@@ -1,0 +1,6 @@
+{
+  "description": "System.getenv source flows through HtmlUtils.htmlEscape (HTML_ESCAPE sanitizer) before reaching println sink — taint should be cleared.",
+  "tags": ["taint", "negative", "xss", "sanitizer"],
+  "modes": ["full"],
+  "expected": []
+}

@@ -19,6 +19,17 @@
       ],
       "evidence_contains": [],
       "notes": "malloc at line 5 only freed when flag is true \u2014 aspirational branch-aware state analysis"
+    },
+    {
+      "rule_id": "cpp.memory.strcpy",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        7,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "strcpy(buf, \"hello\") is a dangerous unbounded copy \u2014 AST pattern correctly flags it."
     }
   ]
 }

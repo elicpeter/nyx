@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use super::domain::{AuthLevel, ProductState, ResourceLifecycle};
 use super::engine::Transfer;
 use super::symbol::{SymbolId, SymbolInterner};
@@ -24,12 +26,71 @@ pub enum TransferEventKind {
 /// Resource-use patterns: callees that read/write/operate on a resource handle
 /// (triggering use-after-close if the handle is closed).
 static RESOURCE_USE_PATTERNS: &[&str] = &[
-    "read", "write", "send", "recv", "fread", "fwrite", "fgets", "fputs", "fprintf", "fscanf",
-    "fflush", "fseek", "ftell", "rewind", "feof", "ferror", "fgetc", "fputc", "getc", "putc",
-    "ungetc", "query", "execute", "fetch", "sendto", "recvfrom", "ioctl", "fcntl",
+    "read",
+    "write",
+    "send",
+    "recv",
+    "fread",
+    "fwrite",
+    "fgets",
+    "fputs",
+    "fprintf",
+    "fscanf",
+    "fflush",
+    "fseek",
+    "ftell",
+    "rewind",
+    "feof",
+    "ferror",
+    "fgetc",
+    "fputc",
+    "getc",
+    "putc",
+    "ungetc",
+    "query",
+    "execute",
+    "fetch",
+    "sendto",
+    "recvfrom",
+    "ioctl",
+    "fcntl",
     // Memory access functions (for malloc/free use-after-free detection)
-    "strcpy", "strncpy", "strcat", "strncat", "memcpy", "memmove", "memset", "memcmp", "strcmp",
-    "strncmp", "strlen", "sprintf", "snprintf",
+    "strcpy",
+    "strncpy",
+    "strcat",
+    "strncat",
+    "memcpy",
+    "memmove",
+    "memset",
+    "memcmp",
+    "strcmp",
+    "strncmp",
+    "strlen",
+    "sprintf",
+    "snprintf",
+    // Dot-prefixed method patterns (cross-language method calls)
+    ".read",
+    ".write",
+    ".send",
+    ".recv",
+    ".query",
+    ".execute",
+    ".fetch",
+    // JS/TS Sync variants (suffix doesn't match plain "read"/"write")
+    "readSync",
+    "writeSync",
+    "readFileSync",
+    "writeFileSync",
+    "appendFileSync",
+    "ftruncateSync",
+    "fsyncSync",
+    "fstatSync",
+    // Stream operations
+    "pipe",
+    "unpipe",
+    "resume",
+    "pause",
+    "destroy",
 ];
 
 /// Auth-call matchers for admin-level privilege.
@@ -41,10 +102,34 @@ static ADMIN_PATTERNS: &[&str] = &[
     "require_admin",
 ];
 
+/// Effect type for resource method summaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceEffect {
+    Acquire,
+    Release,
+}
+
+/// Summary for a method body that wraps a known resource operation.
+/// Only created for methods whose bodies actually contain a recognized
+/// resource acquire/release call from the existing resource_pairs matchers.
+#[derive(Debug, Clone)]
+pub struct ResourceMethodSummary {
+    /// Method name (e.g., "open", "close").
+    pub method_name: String,
+    /// Whether this method acquires or releases a resource.
+    pub effect: ResourceEffect,
+    /// `parent_body_id` of the declaring method — groups methods by class.
+    pub class_group: crate::cfg::BodyId,
+    /// Span of the actual resource operation (e.g., fs.openSync at line 7).
+    pub original_span: (usize, usize),
+}
+
 pub struct DefaultTransfer<'a> {
     pub lang: Lang,
     pub resource_pairs: &'a [ResourcePair],
     pub interner: &'a SymbolInterner,
+    /// Resource method summaries for cross-body proxy resolution.
+    pub resource_method_summaries: &'a [ResourceMethodSummary],
 }
 
 impl Transfer<ProductState> for DefaultTransfer<'_> {
@@ -77,6 +162,14 @@ impl Transfer<ProductState> for DefaultTransfer<'_> {
 }
 
 impl DefaultTransfer<'_> {
+    /// Look up a variable's [`SymbolId`] using the node's enclosing function
+    /// as scope context.  This ensures same-name variables in different
+    /// functions resolve to distinct IDs.
+    fn get_sym(&self, info: &NodeInfo, name: &str) -> Option<SymbolId> {
+        self.interner
+            .get_scoped(info.ast.enclosing_func.as_deref(), name)
+    }
+
     fn apply_call(
         &self,
         node_idx: NodeIndex,
@@ -84,12 +177,13 @@ impl DefaultTransfer<'_> {
         state: &mut ProductState,
         events: &mut Vec<TransferEvent>,
     ) {
-        let callee = match &info.callee {
+        let callee = match &info.call.callee {
             Some(c) => c.to_ascii_lowercase(),
             None => return,
         };
 
         // ── Resource acquire ─────────────────────────────────────────────
+        let mut direct_acquire = false;
         for pair in self.resource_pairs {
             let is_acquire = pair.acquire.iter().any(|a| callee_matches(&callee, a));
             let is_excluded = pair
@@ -99,22 +193,31 @@ impl DefaultTransfer<'_> {
 
             if is_acquire
                 && !is_excluded
-                && let Some(ref def) = info.defines
-                && let Some(sym) = self.interner.get(def)
+                && let Some(ref def) = info.taint.defines
+                && let Some(sym) = self.get_sym(info, def)
             {
                 state.resource.set(sym, ResourceLifecycle::OPEN);
+                direct_acquire = true;
             }
         }
 
         // ── Resource release ─────────────────────────────────────────────
         // Track which variables have already been released to avoid double-
         // matching across multiple resource pair definitions.
+        let mut direct_release = false;
         let mut released: smallvec::SmallVec<[SymbolId; 4]> = smallvec::SmallVec::new();
         for pair in self.resource_pairs {
             let is_release = pair.release.iter().any(|r| callee_matches(&callee, r));
             if is_release {
-                for used in &info.uses {
-                    if let Some(sym) = self.interner.get(used) {
+                direct_release = true;
+                // Go `defer f.Close()`: skip the CLOSED transition so the
+                // variable stays OPEN mid-function.  Leak suppression is
+                // handled separately in extract_findings().
+                if info.in_defer {
+                    continue;
+                }
+                for used in &info.taint.uses {
+                    if let Some(sym) = self.get_sym(info, used) {
                         if released.contains(&sym) {
                             continue;
                         }
@@ -135,20 +238,89 @@ impl DefaultTransfer<'_> {
             }
         }
 
-        // ── Resource use (read/write/etc.) ───────────────────────────────
-        let is_use = RESOURCE_USE_PATTERNS
-            .iter()
-            .any(|p| callee_matches(&callee, p));
-        if is_use {
-            for used in &info.uses {
-                if let Some(sym) = self.interner.get(used) {
-                    let current = state.resource.get(sym);
-                    if current == ResourceLifecycle::CLOSED {
-                        events.push(TransferEvent {
-                            kind: TransferEventKind::UseAfterClose,
-                            node: node_idx,
-                            var: sym,
-                        });
+        // ── Resource method proxy ────────────────────────────────────────
+        // When no direct resource pair matched, check if the callee is a
+        // method wrapper for a known resource operation. Only fires when:
+        //   1. The callee is a method call (contains `.`)
+        //   2. An explicit receiver is identified
+        //   3. The method suffix matches a ResourceMethodSummary
+        //   4. For Release: the receiver was previously acquired by the same class group
+        if !direct_acquire && !direct_release && callee.contains('.') {
+            // Extract receiver: prefer explicit NodeInfo.call.receiver, fall back
+            // to everything before the last `.` in the callee string.
+            let recv_from_callee: Option<String>;
+            let recv_name: Option<&str> = if let Some(ref r) = info.call.receiver {
+                Some(r.as_str())
+            } else {
+                recv_from_callee = callee.rsplit_once('.').map(|(prefix, _)| {
+                    // For multi-segment paths like "a.b.c", use the root receiver
+                    prefix.split('.').next().unwrap_or(prefix).to_string()
+                });
+                recv_from_callee.as_deref()
+            };
+            if let Some(recv) = recv_name {
+                let method_suffix = callee.rsplit('.').next().unwrap_or("");
+                for summary in self.resource_method_summaries {
+                    if summary.method_name.eq_ignore_ascii_case(method_suffix) {
+                        if let Some(sym) = self.get_sym(info, recv) {
+                            match summary.effect {
+                                ResourceEffect::Acquire => {
+                                    state.resource.set(sym, ResourceLifecycle::OPEN);
+                                    // Track class group for release matching
+                                    state.receiver_class_group.insert(sym, summary.class_group);
+                                    // Store original acquire span for finding attribution
+                                    state.proxy_acquire_spans.insert(sym, summary.original_span);
+                                }
+                                ResourceEffect::Release => {
+                                    // Only release if receiver was acquired by same class group
+                                    if state.receiver_class_group.get(&sym)
+                                        == Some(&summary.class_group)
+                                    {
+                                        let current = state.resource.get(sym);
+                                        if current.contains(ResourceLifecycle::OPEN) {
+                                            state.resource.set(sym, ResourceLifecycle::CLOSED);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Resource use (pair-specific patterns first, then global fallback)
+        let mut use_checked = false;
+        for pair in self.resource_pairs {
+            if pair.use_patterns.iter().any(|p| callee_matches(&callee, p)) {
+                use_checked = true;
+                for used in &info.taint.uses {
+                    if let Some(sym) = self.get_sym(info, used) {
+                        if state.resource.get(sym) == ResourceLifecycle::CLOSED {
+                            events.push(TransferEvent {
+                                kind: TransferEventKind::UseAfterClose,
+                                node: node_idx,
+                                var: sym,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        if !use_checked {
+            let is_use = RESOURCE_USE_PATTERNS
+                .iter()
+                .any(|p| callee_matches(&callee, p));
+            if is_use {
+                for used in &info.taint.uses {
+                    if let Some(sym) = self.get_sym(info, used) {
+                        if state.resource.get(sym) == ResourceLifecycle::CLOSED {
+                            events.push(TransferEvent {
+                                kind: TransferEventKind::UseAfterClose,
+                                node: node_idx,
+                                var: sym,
+                            });
+                        }
                     }
                 }
             }
@@ -175,8 +347,8 @@ impl DefaultTransfer<'_> {
 
         // ── Validation call (guard) ──────────────────────────────────────
         if is_guard_like(&callee) {
-            for used in &info.uses {
-                if let Some(sym) = self.interner.get(used) {
+            for used in &info.taint.uses {
+                if let Some(sym) = self.get_sym(info, used) {
                     state.auth.validated.insert(sym);
                 }
             }
@@ -184,25 +356,76 @@ impl DefaultTransfer<'_> {
     }
 
     fn apply_if(&self, info: &NodeInfo, edge: Option<EdgeKind>, state: &mut ProductState) {
-        // On the True edge of an If node whose condition is an auth check,
-        // refine auth level.
-        let is_true_edge = matches!(edge, Some(EdgeKind::True));
-        if !is_true_edge {
+        // Determine the "positive edge" — the edge where the underlying
+        // (de-negated) condition evaluates to true.
+        //
+        // For `if (is_authenticated(req))`:  positive = True edge
+        // For `if (!allowed[cmd])`:          positive = False edge
+        //   (because `!X` being false means `X` is true)
+        let is_positive_edge = if info.condition_negated {
+            matches!(edge, Some(EdgeKind::False))
+        } else {
+            matches!(edge, Some(EdgeKind::True))
+        };
+
+        // Resource null-check: `if (f)` or `if (!f)` where f is a tracked
+        // resource currently in OPEN state.  The "var is falsy" edge means
+        // the acquisition returned null/zero — no resource was actually
+        // produced — so subsequent close requirements do not apply on that
+        // path.  Clearing OPEN suppresses the spurious may-leak finding for
+        // the canonical NULL-safe close idiom in C / C++ / similar:
+        //
+        //     FILE *f = fopen(path, "r");
+        //     if (f) fclose(f);
+        //
+        // Without this rule the false edge keeps OPEN, joins with the true
+        // edge's CLOSED at function exit, and produces a may-leak FP even
+        // though the code is correct.
+        //
+        // Heuristic conditions:
+        //   * condition is a single-variable truth check (no comparisons,
+        //     no calls — `condition_vars.len() == 1` and the trimmed text
+        //     equals that variable name).
+        //   * the var has OPEN in its lifecycle bitset.
+        //   * the edge represents "var is falsy" (= !is_positive_edge).
+        if !is_positive_edge && is_simple_truth_check(info) {
+            for var in &info.condition_vars {
+                if let Some(sym) = self.get_sym(info, var) {
+                    let lc = state.resource.get(sym);
+                    if lc.contains(ResourceLifecycle::OPEN) {
+                        state
+                            .resource
+                            .set(sym, lc.difference(ResourceLifecycle::OPEN));
+                    }
+                }
+            }
+        }
+
+        if !is_positive_edge {
             return;
         }
 
         if let Some(ref cond) = info.condition_text {
             let cond_lower = cond.to_ascii_lowercase();
+            // Strip leading negation operator for pattern matching —
+            // the edge selection above already encodes the semantics.
+            let cond_inner = if info.condition_negated {
+                cond_lower.trim_start_matches('!').trim_start()
+            } else {
+                cond_lower.as_str()
+            };
 
             // Auth-related condition
             let auth_rules = rules::auth_rules(self.lang);
             let is_auth_cond = auth_rules.iter().any(|rule| {
                 rule.matchers
                     .iter()
-                    .any(|m| cond_lower.contains(&m.to_ascii_lowercase()))
+                    .any(|m| condition_contains_auth_token(cond_inner, m))
             });
-            if is_auth_cond && !info.condition_negated {
-                let is_admin = ADMIN_PATTERNS.iter().any(|p| cond_lower.contains(p));
+            if is_auth_cond {
+                let is_admin = ADMIN_PATTERNS
+                    .iter()
+                    .any(|p| condition_contains_auth_token(cond_inner, p));
                 let new_level = if is_admin {
                     AuthLevel::Admin
                 } else {
@@ -213,10 +436,19 @@ impl DefaultTransfer<'_> {
                 }
             }
 
+            // Go-specific: map boolean lookup is an allowlist/authorization guard.
+            // In Go, `map[string]bool` lookups like `allowed[cmd]` return false
+            // for missing keys, making `if allowed[cmd]` a standard allowlist pattern.
+            if self.lang == Lang::Go && is_go_map_boolean_guard(cond_inner) {
+                if AuthLevel::Authed > state.auth.auth_level {
+                    state.auth.auth_level = AuthLevel::Authed;
+                }
+            }
+
             // Validation-related condition
-            if is_guard_like(&cond_lower) && !info.condition_negated {
+            if is_guard_like(cond_inner) {
                 for var in &info.condition_vars {
-                    if let Some(sym) = self.interner.get(var) {
+                    if let Some(sym) = self.get_sym(info, var) {
                         state.auth.validated.insert(sym);
                     }
                 }
@@ -227,12 +459,12 @@ impl DefaultTransfer<'_> {
     fn apply_assignment(&self, _node_idx: NodeIndex, info: &NodeInfo, state: &mut ProductState) {
         // Ownership transfer: if `defines` reassigns a tracked resource
         // variable from a `uses` variable, transfer the lifecycle.
-        if let Some(ref def) = info.defines
-            && let Some(def_sym) = self.interner.get(def)
+        if let Some(ref def) = info.taint.defines
+            && let Some(def_sym) = self.get_sym(info, def)
         {
             // If the RHS is a tracked resource, transfer its state
-            for used in &info.uses {
-                if let Some(use_sym) = self.interner.get(used) {
+            for used in &info.taint.uses {
+                if let Some(use_sym) = self.get_sym(info, used) {
                     let lc = state.resource.get(use_sym);
                     if lc.contains(ResourceLifecycle::OPEN) {
                         state.resource.set(def_sym, lc);
@@ -243,6 +475,11 @@ impl DefaultTransfer<'_> {
             }
         }
     }
+}
+
+/// Public wrapper for `callee_matches` used by `build_resource_method_summaries`.
+pub fn callee_matches_pub(callee: &str, pattern: &str) -> bool {
+    callee_matches(callee, pattern)
 }
 
 /// Check if a callee matches a pattern.
@@ -265,9 +502,114 @@ fn is_guard_like(callee: &str) -> bool {
     GUARD_PREFIXES.iter().any(|p| callee.starts_with(p))
 }
 
+/// True iff the condition is a single-variable truth check (no comparison,
+/// no method call, no boolean composition) — the bare `if (f)` or `if (!f)`
+/// shape used as a NULL-safe gate around resource access.
+///
+/// Conservative: requires `condition_vars` to have exactly one entry, and
+/// the de-negated `condition_text` to be exactly that variable name (with
+/// optional parens stripped).  Rejects `if (f != NULL)`, `if (f.method())`,
+/// `if (f && g)`, etc., which are not the simple truth-check idiom and may
+/// have different semantics for the false-branch resource state.
+fn is_simple_truth_check(info: &NodeInfo) -> bool {
+    if info.condition_vars.len() != 1 {
+        return false;
+    }
+    let var = &info.condition_vars[0];
+    let Some(text) = info.condition_text.as_deref() else {
+        return false;
+    };
+    let stripped = text.trim();
+    let stripped = stripped.trim_start_matches('!').trim();
+    let stripped = stripped.trim_matches(|c: char| c == '(' || c == ')').trim();
+    stripped == var
+}
+
+/// Detect Go `map[string]bool` allowlist lookups used as boolean guards.
+///
+/// Matches when the entire condition is an index expression of the form
+/// `identifier[identifier]` (e.g., `allowed[cmd]`, `whitelist[key]`).
+/// In Go, indexing a `map[string]bool` returns `false` for missing keys,
+/// making `if allowed[cmd]` a standard allowlist/authorization pattern.
+///
+/// Narrow by design: does NOT match complex expressions (`arr[i] > 0`),
+/// dotted receivers (`obj.map[key]`), or nested indexing.
+fn is_go_map_boolean_guard(cond: &str) -> bool {
+    let cond = cond.trim();
+    let Some(bracket_start) = cond.find('[') else {
+        return false;
+    };
+    if !cond.ends_with(']') {
+        return false;
+    }
+    let before = &cond[..bracket_start];
+    let inside = &cond[bracket_start + 1..cond.len() - 1];
+    // Before bracket: plain identifier (no dots, no operators)
+    // Inside bracket: identifier, possibly dotted (r.URL.Query().Get("cmd"))
+    !before.is_empty()
+        && before
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && !inside.is_empty()
+        && inside
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
+}
+
+/// Check if condition text contains an auth/admin matcher at a word boundary.
+///
+/// Dispatches based on matcher content:
+/// - **Identifier-only** (`is_authenticated`, `require_auth`): tokenise condition
+///   text on non-identifier characters and require an exact token match.
+/// - **Contains punctuation** (`middleware.auth`): find the matcher as a substring
+///   and verify word boundaries (non-ident char or string edge) on both sides.
+fn condition_contains_auth_token(cond: &str, matcher: &str) -> bool {
+    let matcher_lower = matcher.to_ascii_lowercase();
+    let is_ident_only = matcher_lower
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_');
+
+    if is_ident_only {
+        // Tokenise on non-identifier chars, check for exact token match.
+        cond.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .filter(|s| !s.is_empty())
+            .any(|token| token == matcher_lower)
+    } else {
+        // Word-boundary substring match for punctuated patterns.
+        let hay = cond.as_bytes();
+        let needle = matcher_lower.as_bytes();
+        if needle.len() > hay.len() {
+            return false;
+        }
+        let mut start = 0;
+        while start + needle.len() <= hay.len() {
+            if let Some(pos) = cond[start..].find(&*matcher_lower) {
+                let abs = start + pos;
+                let end = abs + needle.len();
+                let left_ok = abs == 0 || {
+                    let c = hay[abs - 1];
+                    !c.is_ascii_alphanumeric() && c != b'_'
+                };
+                let right_ok = end >= hay.len() || {
+                    let c = hay[end];
+                    !c.is_ascii_alphanumeric() && c != b'_'
+                };
+                if left_ok && right_ok {
+                    return true;
+                }
+                start = abs + 1;
+            } else {
+                break;
+            }
+        }
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cfg::{AstMeta, CallMeta, TaintMeta};
     #[test]
     fn callee_matches_exact() {
         assert!(callee_matches("fopen", "fopen"));
@@ -286,6 +628,27 @@ mod tests {
     }
 
     #[test]
+    fn callee_matches_js_fd_use_patterns() {
+        assert!(callee_matches("fs.readsync", "fs.readSync"));
+        assert!(callee_matches("fs.writesync", "fs.writeSync"));
+        assert!(!callee_matches("fs.readsync", "fs.writeSync"));
+    }
+
+    #[test]
+    fn callee_matches_stream_method_patterns() {
+        assert!(callee_matches("reader.pipe", ".pipe"));
+        assert!(callee_matches("stream.write", ".write"));
+        assert!(!callee_matches("readstream", ".read")); // no dot, no match
+    }
+
+    #[test]
+    fn callee_matches_dot_prefix_no_c_interference() {
+        assert!(!callee_matches("fread", ".read"));
+        assert!(!callee_matches("fwrite", ".write"));
+        assert!(!callee_matches("send", ".send"));
+    }
+
+    #[test]
     fn acquire_sets_open() {
         let mut interner = SymbolInterner::new();
         let sym_f = interner.intern("f");
@@ -294,20 +657,24 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let info = NodeInfo {
             kind: StmtKind::Call,
-            span: (0, 10),
-            label: None,
-            defines: Some("f".into()),
-            uses: vec![],
-            callee: Some("fopen".into()),
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
+            ast: AstMeta {
+                span: (0, 10),
+                ..Default::default()
+            },
+            taint: TaintMeta {
+                defines: Some("f".into()),
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fopen".into()),
+                ..Default::default()
+            },
+            ..Default::default()
         };
 
         let (state, events) =
@@ -325,6 +692,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let mut state = ProductState::initial();
@@ -332,16 +700,19 @@ mod tests {
 
         let info = NodeInfo {
             kind: StmtKind::Call,
-            span: (10, 20),
-            label: None,
-            defines: None,
-            uses: vec!["f".into()],
-            callee: Some("fclose".into()),
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
+            ast: AstMeta {
+                span: (10, 20),
+                ..Default::default()
+            },
+            taint: TaintMeta {
+                uses: vec!["f".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fclose".into()),
+                ..Default::default()
+            },
+            ..Default::default()
         };
 
         let (state, events) = transfer.apply(NodeIndex::new(1), &info, None, state);
@@ -358,6 +729,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let mut state = ProductState::initial();
@@ -365,16 +737,19 @@ mod tests {
 
         let info = NodeInfo {
             kind: StmtKind::Call,
-            span: (20, 30),
-            label: None,
-            defines: None,
-            uses: vec!["f".into()],
-            callee: Some("fclose".into()),
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
+            ast: AstMeta {
+                span: (20, 30),
+                ..Default::default()
+            },
+            taint: TaintMeta {
+                uses: vec!["f".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fclose".into()),
+                ..Default::default()
+            },
+            ..Default::default()
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(2), &info, None, state);
@@ -392,6 +767,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let mut state = ProductState::initial();
@@ -399,16 +775,19 @@ mod tests {
 
         let info = NodeInfo {
             kind: StmtKind::Call,
-            span: (30, 40),
-            label: None,
-            defines: None,
-            uses: vec!["f".into()],
-            callee: Some("fread".into()),
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
+            ast: AstMeta {
+                span: (30, 40),
+                ..Default::default()
+            },
+            taint: TaintMeta {
+                uses: vec!["f".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fread".into()),
+                ..Default::default()
+            },
+            ..Default::default()
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(3), &info, None, state);
@@ -422,5 +801,359 @@ mod tests {
         assert!(is_guard_like("sanitize_html"));
         assert!(is_guard_like("check_permission"));
         assert!(!is_guard_like("open_file"));
+    }
+
+    #[test]
+    fn is_simple_truth_check_recognises_bare_identifier() {
+        let make = |text: &str, vars: Vec<&str>| NodeInfo {
+            kind: StmtKind::If,
+            ast: AstMeta::default(),
+            condition_text: Some(text.to_string()),
+            condition_vars: vars.into_iter().map(String::from).collect(),
+            ..Default::default()
+        };
+        // Plain `if (f)` truth check
+        assert!(is_simple_truth_check(&make("f", vec!["f"])));
+        // Negated form `if (!f)`
+        assert!(is_simple_truth_check(&make("!f", vec!["f"])));
+        // Parenthesised form `if ((f))`
+        assert!(is_simple_truth_check(&make("(f)", vec!["f"])));
+        // Negated parenthesised form `if (!(f))`
+        assert!(is_simple_truth_check(&make("!(f)", vec!["f"])));
+        // Negative: comparison
+        assert!(!is_simple_truth_check(&make("f != NULL", vec!["f"])));
+        // Negative: method call
+        assert!(!is_simple_truth_check(&make("f.is_valid()", vec!["f"])));
+        // Negative: composite condition
+        assert!(!is_simple_truth_check(&make("f && g", vec!["f", "g"])));
+        // Negative: empty vars
+        assert!(!is_simple_truth_check(&make("f", vec![])));
+    }
+
+    #[test]
+    fn null_check_clears_open_on_false_edge() {
+        let mut interner = SymbolInterner::new();
+        let sym_f = interner.intern("f");
+
+        let transfer = DefaultTransfer {
+            lang: Lang::C,
+            resource_pairs: rules::resource_pairs(Lang::C),
+            interner: &interner,
+            resource_method_summaries: &[],
+        };
+
+        let mut state = ProductState::initial();
+        state.resource.set(sym_f, ResourceLifecycle::OPEN);
+
+        let info = NodeInfo {
+            kind: StmtKind::If,
+            condition_text: Some("f".into()),
+            condition_vars: vec!["f".into()],
+            condition_negated: false,
+            ..Default::default()
+        };
+
+        // False edge: f is null → should clear OPEN
+        let (state_false, _) = transfer.apply(
+            NodeIndex::new(5),
+            &info,
+            Some(EdgeKind::False),
+            state.clone(),
+        );
+        assert!(
+            !state_false
+                .resource
+                .get(sym_f)
+                .contains(ResourceLifecycle::OPEN),
+            "OPEN should be cleared on the null edge of `if (f)`"
+        );
+
+        // True edge: f is non-null → OPEN preserved
+        let (state_true, _) = transfer.apply(
+            NodeIndex::new(5),
+            &info,
+            Some(EdgeKind::True),
+            state.clone(),
+        );
+        assert!(
+            state_true
+                .resource
+                .get(sym_f)
+                .contains(ResourceLifecycle::OPEN),
+            "OPEN should be preserved on the non-null edge of `if (f)`"
+        );
+    }
+
+    #[test]
+    fn null_check_negated_clears_open_on_true_edge() {
+        let mut interner = SymbolInterner::new();
+        let sym_f = interner.intern("f");
+
+        let transfer = DefaultTransfer {
+            lang: Lang::C,
+            resource_pairs: rules::resource_pairs(Lang::C),
+            interner: &interner,
+            resource_method_summaries: &[],
+        };
+
+        let mut state = ProductState::initial();
+        state.resource.set(sym_f, ResourceLifecycle::OPEN);
+
+        // `if (!f)` — condition_negated=true, true-edge means f is null
+        let info = NodeInfo {
+            kind: StmtKind::If,
+            condition_text: Some("!f".into()),
+            condition_vars: vec!["f".into()],
+            condition_negated: true,
+            ..Default::default()
+        };
+
+        let (state_true, _) = transfer.apply(
+            NodeIndex::new(5),
+            &info,
+            Some(EdgeKind::True),
+            state.clone(),
+        );
+        assert!(
+            !state_true
+                .resource
+                .get(sym_f)
+                .contains(ResourceLifecycle::OPEN),
+            "OPEN should be cleared on the null edge of `if (!f)` (true edge)"
+        );
+
+        let (state_false, _) = transfer.apply(
+            NodeIndex::new(5),
+            &info,
+            Some(EdgeKind::False),
+            state.clone(),
+        );
+        assert!(
+            state_false
+                .resource
+                .get(sym_f)
+                .contains(ResourceLifecycle::OPEN),
+            "OPEN should be preserved on the non-null edge of `if (!f)` (false edge)"
+        );
+    }
+
+    // ── callee_matches for resource patterns ───────────────────────────
+
+    #[test]
+    fn callee_matches_js_end_release() {
+        assert!(callee_matches("conn.end", ".end"));
+        assert!(callee_matches("pool.end", ".end"));
+        assert!(!callee_matches("backend", ".end")); // no dot
+    }
+
+    #[test]
+    fn callee_matches_go_sql_open() {
+        assert!(callee_matches("sql.open", "sql.Open")); // case-insensitive
+    }
+
+    #[test]
+    fn callee_matches_php_pg() {
+        assert!(callee_matches("pg_connect", "pg_connect"));
+        assert!(callee_matches("pg_close", "pg_close"));
+        assert!(!callee_matches("pg_query", "pg_connect"));
+    }
+
+    #[test]
+    fn callee_matches_java_prepare_statement() {
+        assert!(callee_matches("conn.preparestatement", "prepareStatement"));
+        assert!(callee_matches("preparestatement", "prepareStatement"));
+    }
+
+    #[test]
+    fn callee_matches_websocket() {
+        assert!(callee_matches("websocket", "WebSocket"));
+    }
+
+    #[test]
+    fn callee_matches_mysql_create_connection() {
+        assert!(callee_matches(
+            "mysql.createconnection",
+            "mysql.createConnection"
+        ));
+    }
+
+    #[test]
+    fn callee_matches_finish_release() {
+        assert!(callee_matches("http.finish", ".finish"));
+        assert!(!callee_matches("finish_setup", ".finish")); // no dot
+    }
+
+    // ── condition_contains_auth_token ────────────────────────────────────
+
+    #[test]
+    fn auth_token_exact_match() {
+        assert!(condition_contains_auth_token(
+            "is_authenticated",
+            "is_authenticated"
+        ));
+        assert!(condition_contains_auth_token("is_admin", "is_admin"));
+        assert!(condition_contains_auth_token(
+            "require_auth",
+            "require_auth"
+        ));
+    }
+
+    #[test]
+    fn auth_token_dotted_access() {
+        assert!(condition_contains_auth_token(
+            "req.is_authenticated()",
+            "is_authenticated"
+        ));
+        assert!(condition_contains_auth_token(
+            "user.is_authenticated == true",
+            "is_authenticated"
+        ));
+        assert!(condition_contains_auth_token(
+            "req.user.is_authenticated",
+            "is_authenticated"
+        ));
+        assert!(condition_contains_auth_token("user.is_admin()", "is_admin"));
+    }
+
+    #[test]
+    fn auth_token_rejects_substring_regression() {
+        // Explicit regression locks for known false positives.
+        assert!(!condition_contains_auth_token(
+            "not_is_authenticated",
+            "is_authenticated"
+        ));
+        assert!(!condition_contains_auth_token(
+            "cached_is_authenticated_flag",
+            "is_authenticated"
+        ));
+        assert!(!condition_contains_auth_token(
+            "xis_authenticated",
+            "is_authenticated"
+        ));
+        assert!(!condition_contains_auth_token(
+            "this_is_admin_panel",
+            "is_admin"
+        ));
+    }
+
+    #[test]
+    fn auth_token_underscore_camel_boundary_cases() {
+        // Underscore-joined identifiers are single tokens — must not match interior.
+        assert!(!condition_contains_auth_token(
+            "req.user_is_authenticated_flag",
+            "is_authenticated"
+        ));
+        // Dot-separated segments ARE separate tokens.
+        assert!(condition_contains_auth_token(
+            "req.user.is_authenticated",
+            "is_authenticated"
+        ));
+    }
+
+    #[test]
+    fn auth_token_dotted_matcher() {
+        assert!(condition_contains_auth_token(
+            "middleware.auth()",
+            "middleware.auth"
+        ));
+        assert!(condition_contains_auth_token(
+            "if middleware.auth(req)",
+            "middleware.auth"
+        ));
+        // Left boundary violation.
+        assert!(!condition_contains_auth_token(
+            "xmiddleware.auth()",
+            "middleware.auth"
+        ));
+        // Right boundary violation — "middleware.authz" extends past "middleware.auth".
+        assert!(!condition_contains_auth_token(
+            "middleware.authz()",
+            "middleware.auth"
+        ));
+        // "middleware.auth.check" — matcher ends at '.', which is non-ident → matches.
+        assert!(condition_contains_auth_token(
+            "middleware.auth.check()",
+            "middleware.auth"
+        ));
+    }
+
+    // ── condition_contains_auth_token for auth patterns ────────────────
+
+    #[test]
+    fn auth_token_jwt_verify() {
+        assert!(condition_contains_auth_token(
+            "jwt.verify(token)",
+            "jwt.verify"
+        ));
+        assert!(!condition_contains_auth_token(
+            "jwt.verifyAsync(token)",
+            "jwt.verify"
+        ));
+    }
+
+    #[test]
+    fn auth_token_passport() {
+        assert!(condition_contains_auth_token(
+            "passport.authenticate('local')",
+            "passport.authenticate"
+        ));
+    }
+
+    #[test]
+    fn auth_token_generate_not_auth() {
+        assert!(!condition_contains_auth_token(
+            "generateToken(secret)",
+            "verify_token"
+        ));
+        assert!(!condition_contains_auth_token(
+            "generateToken(secret)",
+            "validate_token"
+        ));
+        assert!(!condition_contains_auth_token(
+            "generateToken(secret)",
+            "authenticate"
+        ));
+    }
+
+    #[test]
+    fn auth_token_ensure_authenticated() {
+        // condition_contains_auth_token expects pre-lowered condition text
+        assert!(condition_contains_auth_token(
+            "ensureauthenticated(req)",
+            "ensureAuthenticated"
+        ));
+    }
+
+    #[test]
+    fn auth_token_require_role_not_substring() {
+        assert!(condition_contains_auth_token(
+            "requirerole('admin')",
+            "requireRole"
+        ));
+        assert!(!condition_contains_auth_token(
+            "prerequirerole()",
+            "requireRole"
+        ));
+    }
+
+    #[test]
+    fn auth_token_boolean_composition() {
+        // Compound conditions — each token should be individually matchable.
+        assert!(condition_contains_auth_token(
+            "is_authenticated && is_admin",
+            "is_authenticated"
+        ));
+        assert!(condition_contains_auth_token(
+            "is_authenticated && is_admin",
+            "is_admin"
+        ));
+        assert!(condition_contains_auth_token(
+            "!is_authenticated && is_admin",
+            "is_authenticated"
+        ));
+        assert!(condition_contains_auth_token(
+            "user == null || !user.is_authenticated",
+            "is_authenticated"
+        ));
     }
 }

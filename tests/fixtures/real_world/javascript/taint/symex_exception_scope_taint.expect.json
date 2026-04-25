@@ -1,0 +1,15 @@
+{
+  "description": "Try-body variable payload is tainted and used in catch block via string concat to res.send. Tests that try-body taint is preserved across exception fork.",
+  "tags": ["taint", "xss", "symex", "exception-path"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 11],
+      "evidence_contains": [],
+      "notes": "req.query.payload flows through try-body scoped variable to res.send in catch — taint preserved across exception fork"
+    }
+  ]
+}

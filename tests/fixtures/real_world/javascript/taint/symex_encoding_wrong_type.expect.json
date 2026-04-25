@@ -1,0 +1,28 @@
+{
+  "description": "SQL injection via URL-encoded input: encodeURIComponent does not protect against SQLi. Tests that symex models encoding structurally and detects transform-sink mismatch.",
+  "tags": [
+    "taint",
+    "sqli",
+    "symex",
+    "encoding"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        14,
+        19
+      ],
+      "evidence_contains": [
+        "transform note",
+        "does not match sink neutralization class"
+      ],
+      "notes": "req.query.q flows through encodeURIComponent into client.query — URL encoding does not neutralize SQL injection. Witness includes mismatch note."
+    }
+  ]
+}

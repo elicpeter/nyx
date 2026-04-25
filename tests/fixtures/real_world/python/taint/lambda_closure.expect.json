@@ -1,0 +1,22 @@
+{
+  "description": "Python lambda captures outer var; lambda invoked later flows tainted capture to os.system sink",
+  "tags": ["taint", "closure", "lambda", "cmdi", "flask"],
+  "modes": ["full"],
+  "strict_unexpected": ["taint-unsanitised-flow"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_match": true,
+      "line_range": [9, 11],
+      "evidence_contains": [],
+      "notes": "lambda: os.system(q) captures request.args.get('q') — anon body named via assignment LHS"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_match": true,
+      "line_range": [11, 11],
+      "evidence_contains": [],
+      "notes": "outer run() invocation re-reports the flow via inline callee analysis — tainted capture reaches os.system in body"
+    }
+  ]
+}

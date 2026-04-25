@@ -1,0 +1,15 @@
+{
+  "description": "Partial field taint: last field write is tainted — synthetic base update carries taint to base.",
+  "tags": ["taint", "xss", "field-access", "synthetic-base-update"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 8],
+      "evidence_contains": [],
+      "notes": "obj.danger = req.query.input is the last field write, so the synthetic base update for obj carries taint; res.send(obj) should fire"
+    }
+  ]
+}

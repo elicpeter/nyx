@@ -1,0 +1,6 @@
+{
+  "description": "fmt.Fprintf to *sql.DB should not trigger XSS — db is typed as DatabaseConnection via constructor inference, definitely_not http.ResponseWriter strips HTML_ESCAPE",
+  "tags": ["taint", "type-flow", "go", "safe", "xss"],
+  "modes": ["full"],
+  "expected": []
+}

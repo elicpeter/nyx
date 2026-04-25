@@ -30,6 +30,17 @@
       ],
       "evidence_contains": [],
       "notes": "request.getParameter(\"id\") concatenated into SQL query string passed to executeQuery"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        16,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": "source at 10:9 (request.getParameter(\"id\")) flows through tainted SQL query (line 12) into result set output at out.println(rs.getString(\"name\")); second-order taint via query results"
     }
   ]
 }

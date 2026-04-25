@@ -1,0 +1,34 @@
+{
+  "description": "Method receiver taint propagation: zero-arg method call falls back to collect_uses_taint (receiver propagates); with-arg method call uses offset so only real args are checked.",
+  "tags": [
+    "taint",
+    "receiver",
+    "method-call",
+    "resolved-summary"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        12,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": "Case 1: tainted.passthrough() — zero real args, fallback propagates receiver taint through to res.send"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [
+        21,
+        25
+      ],
+      "notes": "Case 2: tainted.passthrough('safe') — offset maps param 0 to 'safe' (not tainted), so no finding (regression guard)"
+    }
+  ]
+}

@@ -12,7 +12,7 @@
     {
       "rule_id": "state-double-close",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         3,
         9
@@ -23,7 +23,7 @@
     {
       "rule_id": "state-use-after-close",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         9,
         16

@@ -16,6 +16,30 @@ pub trait Lattice: Clone + Eq + Sized {
     fn leq(&self, other: &Self) -> bool;
 }
 
+/// Full abstract domain with widening and top element.
+///
+/// Extends [`Lattice`] with operations required for abstract interpretation:
+/// - `top()`: maximally imprecise element (no information)
+/// - `meet()`: greatest lower bound (refine with new info)
+/// - `widen()`: extrapolation operator ensuring termination
+///
+/// Implementations must satisfy:
+/// - `top()` is the greatest element: `leq(x, top()) == true` for all x
+/// - `meet(a, b) ⊑ a` and `meet(a, b) ⊑ b`
+/// - `widen(a, b) ⊒ join(a, b)` (widening is at least as imprecise as join)
+/// - Ascending chains under `widen` stabilize in finite steps
+#[allow(dead_code)]
+pub trait AbstractDomain: Lattice {
+    /// Top element (no information / maximally imprecise).
+    fn top() -> Self;
+
+    /// Greatest lower bound: refine with new information.
+    fn meet(&self, other: &Self) -> Self;
+
+    /// Widening: extrapolate to ensure termination of ascending chains.
+    fn widen(&self, other: &Self) -> Self;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

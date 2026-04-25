@@ -1,0 +1,6 @@
+{
+  "description": "(header >> 4) & 0x0F extracts a 4-bit field [0, 15]. Chained bitwise operations with final mask produce proven-bounded integer, suppressing SQL injection.",
+  "tags": ["taint", "sqli", "bitwise", "shift", "abstract-interp"],
+  "modes": ["full"],
+  "expected": []
+}

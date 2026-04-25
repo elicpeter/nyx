@@ -1,0 +1,25 @@
+{
+  "description": "getenv source flows through sanitize_input (HTML_ESCAPE sanitizer) before reaching sprintf sink \u2014 taint should be cleared.",
+  "tags": [
+    "taint",
+    "negative",
+    "buffer",
+    "sanitizer"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "c.memory.sprintf",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        22,
+        22
+      ],
+      "evidence_contains": [],
+      "notes": "sprintf(msg, ...) is a dangerous unbounded write \u2014 AST pattern correctly flags it even though taint was sanitized."
+    }
+  ]
+}

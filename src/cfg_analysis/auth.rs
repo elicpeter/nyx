@@ -15,13 +15,13 @@ pub struct AuthGap;
 /// Shell execution, file I/O, and similar sensitive operations.
 fn is_privileged_sink(info: &crate::cfg::NodeInfo) -> bool {
     use crate::labels::Cap;
-    match info.label {
-        Some(DataLabel::Sink(caps)) => {
-            // Shell execution or file I/O are privileged
+    info.taint.labels.iter().any(|l| {
+        if let DataLabel::Sink(caps) = l {
             caps.intersects(Cap::SHELL_ESCAPE | Cap::FILE_IO)
+        } else {
+            false
         }
-        _ => false,
-    }
+    })
 }
 
 /// Web handler parameter patterns by language.
@@ -31,7 +31,7 @@ fn has_web_handler_params(ctx: &AnalysisContext, func_name: &str) -> bool {
     let param_names: Vec<&str> = ctx
         .func_summaries
         .values()
-        .filter(|s| ctx.cfg[s.entry].enclosing_func.as_deref() == Some(func_name))
+        .filter(|s| ctx.cfg[s.entry].ast.enclosing_func.as_deref() == Some(func_name))
         .flat_map(|s| s.param_names.iter().map(|p| p.as_str()))
         .collect();
 
@@ -138,7 +138,7 @@ fn is_web_entrypoint(ctx: &AnalysisContext, func_name: &str) -> bool {
 fn find_web_entry_point_functions(ctx: &AnalysisContext) -> Vec<String> {
     let mut entry_funcs = Vec::new();
     for idx in ctx.cfg.node_indices() {
-        if let Some(func_name) = &ctx.cfg[idx].enclosing_func
+        if let Some(func_name) = &ctx.cfg[idx].ast.enclosing_func
             && is_web_entrypoint(ctx, func_name)
             && !entry_funcs.contains(func_name)
         {
@@ -162,6 +162,18 @@ impl CfgAnalysis for AuthGap {
     }
 
     fn run(&self, ctx: &AnalysisContext) -> Vec<CfgFinding> {
+        // Decorator/annotation/attribute auth on the body declaration
+        // already gates every sink in the body — skip the
+        // structural-call dominance check entirely when the framework
+        // enforces auth at the declaration level.  Mirrors the
+        // `classify_auth_decorators` lookup the state engine uses to
+        // seed the AuthLevel of the body's initial state, so both
+        // analyses agree on which decorators count.
+        let body_auth_level = crate::state::classify_auth_decorators(ctx.lang, ctx.auth_decorators);
+        if body_auth_level >= crate::state::domain::AuthLevel::Authed {
+            return Vec::new();
+        }
+
         let doms = dominators::compute_dominators(ctx.cfg, ctx.entry);
         let entry_funcs = find_web_entry_point_functions(ctx);
         let auth_nodes = find_auth_nodes(ctx);
@@ -181,7 +193,7 @@ impl CfgAnalysis for AuthGap {
             }
 
             // Only check nodes inside web entry point functions
-            let func_name = match &info.enclosing_func {
+            let func_name = match &info.ast.enclosing_func {
                 Some(name) if entry_funcs.contains(name) => name.clone(),
                 _ => continue,
             };
@@ -202,14 +214,14 @@ impl CfgAnalysis for AuthGap {
                 .any(|&auth_idx| dominates(&doms, auth_idx, idx));
 
             if !has_auth {
-                let callee_desc = info.callee.as_deref().unwrap_or("(sensitive op)");
+                let callee_desc = info.call.callee.as_deref().unwrap_or("(sensitive op)");
 
                 findings.push(CfgFinding {
                     rule_id: "cfg-auth-gap".to_string(),
                     title: "Missing auth check".to_string(),
                     severity: Severity::High,
                     confidence: Confidence::Medium,
-                    span: info.span,
+                    span: info.ast.span,
                     message: format!(
                         "Sensitive operation `{callee_desc}` in web handler `{func_name}` \
                          has no dominating authentication check"

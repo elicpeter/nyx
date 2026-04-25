@@ -1,0 +1,15 @@
+{
+  "description": "SQL injection via string concatenation into mysql connection.query()",
+  "tags": ["taint", "sqli", "mysql"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [3, 9],
+      "evidence_contains": [],
+      "notes": "req.query.id flows into SQL string via concat, then to connection.query()"
+    }
+  ]
+}

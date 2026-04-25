@@ -1,0 +1,28 @@
+{
+  "description": "XSS through container alias: a and b share the same array, taint pushed via a flows out via b",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "array",
+    "container",
+    "alias",
+    "heap"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "heap identity: b = a makes both point to same HeapObject, push through a visible via load through b"
+    }
+  ]
+}

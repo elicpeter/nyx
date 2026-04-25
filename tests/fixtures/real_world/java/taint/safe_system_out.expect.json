@@ -1,0 +1,6 @@
+{
+  "description": "System.out.println and System.err.println are console output, not HTTP response sinks — no XSS finding expected",
+  "tags": ["taint", "negative", "xss", "type-aware"],
+  "modes": ["full"],
+  "expected": []
+}

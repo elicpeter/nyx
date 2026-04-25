@@ -1,0 +1,23 @@
+{
+  "description": "Open redirect via location.hash flowing into location.assign. encodeURIComponent strips URL_ENCODE but SSRF cap remains.",
+  "tags": ["taint", "redirect", "open-redirect", "location.assign"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [1, 3],
+      "evidence_contains": [],
+      "notes": "location.hash flows directly into location.assign — open redirect"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [5, 6],
+      "evidence_contains": [],
+      "notes": "encodeURIComponent strips URL_ENCODE cap but location.assign requires SSRF cap — still fires"
+    }
+  ]
+}

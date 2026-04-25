@@ -13,14 +13,25 @@
   "expected": [
     {
       "rule_id": "state-resource-leak-possible",
-      "severity": null,
-      "must_match": false,
+      "severity": "LOW",
+      "must_match": true,
       "line_range": [
         1,
         12
       ],
       "evidence_contains": [],
       "notes": "File handle closed in if branch but leaked in else branch"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        2,
+        2
+      ],
+      "evidence_contains": [],
+      "notes": "Does not fire — correctly identified as may-leak, not definite leak"
     }
   ]
 }

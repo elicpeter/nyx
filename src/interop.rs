@@ -24,10 +24,4 @@ pub struct CallSiteKey {
 pub struct InteropEdge {
     pub from: CallSiteKey,
     pub to: FuncKey,
-    /// Maps caller argument positions to callee parameter positions.
-    #[allow(dead_code)] // used for future per-argument taint mapping
-    pub arg_map: Vec<(usize, usize)>,
-    /// Whether the callee's return value carries taint.
-    #[allow(dead_code)] // used for future interop return taint control
-    pub ret_taints: bool,
 }

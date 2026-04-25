@@ -1,0 +1,15 @@
+{
+  "description": "Jackson ObjectMapper.readValue as dual Source+Sink(DESERIALIZE); tainted data flows to Runtime.exec",
+  "tags": ["taint", "deser", "cmdi", "multi-label", "jackson"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [6, 11],
+      "evidence_contains": [],
+      "notes": "ObjectMapper.readValue (Source) taints data, which flows to Runtime.exec (SHELL_ESCAPE sink)"
+    }
+  ]
+}

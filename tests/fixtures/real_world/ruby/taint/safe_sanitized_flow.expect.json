@@ -1,0 +1,24 @@
+{
+  "description": "ENV source flows through Shellwords.escape (SHELL_ESCAPE sanitizer) before reaching system sink \u2014 taint should be cleared.",
+  "tags": [
+    "taint",
+    "negative",
+    "cmdi",
+    "sanitizer"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "rb.cmdi.system_interp",
+      "severity": "HIGH",
+      "must_not_match": true,
+      "line_range": [
+        5,
+        5
+      ],
+      "notes": "Shellwords.escape sanitizes input — rb.cmdi.system_interp must NOT fire (regression guard, Layer B suppression)"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "description": "system/exec/echo called with only hardcoded string literals — no taint source.",
+  "tags": [
+    "taint",
+    "negative",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": "HIGH",
+      "must_not_match": true,
+      "line_range": [
+        3,
+        3
+      ],
+      "notes": "Constant string arg — php.cmdi.system must NOT fire (regression guard)"
+    },
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": "HIGH",
+      "must_not_match": true,
+      "line_range": [
+        4,
+        4
+      ],
+      "notes": "Constant string arg — php.cmdi.system must NOT fire (regression guard)"
+    }
+  ]
+}

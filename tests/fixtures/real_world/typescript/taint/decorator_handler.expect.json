@@ -24,13 +24,24 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         9,
         13
       ],
       "evidence_contains": [],
-      "notes": "userInput flows to child_process.exec but is a method param, not a recognized source"
+      "notes": "userInput flows to child_process.exec via handler param-as-source heuristic"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on target parameter in Route decorator function"
     }
   ]
 }

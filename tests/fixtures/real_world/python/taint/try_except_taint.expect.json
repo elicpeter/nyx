@@ -1,0 +1,35 @@
+{
+  "description": "Python try/except: user input flows to os.system inside try body",
+  "tags": [
+    "taint",
+    "cmdi",
+    "try_except",
+    "python"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "input() flows to os.system(user_cmd) inside try body"
+    },
+    {
+      "rule_id": "py.cmdi.os_system",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        4,
+        4
+      ],
+      "notes": "Layer B suppression: AST pattern must NOT fire when taint finding at same sink confirms (regression guard)"
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "description": "Edge cases that should NOT be suppressed by parameterized query detection",
+  "tags": ["taint", "sqli", "edge-cases", "parameterized"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [7, 7],
+      "evidence_contains": [],
+      "notes": "Template literal with interpolation — ${table} makes the query dynamic, $1 placeholder does not help"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [16, 16],
+      "evidence_contains": [],
+      "notes": "Dynamic variable as first arg — query built via concatenation then passed to client.query"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [24, 24],
+      "evidence_contains": [],
+      "notes": "Classic string concatenation into client.query — no parameterization"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [32, 32],
+      "evidence_contains": [],
+      "notes": "Concatenation even though query mentions OR — no bind params at all"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [39, 39],
+      "evidence_contains": [],
+      "notes": "sequelize.query with raw SQL concatenation — ORM raw entry point is not suppressed"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [40, 40],
+      "evidence_contains": [],
+      "notes": "noise: secondary res.json flow from sequelize function"
+    }
+  ]
+}

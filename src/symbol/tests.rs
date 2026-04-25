@@ -27,13 +27,156 @@ fn lang_aliases() {
 
 #[test]
 fn func_key_display() {
-    let k = FuncKey {
-        lang: Lang::Rust,
-        namespace: "src/lib.rs".into(),
-        name: "my_func".into(),
-        arity: Some(2),
-    };
+    let k = FuncKey::new_function(Lang::Rust, "src/lib.rs", "my_func", Some(2));
     assert_eq!(k.to_string(), "rust::src/lib.rs::my_func/2");
+}
+
+#[test]
+fn func_key_display_method_with_container() {
+    let k = FuncKey {
+        lang: Lang::Java,
+        namespace: "src/OrderService.java".into(),
+        container: "OrderService".into(),
+        name: "process".into(),
+        arity: Some(1),
+        disambig: None,
+        kind: FuncKind::Method,
+    };
+    assert_eq!(
+        k.to_string(),
+        "java::src/OrderService.java::OrderService::process/1[method]"
+    );
+}
+
+#[test]
+fn func_key_display_closure_with_disambig() {
+    let k = FuncKey {
+        lang: Lang::JavaScript,
+        namespace: "src/app.js".into(),
+        container: "outer".into(),
+        name: "<anon>".into(),
+        arity: Some(0),
+        disambig: Some(421),
+        kind: FuncKind::Closure,
+    };
+    assert_eq!(
+        k.to_string(),
+        "javascript::src/app.js::outer::<anon>/0#421[closure]"
+    );
+}
+
+#[test]
+fn func_key_qualified_name_free_function() {
+    let k = FuncKey::new_function(Lang::Rust, "lib.rs", "foo", Some(0));
+    assert_eq!(k.qualified_name(), "foo");
+}
+
+#[test]
+fn func_key_qualified_name_method() {
+    let k = FuncKey {
+        lang: Lang::Python,
+        namespace: "app.py".into(),
+        container: "Service".into(),
+        name: "run".into(),
+        arity: Some(1),
+        disambig: None,
+        kind: FuncKind::Method,
+    };
+    assert_eq!(k.qualified_name(), "Service::run");
+}
+
+#[test]
+fn method_vs_function_same_name_are_distinct_keys() {
+    let free = FuncKey::new_function(Lang::Python, "app.py", "process", Some(1));
+    let method = FuncKey {
+        lang: Lang::Python,
+        namespace: "app.py".into(),
+        container: "Worker".into(),
+        name: "process".into(),
+        arity: Some(1),
+        disambig: None,
+        kind: FuncKind::Method,
+    };
+    assert_ne!(free, method);
+    assert_ne!(free.qualified_name(), method.qualified_name());
+}
+
+#[test]
+fn two_methods_same_name_different_containers_are_distinct() {
+    let order = FuncKey {
+        lang: Lang::Java,
+        namespace: "src/Services.java".into(),
+        container: "OrderService".into(),
+        name: "process".into(),
+        arity: Some(1),
+        disambig: None,
+        kind: FuncKind::Method,
+    };
+    let user = FuncKey {
+        lang: Lang::Java,
+        namespace: "src/Services.java".into(),
+        container: "UserService".into(),
+        name: "process".into(),
+        arity: Some(1),
+        disambig: None,
+        kind: FuncKind::Method,
+    };
+    assert_ne!(order, user);
+}
+
+#[test]
+fn closure_disambig_separates_same_name_siblings() {
+    let a = FuncKey {
+        lang: Lang::JavaScript,
+        namespace: "f.js".into(),
+        container: "outer".into(),
+        name: "<anon>".into(),
+        arity: Some(0),
+        disambig: Some(100),
+        kind: FuncKind::Closure,
+    };
+    let b = FuncKey {
+        lang: Lang::JavaScript,
+        namespace: "f.js".into(),
+        container: "outer".into(),
+        name: "<anon>".into(),
+        arity: Some(0),
+        disambig: Some(205),
+        kind: FuncKind::Closure,
+    };
+    assert_ne!(a, b);
+}
+
+#[test]
+fn legacy_json_without_new_fields_deserialises() {
+    // JSON written before container/disambig/kind existed must still parse.
+    let json = r#"{
+        "lang": "rust",
+        "namespace": "src/lib.rs",
+        "name": "helper",
+        "arity": 1
+    }"#;
+    let key: FuncKey = serde_json::from_str(json).unwrap();
+    assert_eq!(key.name, "helper");
+    assert_eq!(key.container, "");
+    assert_eq!(key.disambig, None);
+    assert_eq!(key.kind, FuncKind::Function);
+}
+
+#[test]
+fn round_trip_full_fields_serde() {
+    let k = FuncKey {
+        lang: Lang::Ruby,
+        namespace: "lib/worker.rb".into(),
+        container: "Admin::Worker".into(),
+        name: "run".into(),
+        arity: Some(2),
+        disambig: Some(9001),
+        kind: FuncKind::Method,
+    };
+    let json = serde_json::to_string(&k).unwrap();
+    let back: FuncKey = serde_json::from_str(&json).unwrap();
+    assert_eq!(k, back);
 }
 
 #[test]

@@ -1,4 +1,5 @@
 name: CI
+
 permissions:
   contents: read
 
@@ -8,33 +9,232 @@ on:
   pull_request:
     branches: ["master"]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  frontend:
+    name: frontend
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        rust: [stable, beta]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
         with:
-          toolchain: ${{ matrix.rust }}
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Frontend license check
+        working-directory: frontend
+        run: npm run license:check
+
+      - name: Frontend format check
+        working-directory: frontend
+        run: npm run format:check
+
+      - name: Frontend lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Frontend type check
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm test
+
+  rustfmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+          cache: true
 
       - name: Format check
         run: cargo fmt --all -- --check
 
+  clippy-stable:
+    name: clippy-stable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+          cache: true
+
       - name: Lint (Clippy)
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Build & Test
-        run: cargo test --all-features --verbose
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
 
-      - name: Security audit
-        uses: actions-rs/audit-check@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          toolchain: stable
+          cache: true
+
+      - uses: taiki-e/install-action@cargo-deny
 
       - name: License & advisory checks
-        uses: EmbarkStudios/cargo-deny-action@v2
+        run: cargo deny check advisories licenses bans sources
+
+  third-party-licenses:
+    name: third-party-licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.7.1
+
+      - name: Prime cargo registry cache
+        run: cargo fetch --locked
+
+      - name: Regenerate license attribution
+        run: cargo about generate --offline about.hbs | tr -d '\r' > /tmp/THIRDPARTY-LICENSES.html
+
+      - name: Diff against committed file
+        run: diff -u --strip-trailing-cr THIRDPARTY-LICENSES.html /tmp/THIRDPARTY-LICENSES.html
+
+  docs-fresh:
+    name: docs-fresh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Regenerate rule reference
+        run: cargo run --features docgen --bin nyx-docgen
+
+      - name: Verify docs/rules.md is fresh
+        run: |
+          if ! git diff --exit-code docs/rules.md; then
+            echo "::error::docs/rules.md is stale. Run 'cargo run --features docgen --bin nyx-docgen' and commit the result."
+            exit 1
+          fi
+
+  rust-beta-build:
+    name: rust-beta-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: beta
+          cache: true
+
+      - name: Beta compile compatibility check
+        run: cargo check --all-features --tests
+
+  rust-stable-test:
+    name: rust-stable-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - uses: taiki-e/install-action@nextest
+
+      - name: Rust tests (stable)
+        run: cargo nextest run --all-features
+
+  cross-platform-smoke:
+    name: cross-platform-smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - uses: taiki-e/install-action@nextest
+
+      - name: Build
+        run: cargo build --release --all-features
+
+      - name: Smoke tests
+        run: cargo nextest run --all-features --test integration_tests --test pattern_tests --test cli_validation_tests
+
+  rust-beta-test:
+    name: rust-beta-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: beta
+          cache: true
+
+      - uses: taiki-e/install-action@nextest
+
+      - name: Rust tests (beta)
+        run: cargo nextest run --all-features
+
+  benchmark-gate:
+    name: benchmark-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+          cache-key: benchmark-gate-release
+
+      - name: Accuracy regression gate (P/R/F1)
+        run: cargo test --release --all-features --test benchmark_test -- --ignored --nocapture benchmark_evaluation
+
+      - name: Performance regression gate
+        env:
+          NYX_CI_BENCH: "1"
+        run: cargo test --release --all-features --test perf_tests -- --nocapture
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-results
+          path: tests/benchmark/results/latest.json
+          if-no-files-found: warn

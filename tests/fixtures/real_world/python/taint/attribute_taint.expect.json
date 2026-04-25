@@ -1,0 +1,15 @@
+{
+  "description": "Attribute write from source (os.getenv) flows through attribute read (config.cmd) to sink (os.system).",
+  "tags": ["taint", "cmdi", "attribute-access"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [7, 8],
+      "evidence_contains": [],
+      "notes": "config.cmd = os.getenv('CMD') flows to os.system(config.cmd) — command injection via attribute propagation"
+    }
+  ]
+}

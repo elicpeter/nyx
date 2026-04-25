@@ -1,0 +1,25 @@
+{
+  "description": "Cross-variable infeasible path: x > y AND y > x is impossible. Tests that SMT solver detects cross-variable contradictions PathEnv cannot.",
+  "tags": [
+    "taint",
+    "code-exec",
+    "symex",
+    "smt"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        5,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "eval(req.query.payload) is in dead code (x > y && y > x). Without SMT, PathEnv may still report this as a finding. With SMT, the path should be pruned as infeasible."
+    }
+  ]
+}

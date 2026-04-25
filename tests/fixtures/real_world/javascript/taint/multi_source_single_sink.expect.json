@@ -1,0 +1,15 @@
+{
+  "description": "XSS via multiple req.query sources (q and page) flowing into a single res.send sink through string concatenation.",
+  "tags": ["taint", "xss", "express", "res.send", "multi-source"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [3, 9],
+      "evidence_contains": [],
+      "notes": "req.query.q and req.query.page both flow into res.send via string concat — XSS"
+    }
+  ]
+}

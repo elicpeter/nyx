@@ -7,6 +7,9 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
     {
       "rule_id": "c.memory.strcpy",
@@ -17,7 +20,7 @@
         8
       ],
       "evidence_contains": [],
-      "notes": "strcpy without bounds check \u2014 potential buffer overflow"
+      "notes": "strcpy without bounds check — potential buffer overflow"
     },
     {
       "rule_id": "c.memory.gets",
@@ -28,7 +31,18 @@
         21
       ],
       "evidence_contains": [],
-      "notes": "gets() is always unsafe \u2014 no way to limit input length"
+      "notes": "gets() is always unsafe — no way to limit input length"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        19,
+        21
+      ],
+      "evidence_contains": [],
+      "notes": "gets(buf) is a tainted input source; printf(buf) at line 20 is an output sink — scanner reports the unbounded-input-to-output flow"
     },
     {
       "rule_id": "c.memory.strcpy",
@@ -39,7 +53,7 @@
         27
       ],
       "evidence_contains": [],
-      "notes": "strcpy in concat_vuln \u2014 first unbounded copy"
+      "notes": "strcpy in concat_vuln — first unbounded copy"
     },
     {
       "rule_id": "c.memory.strcat",
@@ -50,7 +64,7 @@
         28
       ],
       "evidence_contains": [],
-      "notes": "strcat without bounds check \u2014 appends without size limit"
+      "notes": "strcat without bounds check — appends without size limit"
     }
   ]
 }

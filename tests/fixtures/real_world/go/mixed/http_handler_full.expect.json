@@ -67,6 +67,17 @@
       ],
       "evidence_contains": [],
       "notes": "os.Open on line 19 \u2014 f never closed in readHandler"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        14,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "Tainted cmd (source line 11) flows through exec.Command output into fmt.Fprintf response \u2014 command output written to HTTP client"
     }
   ]
 }

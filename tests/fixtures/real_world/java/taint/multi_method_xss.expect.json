@@ -1,0 +1,25 @@
+{
+  "description": "Multi-method XSS: request.getParameter flows through processInput helper to println output",
+  "tags": [
+    "taint",
+    "xss",
+    "servlet",
+    "inter-method"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        9,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "request.getParameter flows to println via processInput; must_match false because SSA may not track inter-method taint within the same class"
+    }
+  ]
+}

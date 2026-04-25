@@ -2,7 +2,7 @@ use super::lattice::Lattice;
 use crate::cfg::{Cfg, EdgeKind, NodeInfo};
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Maximum tracked variables per function (guarded degradation).
 pub const MAX_TRACKED_VARS: usize = 64;
@@ -44,7 +44,7 @@ pub trait Transfer<S: Lattice> {
 pub struct DataflowResult<S, E> {
     /// Converged state at the entry of each node.
     pub states: HashMap<NodeIndex, S>,
-    /// Events emitted during Phase 2 transfer over converged states.
+    /// Events emitted during the second pass over converged states.
     pub events: Vec<E>,
     /// Whether the analysis converged (false if budget was hit).
     #[allow(dead_code)]
@@ -53,9 +53,9 @@ pub struct DataflowResult<S, E> {
 
 /// Run a forward worklist dataflow analysis over the CFG.
 ///
-/// Two-phase design:
-/// - Phase 1: fixed-point iteration to converge states (no event collection).
-/// - Phase 2: single pass over converged states to collect events.
+/// Two-pass design:
+/// - First pass: fixed-point iteration to converge states (no event collection).
+/// - Second pass: single pass over converged states to collect events.
 ///
 /// Termination is guaranteed by lattice finiteness + iteration budget.
 pub fn run_forward<S: Lattice, T: Transfer<S>>(
@@ -70,20 +70,27 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
     // Initialize entry node
     states.insert(entry, initial);
 
-    // ── Phase 1: fixed-point iteration (compute converged states) ─────
+    // ── First pass: fixed-point iteration (compute converged states) ──
+    let _phase1_span = tracing::debug_span!("state_engine_phase1").entered();
     let mut worklist: VecDeque<NodeIndex> = VecDeque::new();
+    let mut in_worklist: HashSet<NodeIndex> = HashSet::new();
     worklist.push_back(entry);
+    in_worklist.insert(entry);
 
     let mut iterations: usize = 0;
     let mut converged = true;
 
     while let Some(node) = worklist.pop_front() {
+        in_worklist.remove(&node);
         iterations += 1;
         if iterations > budget {
-            converged = !transfer.on_budget_exceeded();
-            if !converged {
+            let should_continue = transfer.on_budget_exceeded();
+            if !should_continue {
+                converged = false;
                 break;
             }
+            // Budget exceeded but transfer requested continuation — mark non-converged
+            converged = false;
         }
 
         let node_state = match states.get(&node) {
@@ -98,7 +105,21 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
             continue;
         }
 
-        for (edge_kind, target) in edges {
+        for &(edge_kind, target) in &edges {
+            // Skip redundant Seq edges when a True or False edge reaches the
+            // same target. The CFG builder may emit both a Seq edge (from
+            // build_sub chaining) and a True/False edge (from explicit If
+            // wiring) to the same successor. The Seq edge carries no
+            // branch-aware state, so it dilutes the auth elevation that
+            // the True edge provides. Dropping it preserves correct semantics.
+            if matches!(edge_kind, EdgeKind::Seq)
+                && edges
+                    .iter()
+                    .any(|&(k, t)| t == target && matches!(k, EdgeKind::True | EdgeKind::False))
+            {
+                continue;
+            }
+
             let info = &cfg[node];
             let (out_state, _events) =
                 transfer.apply(node, info, Some(edge_kind), node_state.clone());
@@ -113,14 +134,18 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
             let changed = target_state.is_none_or(|existing| *existing != new_target);
             if changed {
                 states.insert(target, new_target);
-                if !worklist.contains(&target) {
+                if in_worklist.insert(target) {
                     worklist.push_back(target);
                 }
             }
         }
     }
 
-    // ── Phase 2: single pass over converged states to collect events ──
+    tracing::debug!(iterations, converged, "state_engine_phase1 complete");
+    drop(_phase1_span);
+
+    // ── Second pass: single pass over converged states to collect events ──
+    let _phase2_span = tracing::debug_span!("state_engine_phase2").entered();
     let mut events: Vec<T::Event> = Vec::new();
     let mut seen_edges: std::collections::HashSet<(NodeIndex, NodeIndex)> =
         std::collections::HashSet::new();
@@ -141,7 +166,15 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
             continue;
         }
 
-        for (edge_kind, target) in edges {
+        for &(edge_kind, target) in &edges {
+            // Same redundant-Seq-edge skip as the first pass.
+            if matches!(edge_kind, EdgeKind::Seq)
+                && edges
+                    .iter()
+                    .any(|&(k, t)| t == target && matches!(k, EdgeKind::True | EdgeKind::False))
+            {
+                continue;
+            }
             if !seen_edges.insert((node, target)) {
                 continue;
             }
@@ -162,7 +195,7 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cfg::{EdgeKind, NodeInfo, StmtKind};
+    use crate::cfg::{CallMeta, EdgeKind, NodeInfo, StmtKind, TaintMeta};
     use crate::cfg_analysis::rules;
     use crate::state::domain::ResourceLifecycle;
     use crate::state::symbol::SymbolInterner;
@@ -173,16 +206,7 @@ mod tests {
     fn make_node(kind: StmtKind) -> NodeInfo {
         NodeInfo {
             kind,
-            span: (0, 0),
-            label: None,
-            defines: None,
-            uses: vec![],
-            callee: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
+            ..Default::default()
         }
     }
 
@@ -195,15 +219,27 @@ mod tests {
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let open_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            defines: Some("f".into()),
-            callee: Some("fopen".into()),
-            ..make_node(StmtKind::Call)
+            taint: TaintMeta {
+                defines: Some("f".into()),
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fopen".into()),
+                ..Default::default()
+            },
+            ..Default::default()
         });
         let close_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            uses: vec!["f".into()],
-            callee: Some("fclose".into()),
-            ..make_node(StmtKind::Call)
+            taint: TaintMeta {
+                uses: vec!["f".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fclose".into()),
+                ..Default::default()
+            },
+            ..Default::default()
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
 
@@ -216,6 +252,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -247,16 +284,28 @@ mod tests {
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let open_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            defines: Some("f".into()),
-            callee: Some("fopen".into()),
-            ..make_node(StmtKind::Call)
+            taint: TaintMeta {
+                defines: Some("f".into()),
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fopen".into()),
+                ..Default::default()
+            },
+            ..Default::default()
         });
         let if_node = cfg.add_node(make_node(StmtKind::If));
         let close_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            uses: vec!["f".into()],
-            callee: Some("fclose".into()),
-            ..make_node(StmtKind::Call)
+            taint: TaintMeta {
+                uses: vec!["f".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fclose".into()),
+                ..Default::default()
+            },
+            ..Default::default()
         });
         let no_close = cfg.add_node(make_node(StmtKind::Seq));
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -273,6 +322,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -284,5 +334,178 @@ mod tests {
             exit_state.resource.get(sym_f),
             ResourceLifecycle::OPEN | ResourceLifecycle::CLOSED
         );
+    }
+
+    // ── Budget / on_budget_exceeded tests ──────────────────────────────────
+
+    /// Minimal lattice for budget tests.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct UnitState;
+
+    impl Lattice for UnitState {
+        fn bot() -> Self {
+            UnitState
+        }
+        fn join(&self, _other: &Self) -> Self {
+            UnitState
+        }
+        fn leq(&self, _other: &Self) -> bool {
+            true
+        }
+    }
+
+    /// Transfer that always bails on budget (returns false).
+    struct BailTransfer;
+
+    impl Transfer<UnitState> for BailTransfer {
+        type Event = ();
+
+        fn apply(
+            &self,
+            _node: NodeIndex,
+            _info: &NodeInfo,
+            _edge: Option<EdgeKind>,
+            state: UnitState,
+        ) -> (UnitState, Vec<()>) {
+            (state, vec![])
+        }
+
+        fn iteration_budget(&self) -> usize {
+            2 // very small budget
+        }
+
+        fn on_budget_exceeded(&self) -> bool {
+            false // bail
+        }
+    }
+
+    /// Transfer that continues on budget (returns true).
+    struct ContinueTransfer;
+
+    impl Transfer<UnitState> for ContinueTransfer {
+        type Event = ();
+
+        fn apply(
+            &self,
+            _node: NodeIndex,
+            _info: &NodeInfo,
+            _edge: Option<EdgeKind>,
+            state: UnitState,
+        ) -> (UnitState, Vec<()>) {
+            (state, vec![])
+        }
+
+        fn iteration_budget(&self) -> usize {
+            2
+        }
+
+        fn on_budget_exceeded(&self) -> bool {
+            true // keep going
+        }
+    }
+
+    fn make_chain_cfg() -> (Cfg, NodeIndex) {
+        // Entry → A → B → C → Exit (4 iterations for the worklist)
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let a = cfg.add_node(make_node(StmtKind::Seq));
+        let b = cfg.add_node(make_node(StmtKind::Seq));
+        let c = cfg.add_node(make_node(StmtKind::Seq));
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+        cfg.add_edge(entry, a, EdgeKind::Seq);
+        cfg.add_edge(a, b, EdgeKind::Seq);
+        cfg.add_edge(b, c, EdgeKind::Seq);
+        cfg.add_edge(c, exit, EdgeKind::Seq);
+        (cfg, entry)
+    }
+
+    #[test]
+    fn budget_exceeded_bail_stops_immediately_and_marks_non_converged() {
+        let (cfg, entry) = make_chain_cfg();
+        let result = run_forward(&cfg, entry, &BailTransfer, UnitState);
+
+        // Must NOT be converged when on_budget_exceeded returns false
+        assert!(!result.converged, "bail transfer must mark converged=false");
+    }
+
+    #[test]
+    fn budget_exceeded_continue_marks_non_converged() {
+        let (cfg, entry) = make_chain_cfg();
+        let result = run_forward(&cfg, entry, &ContinueTransfer, UnitState);
+
+        // Even when continuing past budget, converged must be false
+        assert!(
+            !result.converged,
+            "continue-past-budget must still mark converged=false"
+        );
+    }
+
+    #[test]
+    fn within_budget_marks_converged() {
+        // Use a generous budget so the analysis converges normally
+        struct GenerousTransfer;
+        impl Transfer<UnitState> for GenerousTransfer {
+            type Event = ();
+            fn apply(
+                &self,
+                _node: NodeIndex,
+                _info: &NodeInfo,
+                _edge: Option<EdgeKind>,
+                state: UnitState,
+            ) -> (UnitState, Vec<()>) {
+                (state, vec![])
+            }
+            fn iteration_budget(&self) -> usize {
+                100_000
+            }
+        }
+
+        let (cfg, entry) = make_chain_cfg();
+        let result = run_forward(&cfg, entry, &GenerousTransfer, UnitState);
+        assert!(result.converged, "within-budget analysis should converge");
+    }
+
+    #[test]
+    fn worklist_membership_dedup_with_nodeindex() {
+        use petgraph::graph::NodeIndex;
+        use std::collections::{HashSet, VecDeque};
+
+        let mut wl: VecDeque<NodeIndex> = VecDeque::new();
+        let mut in_wl: HashSet<NodeIndex> = HashSet::new();
+
+        let n0 = NodeIndex::new(0);
+        let n1 = NodeIndex::new(1);
+        let n2 = NodeIndex::new(2);
+
+        // Push n0
+        assert!(in_wl.insert(n0));
+        wl.push_back(n0);
+
+        // Push n1
+        assert!(in_wl.insert(n1));
+        wl.push_back(n1);
+
+        // Duplicate n0 — should not insert
+        assert!(!in_wl.insert(n0));
+        // wl still has only 2 entries
+        assert_eq!(wl.len(), 2);
+
+        // Pop n0
+        let popped = wl.pop_front().unwrap();
+        in_wl.remove(&popped);
+        assert_eq!(popped, n0);
+        assert!(!in_wl.contains(&n0));
+        assert!(in_wl.contains(&n1));
+
+        // Re-enqueue n0 (state changed)
+        assert!(in_wl.insert(n0));
+        wl.push_back(n0);
+
+        // Push n2
+        assert!(in_wl.insert(n2));
+        wl.push_back(n2);
+
+        assert_eq!(wl.len(), 3);
+        assert_eq!(in_wl.len(), 3);
     }
 }

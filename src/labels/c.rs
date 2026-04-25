@@ -6,15 +6,38 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["getenv"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["fgets", "scanf", "fscanf", "gets", "read"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
+    },
+    // Network input sources
+    LabelRule {
+        matchers: &["recv", "recvfrom"],
+        label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     // ───────── Sanitizers ──────────
+    // Generic `sanitize_*` prefix: clears the full cap mask.  A function
+    // named `sanitize_*` is a developer-asserted general-purpose
+    // sanitizer; without a more specific signal (e.g. an explicit
+    // sanitizer label rule with a narrower cap), assume it covers every
+    // taint cap that flows through it.  Narrowing to a single cap (e.g.
+    // HTML_ESCAPE) under-clears developer-named sanitizers and produces
+    // FPs whenever the downstream sink belongs to a different cap (e.g.
+    // FMT_STRING via printf), which is the typical case in C/C++ code.
     LabelRule {
         matchers: &["sanitize_"],
-        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        label: DataLabel::Sanitizer(Cap::all()),
+        case_sensitive: false,
+    },
+    // Type conversion sanitizers
+    LabelRule {
+        matchers: &["atoi", "atol", "strtol", "strtoul"],
+        label: DataLabel::Sanitizer(Cap::all()),
+        case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
     LabelRule {
@@ -22,18 +45,27 @@ pub static RULES: &[LabelRule] = &[
             "system", "popen", "exec", "execl", "execlp", "execle", "execve", "execvp",
         ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["sprintf", "strcpy", "strcat"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["printf", "fprintf"],
         label: DataLabel::Sink(Cap::FMT_STRING),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["fopen", "open"],
         label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["curl_easy_perform"],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
     },
 ];
 
@@ -43,7 +75,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "while_statement"       => Kind::While,
     "for_statement"         => Kind::For,
     "do_statement"          => Kind::While,
-    "switch_statement"      => Kind::Block,
+    "switch_statement"      => Kind::Switch,
     "case_statement"        => Kind::Block,
     "labeled_statement"     => Kind::Block,
 
@@ -79,3 +111,26 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     self_param_kinds: &[],
     ident_fields: &["declarator", "name"],
 };
+
+/// Benchmark-driven output-parameter source positions for known C APIs.
+/// Maps callee name → argument positions that receive Source taint.
+pub static OUTPUT_PARAM_SOURCES: &[(&str, &[usize])] = &[
+    ("fgets", &[0]),    // fgets(buf, size, stream) — buf receives input
+    ("gets", &[0]),     // gets(buf) — buf receives input
+    ("recv", &[1]),     // recv(fd, buf, len, flags)
+    ("recvfrom", &[1]), // recvfrom(fd, buf, len, flags, ...)
+];
+
+/// Arg-to-arg taint propagation for known C functions.
+pub static ARG_PROPAGATIONS: &[super::ArgPropagation] = &[
+    super::ArgPropagation {
+        callee: "inet_pton",
+        from_args: &[1],
+        to_args: &[2],
+    },
+    super::ArgPropagation {
+        callee: "inet_aton",
+        from_args: &[0],
+        to_args: &[1],
+    },
+];

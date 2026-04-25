@@ -1,0 +1,15 @@
+{
+  "description": "SSRF: user-controlled URL from request.args flows to httpx.get()",
+  "tags": ["taint", "ssrf", "flask"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [6, 11],
+      "evidence_contains": [],
+      "notes": "request.args.get('url') flows to httpx.get(url) without URL validation"
+    }
+  ]
+}

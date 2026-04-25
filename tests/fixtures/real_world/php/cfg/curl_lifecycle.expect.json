@@ -20,6 +20,17 @@
       ],
       "evidence_contains": [],
       "notes": "fetchUrl opens cURL handle but never calls curl_close"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [
+        3,
+        3
+      ],
+      "evidence_contains": [],
+      "notes": "TP: curl_init at line 3 in fetchUrl is never closed; curl_close is missing from this function, so the cURL handle leaks"
     }
   ]
 }

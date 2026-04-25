@@ -1,0 +1,15 @@
+{
+  "description": "SSRF via req.query.id flowing into fetch through string concatenation in a .then() chain.",
+  "tags": ["taint", "ssrf", "express", "fetch", "promise"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [3, 12],
+      "evidence_contains": [],
+      "notes": "req.query.id flows into fetch via string concat — SSRF"
+    }
+  ]
+}

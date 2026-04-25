@@ -1,5 +1,5 @@
 {
-  "description": "Path traversal via req.query flowing into fs.readFileSync. Scanner lacks fs.readFileSync as a defined sink.",
+  "description": "Path traversal via req.query flowing into fs.readFileSync.",
   "tags": [
     "taint",
     "path-traversal",
@@ -9,17 +9,31 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         5,
         10
       ],
       "evidence_contains": [],
-      "notes": "req.query.path flows into fs.readFileSync but fs.readFileSync is not a recognized taint sink"
+      "notes": "req.query.path flows into fs.readFileSync (FILE_IO sink)"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "content read from tainted path flows to res.send — secondary XSS-style response flow"
     },
     {
       "rule_id": "taint-unsanitised-flow",
@@ -31,6 +45,17 @@
       ],
       "evidence_contains": [],
       "notes": "Safe version uses path.resolve and startsWith guard; would require adding fs sinks to detect"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        19,
+        19
+      ],
+      "evidence_contains": [],
+      "notes": "res.send(content) in the guarded handler — scanner does not model path.resolve/startsWith as a validator, so the sanitizer-guarded content still flows to the response sink"
     }
   ]
 }

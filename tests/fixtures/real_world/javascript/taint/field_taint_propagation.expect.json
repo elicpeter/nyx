@@ -1,0 +1,15 @@
+{
+  "description": "Field write from source (req.query.input) flows through field read (obj.data) to sink (res.send).",
+  "tags": ["taint", "xss", "field-access"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 8],
+      "evidence_contains": [],
+      "notes": "obj.data = req.query.input flows to res.send(obj.data) — XSS via field propagation"
+    }
+  ]
+}

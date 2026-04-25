@@ -25,6 +25,10 @@ pub struct ResourcePair {
     /// but should NOT be treated as acquisitions.
     pub exclude_acquire: &'static [&'static str],
     pub resource_name: &'static str,
+    /// Callee patterns that read/write/operate on this specific resource type,
+    /// triggering use-after-close if the handle is closed. Checked before the
+    /// global `RESOURCE_USE_PATTERNS` fallback.
+    pub use_patterns: &'static [&'static str],
 }
 
 // ── Guard rules ─────────────────────────────────────────────────────────
@@ -82,6 +86,12 @@ static COMMON_AUTH: &[AuthRule] = &[AuthRule {
         "check_auth",
         "verify_token",
         "validate_token",
+        // Additional patterns
+        "ensureAuthenticated",
+        "ensureAuth",
+        "requireAuth",
+        "hasPermission",
+        "requireRole",
     ],
 }];
 
@@ -99,6 +109,12 @@ static GO_AUTH: &[AuthRule] = &[AuthRule {
         "validate_token",
         "middleware.auth",
         "auth.required",
+        // Additional patterns
+        "ensureAuthenticated",
+        "ensureAuth",
+        "requireAuth",
+        "hasPermission",
+        "requireRole",
     ],
 }];
 
@@ -118,6 +134,163 @@ static JAVA_AUTH: &[AuthRule] = &[AuthRule {
         "checkPermission",
         "hasAuthority",
         "hasRole",
+        // Additional patterns
+        "ensureAuthenticated",
+        "ensureAuth",
+        "requireAuth",
+        "hasPermission",
+        "requireRole",
+        // Spring Security / JAX-RS annotation names (used by decorator
+        // detection — see `extract_auth_decorators` in src/cfg.rs).
+        "PreAuthorize",
+        "PostAuthorize",
+        "Secured",
+        "RolesAllowed",
+        "DenyAll",
+        "Authenticated",
+    ],
+}];
+
+static JS_AUTH: &[AuthRule] = &[AuthRule {
+    matchers: &[
+        "is_authenticated",
+        "require_auth",
+        "check_permission",
+        "is_admin",
+        "authorize",
+        "authenticate",
+        "require_login",
+        "check_auth",
+        "verify_token",
+        "validate_token",
+        // JS/TS middleware & JWT
+        "ensureAuthenticated",
+        "ensureAuth",
+        "requireAuth",
+        "hasPermission",
+        "requireRole",
+        "checkRole",
+        "passport.authenticate",
+        "jwt.verify",
+        // NestJS-style decorators and guard class names (seeded by decorator
+        // arg extraction in `extract_auth_decorators`). `UseGuards` alone is
+        // too generic — we still match on guard *argument* identifiers here.
+        "Authenticated",
+        "AuthGuard",
+        "JwtAuthGuard",
+        "JwtGuard",
+        "RolesGuard",
+        "SessionGuard",
+        "PassportAuthGuard",
+    ],
+}];
+
+static PYTHON_AUTH: &[AuthRule] = &[AuthRule {
+    matchers: &[
+        "is_authenticated",
+        "require_auth",
+        "check_permission",
+        "is_admin",
+        "authorize",
+        "authenticate",
+        "require_login",
+        "check_auth",
+        "verify_token",
+        "validate_token",
+        // Python-specific
+        "ensureAuthenticated",
+        "ensureAuth",
+        "requireAuth",
+        "hasPermission",
+        "requireRole",
+        "login_required",
+        "permission_required",
+        "has_permission",
+        "check_permissions",
+        // Common decorator names used by Flask-Login / Django / custom views
+        // (consumed by `extract_auth_decorators` on function_definition nodes).
+        "admin_required",
+        "staff_member_required",
+        "user_passes_test",
+    ],
+}];
+
+static RUBY_AUTH: &[AuthRule] = &[AuthRule {
+    matchers: &[
+        "is_authenticated",
+        "require_auth",
+        "check_permission",
+        "is_admin",
+        "authorize",
+        "authenticate",
+        "require_login",
+        "check_auth",
+        "verify_token",
+        "validate_token",
+        // Devise / Rails controller-filter idioms (consumed by `before_action`
+        // decorator extraction).
+        "authenticate_user",
+        "authenticate_admin",
+        "require_user",
+        "require_admin",
+        "current_user",
+    ],
+}];
+
+static PHP_AUTH: &[AuthRule] = &[AuthRule {
+    matchers: &[
+        "is_authenticated",
+        "require_auth",
+        "check_permission",
+        "is_admin",
+        "authorize",
+        "authenticate",
+        "require_login",
+        "check_auth",
+        "verify_token",
+        "validate_token",
+        // Symfony Security attributes (`#[IsGranted(..)]`, `#[Security(..)]`)
+        // and common guard idioms.
+        "IsGranted",
+        "Security",
+    ],
+}];
+
+static CPP_AUTH: &[AuthRule] = &[AuthRule {
+    matchers: &[
+        "is_authenticated",
+        "require_auth",
+        "check_permission",
+        "is_admin",
+        "authorize",
+        "authenticate",
+        "require_login",
+        "check_auth",
+        "verify_token",
+        "validate_token",
+        // Custom C++ attributes — framework-defined, bare-name match.
+        "authenticated",
+        "require_auth",
+        "admin_only",
+    ],
+}];
+
+static RUST_AUTH: &[AuthRule] = &[AuthRule {
+    matchers: &[
+        "is_authenticated",
+        "require_auth",
+        "check_permission",
+        "is_admin",
+        "authorize",
+        "authenticate",
+        "require_login",
+        "check_auth",
+        "verify_token",
+        "validate_token",
+        // Custom proc-macro attributes — framework-defined, bare-name match.
+        "authenticated",
+        "require_auth",
+        "admin_only",
     ],
 }];
 
@@ -125,6 +298,12 @@ pub fn auth_rules(lang: Lang) -> &'static [AuthRule] {
     match lang {
         Lang::Go => GO_AUTH,
         Lang::Java => JAVA_AUTH,
+        Lang::JavaScript | Lang::TypeScript => JS_AUTH,
+        Lang::Python => PYTHON_AUTH,
+        Lang::Ruby => RUBY_AUTH,
+        Lang::Php => PHP_AUTH,
+        Lang::Cpp => CPP_AUTH,
+        Lang::Rust => RUST_AUTH,
         _ => COMMON_AUTH,
     }
 }
@@ -183,24 +362,68 @@ static C_RESOURCES: &[ResourcePair] = &[
         release: &["free"],
         exclude_acquire: &[],
         resource_name: "memory",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["fopen", "fdopen", "curlx_fopen", "curlx_fdopen"],
         release: &["fclose", "curlx_fclose"],
         exclude_acquire: &["freopen", "curlx_freopen"],
         resource_name: "file handle",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["open"],
         release: &["close"],
         exclude_acquire: &["freopen", "curlx_freopen"],
         resource_name: "file descriptor",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["pthread_mutex_lock"],
         release: &["pthread_mutex_unlock"],
         exclude_acquire: &[],
         resource_name: "mutex",
+        use_patterns: &[],
+    },
+];
+
+static CPP_RESOURCES: &[ResourcePair] = &[
+    // Inherited from C
+    ResourcePair {
+        acquire: &["malloc", "calloc", "realloc"],
+        release: &["free"],
+        exclude_acquire: &[],
+        resource_name: "memory",
+        use_patterns: &[],
+    },
+    ResourcePair {
+        acquire: &["fopen", "fdopen", "curlx_fopen", "curlx_fdopen"],
+        release: &["fclose", "curlx_fclose"],
+        exclude_acquire: &["freopen", "curlx_freopen"],
+        resource_name: "file handle",
+        use_patterns: &[],
+    },
+    ResourcePair {
+        acquire: &["open"],
+        release: &["close"],
+        exclude_acquire: &["freopen", "curlx_freopen"],
+        resource_name: "file descriptor",
+        use_patterns: &[],
+    },
+    ResourcePair {
+        acquire: &["pthread_mutex_lock"],
+        release: &["pthread_mutex_unlock"],
+        exclude_acquire: &[],
+        resource_name: "mutex",
+        use_patterns: &[],
+    },
+    // C++ new/delete (callee normalized to "new"/"delete" in cfg.rs)
+    ResourcePair {
+        acquire: &["new"],
+        release: &["delete"],
+        exclude_acquire: &[],
+        resource_name: "heap object",
+        use_patterns: &[],
     },
 ];
 
@@ -210,12 +433,29 @@ static GO_RESOURCES: &[ResourcePair] = &[
         release: &[".Close"],
         exclude_acquire: &[],
         resource_name: "file handle",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &[".Lock"],
         release: &[".Unlock"],
         exclude_acquire: &[],
         resource_name: "mutex",
+        use_patterns: &[],
+    },
+    // Additional patterns
+    ResourcePair {
+        acquire: &["sql.Open"],
+        release: &[".Close"],
+        exclude_acquire: &[],
+        resource_name: "db connection",
+        use_patterns: &[".Query", ".Exec", ".Prepare", ".Begin"],
+    },
+    ResourcePair {
+        acquire: &["net.Listen"],
+        release: &[".Close"],
+        exclude_acquire: &[],
+        resource_name: "listener",
+        use_patterns: &[".Accept", ".Addr"],
     },
 ];
 
@@ -226,20 +466,86 @@ static RUST_RESOURCES: &[ResourcePair] = &[
         release: &["dealloc"],
         exclude_acquire: &[],
         resource_name: "raw memory",
+        use_patterns: &[],
     },
 ];
 
-static JAVA_RESOURCES: &[ResourcePair] = &[ResourcePair {
-    acquire: &[
-        "new FileInputStream",
-        "new FileOutputStream",
-        "new BufferedReader",
-        "openConnection",
-    ],
-    release: &[".close"],
-    exclude_acquire: &[],
-    resource_name: "stream/connection",
-}];
+static JAVA_RESOURCES: &[ResourcePair] = &[
+    ResourcePair {
+        acquire: &[
+            "FileInputStream",
+            "FileOutputStream",
+            "BufferedReader",
+            "openConnection",
+        ],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "stream/connection",
+        use_patterns: &[".read", ".write", ".flush", ".available"],
+    },
+    ResourcePair {
+        acquire: &["DriverManager.getConnection", "getConnection"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "db connection",
+        use_patterns: &[
+            ".executeQuery",
+            ".executeUpdate",
+            ".createStatement",
+            ".prepareStatement",
+        ],
+    },
+    ResourcePair {
+        acquire: &["Socket"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "socket",
+        use_patterns: &[".getInputStream", ".getOutputStream", ".connect"],
+    },
+    // Additional patterns
+    ResourcePair {
+        acquire: &["prepareStatement"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "prepared statement",
+        use_patterns: &[".executeQuery", ".executeUpdate", ".setString", ".setInt"],
+    },
+    ResourcePair {
+        acquire: &["executeQuery"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "result set",
+        use_patterns: &[".next", ".getString", ".getInt", ".getBoolean"],
+    },
+    ResourcePair {
+        acquire: &["ServerSocket"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "server socket",
+        use_patterns: &[".accept", ".bind"],
+    },
+    ResourcePair {
+        acquire: &["DatagramSocket"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "datagram socket",
+        use_patterns: &[".send", ".receive"],
+    },
+    ResourcePair {
+        acquire: &["RandomAccessFile"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "random access file",
+        use_patterns: &[".read", ".write", ".seek", ".length"],
+    },
+    ResourcePair {
+        acquire: &["Channel.open", "FileChannel.open", "SocketChannel.open"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "NIO channel",
+        use_patterns: &[".read", ".write", ".position"],
+    },
+];
 
 static PYTHON_RESOURCES: &[ResourcePair] = &[
     ResourcePair {
@@ -247,45 +553,135 @@ static PYTHON_RESOURCES: &[ResourcePair] = &[
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "file handle",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["socket.socket", "socket"],
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "socket",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["connect", "cursor"],
         release: &[".close"],
         exclude_acquire: &["signal.connect", "event.connect", ".register"],
         resource_name: "db connection",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["threading.Lock", "threading.RLock"],
         release: &[".release"],
         exclude_acquire: &[],
         resource_name: "mutex",
+        use_patterns: &[],
+    },
+    // Additional patterns
+    ResourcePair {
+        acquire: &["urllib.request.urlopen", "urlopen"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "url handle",
+        use_patterns: &[".read", ".readline", ".readlines"],
+    },
+    ResourcePair {
+        acquire: &[
+            "http.client.HTTPConnection",
+            "HTTPConnection",
+            "HTTPSConnection",
+        ],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "http connection",
+        use_patterns: &[".request", ".getresponse"],
+    },
+    ResourcePair {
+        acquire: &["sqlite3.connect"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "sqlite connection",
+        use_patterns: &[".execute", ".cursor", ".commit"],
+    },
+    ResourcePair {
+        acquire: &["tempfile.NamedTemporaryFile", "NamedTemporaryFile"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "temp file",
+        use_patterns: &[".write", ".read", ".seek"],
+    },
+    ResourcePair {
+        acquire: &["zipfile.ZipFile", "ZipFile"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "zip file",
+        use_patterns: &[".read", ".write", ".extractall", ".namelist"],
     },
 ];
 
 static RUBY_RESOURCES: &[ResourcePair] = &[
     ResourcePair {
-        acquire: &["File.open", "open"],
+        acquire: &["File.open", "File.new", "open"],
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "file handle",
+        use_patterns: &[
+            ".read",
+            ".write",
+            ".gets",
+            ".puts",
+            ".each_line",
+            ".readline",
+            ".readlines",
+            ".sysread",
+            ".syswrite",
+        ],
     },
     ResourcePair {
-        acquire: &["TCPSocket.new", "UDPSocket.new"],
+        acquire: &[
+            "TCPSocket.new",
+            "UDPSocket.new",
+            "TCPServer.new",
+            "UNIXSocket.new",
+        ],
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "socket",
+        use_patterns: &[".read", ".write", ".send", ".recv", ".gets", ".puts"],
     },
     ResourcePair {
         acquire: &[".lock"],
         release: &[".unlock"],
         exclude_acquire: &[],
         resource_name: "mutex",
+        use_patterns: &[],
+    },
+    ResourcePair {
+        acquire: &[
+            "PG.connect",
+            "PG::Connection.new",
+            "Sequel.connect",
+            "Mysql2::Client.new",
+            "SQLite3::Database.new",
+        ],
+        release: &[".close", ".disconnect"],
+        exclude_acquire: &[],
+        resource_name: "db connection",
+        use_patterns: &[".exec", ".query", ".exec_params", ".prepare", ".execute"],
+    },
+    // Additional patterns
+    ResourcePair {
+        acquire: &["Net::HTTP.start"],
+        release: &[".finish"],
+        exclude_acquire: &[],
+        resource_name: "http connection",
+        use_patterns: &[".get", ".post", ".request"],
+    },
+    ResourcePair {
+        acquire: &["Tempfile.new", "Tempfile.open"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "temp file",
+        use_patterns: &[".write", ".read", ".path"],
     },
 ];
 
@@ -295,18 +691,43 @@ static PHP_RESOURCES: &[ResourcePair] = &[
         release: &["fclose"],
         exclude_acquire: &["freopen"],
         resource_name: "file handle",
+        use_patterns: &[],
     },
     ResourcePair {
-        acquire: &["mysqli_connect"],
-        release: &["mysqli_close"],
+        acquire: &["mysqli_connect", "mysqli"],
+        release: &["mysqli_close", ".close"],
         exclude_acquire: &[],
         resource_name: "db connection",
+        use_patterns: &["mysqli_query", "mysqli_fetch_array", ".query", ".fetch"],
     },
     ResourcePair {
         acquire: &["curl_init"],
         release: &["curl_close"],
         exclude_acquire: &[],
         resource_name: "curl handle",
+        use_patterns: &["curl_exec", "curl_getinfo", "curl_setopt"],
+    },
+    // Additional patterns
+    ResourcePair {
+        acquire: &["pg_connect"],
+        release: &["pg_close"],
+        exclude_acquire: &[],
+        resource_name: "pg connection",
+        use_patterns: &["pg_query", "pg_fetch_array", "pg_fetch_row"],
+    },
+    ResourcePair {
+        acquire: &["fsockopen", "pfsockopen"],
+        release: &["fclose"],
+        exclude_acquire: &[],
+        resource_name: "socket",
+        use_patterns: &["fwrite", "fread", "fgets"],
+    },
+    ResourcePair {
+        acquire: &["stream_socket_client"],
+        release: &["fclose"],
+        exclude_acquire: &[],
+        resource_name: "stream socket",
+        use_patterns: &["fwrite", "fread", "stream_get_contents"],
     },
 ];
 
@@ -316,19 +737,63 @@ static JS_RESOURCES: &[ResourcePair] = &[
         release: &["fs.close", "fs.closeSync"],
         exclude_acquire: &[],
         resource_name: "file descriptor",
+        use_patterns: &[
+            "fs.readSync",
+            "fs.writeSync",
+            "fs.fstatSync",
+            "fs.ftruncateSync",
+            "fs.fsyncSync",
+        ],
     },
     ResourcePair {
         acquire: &["createReadStream", "createWriteStream"],
         release: &[".close", ".destroy"],
         exclude_acquire: &[],
         resource_name: "stream",
+        use_patterns: &[".pipe", ".resume", ".write", ".read", ".push"],
+    },
+    // Additional patterns
+    ResourcePair {
+        acquire: &["net.createConnection", "net.connect"],
+        release: &[".end", ".destroy"],
+        exclude_acquire: &[],
+        resource_name: "net socket",
+        use_patterns: &[".write", ".read", ".pipe"],
+    },
+    ResourcePair {
+        acquire: &["http.request", "https.request"],
+        release: &[".end", ".destroy"],
+        exclude_acquire: &[],
+        resource_name: "http request",
+        use_patterns: &[".write"],
+    },
+    ResourcePair {
+        acquire: &["WebSocket"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "websocket",
+        use_patterns: &[".send"],
+    },
+    ResourcePair {
+        acquire: &["mysql.createConnection", "mysql.createPool"],
+        release: &[".end", ".destroy"],
+        exclude_acquire: &[],
+        resource_name: "mysql connection",
+        use_patterns: &[".query", ".execute"],
+    },
+    ResourcePair {
+        acquire: &["pg.Pool", "pg.Client"],
+        release: &[".end", ".release"],
+        exclude_acquire: &[],
+        resource_name: "pg connection",
+        use_patterns: &[".query"],
     },
 ];
 
 pub fn resource_pairs(lang: Lang) -> &'static [ResourcePair] {
     match lang {
         Lang::C => C_RESOURCES,
-        Lang::Cpp => C_RESOURCES,
+        Lang::Cpp => CPP_RESOURCES,
         Lang::Go => GO_RESOURCES,
         Lang::Rust => RUST_RESOURCES,
         Lang::Java => JAVA_RESOURCES,

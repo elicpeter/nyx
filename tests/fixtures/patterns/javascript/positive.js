@@ -45,7 +45,37 @@ function triggerCookieWrite(sid) {
     document.cookie = "session=" + sid;
 }
 
+// js.secrets.hardcoded_secret
+var config = { secret: "keyboard-cat-fallback", password: "admin123" };
+
+// js.crypto.weak_hash
+function triggerWeakHash() {
+    var hash = crypto.createHash("md5");
+}
+
+// js.crypto.weak_hash_import
+function triggerWeakHashImport(password) {
+    var hash = md5(password);
+}
+
 // js.crypto.math_random
 function triggerMathRandom() {
     var token = Math.random();
+}
+
+// js.config.reject_unauthorized
+var opts = { rejectUnauthorized: false, timeout: 3000 };
+
+// js.secrets.fallback_secret
+var sessionSecret = process.env.SESSION_SECRET || "fake-default-session-secret";
+
+// js.config.verbose_error_response
+function errorHandler(err, req, res) {
+    var error = err;
+    res.status(500).render("errors/error", { title: "Server Error", error });
+}
+
+// js.config.cors_dynamic_origin
+function setCors(req, res) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
 }

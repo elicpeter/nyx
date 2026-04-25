@@ -1,0 +1,26 @@
+{
+  "description": "XSS through global variable: tainted input stored in global var in one handler, rendered in another",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "global-variable",
+    "cross-handler"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        4,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "cross-handler global variable taint requires inter-handler analysis; must_match false"
+    }
+  ]
+}

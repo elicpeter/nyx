@@ -1,0 +1,36 @@
+{
+  "description": "SQL injection via string chain: input.trim().toLowerCase() concatenated into query. Tests that symex models string operations structurally (not as opaque Call).",
+  "tags": [
+    "taint",
+    "sqli",
+    "symex",
+    "string-ops"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.q flows through trim().toLowerCase() into client.query via string concat — trim/toLowerCase do not sanitize"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "LOW",
+      "must_match": false,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "structural: cfg-unguarded-sink on client.query"
+    }
+  ]
+}

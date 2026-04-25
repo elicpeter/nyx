@@ -1,4 +1,5 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig};
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule};
+use crate::utils::project::{DetectedFramework, FrameworkContext};
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -6,6 +7,7 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["System.getenv"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &[
@@ -16,34 +18,155 @@ pub static RULES: &[LabelRule] = &[
             "getReader",
             "getQueryString",
             "getPathInfo",
+            "getRequestURI",
+            "getRequestURL",
+            "getServletPath",
+            "getContextPath",
         ],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     LabelRule {
-        matchers: &["readObject", "readLine"],
+        matchers: &["readObject", "readLine", "ObjectMapper.readValue"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["HtmlUtils.htmlEscape", "StringEscapeUtils.escapeHtml4"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    // OWASP ESAPI encoders
+    LabelRule {
+        matchers: &["Encoder.encodeForHTML", "Encoder.encodeForJavaScript"],
+        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["Encoder.encodeForSQL"],
+        label: DataLabel::Sanitizer(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["Encoder.encodeForURL"],
+        label: DataLabel::Sanitizer(Cap::URL_ENCODE),
+        case_sensitive: false,
+    },
+    // OWASP ESAPI input validator — validates and canonicalizes input
+    LabelRule {
+        matchers: &["Validator.getValidInput"],
+        label: DataLabel::Sanitizer(Cap::all()),
+        case_sensitive: false,
+    },
+    // Type-check sanitizers — parsing to a primitive erases taint
+    LabelRule {
+        matchers: &[
+            "Integer.parseInt",
+            "Long.parseLong",
+            "Short.parseShort",
+            "Double.parseDouble",
+            "Integer.valueOf",
+            "Boolean.parseBoolean",
+        ],
+        label: DataLabel::Sanitizer(Cap::all()),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["URLEncoder.encode"],
+        label: DataLabel::Sanitizer(Cap::URL_ENCODE),
+        case_sensitive: false,
+    },
+    // Parameterized queries prevent SQL injection
+    LabelRule {
+        matchers: &["prepareStatement"],
+        label: DataLabel::Sanitizer(Cap::SQL_QUERY),
+        case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
     LabelRule {
         matchers: &["Runtime.exec", "ProcessBuilder"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
-        matchers: &["executeQuery", "executeUpdate", "prepareStatement"],
-        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        matchers: &["executeQuery", "executeUpdate"],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["Class.forName"],
-        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        label: DataLabel::Sink(Cap::CODE_EXEC),
+        case_sensitive: false,
+    },
+    // HTTP response sinks — println/print are broad (also match System.out)
+    // but necessary to catch response.getWriter().println() via suffix matching.
+    LabelRule {
+        matchers: &["println", "print"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    // openConnection() is the standard java.net.URL API for initiating a connection.
+    // It is the correct interception point — the URL is already set on the object.
+    LabelRule {
+        matchers: &[
+            "openConnection",
+            "HttpClient.send",
+            "HttpClient.sendAsync",
+            "getForObject",
+            "RestTemplate.exchange",
+            "postForObject",
+            "postForEntity",
+        ],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
     },
     LabelRule {
-        matchers: &["println", "print", "write"],
-        label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        matchers: &[
+            "readObject",
+            "readUnshared",
+            "XMLDecoder.readObject",
+            "ObjectMapper.readValue",
+        ],
+        label: DataLabel::Sink(Cap::DESERIALIZE),
+        case_sensitive: false,
+    },
+    // ─── Spring / JPA / Hibernate SQL sinks ───
+    LabelRule {
+        matchers: &[
+            "jdbcTemplate.query",
+            "jdbcTemplate.update",
+            "jdbcTemplate.execute",
+            "jdbcTemplate.queryForObject",
+            "jdbcTemplate.queryForList",
+        ],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &[
+            "entityManager.createNativeQuery",
+            "entityManager.createQuery",
+            "session.createQuery",
+            "session.createSQLQuery",
+        ],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+    },
+    // NOTE: Java logging (logger.info, log.warn, etc.) removed as sinks —
+    // logging format injection is not a real security vulnerability in Java.
+    // String.format also removed — it builds strings in memory (not a sink);
+    // the real sink is wherever the formatted string is used (SQL, HTTP, etc.).
+    // ─── JNDI injection sinks ───
+    LabelRule {
+        matchers: &[
+            "InitialContext.lookup",
+            "ctx.lookup",
+            "context.lookup",
+            "dirContext.lookup",
+        ],
+        label: DataLabel::Sink(Cap::CODE_EXEC),
+        case_sensitive: false,
     },
 ];
 
@@ -56,7 +179,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "do_statement"                 => Kind::While,
 
     "return_statement"             => Kind::Return,
-    "throw_statement"              => Kind::Return,
+    "throw_statement"              => Kind::Throw,
     "break_statement"              => Kind::Break,
     "continue_statement"           => Kind::Continue,
 
@@ -68,13 +191,16 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "interface_body"               => Kind::Block,
     "method_declaration"           => Kind::Function,
     "constructor_declaration"      => Kind::Function,
-    "switch_expression"            => Kind::Block,
+    "switch_expression"            => Kind::Switch,
     "switch_block"                 => Kind::Block,
     "switch_block_statement_group" => Kind::Block,
-    "try_statement"                => Kind::Block,
+    "try_statement"                => Kind::Try,
+    "try_with_resources_statement" => Kind::Try,
+    "resource_specification"       => Kind::Block,
+    "resource"                     => Kind::CallWrapper,
     "catch_clause"                 => Kind::Block,
     "finally_clause"               => Kind::Block,
-    "lambda_expression"            => Kind::Block,
+    "lambda_expression"            => Kind::Function,
     "constructor_body"             => Kind::Block,
     "static_initializer"           => Kind::Block,
 
@@ -84,6 +210,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "assignment_expression"        => Kind::Assignment,
     "local_variable_declaration"   => Kind::CallWrapper,
     "expression_statement"         => Kind::CallWrapper,
+    "cast_expression"              => Kind::Seq,
 
     // trivia
     "line_comment"                 => Kind::Trivia,
@@ -102,3 +229,19 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     self_param_kinds: &[],
     ident_fields: &["name"],
 };
+
+/// Framework-conditional rules for Java.
+pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
+    let mut rules = Vec::new();
+
+    if ctx.has(DetectedFramework::Spring) {
+        // When Spring is detected, bare "send" is likely HttpClient.send()
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["send".into()],
+            label: DataLabel::Sink(Cap::SSRF),
+            case_sensitive: false,
+        });
+    }
+
+    rules
+}

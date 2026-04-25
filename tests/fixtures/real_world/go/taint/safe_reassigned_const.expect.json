@@ -1,0 +1,6 @@
+{
+  "description": "Source from os.Getenv killed by constant reassignment before reaching exec.Command sink.",
+  "tags": ["taint", "negative", "reassignment", "safe"],
+  "modes": ["full"],
+  "expected": []
+}

@@ -1,0 +1,26 @@
+{
+  "description": "Command injection via list.append: user input appended to list then passed to subprocess.call",
+  "tags": [
+    "taint",
+    "cmdi",
+    "flask",
+    "list",
+    "container"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "request.args.get('cmd') appended to list then passed to subprocess.call"
+    }
+  ]
+}

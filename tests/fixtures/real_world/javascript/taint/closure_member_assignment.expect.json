@@ -1,0 +1,22 @@
+{
+  "description": "Anonymous fn assigned to object member, then invoked via the member — property-name derived binding must let the closure participate in capture-based taint",
+  "tags": ["taint", "closure", "member-assignment", "code-exec"],
+  "modes": ["full"],
+  "strict_unexpected": ["taint-unsanitised-flow"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_match": true,
+      "line_range": [8, 10],
+      "evidence_contains": [],
+      "notes": "handlers.run = function(){eval(q)} then handlers.run() reaches eval(q)"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_match": true,
+      "line_range": [10, 10],
+      "evidence_contains": [],
+      "notes": "handlers.run() call at line 10 re-reports the flow via inline callee analysis — tainted capture reaches eval in body"
+    }
+  ]
+}

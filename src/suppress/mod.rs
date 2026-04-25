@@ -14,14 +14,14 @@ use std::collections::HashMap;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Whether the directive suppresses on its own line or the next line.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum SuppressionKind {
     SameLine,
     NextLine,
 }
 
 /// Metadata attached to a suppressed finding.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SuppressionMeta {
     pub kind: SuppressionKind,
     /// The pattern that matched the finding's rule ID.

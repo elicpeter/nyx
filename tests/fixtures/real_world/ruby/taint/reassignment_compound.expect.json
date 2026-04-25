@@ -1,0 +1,15 @@
+{
+  "description": "Compound assignment preserves taint: source concatenated with literal still carries taint to system sink.",
+  "tags": ["taint", "reassignment", "compound"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [1, 5],
+      "evidence_contains": [],
+      "notes": "params[:cmd] flows through cmd + suffix concatenation into system"
+    }
+  ]
+}

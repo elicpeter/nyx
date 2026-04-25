@@ -19,9 +19,9 @@ Human-readable, color-coded output to stdout. Status messages go to stderr.
 
 | Tag | Color | Meaning |
 |-----|-------|---------|
-| `[HIGH]` | Red, bold | Critical — likely exploitable |
-| `[MEDIUM]` | Orange, bold | Important — may be exploitable |
-| `[LOW]` | Muted blue-gray | Informational — code quality or weak signal |
+| `[HIGH]` | Red, bold | Critical -- likely exploitable |
+| `[MEDIUM]` | Orange, bold | Important -- may be exploitable |
+| `[LOW]` | Muted blue-gray | Informational -- code quality or weak signal |
 
 ### Evidence fields
 
@@ -139,9 +139,9 @@ Fields marked "no" are omitted when empty/null/false to keep output compact.
 
 | Level | Meaning |
 |-------|---------|
-| `High` | Strong signal — taint-confirmed flow, definite state violation |
-| `Medium` | Moderate signal — resource leak, path-validated taint, CFG structural |
-| `Low` | Weak signal — AST pattern match, possible resource leak, degraded analysis |
+| `High` | Strong signal -- taint-confirmed flow, definite state violation |
+| `Medium` | Moderate signal -- resource leak, path-validated taint, CFG structural |
+| `Low` | Weak signal -- AST pattern match, possible resource leak, degraded analysis |
 
 ### Evidence object
 
@@ -192,12 +192,12 @@ nyx scan . --format sarif > results.sarif
 
 The SARIF output includes:
 
-- **Tool metadata** — Nyx name and version
-- **Rules** — Rule ID, description, severity mapping
-- **Results** — One result per finding with location, message, and properties
-- **Properties** — Each result includes `category` and optionally `confidence` and `rollup.count`
-- **Related locations** — Rollup findings include example locations in `relatedLocations`
-- **Artifacts** — File paths referenced by findings
+- **Tool metadata** -- Nyx name and version
+- **Rules** -- Rule ID, description, severity mapping
+- **Results** -- One result per finding with location, message, and properties
+- **Properties** -- Each result includes `category` and optionally `confidence` and `rollup.count`
+- **Related locations** -- Rollup findings include example locations in `relatedLocations`
+- **Artifacts** -- File paths referenced by findings
 
 ### GitHub Code Scanning integration
 
@@ -229,9 +229,9 @@ Without `--fail-on`, Nyx always exits `0` on a successful scan regardless of fin
 
 | Level | Description | Typical rules |
 |-------|-------------|---------------|
-| **High** | Critical vulnerabilities — likely exploitable | Command injection, unsafe deserialization, banned C functions, taint-confirmed flows with user input sources |
-| **Medium** | Important issues — may be exploitable with additional context | SQL concatenation, XSS sinks, reflection, unguarded sinks, resource leaks |
-| **Low** | Informational — code quality or weak signals | Weak crypto algorithms, insecure randomness, `unwrap()`/`panic!()`, type-safety escapes |
+| **High** | Critical vulnerabilities -- likely exploitable | Command injection, unsafe deserialization, banned C functions, taint-confirmed flows with user input sources |
+| **Medium** | Important issues -- may be exploitable with additional context | SQL concatenation, XSS sinks, reflection, unguarded sinks, resource leaks |
+| **Low** | Informational -- code quality or weak signals | Weak crypto algorithms, insecure randomness, `unwrap()`/`panic!()`, type-safety escapes |
 
 ### Non-production severity downgrade
 
@@ -265,8 +265,8 @@ x = dangerous()  # nyx:ignore taint-unsanitised-flow     ← suppresses this lin
 x = dangerous()                                           ← suppresses this line
 ```
 
-- `nyx:ignore <RULE_ID>` — suppresses findings on the **same line** as the comment.
-- `nyx:ignore-next-line <RULE_ID>` — suppresses findings on the **next line**.
+- `nyx:ignore <RULE_ID>` -- suppresses findings on the **same line** as the comment.
+- `nyx:ignore-next-line <RULE_ID>` -- suppresses findings on the **next line**.
 - For taint findings, the primary line is the **sink line** (the `line` field in output).
 
 ### Rule ID matching
@@ -312,4 +312,4 @@ Suppressed findings do **not** trigger `--fail-on`. A scan with only suppressed 
 | `state-*` | State model | `state-use-after-close`, `state-resource-leak` |
 | `<lang>.*.*` | AST patterns | `rs.memory.transmute`, `js.code_exec.eval` |
 
-See the [Rule Reference](rules/index.md) for a complete listing.
+See the [Rule Reference](rules.md) for a complete listing.

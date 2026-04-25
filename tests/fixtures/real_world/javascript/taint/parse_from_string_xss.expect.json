@@ -1,0 +1,49 @@
+{
+  "description": "DOMParser.parseFromString gated sink: dangerous MIME fires, safe MIME suppressed, payload-arg filtering",
+  "tags": ["taint", "xss", "dom", "parseFromString", "gated-sink"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [1, 5],
+      "evidence_contains": [],
+      "notes": "document.location flows into parseFromString(input, 'text/html') — DOM XSS"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [7, 8],
+      "notes": "parseFromString with text/xml — safe MIME, must NOT fire (regression guard)"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [10, 11],
+      "notes": "parseFromString with application/xml — safe MIME, must NOT fire (regression guard)"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [13, 14],
+      "evidence_contains": [],
+      "notes": "parseFromString with application/xhtml+xml — dangerous MIME, fires"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [16, 18],
+      "evidence_contains": [],
+      "notes": "parseFromString with dynamic MIME — conservative, fires"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [20, 21],
+      "notes": "parseFromString with constant payload — dangerous MIME but safe payload, must NOT fire (regression guard)"
+    }
+  ]
+}

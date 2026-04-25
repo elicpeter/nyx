@@ -1,0 +1,12 @@
+{
+  "description": "println fed by locally-constructed strings \u2014 no taint source involved.",
+  "tags": [
+    "taint",
+    "negative",
+    "xss"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": []
+}

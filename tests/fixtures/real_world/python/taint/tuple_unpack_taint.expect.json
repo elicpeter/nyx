@@ -1,0 +1,15 @@
+{
+  "description": "Tuple unpacking from function return — taint flows through multi-value destructuring.",
+  "tags": ["taint", "cmdi", "destructuring", "tuple-unpack"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 8],
+      "evidence_contains": [],
+      "notes": "get_config() returns (os.getenv(HOST), os.getenv(PORT)); host unpacked from tuple flows to subprocess.run"
+    }
+  ]
+}

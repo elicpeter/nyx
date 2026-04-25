@@ -1,0 +1,49 @@
+{
+  "description": "setAttribute gated sink: dangerous attrs fire, safe attrs suppressed, dynamic is conservative, payload-arg filtering",
+  "tags": ["taint", "xss", "dom", "setAttribute", "gated-sink"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [1, 5],
+      "evidence_contains": [],
+      "notes": "document.location flows into setAttribute('href', ...) — DOM XSS"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [7, 9],
+      "evidence_contains": [],
+      "notes": "document.location flows into setAttribute('onclick', ...) — DOM XSS via event handler"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [11, 14],
+      "notes": "setAttribute('class', ...) is safe — no sink activation (regression guard)"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [16, 18],
+      "notes": "setAttribute('data-name', ...) is safe — no sink activation (regression guard)"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [20, 23],
+      "evidence_contains": [],
+      "notes": "setAttribute(attrName, ...) with dynamic arg — conservative policy fires sink"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [25, 27],
+      "notes": "setAttribute('href', constant) — dangerous attr but safe payload, must NOT fire (regression guard)"
+    }
+  ]
+}

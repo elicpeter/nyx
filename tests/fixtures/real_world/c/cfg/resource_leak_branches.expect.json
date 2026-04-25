@@ -18,6 +18,28 @@
       ],
       "evidence_contains": [],
       "notes": "fopen at line 5 not closed before return -2 at line 10 \u2014 aspirational CFG finding"
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        4,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "fopen at line 5 leaks if early return at line 10 (fgets failure branch)."
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        18,
+        18
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak \u2014 low-value duplicate of more specific findings"
     }
   ]
 }

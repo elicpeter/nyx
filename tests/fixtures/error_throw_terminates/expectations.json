@@ -1,0 +1,14 @@
+{
+  "required_findings": [],
+  "forbidden_findings": [
+    {
+      "id_prefix": "cfg-error-fallthrough"
+    }
+  ],
+  "performance_expectations": {
+    "max_ms_no_index": 1000,
+    "max_ms_index_cold": 1500,
+    "max_ms_index_warm": 500,
+    "ci_mode": "lenient"
+  }
+}

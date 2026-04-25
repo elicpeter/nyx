@@ -1,0 +1,23 @@
+{
+  "description": "Command::new called with only hardcoded string literals \u2014 no taint source, so no taint flow.",
+  "tags": [
+    "taint",
+    "negative",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        4,
+        4
+      ],
+      "notes": "Constant args (no taint source) — cfg-unguarded-sink must NOT fire (regression guard)"
+    }
+  ]
+}

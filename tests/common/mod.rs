@@ -14,6 +14,7 @@ pub fn test_config(mode: AnalysisMode) -> Config {
     cfg.scanner.read_vcsignore = false;
     cfg.scanner.require_git_to_read_vcsignore = false;
     cfg.scanner.enable_state_analysis = true;
+    cfg.scanner.enable_auth_analysis = true;
     cfg.performance.worker_threads = Some(1);
     cfg.performance.batch_size = 64;
     cfg.performance.channel_multiplier = 1;
@@ -101,7 +102,8 @@ pub struct Expectations {
     pub required_findings: Vec<RequiredFinding>,
     #[serde(default)]
     pub forbidden_findings: Vec<ForbiddenFinding>,
-    pub noise_budget: NoiseBudget,
+    #[serde(default)]
+    pub noise_budget: Option<NoiseBudget>,
     pub performance_expectations: PerformanceExpectations,
 }
 
@@ -177,10 +179,8 @@ pub fn validate_expectations(diags: &[Diag], fixture_dir: &Path) {
         }
     }
 
-    // Noise budget
-    assert_max_findings(
-        diags,
-        exp.noise_budget.max_total_findings,
-        exp.noise_budget.max_high_findings,
-    );
+    // Noise budget (optional — omitted on tight safe-code fixtures)
+    if let Some(budget) = &exp.noise_budget {
+        assert_max_findings(diags, budget.max_total_findings, budget.max_high_findings);
+    }
 }

@@ -1,0 +1,21 @@
+{
+  "required_findings": [
+    { "id_prefix": "js.auth.missing_ownership_check", "min_count": 1 },
+    { "id_prefix": "py.auth.missing_ownership_check", "min_count": 1 },
+    { "id_prefix": "rb.auth.missing_ownership_check", "min_count": 1 },
+    { "id_prefix": "go.auth.missing_ownership_check", "min_count": 1 },
+    { "id_prefix": "java.auth.missing_ownership_check", "min_count": 1 },
+    { "id_prefix": "rs.auth.missing_ownership_check", "min_count": 1 }
+  ],
+  "forbidden_findings": [],
+  "noise_budget": {
+    "max_total_findings": 8,
+    "max_high_findings": 8
+  },
+  "performance_expectations": {
+    "max_ms_no_index": 1000,
+    "max_ms_index_cold": 1500,
+    "max_ms_index_warm": 500,
+    "ci_mode": "lenient"
+  }
+}

@@ -6,7 +6,8 @@
 //! exploitable / important results.
 
 use crate::commands::scan::Diag;
-use crate::evidence::Evidence;
+use crate::engine_notes::{LossDirection, worst_direction};
+use crate::evidence::{Confidence, Evidence};
 use crate::patterns::Severity;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -15,7 +16,6 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 pub struct AttackRank {
     pub score: f64,
     /// Breakdown of score components (for debug/display purposes).
-    #[allow(dead_code)]
     pub components: Vec<(String, String)>,
 }
 
@@ -77,7 +77,80 @@ pub fn compute_attack_rank(diag: &Diag) -> AttackRank {
         components.push(("path_validated_penalty".into(), "-5".into()));
     }
 
+    // ── 6. Confidence adjustment ─────────────────────────────────────
+    if let Some(conf) = diag.confidence {
+        let conf_adj = match conf {
+            Confidence::High => 3.0,
+            Confidence::Medium => 0.0,
+            Confidence::Low => -5.0,
+        };
+        score += conf_adj;
+        if conf_adj != 0.0 {
+            components.push(("confidence".into(), format!("{conf_adj}")));
+        }
+    }
+
+    // ── 7. Completeness penalty (engine provenance notes) ────────────
+    //
+    // When the analysis engine hit a cap, widening, or lowering bail,
+    // it attaches `EngineNote` entries to the finding's evidence.  The
+    // direction of precision loss is classified by
+    // `EngineNote::direction()` and drives a bounded penalty:
+    //
+    //   * `Bail`        — analysis aborted on this body → -8.0
+    //   * `OverReport`  — widening may have produced a false positive → -8.0
+    //   * `UnderReport` — fixpoint was cut short but this finding is
+    //                     still a real flow → -3.0
+    //   * `Informational` — no penalty (cache reuse etc.)
+    //
+    // The penalty is the *worst* direction across all attached notes —
+    // not additive — so a body with ten `OriginsTruncated` notes is not
+    // ranked below a body with one `ParseTimeout`.  Magnitudes are
+    // chosen so that `High + capped` (60 − 8 = 52) still exceeds
+    // `Medium + taint + UserInput` (30 + 10 + 6 = 46), preserving the
+    // severity tier ordering.  See `completeness_penalty` tests for
+    // the full tier invariant.
+    if let Some(penalty) = completeness_penalty(diag) {
+        score += penalty.value;
+        components.push((
+            "completeness".into(),
+            format!("{:+} ({})", penalty.value as i32, penalty.direction.tag()),
+        ));
+    }
+
     AttackRank { score, components }
+}
+
+/// Bounded penalty derived from a finding's attached [`EngineNote`] set.
+///
+/// `None` when the finding has no evidence struct, no engine notes, or
+/// only informational notes.  Uses `worst_direction` so the penalty is
+/// the single most credibility-damaging direction present — adding more
+/// notes of the same direction does not compound the penalty.
+struct CompletenessPenalty {
+    value: f64,
+    direction: LossDirection,
+}
+
+fn completeness_penalty(diag: &Diag) -> Option<CompletenessPenalty> {
+    let ev = diag.evidence.as_ref()?;
+    if ev.engine_notes.is_empty() {
+        return None;
+    }
+    let direction = worst_direction(&ev.engine_notes)?;
+    let value = match direction {
+        // Bail and OverReport both indicate the specific finding is
+        // suspect (not merely that we missed others).  Same magnitude,
+        // distinct tag in rank_reason so consumers can differentiate.
+        LossDirection::Bail | LossDirection::OverReport => -8.0,
+        // UnderReport: finding is sound, but result set is a lower bound.
+        // Milder nudge below equivalently-scored converged findings.
+        LossDirection::UnderReport => -3.0,
+        // Filtered out above via `worst_direction`, but keep the arm
+        // exhaustive so future direction additions force a decision.
+        LossDirection::Informational => return None,
+    };
+    Some(CompletenessPenalty { value, direction })
 }
 
 /// Deterministic sort key for a diagnostic.
@@ -111,19 +184,16 @@ pub fn sort_key(diag: &Diag) -> impl Ord {
 /// Sort diagnostics in-place by descending attack-surface score, then by
 /// deterministic tie-breaker.  Populates `rank_score` on each `Diag`.
 pub fn rank_diags(diags: &mut [Diag]) {
-    // Compute scores
-    let scores: Vec<f64> = diags.iter().map(|d| compute_attack_rank(d).score).collect();
-
-    // Attach scores to diags
-    for (d, s) in diags.iter_mut().zip(scores.iter()) {
-        d.rank_score = Some(*s);
+    let ranks: Vec<AttackRank> = diags.iter().map(compute_attack_rank).collect();
+    for (d, rank) in diags.iter_mut().zip(ranks.iter()) {
+        d.rank_score = Some(rank.score);
+        if !rank.components.is_empty() {
+            d.rank_reason = Some(rank.components.clone());
+        }
     }
-
-    // Sort descending by score, then ascending by tie-breaker
     diags.sort_by(|a, b| {
         let sa = a.rank_score.unwrap_or(0.0);
         let sb = b.rank_score.unwrap_or(0.0);
-        // Descending score (higher first)
         sb.partial_cmp(&sa)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| sort_key(a).cmp(&sort_key(b)))
@@ -199,6 +269,7 @@ fn source_kind_priority(source_value: &str) -> f64 {
         "EnvironmentConfig" => return 5.0,
         "FileSystem" => return 3.0,
         "Database" => return 2.0,
+        "CaughtException" => return 2.0,
         "Unknown" => return 4.0,
         _ => {}
     }
@@ -278,6 +349,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         }
     }
 
@@ -558,6 +631,7 @@ mod tests {
             sanitizers: vec![],
             state: None,
             notes: vec!["source_kind:UserInput".into()],
+            ..Default::default()
         });
 
         let legacy = make_diag(
@@ -604,6 +678,7 @@ mod tests {
             sanitizers: vec![span()],             // 1 sanitizer
             state: None,
             notes: vec![],
+            ..Default::default()
         });
 
         // item_count = 1 (source) + 1 (sink) + min(2, 3+1) = 4
@@ -633,6 +708,7 @@ mod tests {
             sanitizers: vec![],
             state: None,
             notes: vec!["path_validated".into()],
+            ..Default::default()
         });
 
         let rank = compute_attack_rank(&d);
@@ -641,6 +717,324 @@ mod tests {
                 .iter()
                 .any(|(k, _)| k == "path_validated_penalty"),
             "path_validated note in evidence should trigger penalty"
+        );
+    }
+
+    // ── Confidence tests ────────────────────────────────────────────
+
+    #[test]
+    fn confidence_high_boosts_score() {
+        let d_none = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "x.rs",
+            1,
+            vec![("Source".into(), "stdin at 1:1".into())],
+            false,
+        );
+        let mut d_high = d_none.clone();
+        d_high.confidence = Some(crate::evidence::Confidence::High);
+
+        let score_none = compute_attack_rank(&d_none).score;
+        let score_high = compute_attack_rank(&d_high).score;
+        assert!(
+            score_high > score_none,
+            "High confidence ({score_high}) should score above None ({score_none})"
+        );
+    }
+
+    #[test]
+    fn confidence_low_demotes_score() {
+        let d_none = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "x.rs",
+            1,
+            vec![("Source".into(), "stdin at 1:1".into())],
+            false,
+        );
+        let mut d_low = d_none.clone();
+        d_low.confidence = Some(crate::evidence::Confidence::Low);
+
+        let score_none = compute_attack_rank(&d_none).score;
+        let score_low = compute_attack_rank(&d_low).score;
+        assert!(
+            score_low < score_none,
+            "Low confidence ({score_low}) should score below None ({score_none})"
+        );
+    }
+
+    #[test]
+    fn confidence_does_not_override_severity_tier() {
+        // High-severity + Low-confidence should still beat Medium-severity + High-confidence.
+        let mut high_sev_low_conf = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "x.rs",
+            1,
+            vec![("Source".into(), "stdin at 1:1".into())],
+            false,
+        );
+        high_sev_low_conf.confidence = Some(crate::evidence::Confidence::Low);
+
+        let mut med_sev_high_conf = make_diag(
+            Severity::Medium,
+            "taint-unsanitised-flow (source 2:1)",
+            "x.rs",
+            2,
+            vec![("Source".into(), "stdin at 2:1".into())],
+            false,
+        );
+        med_sev_high_conf.confidence = Some(crate::evidence::Confidence::High);
+
+        let score_high_sev = compute_attack_rank(&high_sev_low_conf).score;
+        let score_med_sev = compute_attack_rank(&med_sev_high_conf).score;
+        assert!(
+            score_high_sev > score_med_sev,
+            "High-sev/Low-conf ({score_high_sev}) should still beat Med-sev/High-conf ({score_med_sev})"
+        );
+    }
+
+    #[test]
+    fn rank_reason_populated() {
+        let d1 = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "a.rs",
+            1,
+            vec![],
+            false,
+        );
+        let d2 = make_diag(
+            Severity::Medium,
+            "cfg-unguarded-sink",
+            "b.rs",
+            2,
+            vec![],
+            false,
+        );
+        let mut diags = vec![d1, d2];
+        rank_diags(&mut diags);
+        for d in &diags {
+            assert!(
+                d.rank_reason.is_some(),
+                "rank_reason should be populated after rank_diags()"
+            );
+            assert!(
+                !d.rank_reason.as_ref().unwrap().is_empty(),
+                "rank_reason should not be empty"
+            );
+        }
+    }
+
+    // ── Completeness penalty (engine_notes) tests ──────────────────
+
+    use crate::engine_notes::EngineNote;
+
+    /// Attach engine notes without disturbing the evidence-derived
+    /// score.  The completeness tests compare a "clean" diag against
+    /// the same diag plus notes, so both sides must go through the same
+    /// evidence-strength path.  We seed both with an equivalent
+    /// `source_kind:UserInput` evidence note so `evidence_strength`
+    /// awards the same base bonus in both cases; the only delta is the
+    /// completeness penalty under test.
+    fn clean_diag_with_evidence() -> Diag {
+        let mut d = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "x.rs",
+            1,
+            vec![("Source".into(), "stdin at 1:1".into())],
+            false,
+        );
+        d.evidence = Some(crate::evidence::Evidence {
+            notes: vec!["source_kind:UserInput".into()],
+            ..Default::default()
+        });
+        d
+    }
+
+    fn attach_notes(d: &mut Diag, notes: Vec<EngineNote>) {
+        let mut ev = d.evidence.clone().unwrap_or_default();
+        ev.engine_notes = smallvec::SmallVec::from_vec(notes);
+        d.evidence = Some(ev);
+    }
+
+    #[test]
+    fn completeness_penalty_absent_when_no_engine_notes() {
+        let d = clean_diag_with_evidence();
+        let rank = compute_attack_rank(&d);
+        assert!(
+            !rank.components.iter().any(|(k, _)| k == "completeness"),
+            "completeness should be absent without engine_notes"
+        );
+    }
+
+    #[test]
+    fn completeness_penalty_absent_for_informational_only() {
+        let mut d = clean_diag_with_evidence();
+        attach_notes(&mut d, vec![EngineNote::InlineCacheReused]);
+        let rank = compute_attack_rank(&d);
+        assert!(
+            !rank.components.iter().any(|(k, _)| k == "completeness"),
+            "informational-only notes must not trigger a penalty"
+        );
+    }
+
+    #[test]
+    fn completeness_penalty_under_report_applies_minus_3() {
+        let d_clean = clean_diag_with_evidence();
+        let mut d_under = d_clean.clone();
+        attach_notes(
+            &mut d_under,
+            vec![EngineNote::WorklistCapped { iterations: 100 }],
+        );
+
+        let s_clean = compute_attack_rank(&d_clean).score;
+        let s_under = compute_attack_rank(&d_under).score;
+        assert!(
+            (s_clean - s_under - 3.0).abs() < f64::EPSILON,
+            "UnderReport must apply -3.0 penalty (clean={s_clean} under={s_under})"
+        );
+    }
+
+    #[test]
+    fn completeness_penalty_over_report_applies_minus_8() {
+        let d_clean = clean_diag_with_evidence();
+        let mut d_over = d_clean.clone();
+        attach_notes(&mut d_over, vec![EngineNote::PredicateStateWidened]);
+
+        let s_clean = compute_attack_rank(&d_clean).score;
+        let s_over = compute_attack_rank(&d_over).score;
+        assert!(
+            (s_clean - s_over - 8.0).abs() < f64::EPSILON,
+            "OverReport must apply -8.0 penalty (clean={s_clean} over={s_over})"
+        );
+    }
+
+    #[test]
+    fn completeness_penalty_bail_applies_minus_8() {
+        let d_clean = clean_diag_with_evidence();
+        let mut d_bail = d_clean.clone();
+        attach_notes(
+            &mut d_bail,
+            vec![EngineNote::ParseTimeout { timeout_ms: 100 }],
+        );
+
+        let s_clean = compute_attack_rank(&d_clean).score;
+        let s_bail = compute_attack_rank(&d_bail).score;
+        assert!(
+            (s_clean - s_bail - 8.0).abs() < f64::EPSILON,
+            "Bail must apply -8.0 penalty (clean={s_clean} bail={s_bail})"
+        );
+    }
+
+    #[test]
+    fn completeness_penalty_is_not_additive_across_notes() {
+        // Ten OriginsTruncated notes must produce the same penalty as one —
+        // the penalty reflects the worst direction, not a count.
+        let mut d_many = clean_diag_with_evidence();
+        let many = (0..10)
+            .map(|i| EngineNote::OriginsTruncated { dropped: i })
+            .collect();
+        attach_notes(&mut d_many, many);
+
+        let mut d_one = clean_diag_with_evidence();
+        attach_notes(
+            &mut d_one,
+            vec![EngineNote::OriginsTruncated { dropped: 1 }],
+        );
+
+        let s_many = compute_attack_rank(&d_many).score;
+        let s_one = compute_attack_rank(&d_one).score;
+        assert!(
+            (s_many - s_one).abs() < f64::EPSILON,
+            "penalty must be direction-based, not additive (many={s_many} one={s_one})"
+        );
+    }
+
+    #[test]
+    fn completeness_penalty_picks_worst_when_mixed() {
+        // UnderReport + OverReport ⇒ OverReport penalty (-8) dominates.
+        let mut d_mixed = clean_diag_with_evidence();
+        attach_notes(
+            &mut d_mixed,
+            vec![
+                EngineNote::WorklistCapped { iterations: 10 },
+                EngineNote::PredicateStateWidened,
+            ],
+        );
+
+        let d_clean = clean_diag_with_evidence();
+
+        let s_clean = compute_attack_rank(&d_clean).score;
+        let s_mixed = compute_attack_rank(&d_mixed).score;
+        assert!(
+            (s_clean - s_mixed - 8.0).abs() < f64::EPSILON,
+            "mixed UnderReport+OverReport must apply OverReport magnitude"
+        );
+
+        // And the rank_reason component tag must reflect the worst direction.
+        let rank = compute_attack_rank(&d_mixed);
+        let completeness = rank
+            .components
+            .iter()
+            .find(|(k, _)| k == "completeness")
+            .expect("completeness component must be present");
+        assert!(
+            completeness.1.contains("over-report"),
+            "mixed notes must tag worst direction (got {:?})",
+            completeness.1
+        );
+    }
+
+    #[test]
+    fn completeness_penalty_preserves_severity_tier() {
+        // Core invariant: a High-severity finding with a Bail note must
+        // still outrank a Medium-severity finding from converged
+        // analysis.  This is the tier boundary that the -8 magnitude
+        // is calibrated for.
+        let mut high_capped = clean_diag_with_evidence();
+        attach_notes(
+            &mut high_capped,
+            vec![EngineNote::ParseTimeout { timeout_ms: 100 }],
+        );
+
+        let mut medium_clean = clean_diag_with_evidence();
+        medium_clean.severity = Severity::Medium;
+        medium_clean.id = "taint-unsanitised-flow (source 2:1)".into();
+
+        let s_high_capped = compute_attack_rank(&high_capped).score;
+        let s_medium_clean = compute_attack_rank(&medium_clean).score;
+        assert!(
+            s_high_capped > s_medium_clean,
+            "High+Bail ({s_high_capped}) must outrank Medium+clean ({s_medium_clean})"
+        );
+    }
+
+    #[test]
+    fn completeness_penalty_orders_bail_at_or_below_under_report() {
+        // Within the same severity tier, a finding with a Bail note
+        // must rank at or below one with only an UnderReport note.
+        // (Equal if Bail and OverReport use the same magnitude, which
+        // they currently do; strictly below if that changes.)
+        let mut d_under = clean_diag_with_evidence();
+        attach_notes(
+            &mut d_under,
+            vec![EngineNote::WorklistCapped { iterations: 10 }],
+        );
+
+        let mut d_bail = clean_diag_with_evidence();
+        attach_notes(
+            &mut d_bail,
+            vec![EngineNote::ParseTimeout { timeout_ms: 100 }],
+        );
+
+        let s_under = compute_attack_rank(&d_under).score;
+        let s_bail = compute_attack_rank(&d_bail).score;
+        assert!(
+            s_bail <= s_under,
+            "Bail ({s_bail}) must rank at or below UnderReport ({s_under})"
         );
     }
 }

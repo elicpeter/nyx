@@ -1,0 +1,6 @@
+{
+  "description": "SSRF negative: hardcoded URL to fetch() — no taint source, no finding expected",
+  "tags": ["taint", "ssrf", "negative", "typescript"],
+  "modes": ["full"],
+  "expected": []
+}

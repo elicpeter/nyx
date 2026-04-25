@@ -1,0 +1,63 @@
+{
+  "description": "Parameterized SQL queries across Python drivers — sqlite3 ?, psycopg2 %s, executemany, conn.execute",
+  "tags": ["taint", "sqli", "sqlite", "psycopg2", "safe", "parameterized"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [6, 11],
+      "evidence_contains": [],
+      "notes": "sqlite3 cursor.execute with ? placeholder — safe, must NOT fire"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [14, 20],
+      "evidence_contains": [],
+      "notes": "psycopg2 cursor.execute with %s placeholder — safe, must NOT fire"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [23, 27],
+      "evidence_contains": [],
+      "notes": "cursor.executemany with ? placeholder — safe, must NOT fire"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [30, 34],
+      "evidence_contains": [],
+      "notes": "conn.execute with ? placeholder — safe, must NOT fire"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [1, 34],
+      "evidence_contains": [],
+      "notes": "No cfg-unguarded-sink should fire for parameterized queries"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [1, 34],
+      "evidence_contains": [],
+      "notes": "noise: resource leaks unrelated to SQL injection"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [1, 34],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak unrelated to SQL injection"
+    }
+  ]
+}

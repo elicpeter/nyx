@@ -1,0 +1,33 @@
+{
+  "description": "os.system/subprocess.run called with only hardcoded string literals \u2014 no taint source.",
+  "tags": [
+    "taint",
+    "negative",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "py.cmdi.os_system",
+      "severity": "HIGH",
+      "must_not_match": true,
+      "line_range": [
+        4,
+        4
+      ],
+      "notes": "Constant arg to os.system — py.cmdi.os_system must NOT fire (regression guard)"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        5,
+        5
+      ],
+      "notes": "No taint source in fixture — cfg-unguarded-sink must NOT fire (regression guard)"
+    }
+  ]
+}

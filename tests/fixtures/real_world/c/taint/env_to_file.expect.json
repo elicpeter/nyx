@@ -1,5 +1,5 @@
 {
-  "description": "Environment variable flows to fopen path \u2014 path traversal / arbitrary file write",
+  "description": "Environment variable flows to fopen path — path traversal / arbitrary file write",
   "tags": [
     "taint",
     "path-traversal"
@@ -17,7 +17,18 @@
         8
       ],
       "evidence_contains": [],
-      "notes": "getenv(\"CONFIG_PATH\") flows directly into fopen as file path \u2014 arbitrary file write"
+      "notes": "getenv(\"CONFIG_PATH\") flows directly into fopen as file path — arbitrary file write"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        7,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "noise: taint-unsanitised-flow — secondary flow or cross-function leakage"
     }
   ]
 }

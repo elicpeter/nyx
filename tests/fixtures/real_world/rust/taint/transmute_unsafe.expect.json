@@ -29,6 +29,17 @@
       ],
       "evidence_contains": [],
       "notes": "unsafe block wrapping mem::transmute call"
+    },
+    {
+      "rule_id": "rs.quality.unsafe_fn",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [
+        3,
+        3
+      ],
+      "evidence_contains": [],
+      "notes": "TP: unsafe fn reinterpret declaration correctly flagged by AST quality rule"
     }
   ]
 }

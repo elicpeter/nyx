@@ -1,26 +1,31 @@
 {
   "description": "Class-based resource management. riskyUsage skips close() on throw; safeUsage uses try/finally.",
-  "tags": [
-    "cfg",
-    "resource-leak",
-    "class",
-    "try-catch",
-    "typescript"
-  ],
-  "modes": [
-    "full"
-  ],
+  "tags": ["cfg", "resource-leak", "class", "try-catch", "typescript"],
+  "modes": ["full"],
   "expected": [
     {
       "rule_id": "cfg-resource-leak",
       "severity": null,
       "must_match": false,
-      "line_range": [
-        24,
-        32
-      ],
+      "line_range": [24, 32],
       "evidence_contains": [],
       "notes": "fp.close() skipped when fp.process() throws in riskyUsage; scanner may not track class-based resource lifecycle"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [7, 7],
+      "evidence_contains": [],
+      "notes": "TP: fs.openSync resource at line 7 can leak if process() throws and close() is never called (e.g., in riskyUsage)"
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [7, 7],
+      "evidence_contains": [],
+      "notes": "TP: fs.openSync resource at line 7 has a possible leak path when exceptions bypass close() [per-body: sensitivity change]"
     }
   ]
 }

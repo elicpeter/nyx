@@ -13,7 +13,7 @@
     {
       "rule_id": "state-use-after-close",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         1,
         9

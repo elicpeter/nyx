@@ -1,5 +1,5 @@
 {
-  "description": "system() calls in switch statement \u2014 case 3 falls through without break",
+  "description": "system() calls in switch statement — case 3 falls through without break",
   "tags": [
     "cmdi",
     "cfg"
@@ -28,7 +28,70 @@
         15
       ],
       "evidence_contains": [],
-      "notes": "system(arg) in case 3 \u2014 falls through to case 4"
+      "notes": "system(arg) in case 3 — falls through to case 4"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [
+        6,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "system(arg) in case 1 called without any validation of arg — security-sensitive sink."
+    },
+    {
+      "rule_id": "state-unauthed-access",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        6,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "noise: system(arg) flagged as unauthed access — there is no auth model in this code, just a switch on cmd."
+    },
+    {
+      "rule_id": "cfg-auth-gap",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        12,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "noise: system(arg) in case 3 flagged as auth gap — no auth model present, this is a switch dispatch."
+    },
+    {
+      "rule_id": "cfg-unreachable-sink",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        10,
+        10
+      ],
+      "notes": "Regression guard: case 2 printf is reachable via switch dispatch; cfg-unreachable-sink must NOT fire (catches regressions in C switch_statement CFG handling)"
+    },
+    {
+      "rule_id": "cfg-unreachable-sink",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        13,
+        13
+      ],
+      "notes": "Regression guard: case 3 system(arg) is reachable via switch dispatch (and falls through to case 4); cfg-unreachable-sink must NOT fire"
+    },
+    {
+      "rule_id": "cfg-unreachable-sink",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        15,
+        15
+      ],
+      "notes": "Regression guard: case 4 printf is reachable via direct dispatch and via fallthrough from case 3; cfg-unreachable-sink must NOT fire"
     }
   ]
 }

@@ -8,6 +8,9 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
@@ -18,7 +21,18 @@
         8
       ],
       "evidence_contains": [],
-      "notes": "getenv(\"USER_PATH\") flows into fopen as file path \u2014 path traversal"
+      "notes": "getenv(\"USER_PATH\") flows into fopen as file path — path traversal"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "fgets reads from fopen handle opened on a tainted path; printf(buf) echoes tainted file content — secondary flow at the output sink"
     },
     {
       "rule_id": "state-resource-leak",
@@ -29,7 +43,7 @@
         12
       ],
       "evidence_contains": [],
-      "notes": "fopen at line 6 never closed \u2014 aspirational state finding"
+      "notes": "fopen at line 6 never closed — aspirational state finding"
     }
   ]
 }

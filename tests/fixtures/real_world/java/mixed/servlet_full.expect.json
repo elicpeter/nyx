@@ -56,6 +56,38 @@
       ],
       "evidence_contains": [],
       "notes": "FileInputStream opened on line 23 but never closed"
+    },
+    {
+      "rule_id": "java.cmdi.runtime_exec",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        14,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "Runtime.getRuntime().exec(input) in exec branch; AST pattern correctly matches"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        20,
+        20
+      ],
+      "evidence_contains": [],
+      "notes": "source at 11:9 (request.getParameter(\"input\")) flows through SQL query (line 17) into result set output at out.println(rs.getString(1)); second-order taint via tainted query results"
+    },
+    {
+      "rule_id": "java.xss.getwriter_print",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        26,
+        26
+      ],
+      "notes": "response.getWriter().println(new String(data)) — file-read data, Layer B suppresses (regression guard)"
     }
   ]
 }

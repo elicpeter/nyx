@@ -14,8 +14,8 @@
   "expected": [
     {
       "rule_id": "state-resource-leak",
-      "severity": null,
-      "must_match": false,
+      "severity": "MEDIUM",
+      "must_match": true,
       "line_range": [
         1,
         7
@@ -25,25 +25,55 @@
     },
     {
       "rule_id": "state-double-close",
-      "severity": null,
-      "must_match": false,
+      "severity": "MEDIUM",
+      "must_match": true,
       "line_range": [
-        12,
-        20
+        14,
+        18
       ],
       "evidence_contains": [],
       "notes": "double_close calls f.close twice"
     },
     {
       "rule_id": "state-use-after-close",
-      "severity": null,
-      "must_match": false,
+      "severity": "HIGH",
+      "must_match": true,
       "line_range": [
-        18,
-        27
+        20,
+        25
       ],
       "evidence_contains": [],
       "notes": "use_after_close reads from file handle after closing it"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        15,
+        15
+      ],
+      "notes": "Dedup: cfg-resource-leak suppressed by state-double-close (regression guard)"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        21,
+        21
+      ],
+      "notes": "Dedup: cfg-resource-leak suppressed by state-use-after-close (regression guard)"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        8,
+        8
+      ],
+      "notes": "Properly closed: cfg-resource-leak must NOT fire on read_and_close (regression guard)"
     }
   ]
 }

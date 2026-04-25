@@ -17,9 +17,17 @@ static CACHE: LazyLock<RwLock<HashMap<&'static str, QuerySet>>> =
 /// Return **one shared Arc** to the per-language query set.
 /// Cloning the `Arc` is O(1) and the underlying Vec lives for the
 /// lifetime of the process.
+///
+/// Malformed tree-sitter queries do not panic: each invalid pattern is
+/// dropped via `filter_map` with a warn-level log, and the remaining
+/// patterns for the language are cached normally. A language with an
+/// all-malformed pattern slice yields an empty cache entry.
+///
+/// Lock poisoning on the shared cache is recovered transparently — a
+/// panic in another thread must not brick pattern loading process-wide.
 pub fn for_lang(lang: &'static str, ts_lang: Language) -> std::sync::Arc<Vec<CompiledQuery>> {
     // fast path
-    if let Some(v) = CACHE.read().unwrap().get(lang) {
+    if let Some(v) = CACHE.read().unwrap_or_else(|p| p.into_inner()).get(lang) {
         return v.clone();
     }
 
@@ -41,6 +49,6 @@ pub fn for_lang(lang: &'static str, ts_lang: Language) -> std::sync::Arc<Vec<Com
 
     let compiled = std::sync::Arc::new(compiled);
 
-    let mut w = CACHE.write().unwrap();
+    let mut w = CACHE.write().unwrap_or_else(|p| p.into_inner());
     w.entry(lang).or_insert_with(|| compiled.clone()).clone()
 }

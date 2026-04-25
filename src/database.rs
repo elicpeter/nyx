@@ -1,4 +1,6 @@
 pub mod index {
+    #![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
     use crate::commands::scan::Diag;
     use crate::errors::{NyxError, NyxResult};
     use crate::patterns::Severity;
@@ -42,11 +44,154 @@ pub mod index {
             name TEXT NOT NULL,
             arity INTEGER NOT NULL DEFAULT -1,
             lang TEXT NOT NULL,
+            container TEXT NOT NULL DEFAULT '',
+            disambig INTEGER,
+            kind TEXT NOT NULL DEFAULT 'fn',
             summary TEXT NOT NULL,
             updated_at INTEGER NOT NULL,
-            UNIQUE(project, file_path, name, arity)
+            UNIQUE(project, file_path, name, container, arity, disambig, kind)
+        );
+
+        CREATE TABLE IF NOT EXISTS ssa_function_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_hash BLOB NOT NULL,
+            name TEXT NOT NULL,
+            arity INTEGER NOT NULL DEFAULT -1,
+            lang TEXT NOT NULL,
+            namespace TEXT NOT NULL DEFAULT '',
+            container TEXT NOT NULL DEFAULT '',
+            disambig INTEGER,
+            kind TEXT NOT NULL DEFAULT 'fn',
+            summary TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(project, file_path, name, container, arity, disambig, kind)
+        );
+
+        CREATE TABLE IF NOT EXISTS auth_check_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_hash BLOB NOT NULL,
+            name TEXT NOT NULL,
+            arity INTEGER NOT NULL DEFAULT -1,
+            lang TEXT NOT NULL,
+            namespace TEXT NOT NULL DEFAULT '',
+            container TEXT NOT NULL DEFAULT '',
+            disambig INTEGER,
+            kind TEXT NOT NULL DEFAULT 'fn',
+            summary TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(project, file_path, name, container, arity, disambig, kind)
+        );
+
+        CREATE TABLE IF NOT EXISTS ssa_function_bodies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_hash BLOB NOT NULL,
+            name TEXT NOT NULL,
+            arity INTEGER NOT NULL DEFAULT -1,
+            lang TEXT NOT NULL,
+            namespace TEXT NOT NULL DEFAULT '',
+            container TEXT NOT NULL DEFAULT '',
+            disambig INTEGER,
+            kind TEXT NOT NULL DEFAULT 'fn',
+            body TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(project, file_path, name, container, arity, disambig, kind)
+        );
+
+        CREATE TABLE IF NOT EXISTS scans (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            scan_root TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            duration_secs REAL,
+            engine_version TEXT,
+            languages TEXT,
+            files_scanned INTEGER,
+            files_skipped INTEGER,
+            finding_count INTEGER,
+            findings_json TEXT,
+            timing_json TEXT,
+            error TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS scan_metrics (
+            scan_id TEXT PRIMARY KEY REFERENCES scans(id) ON DELETE CASCADE,
+            cfg_nodes INTEGER,
+            call_edges INTEGER,
+            functions_analyzed INTEGER,
+            summaries_reused INTEGER,
+            unresolved_calls INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS scan_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+            timestamp TEXT NOT NULL,
+            level TEXT NOT NULL,
+            message TEXT NOT NULL,
+            file_path TEXT,
+            detail TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_scan_logs_scan ON scan_logs(scan_id);
+
+        CREATE TABLE IF NOT EXISTS triage_states (
+            fingerprint TEXT PRIMARY KEY,
+            state TEXT NOT NULL DEFAULT 'open',
+            note TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS triage_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fingerprint TEXT NOT NULL,
+            action TEXT NOT NULL,
+            previous_state TEXT NOT NULL,
+            new_state TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            timestamp TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_triage_audit_fp ON triage_audit_log(fingerprint);
+        CREATE INDEX IF NOT EXISTS idx_triage_audit_ts ON triage_audit_log(timestamp);
+
+        CREATE TABLE IF NOT EXISTS nyx_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS triage_suppression_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            suppress_by TEXT NOT NULL,
+            match_value TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'suppressed',
+            note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            UNIQUE(suppress_by, match_value)
         );
     "#;
+
+    /// Engine version used to detect stale caches across upgrades.
+    pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+    /// On-disk schema version for cached analysis data.
+    ///
+    /// Bumped independently of `ENGINE_VERSION` whenever the serialized
+    /// layout or identity of a cached artefact changes in an incompatible
+    /// way — e.g. a `FuncKey` field semantic change that would cause old
+    /// summaries to misbehave when rehydrated.
+    ///
+    /// History:
+    /// * `"1"` — initial.
+    /// * `"2"` — 0.5.0: `FuncKey.disambig` changed from the function-node
+    ///   byte offset to a depth-first structural index.  Pre-0.5.0 caches
+    ///   store byte-offset disambigs and would fail to match bodies built
+    ///   by the new engine, so they are silently rebuilt on open.
+    pub const SCHEMA_VERSION: &str = "2";
 
     // TODO: ADD CLEANS FOR EACH TABLE BASED ON PROJECT WHICH RUNS ON CLEAN
     // TODO: ADD DROP AND GIVE A CLI PARAMETER FOR DROP
@@ -58,6 +203,48 @@ pub mod index {
         pub severity: &'a str,
         pub line: i64,
         pub col: i64,
+    }
+
+    /// A scan record for DB persistence.
+    #[derive(Debug, Clone)]
+    pub struct ScanRecord {
+        pub id: String,
+        pub status: String,
+        pub scan_root: String,
+        pub started_at: Option<String>,
+        pub finished_at: Option<String>,
+        pub duration_secs: Option<f64>,
+        pub engine_version: Option<String>,
+        pub languages: Option<String>,
+        pub files_scanned: Option<i64>,
+        pub files_skipped: Option<i64>,
+        pub finding_count: Option<i64>,
+        pub findings_json: Option<String>,
+        pub timing_json: Option<String>,
+        pub error: Option<String>,
+    }
+
+    /// A triage audit log entry.
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub struct AuditEntry {
+        pub id: i64,
+        pub fingerprint: String,
+        pub action: String,
+        pub previous_state: String,
+        pub new_state: String,
+        pub note: String,
+        pub timestamp: String,
+    }
+
+    /// A pattern-based suppression rule.
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub struct SuppressionRule {
+        pub id: i64,
+        pub suppress_by: String,
+        pub match_value: String,
+        pub state: String,
+        pub note: String,
+        pub created_at: String,
     }
 
     pub struct Indexer {
@@ -87,39 +274,265 @@ pub mod index {
                 conn.pragma_update(None, "mmap_size", "268435456")?; // 256 MB
                 conn.execute_batch(SCHEMA)?;
 
-                // Migrate: if the function_summaries table has the old schema
-                // (missing `arity` column), drop and recreate it.
-                let has_arity: bool = conn
+                // Migrate: if the function_summaries table is missing any required
+                // column (arity for older schemas; container/disambig/kind for the
+                // richer FuncKey identity), drop and recreate it so the data layout
+                // matches the current model.
+                let fn_cols: std::collections::HashSet<String> = conn
                     .prepare("PRAGMA table_info(function_summaries)")
                     .and_then(|mut s| {
                         let cols: Vec<String> = s
                             .query_map([], |r| r.get::<_, String>(1))?
                             .filter_map(Result::ok)
                             .collect();
-                        Ok(cols.iter().any(|c| c == "arity"))
+                        Ok(cols.into_iter().collect())
                     })
-                    .unwrap_or(true);
+                    .unwrap_or_default();
 
-                if !has_arity {
-                    tracing::info!("migrating function_summaries: adding arity column");
+                let fn_ok = fn_cols.contains("arity")
+                    && fn_cols.contains("container")
+                    && fn_cols.contains("disambig")
+                    && fn_cols.contains("kind");
+
+                if !fn_ok {
+                    tracing::info!(
+                        "migrating function_summaries: recreating table with identity columns"
+                    );
                     conn.execute_batch("DROP TABLE IF EXISTS function_summaries;")?;
+                    conn.execute_batch(SCHEMA)?;
+                }
+
+                // Migrate: verify SSA tables carry namespace + container/disambig/kind.
+                let ssa_cols: std::collections::HashSet<String> = conn
+                    .prepare("PRAGMA table_info(ssa_function_summaries)")
+                    .and_then(|mut s| {
+                        let cols: Vec<String> = s
+                            .query_map([], |r| r.get::<_, String>(1))?
+                            .filter_map(Result::ok)
+                            .collect();
+                        Ok(cols.into_iter().collect())
+                    })
+                    .unwrap_or_default();
+
+                let ssa_ok = ssa_cols.contains("namespace")
+                    && ssa_cols.contains("container")
+                    && ssa_cols.contains("disambig")
+                    && ssa_cols.contains("kind");
+
+                if !ssa_ok {
+                    tracing::info!("migrating ssa_function_summaries: recreating tables");
+                    conn.execute_batch("DROP TABLE IF EXISTS ssa_function_summaries;")?;
+                    conn.execute_batch("DROP TABLE IF EXISTS ssa_function_bodies;")?;
+                    conn.execute_batch(SCHEMA)?;
+                }
+
+                // ssa_function_bodies may have been created with the old column set
+                // even when ssa_function_summaries is current (e.g. partial
+                // migrations).  Check and recreate independently.
+                let body_cols: std::collections::HashSet<String> = conn
+                    .prepare("PRAGMA table_info(ssa_function_bodies)")
+                    .and_then(|mut s| {
+                        let cols: Vec<String> = s
+                            .query_map([], |r| r.get::<_, String>(1))?
+                            .filter_map(Result::ok)
+                            .collect();
+                        Ok(cols.into_iter().collect())
+                    })
+                    .unwrap_or_default();
+
+                let body_ok = body_cols.contains("namespace")
+                    && body_cols.contains("container")
+                    && body_cols.contains("disambig")
+                    && body_cols.contains("kind");
+
+                if !body_ok {
+                    tracing::info!("migrating ssa_function_bodies: recreating table");
+                    conn.execute_batch("DROP TABLE IF EXISTS ssa_function_bodies;")?;
+                    conn.execute_batch(SCHEMA)?;
+                }
+
+                // Ensure the auth_check_summaries table exists for DBs
+                // created before this column set was introduced.  The
+                // `CREATE TABLE IF NOT EXISTS` in SCHEMA handles new DBs;
+                // this branch only fires when the table is missing
+                // entirely from a pre-existing DB.
+                let auth_exists: bool = conn
+                    .query_row(
+                        "SELECT 1 FROM sqlite_master
+                         WHERE type = 'table' AND name = 'auth_check_summaries'",
+                        [],
+                        |_| Ok(true),
+                    )
+                    .optional()?
+                    .unwrap_or(false);
+                if !auth_exists {
+                    tracing::info!("creating auth_check_summaries table");
+                    conn.execute_batch(SCHEMA)?;
+                }
+
+                // Schema version check: invalidate cached summary tables
+                // when the on-disk artefact layout has changed in an
+                // incompatible way, independently of the engine version.
+                // Runs before `check_engine_version` so the engine-version
+                // branch below does not race with a stale schema.
+                Self::check_schema_version(&conn)?;
+
+                // Engine version check: invalidate all caches when the scanner
+                // version changes so stale serialized data cannot be loaded.
+                Self::check_engine_version(&conn)?;
+            }
+            Ok(pool)
+        }
+
+        /// Check stored schema version against the compiled-in value.
+        ///
+        /// On mismatch (including first-time open), wipe the cached
+        /// summary tables so pre-schema-bump artefacts cannot be
+        /// rehydrated against the current engine.  Intentionally does
+        /// not drop `files`, `scans`, or triage data: those are not
+        /// layout-sensitive across this bump.
+        fn check_schema_version(conn: &Connection) -> NyxResult<()> {
+            let stored: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM nyx_metadata WHERE key = 'schema_version'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+
+            let current = SCHEMA_VERSION;
+
+            match stored {
+                Some(ref v) if v == current => {
+                    // Schema version matches — nothing to do.
+                }
+                _ => {
+                    let old = stored.as_deref().unwrap_or("<none>");
+                    tracing::info!(
+                        "db schema version changed ({old} → {current}), clearing summary caches"
+                    );
                     conn.execute_batch(
-                        "CREATE TABLE IF NOT EXISTS function_summaries (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            project TEXT NOT NULL,
-                            file_path TEXT NOT NULL,
-                            file_hash BLOB NOT NULL,
-                            name TEXT NOT NULL,
-                            arity INTEGER NOT NULL DEFAULT -1,
-                            lang TEXT NOT NULL,
-                            summary TEXT NOT NULL,
-                            updated_at INTEGER NOT NULL,
-                            UNIQUE(project, file_path, name, arity)
-                        );",
+                        "DELETE FROM function_summaries;
+                         DELETE FROM ssa_function_summaries;
+                         DELETE FROM ssa_function_bodies;
+                         DELETE FROM auth_check_summaries;
+                         DELETE FROM files;",
+                    )?;
+                    conn.execute(
+                        "INSERT OR REPLACE INTO nyx_metadata (key, value) VALUES ('schema_version', ?1)",
+                        params![current],
                     )?;
                 }
             }
-            Ok(pool)
+            Ok(())
+        }
+
+        /// Check stored engine version against the running binary.
+        /// On mismatch (or missing row), wipe all cached analysis data so
+        /// every file is rescanned with the new engine.
+        fn check_engine_version(conn: &Connection) -> NyxResult<()> {
+            let stored: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM nyx_metadata WHERE key = 'engine_version'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+
+            let current = ENGINE_VERSION;
+
+            match stored {
+                Some(ref v) if v == current => {
+                    // Version matches — nothing to do.
+                }
+                _ => {
+                    let old = stored.as_deref().unwrap_or("<none>");
+                    tracing::info!("engine version changed ({old} → {current}), rebuilding index");
+
+                    // Wipe all cached summaries and file hashes so everything
+                    // gets rescanned.
+                    conn.execute_batch(
+                        "DELETE FROM function_summaries;
+                         DELETE FROM ssa_function_summaries;
+                         DELETE FROM ssa_function_bodies;
+                         DELETE FROM auth_check_summaries;
+                         DELETE FROM files;",
+                    )?;
+
+                    conn.execute(
+                        "INSERT OR REPLACE INTO nyx_metadata (key, value) VALUES ('engine_version', ?1)",
+                        params![current],
+                    )?;
+                }
+            }
+            Ok(())
+        }
+
+        /// Persist the current engine version into metadata.
+        ///
+        /// Called after a successful scan to ensure the metadata row exists
+        /// even for a freshly created database.
+        pub fn write_engine_version(pool: &Pool<SqliteConnectionManager>) -> NyxResult<()> {
+            let conn = pool.get()?;
+            conn.execute(
+                "INSERT OR REPLACE INTO nyx_metadata (key, value) VALUES ('engine_version', ?1)",
+                params![ENGINE_VERSION],
+            )?;
+            Ok(())
+        }
+
+        /// Force a specific engine version into the metadata table.
+        /// Used by tests to simulate version mismatch scenarios.
+        #[cfg(test)]
+        pub fn set_engine_version(
+            pool: &Pool<SqliteConnectionManager>,
+            version: &str,
+        ) -> NyxResult<()> {
+            let conn = pool.get()?;
+            conn.execute(
+                "INSERT OR REPLACE INTO nyx_metadata (key, value) VALUES ('engine_version', ?1)",
+                params![version],
+            )?;
+            Ok(())
+        }
+
+        /// Read the stored engine version from metadata. Returns None if not set.
+        #[cfg(test)]
+        pub fn get_stored_engine_version(
+            pool: &Pool<SqliteConnectionManager>,
+        ) -> NyxResult<Option<String>> {
+            let conn = pool.get()?;
+            let v: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM nyx_metadata WHERE key = 'engine_version'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok(v)
+        }
+
+        /// Count rows in a table for a given project. Test helper.
+        #[cfg(test)]
+        pub fn count_rows(
+            pool: &Pool<SqliteConnectionManager>,
+            table: &str,
+            project: &str,
+        ) -> NyxResult<i64> {
+            let conn = pool.get()?;
+            // table name can't be parameterized; this is test-only code with trusted inputs.
+            let sql = format!("SELECT COUNT(*) FROM {table} WHERE project = ?1");
+            let count: i64 = conn.query_row(&sql, params![project], |r| r.get(0))?;
+            Ok(count)
+        }
+
+        /// Create a pool with init (schema + migrations + version check) for testing.
+        /// This is `init()` but exposed under a clearer name for tests.
+        #[cfg(test)]
+        pub fn init_for_test(
+            database_path: &Path,
+        ) -> NyxResult<Arc<Pool<SqliteConnectionManager>>> {
+            Self::init(database_path)
         }
 
         pub fn from_pool(project: &str, pool: &Pool<SqliteConnectionManager>) -> NyxResult<Self> {
@@ -223,6 +636,13 @@ pub mod index {
         }
 
         /// Replace all issues for `file_id` with the supplied set.
+        ///
+        /// Dedups rows by the same PRIMARY KEY the `issues` table enforces
+        /// (`file_id, rule_id, line, col`) to defend against upstream bugs
+        /// that produce same-keyed diagnostics with differing severity or
+        /// cosmetic fields. The first-seen row wins; upstream
+        /// [`crate::ast::ParsedSource::finalize_diags`] sorts so that high
+        /// severity comes first, and this fallback preserves that ordering.
         pub fn replace_issues<'a>(
             &mut self,
             file_id: i64,
@@ -236,7 +656,12 @@ pub mod index {
                     "INSERT INTO issues (file_id, rule_id, severity, line, col)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                 )?;
+                let mut seen: std::collections::HashSet<(String, i64, i64)> =
+                    std::collections::HashSet::new();
                 for iss in issues {
+                    if !seen.insert((iss.rule_id.to_string(), iss.line, iss.col)) {
+                        continue;
+                    }
                     stmt.execute(params![
                         file_id,
                         iss.rule_id,
@@ -266,12 +691,19 @@ pub mod index {
 
             let issue_iter = stmt.query_map([file_id], |row| {
                 let sev_str: String = row.get(1)?;
+                let severity = Severity::from_str(&sev_str).unwrap_or_else(|_| {
+                    tracing::warn!(
+                        severity = %sev_str,
+                        "unknown severity in DB row; defaulting to Medium"
+                    );
+                    Severity::Medium
+                });
                 Ok(Diag {
                     path: path.to_string_lossy().to_string(),
                     id: row.get::<_, String>(0)?, // rule_id
                     line: row.get::<_, i64>(2)? as usize,
                     col: row.get::<_, i64>(3)? as usize,
-                    severity: Severity::from_str(&sev_str).unwrap(),
+                    severity,
                     category: crate::patterns::FindingCategory::Security,
                     path_validated: false,
                     guard_kind: None,
@@ -284,6 +716,8 @@ pub mod index {
                     suppressed: false,
                     suppression: None,
                     rollup: None,
+                    finding_id: String::new(),
+                    alternative_finding_ids: Vec::new(),
                 })
             })?;
 
@@ -313,13 +747,15 @@ pub mod index {
             {
                 let mut stmt = tx.prepare(
                     "INSERT OR REPLACE INTO function_summaries
-                        (project, file_path, file_hash, name, arity, lang, summary, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                        (project, file_path, file_hash, name, arity, lang,
+                         container, disambig, kind, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 )?;
 
                 for s in summaries {
                     let json = serde_json::to_string(s)
                         .map_err(|e| NyxError::Msg(format!("summary serialise: {e}")))?;
+                    let disambig_sql = s.disambig.map(|d| d as i64);
                     stmt.execute(params![
                         self.project,
                         path_str,
@@ -327,6 +763,73 @@ pub mod index {
                         s.name,
                         s.param_count as i64,
                         s.lang,
+                        s.container,
+                        disambig_sql,
+                        s.kind.as_str(),
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            tx.commit()?;
+            Ok(())
+        }
+
+        /// Atomically replace all SSA function summaries for a single file.
+        ///
+        /// The input tuple is
+        /// `(name, arity, lang, namespace, container, disambig, kind, summary)` —
+        /// matching the fields required to reconstruct a full [`crate::symbol::FuncKey`]
+        /// on load.
+        pub fn replace_ssa_summaries_for_file(
+            &mut self,
+            file_path: &Path,
+            file_hash: &[u8],
+            summaries: &[(
+                String,
+                usize,
+                String,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::summary::ssa_summary::SsaFuncSummary,
+            )],
+        ) -> NyxResult<()> {
+            let tx = self.conn.transaction()?;
+            let path_str = file_path.to_string_lossy();
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+
+            tx.execute(
+                "DELETE FROM ssa_function_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO ssa_function_summaries
+                        (project, file_path, file_hash, name, arity, lang, namespace,
+                         container, disambig, kind, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                )?;
+
+                for (name, arity, lang, namespace, container, disambig, kind, summary) in summaries
+                {
+                    let json = serde_json::to_string(summary)
+                        .map_err(|e| NyxError::Msg(format!("SSA summary serialise: {e}")))?;
+                    let disambig_sql = disambig.map(|d| d as i64);
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        name,
+                        *arity as i64,
+                        lang,
+                        namespace,
+                        container,
+                        disambig_sql,
+                        kind.as_str(),
                         json,
                         now
                     ])?;
@@ -348,7 +851,13 @@ pub mod index {
 
             let jsons: Vec<String> = stmt
                 .query_map([&self.project], |row| row.get::<_, String>(0))?
-                .filter_map(Result::ok)
+                .filter_map(|r| match r {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!("failed to read summary row: {e}");
+                        None
+                    }
+                })
                 .collect();
 
             // Parallel JSON deserialization for large sets
@@ -357,19 +866,540 @@ pub mod index {
                 let results: Vec<_> = jsons
                     .par_iter()
                     .filter_map(|json| {
-                        serde_json::from_str::<crate::summary::FuncSummary>(json).ok()
+                        serde_json::from_str::<crate::summary::FuncSummary>(json)
+                            .map_err(|e| {
+                                tracing::warn!("failed to deserialize summary JSON: {e}");
+                                e
+                            })
+                            .ok()
                     })
                     .collect();
                 Ok(results)
             } else {
                 let mut out = Vec::with_capacity(jsons.len());
                 for json in &jsons {
-                    if let Ok(s) = serde_json::from_str::<crate::summary::FuncSummary>(json) {
-                        out.push(s);
+                    match serde_json::from_str::<crate::summary::FuncSummary>(json) {
+                        Ok(s) => out.push(s),
+                        Err(e) => {
+                            tracing::warn!("failed to deserialize summary JSON: {e}");
+                        }
                     }
                 }
                 Ok(out)
             }
+        }
+
+        /// Load every SSA function summary for this project.
+        ///
+        /// Returns rows with full metadata for `FuncKey` reconstruction:
+        /// `(file_path, name, lang, arity, namespace, container, disambig, kind, SsaFuncSummary)`.
+        pub fn load_all_ssa_summaries(
+            &self,
+        ) -> NyxResult<
+            Vec<(
+                String,
+                String,
+                String,
+                i64,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::summary::ssa_summary::SsaFuncSummary,
+            )>,
+        > {
+            let mut stmt = self.c().prepare(
+                "SELECT file_path, name, lang, arity, namespace,
+                        container, disambig, kind, summary
+                 FROM ssa_function_summaries WHERE project = ?1",
+            )?;
+
+            let rows: Vec<(
+                String,
+                String,
+                String,
+                i64,
+                String,
+                String,
+                Option<i64>,
+                String,
+                String,
+            )> = stmt
+                .query_map([&self.project], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                    ))
+                })?
+                .filter_map(|r| match r {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!("failed to read SSA summary row: {e}");
+                        None
+                    }
+                })
+                .collect();
+
+            if rows.len() > 256 {
+                use rayon::prelude::*;
+                let results: Vec<_> = rows
+                    .par_iter()
+                    .filter_map(
+                        |(fp, name, lang, arity, ns, container, disambig, kind, json)| {
+                            serde_json::from_str::<crate::summary::ssa_summary::SsaFuncSummary>(
+                                json,
+                            )
+                            .map_err(|e| {
+                                tracing::warn!("failed to deserialize SSA summary JSON: {e}");
+                                e
+                            })
+                            .ok()
+                            .map(|s| {
+                                (
+                                    fp.clone(),
+                                    name.clone(),
+                                    lang.clone(),
+                                    *arity,
+                                    ns.clone(),
+                                    container.clone(),
+                                    disambig.map(|d| d as u32),
+                                    crate::symbol::FuncKind::from_slug(kind),
+                                    s,
+                                )
+                            })
+                        },
+                    )
+                    .collect();
+                Ok(results)
+            } else {
+                let mut out = Vec::with_capacity(rows.len());
+                for (fp, name, lang, arity, ns, container, disambig, kind, json) in &rows {
+                    match serde_json::from_str::<crate::summary::ssa_summary::SsaFuncSummary>(json)
+                    {
+                        Ok(s) => {
+                            out.push((
+                                fp.clone(),
+                                name.clone(),
+                                lang.clone(),
+                                *arity,
+                                ns.clone(),
+                                container.clone(),
+                                disambig.map(|d| d as u32),
+                                crate::symbol::FuncKind::from_slug(kind),
+                                s,
+                            ));
+                        }
+                        Err(e) => {
+                            tracing::warn!("failed to deserialize SSA summary JSON: {e}");
+                        }
+                    }
+                }
+                Ok(out)
+            }
+        }
+
+        /// Load symbol metadata (name, arity, lang, namespace) for a single file.
+        ///
+        /// Lighter than `load_all_ssa_summaries` — skips JSON deserialization of
+        /// the full summary body and filters by file_path in the query.
+        pub fn load_ssa_summaries_for_file(
+            &self,
+            file_path: &str,
+        ) -> NyxResult<Vec<(String, i64, String, String)>> {
+            let mut stmt = self.c().prepare(
+                "SELECT name, arity, lang, namespace
+                 FROM ssa_function_summaries
+                 WHERE project = ?1 AND file_path = ?2",
+            )?;
+            let rows: Vec<(String, i64, String, String)> = stmt
+                .query_map(rusqlite::params![self.project, file_path], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            Ok(rows)
+        }
+
+        /// Atomically replace all SSA callee bodies for a single file.
+        ///
+        /// Persists cross-file callee bodies for interprocedural symex.
+        /// Bodies are serialized as JSON TEXT, matching the ssa_function_summaries pattern.
+        /// Input tuple: `(name, arity, lang, namespace, container, disambig, kind, body)`.
+        pub fn replace_ssa_bodies_for_file(
+            &mut self,
+            file_path: &Path,
+            file_hash: &[u8],
+            bodies: &[(
+                String,
+                usize,
+                String,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::taint::ssa_transfer::CalleeSsaBody,
+            )],
+        ) -> NyxResult<()> {
+            let tx = self.conn.transaction()?;
+            let path_str = file_path.to_string_lossy();
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+
+            tx.execute(
+                "DELETE FROM ssa_function_bodies WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO ssa_function_bodies
+                        (project, file_path, file_hash, name, arity, lang, namespace,
+                         container, disambig, kind, body, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                )?;
+
+                for (name, arity, lang, namespace, container, disambig, kind, body) in bodies {
+                    let json = serde_json::to_string(body)
+                        .map_err(|e| NyxError::Msg(format!("SSA body serialise: {e}")))?;
+                    let disambig_sql = disambig.map(|d| d as i64);
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        name,
+                        *arity as i64,
+                        lang,
+                        namespace,
+                        container,
+                        disambig_sql,
+                        kind.as_str(),
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            tx.commit()?;
+            Ok(())
+        }
+
+        /// Load every SSA callee body for this project.
+        ///
+        /// Returns rows with full metadata for `FuncKey` reconstruction:
+        /// `(file_path, name, lang, arity, namespace, container, disambig, kind, CalleeSsaBody)`.
+        pub fn load_all_ssa_bodies(
+            &self,
+        ) -> NyxResult<
+            Vec<(
+                String,
+                String,
+                String,
+                i64,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::taint::ssa_transfer::CalleeSsaBody,
+            )>,
+        > {
+            let mut stmt = self.c().prepare(
+                "SELECT file_path, name, lang, arity, namespace,
+                        container, disambig, kind, body
+                 FROM ssa_function_bodies WHERE project = ?1",
+            )?;
+
+            let rows: Vec<(
+                String,
+                String,
+                String,
+                i64,
+                String,
+                String,
+                Option<i64>,
+                String,
+                String,
+            )> = stmt
+                .query_map([&self.project], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                    ))
+                })?
+                .filter_map(|r| match r {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!("failed to read SSA body row: {e}");
+                        None
+                    }
+                })
+                .collect();
+
+            if rows.len() > 256 {
+                use rayon::prelude::*;
+                let results: Vec<_> = rows
+                    .par_iter()
+                    .filter_map(
+                        |(fp, name, lang, arity, ns, container, disambig, kind, json)| {
+                            serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json)
+                                .map_err(|e| {
+                                    tracing::warn!("failed to deserialize SSA body JSON: {e}");
+                                    e
+                                })
+                                .ok()
+                                .map(|mut b| {
+                                    // Rehydrate a proxy Cfg from node_meta so
+                                    // the taint engine's cross-file inline path can index
+                                    // `cfg[inst.cfg_node]` uniformly.  No-op for intra-file
+                                    // bodies that carry node_meta empty.
+                                    crate::taint::ssa_transfer::rebuild_body_graph(&mut b);
+                                    (
+                                        fp.clone(),
+                                        name.clone(),
+                                        lang.clone(),
+                                        *arity,
+                                        ns.clone(),
+                                        container.clone(),
+                                        disambig.map(|d| d as u32),
+                                        crate::symbol::FuncKind::from_slug(kind),
+                                        b,
+                                    )
+                                })
+                        },
+                    )
+                    .collect();
+                Ok(results)
+            } else {
+                let mut out = Vec::with_capacity(rows.len());
+                for (fp, name, lang, arity, ns, container, disambig, kind, json) in &rows {
+                    match serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json) {
+                        Ok(mut b) => {
+                            // See note in parallel branch above.
+                            crate::taint::ssa_transfer::rebuild_body_graph(&mut b);
+                            out.push((
+                                fp.clone(),
+                                name.clone(),
+                                lang.clone(),
+                                *arity,
+                                ns.clone(),
+                                container.clone(),
+                                disambig.map(|d| d as u32),
+                                crate::symbol::FuncKind::from_slug(kind),
+                                b,
+                            ));
+                        }
+                        Err(e) => {
+                            tracing::warn!("failed to deserialize SSA body JSON: {e}");
+                        }
+                    }
+                }
+                Ok(out)
+            }
+        }
+
+        /// Atomically replace all `AuthCheckSummary` rows for a single file.
+        ///
+        /// Mirrors [`Self::replace_ssa_summaries_for_file`].  Each input tuple
+        /// is `(name, arity, lang, namespace, container, disambig, kind, summary)`
+        /// — the full identity needed to reconstruct the callee's
+        /// [`crate::symbol::FuncKey`] on load.
+        pub fn replace_auth_summaries_for_file(
+            &mut self,
+            file_path: &Path,
+            file_hash: &[u8],
+            summaries: &[(
+                String,
+                usize,
+                String,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::auth_analysis::model::AuthCheckSummary,
+            )],
+        ) -> NyxResult<()> {
+            let tx = self.conn.transaction()?;
+            let path_str = file_path.to_string_lossy();
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+
+            tx.execute(
+                "DELETE FROM auth_check_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO auth_check_summaries
+                        (project, file_path, file_hash, name, arity, lang, namespace,
+                         container, disambig, kind, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                )?;
+
+                for (name, arity, lang, namespace, container, disambig, kind, summary) in summaries
+                {
+                    let json = serde_json::to_string(summary)
+                        .map_err(|e| NyxError::Msg(format!("auth summary serialise: {e}")))?;
+                    let disambig_sql = disambig.map(|d| d as i64);
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        name,
+                        *arity as i64,
+                        lang,
+                        namespace,
+                        container,
+                        disambig_sql,
+                        kind.as_str(),
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            tx.commit()?;
+            Ok(())
+        }
+
+        /// Load every `AuthCheckSummary` for this project.
+        ///
+        /// Returns rows with full metadata for `FuncKey` reconstruction:
+        /// `(file_path, name, lang, arity, namespace, container, disambig, kind, AuthCheckSummary)`.
+        pub fn load_all_auth_summaries(
+            &self,
+        ) -> NyxResult<
+            Vec<(
+                String,
+                String,
+                String,
+                i64,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::auth_analysis::model::AuthCheckSummary,
+            )>,
+        > {
+            let mut stmt = self.c().prepare(
+                "SELECT file_path, name, lang, arity, namespace,
+                        container, disambig, kind, summary
+                 FROM auth_check_summaries WHERE project = ?1",
+            )?;
+
+            let rows: Vec<(
+                String,
+                String,
+                String,
+                i64,
+                String,
+                String,
+                Option<i64>,
+                String,
+                String,
+            )> = stmt
+                .query_map([&self.project], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                    ))
+                })?
+                .filter_map(|r| match r {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!("failed to read auth summary row: {e}");
+                        None
+                    }
+                })
+                .collect();
+
+            let mut out = Vec::with_capacity(rows.len());
+            for (fp, name, lang, arity, ns, container, disambig, kind, json) in &rows {
+                match serde_json::from_str::<crate::auth_analysis::model::AuthCheckSummary>(json) {
+                    Ok(s) => {
+                        out.push((
+                            fp.clone(),
+                            name.clone(),
+                            lang.clone(),
+                            *arity,
+                            ns.clone(),
+                            container.clone(),
+                            disambig.map(|d| d as u32),
+                            crate::symbol::FuncKind::from_slug(kind),
+                            s,
+                        ));
+                    }
+                    Err(e) => {
+                        tracing::warn!("failed to deserialize auth summary JSON: {e}");
+                    }
+                }
+            }
+            Ok(out)
+        }
+
+        /// Remove a file and all derived persisted state for this project.
+        ///
+        /// This deletes the file row, issues, and all persisted summary rows so
+        /// incremental scans can prune deleted files from the index cleanly.
+        pub fn remove_file_and_related(&mut self, path: &Path) -> NyxResult<()> {
+            let tx = self.conn.transaction()?;
+            let path_str = path.to_string_lossy();
+
+            let file_id: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM files WHERE project = ?1 AND path = ?2",
+                    params![self.project, path_str.as_ref()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+
+            if let Some(file_id) = file_id {
+                tx.execute("DELETE FROM issues WHERE file_id = ?1", params![file_id])?;
+                tx.execute("DELETE FROM files WHERE id = ?1", params![file_id])?;
+            }
+
+            tx.execute(
+                "DELETE FROM function_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str.as_ref()],
+            )?;
+            tx.execute(
+                "DELETE FROM ssa_function_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str.as_ref()],
+            )?;
+            tx.execute(
+                "DELETE FROM ssa_function_bodies WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str.as_ref()],
+            )?;
+            tx.execute(
+                "DELETE FROM auth_check_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str.as_ref()],
+            )?;
+
+            tx.commit()?;
+            Ok(())
         }
 
         /// gets files from the database
@@ -388,6 +1418,560 @@ pub mod index {
         }
 
         // -------------------------------------------------------------------------
+        // Scan persistence
+        // -------------------------------------------------------------------------
+
+        /// Insert a new scan record.
+        pub fn insert_scan(&self, record: &ScanRecord) -> NyxResult<()> {
+            self.c().execute(
+                "INSERT OR REPLACE INTO scans (id, status, scan_root, started_at, finished_at,
+                 duration_secs, engine_version, languages, files_scanned, files_skipped,
+                 finding_count, findings_json, timing_json, error)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![
+                    record.id,
+                    record.status,
+                    record.scan_root,
+                    record.started_at,
+                    record.finished_at,
+                    record.duration_secs,
+                    record.engine_version,
+                    record.languages,
+                    record.files_scanned,
+                    record.files_skipped,
+                    record.finding_count,
+                    record.findings_json,
+                    record.timing_json,
+                    record.error,
+                ],
+            )?;
+            Ok(())
+        }
+
+        /// Update a scan record status and completion fields.
+        pub fn update_scan(
+            &self,
+            id: &str,
+            status: &str,
+            finished_at: Option<&str>,
+            duration_secs: Option<f64>,
+            finding_count: Option<i64>,
+            findings_json: Option<&str>,
+            timing_json: Option<&str>,
+            error: Option<&str>,
+            files_scanned: Option<i64>,
+            files_skipped: Option<i64>,
+            languages: Option<&str>,
+        ) -> NyxResult<()> {
+            self.c().execute(
+                "UPDATE scans SET status = ?2, finished_at = ?3, duration_secs = ?4,
+                 finding_count = ?5, findings_json = ?6, timing_json = ?7, error = ?8,
+                 files_scanned = ?9, files_skipped = ?10, languages = ?11
+                 WHERE id = ?1",
+                params![
+                    id,
+                    status,
+                    finished_at,
+                    duration_secs,
+                    finding_count,
+                    findings_json,
+                    timing_json,
+                    error,
+                    files_scanned,
+                    files_skipped,
+                    languages,
+                ],
+            )?;
+            Ok(())
+        }
+
+        /// Get a single scan record by ID.
+        pub fn get_scan(&self, id: &str) -> NyxResult<Option<ScanRecord>> {
+            let result = self
+                .c()
+                .query_row(
+                    "SELECT id, status, scan_root, started_at, finished_at, duration_secs,
+                     engine_version, languages, files_scanned, files_skipped, finding_count,
+                     findings_json, timing_json, error
+                     FROM scans WHERE id = ?1",
+                    params![id],
+                    |row| {
+                        Ok(ScanRecord {
+                            id: row.get(0)?,
+                            status: row.get(1)?,
+                            scan_root: row.get(2)?,
+                            started_at: row.get(3)?,
+                            finished_at: row.get(4)?,
+                            duration_secs: row.get(5)?,
+                            engine_version: row.get(6)?,
+                            languages: row.get(7)?,
+                            files_scanned: row.get(8)?,
+                            files_skipped: row.get(9)?,
+                            finding_count: row.get(10)?,
+                            findings_json: row.get(11)?,
+                            timing_json: row.get(12)?,
+                            error: row.get(13)?,
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(result)
+        }
+
+        /// List scan records, most recent first, up to `limit`.
+        pub fn list_scans(&self, limit: i64) -> NyxResult<Vec<ScanRecord>> {
+            let mut stmt = self.c().prepare(
+                "SELECT id, status, scan_root, started_at, finished_at, duration_secs,
+                 engine_version, languages, files_scanned, files_skipped, finding_count,
+                 findings_json, timing_json, error
+                 FROM scans ORDER BY started_at DESC LIMIT ?1",
+            )?;
+            let rows = stmt
+                .query_map(params![limit], |row| {
+                    Ok(ScanRecord {
+                        id: row.get(0)?,
+                        status: row.get(1)?,
+                        scan_root: row.get(2)?,
+                        started_at: row.get(3)?,
+                        finished_at: row.get(4)?,
+                        duration_secs: row.get(5)?,
+                        engine_version: row.get(6)?,
+                        languages: row.get(7)?,
+                        files_scanned: row.get(8)?,
+                        files_skipped: row.get(9)?,
+                        finding_count: row.get(10)?,
+                        findings_json: row.get(11)?,
+                        timing_json: row.get(12)?,
+                        error: row.get(13)?,
+                    })
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            Ok(rows)
+        }
+
+        /// Delete a scan and its associated metrics/logs (FK CASCADE).
+        pub fn delete_scan(&self, id: &str) -> NyxResult<usize> {
+            let rows = self
+                .c()
+                .execute("DELETE FROM scans WHERE id = ?1", params![id])?;
+            Ok(rows)
+        }
+
+        /// Insert scan metrics for a completed scan.
+        pub fn insert_scan_metrics(
+            &self,
+            scan_id: &str,
+            metrics: &crate::server::progress::ScanMetricsSnapshot,
+        ) -> NyxResult<()> {
+            self.c().execute(
+                "INSERT OR REPLACE INTO scan_metrics (scan_id, cfg_nodes, call_edges,
+                 functions_analyzed, summaries_reused, unresolved_calls)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    scan_id,
+                    metrics.cfg_nodes as i64,
+                    metrics.call_edges as i64,
+                    metrics.functions_analyzed as i64,
+                    metrics.summaries_reused as i64,
+                    metrics.unresolved_calls as i64,
+                ],
+            )?;
+            Ok(())
+        }
+
+        /// Get scan metrics by scan ID.
+        pub fn get_scan_metrics(
+            &self,
+            scan_id: &str,
+        ) -> NyxResult<Option<crate::server::progress::ScanMetricsSnapshot>> {
+            let result = self
+                .c()
+                .query_row(
+                    "SELECT cfg_nodes, call_edges, functions_analyzed,
+                     summaries_reused, unresolved_calls
+                     FROM scan_metrics WHERE scan_id = ?1",
+                    params![scan_id],
+                    |row| {
+                        Ok(crate::server::progress::ScanMetricsSnapshot {
+                            cfg_nodes: row.get::<_, i64>(0)? as u64,
+                            call_edges: row.get::<_, i64>(1)? as u64,
+                            functions_analyzed: row.get::<_, i64>(2)? as u64,
+                            summaries_reused: row.get::<_, i64>(3)? as u64,
+                            unresolved_calls: row.get::<_, i64>(4)? as u64,
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(result)
+        }
+
+        /// Insert scan log entries.
+        pub fn insert_scan_logs(
+            &self,
+            scan_id: &str,
+            logs: &[crate::server::scan_log::ScanLogEntry],
+        ) -> NyxResult<()> {
+            let mut stmt = self.c().prepare(
+                "INSERT INTO scan_logs (scan_id, timestamp, level, message, file_path, detail)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for log in logs {
+                stmt.execute(params![
+                    scan_id,
+                    log.timestamp.to_rfc3339(),
+                    log.level.to_string(),
+                    log.message,
+                    log.file_path,
+                    log.detail,
+                ])?;
+            }
+            Ok(())
+        }
+
+        /// Get scan logs, optionally filtered by level.
+        pub fn get_scan_logs(
+            &self,
+            scan_id: &str,
+            level_filter: Option<&str>,
+        ) -> NyxResult<Vec<crate::server::scan_log::ScanLogEntry>> {
+            let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                if let Some(level) = level_filter {
+                    (
+                        "SELECT timestamp, level, message, file_path, detail
+                         FROM scan_logs WHERE scan_id = ?1 AND level = ?2
+                         ORDER BY id ASC",
+                        vec![Box::new(scan_id.to_string()), Box::new(level.to_string())],
+                    )
+                } else {
+                    (
+                        "SELECT timestamp, level, message, file_path, detail
+                         FROM scan_logs WHERE scan_id = ?1
+                         ORDER BY id ASC",
+                        vec![Box::new(scan_id.to_string())],
+                    )
+                };
+
+            let mut stmt = self.c().prepare(sql)?;
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt
+                .query_map(params_refs.as_slice(), |row| {
+                    let ts_str: String = row.get(0)?;
+                    let level_str: String = row.get(1)?;
+                    Ok((
+                        ts_str,
+                        level_str,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                })?
+                .filter_map(Result::ok)
+                .filter_map(|(ts_str, level_str, message, file_path, detail)| {
+                    let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
+                        .ok()?
+                        .with_timezone(&chrono::Utc);
+                    let level = level_str.parse().ok()?;
+                    Some(crate::server::scan_log::ScanLogEntry {
+                        timestamp,
+                        level,
+                        message,
+                        file_path,
+                        detail,
+                    })
+                })
+                .collect();
+            Ok(rows)
+        }
+
+        // -------------------------------------------------------------------------
+        // Triage state management
+        // -------------------------------------------------------------------------
+
+        /// Get the triage state for a single finding fingerprint.
+        /// Returns (state, note, updated_at) or None if no triage state exists.
+        #[allow(dead_code)]
+        pub fn get_triage_state(
+            &self,
+            fingerprint: &str,
+        ) -> NyxResult<Option<(String, String, String)>> {
+            let result = self
+                .c()
+                .query_row(
+                    "SELECT state, note, updated_at FROM triage_states WHERE fingerprint = ?1",
+                    params![fingerprint],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            Ok(result)
+        }
+
+        /// Set the triage state for a single finding. Upserts the state and
+        /// appends an audit log entry. Returns the previous state (or "open").
+        #[allow(dead_code)]
+        pub fn set_triage_state(
+            &self,
+            fingerprint: &str,
+            state: &str,
+            note: &str,
+            action: &str,
+        ) -> NyxResult<String> {
+            let now = chrono::Utc::now().to_rfc3339();
+            let prev: String = self
+                .c()
+                .query_row(
+                    "SELECT state FROM triage_states WHERE fingerprint = ?1",
+                    params![fingerprint],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .unwrap_or_else(|| "open".to_string());
+
+            self.c().execute(
+                "INSERT INTO triage_states (fingerprint, state, note, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(fingerprint) DO UPDATE
+                 SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at",
+                params![fingerprint, state, note, now],
+            )?;
+
+            self.c().execute(
+                "INSERT INTO triage_audit_log (fingerprint, action, previous_state, new_state, note, timestamp)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![fingerprint, action, prev, state, note, now],
+            )?;
+
+            Ok(prev)
+        }
+
+        /// Bulk set triage state. Returns vec of (fingerprint, previous_state).
+        pub fn set_triage_states_bulk(
+            &self,
+            fingerprints: &[String],
+            state: &str,
+            note: &str,
+            action: &str,
+        ) -> NyxResult<Vec<(String, String)>> {
+            let now = chrono::Utc::now().to_rfc3339();
+            let mut results = Vec::with_capacity(fingerprints.len());
+
+            // Read all previous states first
+            let mut prev_stmt = self
+                .c()
+                .prepare("SELECT state FROM triage_states WHERE fingerprint = ?1")?;
+
+            for fp in fingerprints {
+                let prev: String = prev_stmt
+                    .query_row(params![fp], |row| row.get(0))
+                    .optional()?
+                    .unwrap_or_else(|| "open".to_string());
+                results.push((fp.clone(), prev));
+            }
+            drop(prev_stmt);
+
+            // Upsert all states
+            let mut upsert_stmt = self.c().prepare(
+                "INSERT INTO triage_states (fingerprint, state, note, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(fingerprint) DO UPDATE
+                 SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at",
+            )?;
+            for fp in fingerprints {
+                upsert_stmt.execute(params![fp, state, note, now])?;
+            }
+            drop(upsert_stmt);
+
+            // Insert audit log entries
+            let mut audit_stmt = self.c().prepare(
+                "INSERT INTO triage_audit_log (fingerprint, action, previous_state, new_state, note, timestamp)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for (fp, prev) in &results {
+                audit_stmt.execute(params![fp, action, prev, state, note, now])?;
+            }
+
+            Ok(results)
+        }
+
+        /// Load all triage states as a map: fingerprint → (state, note, updated_at).
+        pub fn get_all_triage_states(
+            &self,
+        ) -> NyxResult<std::collections::HashMap<String, (String, String, String)>> {
+            let mut stmt = self
+                .c()
+                .prepare("SELECT fingerprint, state, note, updated_at FROM triage_states")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })?
+                .filter_map(Result::ok)
+                .map(|(fp, state, note, updated)| (fp, (state, note, updated)))
+                .collect();
+            Ok(rows)
+        }
+
+        /// List triage states with optional state filter, paginated.
+        /// Returns (entries, total_count).
+        pub fn list_triage_states(
+            &self,
+            state_filter: Option<&str>,
+            limit: i64,
+            offset: i64,
+        ) -> NyxResult<(Vec<(String, String, String, String)>, i64)> {
+            let (sql, count_sql, params_vec): (&str, &str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                if let Some(state) = state_filter {
+                    (
+                        "SELECT fingerprint, state, note, updated_at FROM triage_states
+                         WHERE state = ?1 ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3",
+                        "SELECT COUNT(*) FROM triage_states WHERE state = ?1",
+                        vec![
+                            Box::new(state.to_string()),
+                            Box::new(limit),
+                            Box::new(offset),
+                        ],
+                    )
+                } else {
+                    (
+                        "SELECT fingerprint, state, note, updated_at FROM triage_states
+                         ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2",
+                        "SELECT COUNT(*) FROM triage_states",
+                        vec![Box::new(limit), Box::new(offset)],
+                    )
+                };
+
+            let total: i64 = if let Some(state) = state_filter {
+                self.c()
+                    .query_row(count_sql, params![state], |row| row.get(0))?
+            } else {
+                self.c().query_row(count_sql, [], |row| row.get(0))?
+            };
+
+            let mut stmt = self.c().prepare(sql)?;
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt
+                .query_map(params_refs.as_slice(), |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            Ok((rows, total))
+        }
+
+        /// Get the audit log, optionally filtered by fingerprint, paginated.
+        /// Returns (entries, total_count).
+        pub fn get_audit_log(
+            &self,
+            fingerprint_filter: Option<&str>,
+            limit: i64,
+            offset: i64,
+        ) -> NyxResult<(Vec<AuditEntry>, i64)> {
+            let (sql, count_sql, params_vec): (&str, &str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                if let Some(fp) = fingerprint_filter {
+                    (
+                        "SELECT id, fingerprint, action, previous_state, new_state, note, timestamp
+                         FROM triage_audit_log WHERE fingerprint = ?1
+                         ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3",
+                        "SELECT COUNT(*) FROM triage_audit_log WHERE fingerprint = ?1",
+                        vec![Box::new(fp.to_string()), Box::new(limit), Box::new(offset)],
+                    )
+                } else {
+                    (
+                        "SELECT id, fingerprint, action, previous_state, new_state, note, timestamp
+                         FROM triage_audit_log ORDER BY timestamp DESC LIMIT ?1 OFFSET ?2",
+                        "SELECT COUNT(*) FROM triage_audit_log",
+                        vec![Box::new(limit), Box::new(offset)],
+                    )
+                };
+
+            let total: i64 = if let Some(fp) = fingerprint_filter {
+                self.c()
+                    .query_row(count_sql, params![fp], |row| row.get(0))?
+            } else {
+                self.c().query_row(count_sql, [], |row| row.get(0))?
+            };
+
+            let mut stmt = self.c().prepare(sql)?;
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt
+                .query_map(params_refs.as_slice(), |row| {
+                    Ok(AuditEntry {
+                        id: row.get(0)?,
+                        fingerprint: row.get(1)?,
+                        action: row.get(2)?,
+                        previous_state: row.get(3)?,
+                        new_state: row.get(4)?,
+                        note: row.get(5)?,
+                        timestamp: row.get(6)?,
+                    })
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            Ok((rows, total))
+        }
+
+        /// Add a pattern-based suppression rule.
+        pub fn add_suppression_rule(
+            &self,
+            suppress_by: &str,
+            match_value: &str,
+            state: &str,
+            note: &str,
+        ) -> NyxResult<i64> {
+            let now = chrono::Utc::now().to_rfc3339();
+            self.c().execute(
+                "INSERT OR REPLACE INTO triage_suppression_rules
+                 (suppress_by, match_value, state, note, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![suppress_by, match_value, state, note, now],
+            )?;
+            Ok(self.c().last_insert_rowid())
+        }
+
+        /// Get all suppression rules.
+        pub fn get_suppression_rules(&self) -> NyxResult<Vec<SuppressionRule>> {
+            let mut stmt = self.c().prepare(
+                "SELECT id, suppress_by, match_value, state, note, created_at
+                 FROM triage_suppression_rules ORDER BY created_at DESC",
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(SuppressionRule {
+                        id: row.get(0)?,
+                        suppress_by: row.get(1)?,
+                        match_value: row.get(2)?,
+                        state: row.get(3)?,
+                        note: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            Ok(rows)
+        }
+
+        /// Delete a suppression rule by ID. Returns true if a row was deleted.
+        pub fn delete_suppression_rule(&self, id: i64) -> NyxResult<bool> {
+            let count = self.c().execute(
+                "DELETE FROM triage_suppression_rules WHERE id = ?1",
+                params![id],
+            )?;
+            Ok(count > 0)
+        }
+
+        // -------------------------------------------------------------------------
         // Maintenance utilities
         // -------------------------------------------------------------------------
         pub fn clear(&self) -> NyxResult<()> {
@@ -398,6 +1982,7 @@ pub mod index {
         DROP TABLE IF EXISTS issues;
         DROP TABLE IF EXISTS files;
         DROP TABLE IF EXISTS function_summaries;
+        DROP TABLE IF EXISTS ssa_function_summaries;
 
         PRAGMA foreign_keys = ON;
         VACUUM;
@@ -512,4 +2097,1288 @@ fn clear_and_vacuum_reset_tables() {
     idx.clear().unwrap();
     idx.vacuum().unwrap();
     assert!(idx.get_files("proj").unwrap().is_empty());
+}
+
+#[test]
+fn clear_preserves_scan_history_tables() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let idx = index::Indexer::from_pool("_scans", &pool).unwrap();
+    idx.insert_scan(&index::ScanRecord {
+        id: "scan-1".to_string(),
+        status: "completed".to_string(),
+        scan_root: td.path().display().to_string(),
+        started_at: Some("2026-03-25T12:00:00Z".to_string()),
+        finished_at: Some("2026-03-25T12:00:01Z".to_string()),
+        duration_secs: Some(1.0),
+        engine_version: Some("test".to_string()),
+        languages: None,
+        files_scanned: Some(1),
+        files_skipped: Some(0),
+        finding_count: Some(0),
+        findings_json: Some("[]".to_string()),
+        timing_json: None,
+        error: None,
+    })
+    .unwrap();
+
+    let proj_idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    proj_idx.clear().unwrap();
+
+    let loaded = idx
+        .get_scan("scan-1")
+        .unwrap()
+        .expect("scan history should survive index clears");
+    assert_eq!(loaded.status, "completed");
+}
+
+#[test]
+fn ssa_summaries_round_trip() {
+    use crate::labels::Cap;
+    use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("app.py");
+    std::fs::write(&f, "def process(data): return data").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    let hash = index::Indexer::digest_bytes(b"def process(data): return data");
+    let summaries = vec![
+        (
+            "process".to_string(),
+            1_usize,
+            "python".to_string(),
+            "app.py".to_string(),
+            String::new(),
+            None,
+            crate::symbol::FuncKind::Function,
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::Identity)],
+                param_to_sink: vec![],
+                source_caps: Cap::empty(),
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+                source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
+
+                abstract_transfer: vec![],
+                param_return_paths: vec![],
+                points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
+            },
+        ),
+        (
+            "sanitize".to_string(),
+            1_usize,
+            "python".to_string(),
+            "app.py".to_string(),
+            String::new(),
+            None,
+            crate::symbol::FuncKind::Function,
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
+                param_to_sink: vec![(
+                    0,
+                    smallvec::smallvec![crate::summary::SinkSite::cap_only(Cap::SQL_QUERY)],
+                )],
+                source_caps: Cap::ENV_VAR,
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+                source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
+
+                abstract_transfer: vec![],
+                param_return_paths: vec![],
+                points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
+            },
+        ),
+    ];
+
+    idx.replace_ssa_summaries_for_file(&f, &hash, &summaries)
+        .unwrap();
+
+    let loaded = idx.load_all_ssa_summaries().unwrap();
+    assert_eq!(loaded.len(), 2);
+
+    // Check first summary
+    let (_, name1, lang1, arity1, ns1, _, _, _, sum1) = loaded
+        .iter()
+        .find(|(_, n, _, _, _, _, _, _, _)| n == "process")
+        .unwrap();
+    assert_eq!(name1, "process");
+    assert_eq!(lang1, "python");
+    assert_eq!(*arity1, 1);
+    assert_eq!(ns1, "app.py");
+    assert_eq!(sum1.param_to_return, vec![(0, TaintTransform::Identity)]);
+    assert!(sum1.param_to_sink.is_empty());
+
+    // Check second summary
+    let (_, name2, _, _, _, _, _, _, sum2) = loaded
+        .iter()
+        .find(|(_, n, _, _, _, _, _, _, _)| n == "sanitize")
+        .unwrap();
+    assert_eq!(name2, "sanitize");
+    assert_eq!(
+        sum2.param_to_return,
+        vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))]
+    );
+    assert_eq!(sum2.param_to_sink_caps(), vec![(0, Cap::SQL_QUERY)]);
+    assert_eq!(sum2.source_caps, Cap::ENV_VAR);
+}
+
+/// Round-trip test for [`crate::summary::ssa_summary::PathFactReturnEntry`]:
+/// asserts that `return_path_facts` survive serialise → SQLite persist →
+/// load → deserialise.  Regression guard for the per-return-path PathFact
+/// decomposition that closes the rs-safe-014 / tar-rs / rs-safe-016 FP
+/// cluster — without this round-trip working, cross-file callers lose
+/// the per-arm narrowing and inline-only callees regain the joined-fact
+/// dilution.
+#[test]
+fn ssa_summaries_round_trip_preserves_return_path_facts() {
+    use crate::abstract_interp::PathFact;
+    use crate::summary::ssa_summary::{PathFactReturnEntry, SsaFuncSummary, TaintTransform};
+    use smallvec::smallvec;
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("sanitize.rs");
+    std::fs::write(&f, "// sanitizer body").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    let hash = index::Indexer::digest_bytes(b"// sanitizer body");
+    let return_path_facts = smallvec![
+        PathFactReturnEntry {
+            predicate_hash: 0,
+            known_true: 0,
+            known_false: 0,
+            path_fact: PathFact::top(),
+            variant_inner_fact: None,
+        },
+        PathFactReturnEntry {
+            predicate_hash: 17,
+            known_true: 0,
+            known_false: 0,
+            path_fact: PathFact::top(),
+            variant_inner_fact: Some(
+                PathFact::top()
+                    .with_dotdot_cleared()
+                    .with_absolute_cleared(),
+            ),
+        },
+    ];
+    let summary = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        return_path_facts: return_path_facts.clone(),
+        ..Default::default()
+    };
+    let row = (
+        "sanitize_path".to_string(),
+        1_usize,
+        "rust".to_string(),
+        "sanitize.rs".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        summary,
+    );
+
+    idx.replace_ssa_summaries_for_file(&f, &hash, &[row])
+        .unwrap();
+
+    let loaded = idx.load_all_ssa_summaries().unwrap();
+    assert_eq!(loaded.len(), 1);
+    let (_, name, _, _, _, _, _, _, sum) = &loaded[0];
+    assert_eq!(name, "sanitize_path");
+    assert_eq!(
+        sum.return_path_facts.len(),
+        2,
+        "two distinct return paths must round-trip"
+    );
+    // Find each entry by predicate hash so order doesn't matter.
+    let none_arm = sum
+        .return_path_facts
+        .iter()
+        .find(|e| e.predicate_hash == 0)
+        .expect("unguarded entry");
+    assert!(none_arm.path_fact.is_top());
+    assert!(none_arm.variant_inner_fact.is_none());
+    let some_arm = sum
+        .return_path_facts
+        .iter()
+        .find(|e| e.predicate_hash == 17)
+        .expect("guarded entry");
+    let inner = some_arm
+        .variant_inner_fact
+        .as_ref()
+        .expect("inner fact survives round-trip");
+    assert!(
+        inner.is_path_safe(),
+        "Some arm's inner fact stays path-safe"
+    );
+}
+
+#[test]
+fn ssa_summaries_hash_rescan_replaces_stale() {
+    use crate::labels::Cap;
+    use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("lib.py");
+    std::fs::write(&f, "v1").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    let hash_v1 = index::Indexer::digest_bytes(b"v1");
+    let sums_v1 = vec![(
+        "old_func".to_string(),
+        1_usize,
+        "python".to_string(),
+        "lib.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::Identity)],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+            source_to_callback: vec![],
+
+            receiver_to_return: None,
+
+            receiver_to_sink: Cap::empty(),
+
+            abstract_transfer: vec![],
+            param_return_paths: vec![],
+            points_to: Default::default(),
+            return_path_facts: smallvec::SmallVec::new(),
+        },
+    )];
+    idx.replace_ssa_summaries_for_file(&f, &hash_v1, &sums_v1)
+        .unwrap();
+
+    // Simulate file change: different function, different hash
+    let hash_v2 = index::Indexer::digest_bytes(b"v2");
+    let sums_v2 = vec![(
+        "new_func".to_string(),
+        2_usize,
+        "python".to_string(),
+        "lib.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::StripBits(Cap::SHELL_ESCAPE))],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+            source_to_callback: vec![],
+
+            receiver_to_return: None,
+
+            receiver_to_sink: Cap::empty(),
+
+            abstract_transfer: vec![],
+            param_return_paths: vec![],
+            points_to: Default::default(),
+            return_path_facts: smallvec::SmallVec::new(),
+        },
+    )];
+    idx.replace_ssa_summaries_for_file(&f, &hash_v2, &sums_v2)
+        .unwrap();
+
+    let loaded = idx.load_all_ssa_summaries().unwrap();
+    assert_eq!(
+        loaded.len(),
+        1,
+        "old summary should be replaced, not duplicated"
+    );
+    assert_eq!(loaded[0].1, "new_func");
+}
+
+#[test]
+fn clear_drops_ssa_summaries_table() {
+    use crate::labels::Cap;
+    use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("test.py");
+    std::fs::write(&f, "x").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    let hash = index::Indexer::digest_bytes(b"x");
+    let sums = vec![(
+        "f".to_string(),
+        1_usize,
+        "python".to_string(),
+        "test.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::Identity)],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+            source_to_callback: vec![],
+
+            receiver_to_return: None,
+
+            receiver_to_sink: Cap::empty(),
+
+            abstract_transfer: vec![],
+            param_return_paths: vec![],
+            points_to: Default::default(),
+            return_path_facts: smallvec::SmallVec::new(),
+        },
+    )];
+    idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
+        .unwrap();
+    assert_eq!(idx.load_all_ssa_summaries().unwrap().len(), 1);
+
+    idx.clear().unwrap();
+    assert_eq!(idx.load_all_ssa_summaries().unwrap().len(), 0);
+}
+
+// ── CalleeSsaBody persistence tests ──────────────────────────────────────
+
+/// Helper: build a minimal CalleeSsaBody for DB tests.
+#[allow(dead_code)] // used by tests below
+fn make_test_callee_body(
+    num_blocks: usize,
+    param_count: usize,
+) -> crate::taint::ssa_transfer::CalleeSsaBody {
+    use crate::ssa::ir::*;
+    use smallvec::smallvec;
+
+    let mut blocks = Vec::new();
+    for i in 0..num_blocks {
+        blocks.push(SsaBlock {
+            id: BlockId(i as u32),
+            phis: vec![],
+            body: vec![SsaInst {
+                value: SsaValue(i as u32),
+                op: SsaOp::Const(Some(format!("{i}"))),
+                cfg_node: petgraph::graph::NodeIndex::new(0),
+                var_name: None,
+                span: (0, 0),
+            }],
+            terminator: Terminator::Return(Some(SsaValue(0))),
+            preds: smallvec![],
+            succs: smallvec![],
+        });
+    }
+
+    let value_defs: Vec<ValueDef> = (0..num_blocks)
+        .map(|i| ValueDef {
+            var_name: None,
+            cfg_node: petgraph::graph::NodeIndex::new(0),
+            block: BlockId(i as u32),
+        })
+        .collect();
+
+    crate::taint::ssa_transfer::CalleeSsaBody {
+        ssa: SsaBody {
+            blocks,
+            entry: BlockId(0),
+            value_defs,
+            cfg_node_map: std::collections::HashMap::new(),
+            exception_edges: vec![],
+        },
+        opt: crate::ssa::OptimizeResult {
+            const_values: std::collections::HashMap::new(),
+            type_facts: crate::ssa::type_facts::TypeFactResult {
+                facts: std::collections::HashMap::new(),
+            },
+            alias_result: crate::ssa::alias::BaseAliasResult::empty(),
+            points_to: crate::ssa::heap::PointsToResult::empty(),
+            module_aliases: std::collections::HashMap::new(),
+            branches_pruned: 0,
+            copies_eliminated: 0,
+            dead_defs_removed: 0,
+        },
+        param_count,
+        node_meta: std::collections::HashMap::new(),
+        body_graph: None,
+    }
+}
+
+#[test]
+fn ssa_bodies_round_trip() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("helper.py");
+    std::fs::write(&f, "def transform(val): return val").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    let hash = index::Indexer::digest_bytes(b"def transform(val): return val");
+
+    let body = make_test_callee_body(3, 1);
+    let bodies = vec![(
+        "transform".to_string(),
+        1_usize,
+        "python".to_string(),
+        "helper.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        body,
+    )];
+
+    idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
+
+    let loaded = idx.load_all_ssa_bodies().unwrap();
+    assert_eq!(loaded.len(), 1);
+
+    let (fp, name, lang, arity, ns, _, _, _, loaded_body) = &loaded[0];
+    assert_eq!(fp, &f.to_string_lossy().to_string());
+    assert_eq!(name, "transform");
+    assert_eq!(lang, "python");
+    assert_eq!(*arity, 1);
+    assert_eq!(ns, "helper.py");
+    assert_eq!(loaded_body.param_count, 1);
+    assert_eq!(loaded_body.ssa.blocks.len(), 3);
+}
+
+#[test]
+fn ssa_bodies_replace_on_rescan() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("helper.py");
+    std::fs::write(&f, "v1").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    // Store v1 with 2 blocks
+    let hash1 = index::Indexer::digest_bytes(b"v1");
+    let bodies1 = vec![(
+        "func".to_string(),
+        1_usize,
+        "python".to_string(),
+        "h.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        make_test_callee_body(2, 1),
+    )];
+    idx.replace_ssa_bodies_for_file(&f, &hash1, &bodies1)
+        .unwrap();
+    assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 1);
+    assert_eq!(idx.load_all_ssa_bodies().unwrap()[0].8.ssa.blocks.len(), 2);
+
+    // Store v2 with 5 blocks — should replace, not accumulate
+    let hash2 = index::Indexer::digest_bytes(b"v2");
+    let bodies2 = vec![(
+        "func".to_string(),
+        1_usize,
+        "python".to_string(),
+        "h.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        make_test_callee_body(5, 1),
+    )];
+    idx.replace_ssa_bodies_for_file(&f, &hash2, &bodies2)
+        .unwrap();
+
+    let loaded = idx.load_all_ssa_bodies().unwrap();
+    assert_eq!(loaded.len(), 1, "should replace, not accumulate");
+    assert_eq!(loaded[0].8.ssa.blocks.len(), 5);
+}
+
+#[test]
+fn ssa_bodies_with_node_meta_round_trip() {
+    use crate::cfg::{NodeInfo, TaintMeta};
+    use crate::labels::{Cap, DataLabel};
+    use crate::taint::ssa_transfer::CrossFileNodeMeta;
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("helper.py");
+    std::fs::write(&f, "code").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    let hash = index::Indexer::digest_bytes(b"code");
+
+    let mut body = make_test_callee_body(1, 0);
+    body.node_meta.insert(
+        0,
+        CrossFileNodeMeta {
+            info: NodeInfo {
+                bin_op: Some(crate::cfg::BinOp::Add),
+                taint: TaintMeta {
+                    labels: smallvec::smallvec![DataLabel::Sink(Cap::SQL_QUERY)],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        },
+    );
+
+    let bodies = vec![(
+        "f".to_string(),
+        0_usize,
+        "python".to_string(),
+        "h.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        body,
+    )];
+    idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
+
+    let loaded = idx.load_all_ssa_bodies().unwrap();
+    assert_eq!(loaded.len(), 1);
+
+    let meta = &loaded[0].8.node_meta;
+    assert_eq!(meta.len(), 1);
+    assert_eq!(meta[&0].info.bin_op, Some(crate::cfg::BinOp::Add));
+    assert!(matches!(meta[&0].info.taint.labels[0], DataLabel::Sink(cap) if cap == Cap::SQL_QUERY));
+}
+
+#[test]
+fn ssa_bodies_removed_on_file_delete() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("helper.py");
+    std::fs::write(&f, "code").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    let hash = index::Indexer::digest_bytes(b"code");
+
+    // Register file first so remove_file_and_related has something to find
+    idx.upsert_file(&f).unwrap();
+
+    let bodies = vec![(
+        "f".to_string(),
+        0_usize,
+        "python".to_string(),
+        "h.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        make_test_callee_body(1, 0),
+    )];
+    idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
+    assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 1);
+
+    // Delete file — should also remove bodies
+    idx.remove_file_and_related(&f).unwrap();
+    assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 0);
+}
+
+// ── Persistence hardening tests ─────────────────────────────────────────────
+
+/// Helper: build a minimal SsaFuncSummary for persistence tests.
+#[cfg(test)]
+fn make_test_ssa_summary() -> crate::summary::ssa_summary::SsaFuncSummary {
+    use crate::labels::Cap;
+    use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
+    SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        param_to_sink: vec![],
+        source_caps: Cap::empty(),
+        param_to_sink_param: vec![],
+        param_container_to_return: vec![],
+        param_to_container_store: vec![],
+        return_type: None,
+        return_abstract: None,
+        source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
+
+        abstract_transfer: vec![],
+        param_return_paths: vec![],
+        points_to: Default::default(),
+        return_path_facts: smallvec::SmallVec::new(),
+    }
+}
+
+/// Helper: insert a fake summary + SSA summary + file row for a project.
+#[cfg(test)]
+fn populate_project(
+    pool: &r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>,
+    project: &str,
+    dir: &std::path::Path,
+) {
+    let f = dir.join("app.py");
+    std::fs::write(&f, "# code").unwrap();
+
+    let mut idx = index::Indexer::from_pool(project, pool).unwrap();
+    idx.upsert_file(&f).unwrap();
+
+    let hash = index::Indexer::digest_bytes(b"# code");
+
+    // Insert a FuncSummary
+    let func_summary = crate::summary::FuncSummary {
+        name: "do_stuff".to_string(),
+        file_path: f.to_string_lossy().to_string(),
+        param_count: 1,
+        param_names: vec!["data".to_string()],
+        lang: "python".to_string(),
+        source_caps: 0,
+        sanitizer_caps: 0,
+        sink_caps: 0,
+        propagating_params: vec![0],
+        propagates_taint: true,
+        tainted_sink_params: vec![],
+        callees: vec![],
+        ..Default::default()
+    };
+    idx.replace_summaries_for_file(&f, &hash, &[func_summary])
+        .unwrap();
+
+    // Insert an SSA summary
+    let ssa_sums = vec![(
+        "do_stuff".to_string(),
+        1_usize,
+        "python".to_string(),
+        "app.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        make_test_ssa_summary(),
+    )];
+    idx.replace_ssa_summaries_for_file(&f, &hash, &ssa_sums)
+        .unwrap();
+
+    // Insert an SSA body
+    let bodies = vec![(
+        "do_stuff".to_string(),
+        1_usize,
+        "python".to_string(),
+        "app.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        make_test_callee_body(1, 1),
+    )];
+    idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
+}
+
+// ── 1. Engine Version Tests ─────────────────────────────────────────────────
+
+#[test]
+fn version_match_no_reset() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    // First init: creates DB and sets version
+    let pool = index::Indexer::init(&db).unwrap();
+    populate_project(&pool, "proj", td.path());
+
+    // Verify data exists
+    assert_eq!(
+        index::Indexer::count_rows(&pool, "function_summaries", "proj").unwrap(),
+        1
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool, "ssa_function_summaries", "proj").unwrap(),
+        1
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool, "ssa_function_bodies", "proj").unwrap(),
+        1
+    );
+
+    // Second init with same version: data should be preserved
+    drop(pool);
+    let pool2 = index::Indexer::init(&db).unwrap();
+
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(),
+        1
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj").unwrap(),
+        1
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_bodies", "proj").unwrap(),
+        1
+    );
+
+    let stored = index::Indexer::get_stored_engine_version(&pool2).unwrap();
+    assert_eq!(stored.as_deref(), Some(index::ENGINE_VERSION));
+}
+
+#[test]
+fn version_mismatch_triggers_reset() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    // First init
+    let pool = index::Indexer::init(&db).unwrap();
+    populate_project(&pool, "proj", td.path());
+
+    // Simulate an old version
+    index::Indexer::set_engine_version(&pool, "0.0.1-old").unwrap();
+
+    // Verify data is populated
+    assert_eq!(
+        index::Indexer::count_rows(&pool, "function_summaries", "proj").unwrap(),
+        1
+    );
+
+    // Reopen — version mismatch should trigger full wipe
+    drop(pool);
+    let pool2 = index::Indexer::init(&db).unwrap();
+
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(),
+        0
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj").unwrap(),
+        0
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_bodies", "proj").unwrap(),
+        0
+    );
+
+    // files table should also be cleared (forces rescan)
+    let idx = index::Indexer::from_pool("proj", &pool2).unwrap();
+    assert!(idx.get_files("proj").unwrap().is_empty());
+
+    // Version should now be updated
+    let stored = index::Indexer::get_stored_engine_version(&pool2).unwrap();
+    assert_eq!(stored.as_deref(), Some(index::ENGINE_VERSION));
+}
+
+#[test]
+fn missing_version_triggers_reset() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    // Init the DB
+    let pool = index::Indexer::init(&db).unwrap();
+    populate_project(&pool, "proj", td.path());
+
+    // Remove the metadata row to simulate a pre-version DB
+    {
+        let conn = pool.get().unwrap();
+        conn.execute("DELETE FROM nyx_metadata WHERE key = 'engine_version'", [])
+            .unwrap();
+    }
+
+    // Reopen
+    drop(pool);
+    let pool2 = index::Indexer::init(&db).unwrap();
+
+    // All caches should be wiped
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(),
+        0
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj").unwrap(),
+        0
+    );
+
+    // Version should now be set
+    let stored = index::Indexer::get_stored_engine_version(&pool2).unwrap();
+    assert_eq!(stored.as_deref(), Some(index::ENGINE_VERSION));
+}
+
+#[test]
+fn multiple_opens_no_repeated_resets() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    // First open
+    let pool = index::Indexer::init(&db).unwrap();
+    populate_project(&pool, "proj", td.path());
+    drop(pool);
+
+    // Second open — should preserve data
+    let pool2 = index::Indexer::init(&db).unwrap();
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(),
+        1
+    );
+
+    // Re-populate after second open
+    populate_project(&pool2, "proj2", td.path());
+    drop(pool2);
+
+    // Third open — should still preserve both projects
+    let pool3 = index::Indexer::init(&db).unwrap();
+    assert_eq!(
+        index::Indexer::count_rows(&pool3, "function_summaries", "proj").unwrap(),
+        1
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool3, "function_summaries", "proj2").unwrap(),
+        1
+    );
+}
+
+#[test]
+fn write_engine_version_on_scan_completion() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    let pool = index::Indexer::init(&db).unwrap();
+
+    // Simulate writing version after scan
+    index::Indexer::write_engine_version(&pool).unwrap();
+
+    let stored = index::Indexer::get_stored_engine_version(&pool).unwrap();
+    assert_eq!(stored.as_deref(), Some(index::ENGINE_VERSION));
+}
+
+// ── 2. Migration Tests ──────────────────────────────────────────────────────
+
+#[test]
+fn fresh_db_no_migration_needed() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    // Should not panic and tables should exist
+    let pool = index::Indexer::init(&db).unwrap();
+    let idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    // Verify tables are accessible
+    assert!(idx.load_all_summaries().unwrap().is_empty());
+    assert!(idx.load_all_ssa_summaries().unwrap().is_empty());
+    assert!(idx.load_all_ssa_bodies().unwrap().is_empty());
+    assert!(idx.get_files("proj").unwrap().is_empty());
+}
+
+#[test]
+fn missing_ssa_namespace_column_triggers_recreate() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    // Create DB with an outdated SSA table (no namespace column)
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project TEXT NOT NULL, path TEXT NOT NULL,
+                hash BLOB NOT NULL, mtime INTEGER NOT NULL,
+                scanned_at INTEGER NOT NULL, UNIQUE(project, path)
+            );
+            CREATE TABLE IF NOT EXISTS function_summaries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project TEXT NOT NULL, file_path TEXT NOT NULL,
+                file_hash BLOB NOT NULL, name TEXT NOT NULL,
+                arity INTEGER NOT NULL DEFAULT -1, lang TEXT NOT NULL,
+                summary TEXT NOT NULL, updated_at INTEGER NOT NULL,
+                UNIQUE(project, file_path, name, arity)
+            );
+            CREATE TABLE IF NOT EXISTS ssa_function_summaries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project TEXT NOT NULL, file_path TEXT NOT NULL,
+                file_hash BLOB NOT NULL, name TEXT NOT NULL,
+                arity INTEGER NOT NULL DEFAULT -1, lang TEXT NOT NULL,
+                summary TEXT NOT NULL, updated_at INTEGER NOT NULL,
+                UNIQUE(project, file_path, name, arity)
+            );",
+        )
+        .unwrap();
+    }
+
+    // Open via init — should detect missing namespace and recreate
+    let pool = index::Indexer::init(&db).unwrap();
+
+    // Verify the table now has the namespace column by inserting with it
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    let f = td.path().join("test.py");
+    std::fs::write(&f, "x").unwrap();
+    let hash = index::Indexer::digest_bytes(b"x");
+    let sums = vec![(
+        "func".to_string(),
+        1_usize,
+        "python".to_string(),
+        "ns".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        make_test_ssa_summary(),
+    )];
+    // This would fail if the namespace column doesn't exist
+    idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
+        .unwrap();
+    assert_eq!(idx.load_all_ssa_summaries().unwrap().len(), 1);
+}
+
+#[test]
+fn valid_schema_no_recreate() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    // First init — creates all tables
+    let pool = index::Indexer::init(&db).unwrap();
+    populate_project(&pool, "proj", td.path());
+    drop(pool);
+
+    // Second init — schema is valid, should NOT drop/recreate
+    let pool2 = index::Indexer::init(&db).unwrap();
+    // Data survives because schema was already correct
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj").unwrap(),
+        1
+    );
+}
+
+// ── 3. Deserialization Failure Tests ────────────────────────────────────────
+
+#[test]
+fn invalid_json_skipped_in_load_summaries() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let pool = index::Indexer::init(&db).unwrap();
+
+    // Insert corrupted JSON directly
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO function_summaries (project, file_path, file_hash, name, arity, lang, summary, updated_at)
+             VALUES ('proj', 'bad.py', X'00', 'bad', 1, 'python', '{not valid json!!!', 0)",
+            [],
+        ).unwrap();
+    }
+
+    let idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    // Should not panic; invalid row is skipped
+    let loaded = idx.load_all_summaries().unwrap();
+    assert_eq!(loaded.len(), 0);
+}
+
+#[test]
+fn invalid_json_skipped_in_load_ssa_summaries() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let pool = index::Indexer::init(&db).unwrap();
+
+    // Insert corrupted JSON directly
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO ssa_function_summaries (project, file_path, file_hash, name, arity, lang, namespace, summary, updated_at)
+             VALUES ('proj', 'bad.py', X'00', 'bad', 1, 'python', '', 'CORRUPTED', 0)",
+            [],
+        ).unwrap();
+    }
+
+    let idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    let loaded = idx.load_all_ssa_summaries().unwrap();
+    assert_eq!(loaded.len(), 0);
+}
+
+#[test]
+fn invalid_json_skipped_in_load_ssa_bodies() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let pool = index::Indexer::init(&db).unwrap();
+
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO ssa_function_bodies (project, file_path, file_hash, name, arity, lang, namespace, body, updated_at)
+             VALUES ('proj', 'bad.py', X'00', 'bad', 1, 'python', '', '{{{{broken', 0)",
+            [],
+        ).unwrap();
+    }
+
+    let idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    let loaded = idx.load_all_ssa_bodies().unwrap();
+    assert_eq!(loaded.len(), 0);
+}
+
+#[test]
+fn partial_failure_does_not_drop_valid_rows() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let pool = index::Indexer::init(&db).unwrap();
+
+    // Insert one valid SSA summary via the normal API
+    let f = td.path().join("good.py");
+    std::fs::write(&f, "ok").unwrap();
+    let hash = index::Indexer::digest_bytes(b"ok");
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    let sums = vec![(
+        "good_func".to_string(),
+        1_usize,
+        "python".to_string(),
+        "".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        make_test_ssa_summary(),
+    )];
+    idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
+        .unwrap();
+
+    // Insert a corrupted row directly
+    {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO ssa_function_summaries (project, file_path, file_hash, name, arity, lang, namespace, summary, updated_at)
+             VALUES ('proj', 'bad.py', X'00', 'bad_func', 1, 'python', '', 'NOT_JSON', 0)",
+            [],
+        ).unwrap();
+    }
+
+    // Load: should get exactly the 1 valid row
+    let loaded = idx.load_all_ssa_summaries().unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].1, "good_func");
+}
+
+// ── 4. Integration / Round-Trip Tests ───────────────────────────────────────
+
+#[test]
+fn scan_persist_reload_cycle() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    let pool = index::Indexer::init(&db).unwrap();
+    populate_project(&pool, "myproject", td.path());
+
+    // Write version as scan completion would
+    index::Indexer::write_engine_version(&pool).unwrap();
+
+    // Reload from a fresh pool
+    drop(pool);
+    let pool2 = index::Indexer::init(&db).unwrap();
+
+    let idx = index::Indexer::from_pool("myproject", &pool2).unwrap();
+    assert_eq!(idx.load_all_summaries().unwrap().len(), 1);
+    assert_eq!(idx.load_all_ssa_summaries().unwrap().len(), 1);
+    assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 1);
+    assert_eq!(idx.get_files("myproject").unwrap().len(), 1);
+}
+
+#[test]
+fn version_bump_forces_reindex_behavior() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    // Simulate a previous engine version
+    let pool = index::Indexer::init(&db).unwrap();
+    populate_project(&pool, "proj", td.path());
+    index::Indexer::set_engine_version(&pool, "0.1.0-alpha").unwrap();
+    drop(pool);
+
+    // Reopen: version bump should force full invalidation
+    let pool2 = index::Indexer::init(&db).unwrap();
+
+    // Everything should be wiped
+    let idx = index::Indexer::from_pool("proj", &pool2).unwrap();
+    assert!(idx.load_all_summaries().unwrap().is_empty());
+    assert!(idx.load_all_ssa_summaries().unwrap().is_empty());
+    assert!(idx.load_all_ssa_bodies().unwrap().is_empty());
+    assert!(idx.get_files("proj").unwrap().is_empty());
+
+    // After wiping, we can re-populate and it persists
+    populate_project(&pool2, "proj", td.path());
+    assert_eq!(idx.load_all_summaries().unwrap().len(), 1);
+}
+
+// ── 5. Edge Cases ───────────────────────────────────────────────────────────
+
+#[test]
+fn empty_db_file_works() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("empty.sqlite");
+
+    // Create empty file
+    std::fs::write(&db, "").unwrap();
+
+    // init should handle this (SQLite will overwrite the empty file)
+    let pool = index::Indexer::init(&db).unwrap();
+    let idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    assert!(idx.load_all_summaries().unwrap().is_empty());
+}
+
+#[test]
+fn multiple_projects_isolated() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    let pool = index::Indexer::init(&db).unwrap();
+
+    // Populate two different projects
+    let f1 = td.path().join("proj1_file.py");
+    let f2 = td.path().join("proj2_file.py");
+    std::fs::write(&f1, "p1").unwrap();
+    std::fs::write(&f2, "p2").unwrap();
+
+    let mut idx1 = index::Indexer::from_pool("project_a", &pool).unwrap();
+    idx1.upsert_file(&f1).unwrap();
+    let hash1 = index::Indexer::digest_bytes(b"p1");
+    let sums1 = vec![(
+        "func_a".to_string(),
+        0_usize,
+        "python".to_string(),
+        "".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        make_test_ssa_summary(),
+    )];
+    idx1.replace_ssa_summaries_for_file(&f1, &hash1, &sums1)
+        .unwrap();
+
+    let mut idx2 = index::Indexer::from_pool("project_b", &pool).unwrap();
+    idx2.upsert_file(&f2).unwrap();
+    let hash2 = index::Indexer::digest_bytes(b"p2");
+    let sums2 = vec![(
+        "func_b".to_string(),
+        0_usize,
+        "python".to_string(),
+        "".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        make_test_ssa_summary(),
+    )];
+    idx2.replace_ssa_summaries_for_file(&f2, &hash2, &sums2)
+        .unwrap();
+
+    // Each project sees only its own summaries
+    assert_eq!(idx1.load_all_ssa_summaries().unwrap().len(), 1);
+    assert_eq!(idx1.load_all_ssa_summaries().unwrap()[0].1, "func_a");
+
+    assert_eq!(idx2.load_all_ssa_summaries().unwrap().len(), 1);
+    assert_eq!(idx2.load_all_ssa_summaries().unwrap()[0].1, "func_b");
+
+    // Files are project-scoped too (get_files queries by its argument)
+    assert_eq!(idx1.get_files("project_a").unwrap().len(), 1);
+    assert_eq!(idx2.get_files("project_b").unwrap().len(), 1);
+    // Cross-project: project_a should have no project_b files
+    assert_eq!(idx1.get_files("nonexistent_project").unwrap().len(), 0);
+}
+
+#[test]
+fn version_reset_wipes_all_projects() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    let pool = index::Indexer::init(&db).unwrap();
+
+    // Populate two projects
+    let f1 = td.path().join("a.py");
+    let f2 = td.path().join("b.py");
+    std::fs::write(&f1, "a").unwrap();
+    std::fs::write(&f2, "b").unwrap();
+
+    let mut idx1 = index::Indexer::from_pool("proj_x", &pool).unwrap();
+    idx1.upsert_file(&f1).unwrap();
+    let hash1 = index::Indexer::digest_bytes(b"a");
+    let sums1 = vec![(
+        "fx".to_string(),
+        0_usize,
+        "python".to_string(),
+        "".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        make_test_ssa_summary(),
+    )];
+    idx1.replace_ssa_summaries_for_file(&f1, &hash1, &sums1)
+        .unwrap();
+
+    let mut idx2 = index::Indexer::from_pool("proj_y", &pool).unwrap();
+    idx2.upsert_file(&f2).unwrap();
+    let hash2 = index::Indexer::digest_bytes(b"b");
+    let sums2 = vec![(
+        "fy".to_string(),
+        0_usize,
+        "python".to_string(),
+        "".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        make_test_ssa_summary(),
+    )];
+    idx2.replace_ssa_summaries_for_file(&f2, &hash2, &sums2)
+        .unwrap();
+
+    // Simulate version mismatch
+    index::Indexer::set_engine_version(&pool, "0.0.0-stale").unwrap();
+    drop(pool);
+
+    let pool2 = index::Indexer::init(&db).unwrap();
+
+    // Both projects' data should be gone (version check is global, not per-project)
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "function_summaries", "proj_x").unwrap(),
+        0
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj_x").unwrap(),
+        0
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "function_summaries", "proj_y").unwrap(),
+        0
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj_y").unwrap(),
+        0
+    );
+}
+
+#[test]
+fn metadata_table_survives_clear() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    let pool = index::Indexer::init(&db).unwrap();
+    index::Indexer::write_engine_version(&pool).unwrap();
+
+    let idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    idx.clear().unwrap();
+
+    // Metadata should survive clear (clear only drops analysis tables)
+    let stored = index::Indexer::get_stored_engine_version(&pool).unwrap();
+    assert_eq!(stored.as_deref(), Some(index::ENGINE_VERSION));
 }

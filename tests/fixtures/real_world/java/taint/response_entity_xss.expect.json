@@ -1,0 +1,15 @@
+{
+  "description": "ResponseEntity constructed with user input — hierarchy resolves ResponseEntity to HttpResponse, XSS finding expected",
+  "tags": ["taint", "type-flow", "java", "xss"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [6, 9],
+      "evidence_contains": [],
+      "notes": "request.getParameter flows to ResponseEntity constructor; must_match false pending verification that ResponseEntity is recognized as a response sink"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "description": "isinstance guard narrows user_id to int before SQL concatenation — type-flow constraint solving should suppress taint finding",
+  "tags": ["taint", "type-flow", "isinstance", "sqli", "safe"],
+  "modes": ["full"],
+  "expected": []
+}

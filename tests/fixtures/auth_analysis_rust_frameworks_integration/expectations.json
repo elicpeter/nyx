@@ -1,0 +1,22 @@
+{
+  "required_findings": [
+    { "id_prefix": "rs.auth.admin_route_missing_admin_check", "min_count": 1 },
+    { "id_prefix": "rs.auth.missing_ownership_check", "min_count": 1 },
+    { "id_prefix": "rs.auth.partial_batch_authorization", "min_count": 1 },
+    { "id_prefix": "rs.auth.stale_authorization", "min_count": 1 },
+    { "id_prefix": "rs.auth.token_override_without_validation", "min_count": 1 }
+  ],
+  "forbidden_findings": [
+    { "id_prefix": "rs.auth.", "file_glob": "**/*admin_route_clean.rs" }
+  ],
+  "noise_budget": {
+    "max_total_findings": 8,
+    "max_high_findings": 8
+  },
+  "performance_expectations": {
+    "max_ms_no_index": 1000,
+    "max_ms_index_cold": 1500,
+    "max_ms_index_warm": 500,
+    "ci_mode": "lenient"
+  }
+}

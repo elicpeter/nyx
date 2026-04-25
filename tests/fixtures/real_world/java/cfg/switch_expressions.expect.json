@@ -17,7 +17,7 @@
         9
       ],
       "evidence_contains": [],
-      "notes": "input parameter flows into Runtime.exec \u2014 depends on whether scanner models method params as taint sources"
+      "notes": "input parameter flows into Runtime.exec — depends on whether scanner models method params as taint sources"
     },
     {
       "rule_id": "cfg-unguarded-sink",
@@ -29,6 +29,37 @@
       ],
       "evidence_contains": [],
       "notes": "No validation of input before exec call in exec case"
+    },
+    {
+      "rule_id": "java.cmdi.runtime_exec",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        7,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "Runtime.getRuntime().exec(input) in exec case of switch; AST pattern correctly matches"
+    },
+    {
+      "rule_id": "cfg-unreachable-sink",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        11,
+        11
+      ],
+      "notes": "Case body is reachable via switch — cfg-unreachable-sink must NOT fire (regression guard)"
+    },
+    {
+      "rule_id": "cfg-unreachable-sink",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        15,
+        15
+      ],
+      "notes": "Regression guard: System.out.println(input) in case 'log' is reachable via switch dispatch; cfg-unreachable-sink must NOT fire (catches regressions in Java switch_expression CFG handling)"
     }
   ]
 }

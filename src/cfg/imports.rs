@@ -1,0 +1,365 @@
+use super::{
+    ImportBinding, ImportBindings, PromisifyAlias, PromisifyAliases, member_expr_text, text_of,
+};
+use tree_sitter::{Node, Tree};
+
+// -------------------------------------------------------------------------
+//  Import binding extraction
+// -------------------------------------------------------------------------
+
+/// Walk the top-level AST nodes and collect import alias bindings:
+///
+/// - ES6: `import { A as B } from 'mod'` → B → ImportBinding { original: A, module: mod }
+/// - CommonJS: `const { A: B } = require('mod')` → B → ImportBinding { original: A, module: mod }
+///
+/// Only aliased (renamed) bindings are recorded — same-name imports (e.g.
+/// `import { exec }`) are already resolvable by their original name.
+pub(super) fn extract_import_bindings(tree: &Tree, code: &[u8]) -> ImportBindings {
+    let mut bindings = ImportBindings::new();
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+
+    for child in root.children(&mut cursor) {
+        match child.kind() {
+            // ES6: import { A as B } from 'mod'
+            "import_statement" => {
+                let source_str = child
+                    .child_by_field_name("source")
+                    .and_then(|s| text_of(s, code))
+                    .map(|s| s.trim_matches(|c| c == '\'' || c == '"').to_string());
+
+                let mut c1 = child.walk();
+                for clause_child in child.children(&mut c1) {
+                    if clause_child.kind() != "import_clause" {
+                        continue;
+                    }
+                    let mut c2 = clause_child.walk();
+                    for part in clause_child.children(&mut c2) {
+                        if part.kind() != "named_imports" {
+                            continue;
+                        }
+                        let mut c3 = part.walk();
+                        for spec in part.children(&mut c3) {
+                            if spec.kind() != "import_specifier" {
+                                continue;
+                            }
+                            let original = spec
+                                .child_by_field_name("name")
+                                .and_then(|n| text_of(n, code));
+                            let alias = spec
+                                .child_by_field_name("alias")
+                                .and_then(|a| text_of(a, code));
+                            if let (Some(orig), Some(al)) = (original, alias) {
+                                if orig != al {
+                                    bindings.insert(
+                                        al,
+                                        ImportBinding {
+                                            original: orig,
+                                            module_path: source_str.clone(),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // CommonJS: const { A: B } = require('mod')
+            "lexical_declaration" | "variable_declaration" => {
+                let mut c1 = child.walk();
+                for decl in child.children(&mut c1) {
+                    if decl.kind() != "variable_declarator" {
+                        continue;
+                    }
+                    let (pattern, value) = match (
+                        decl.child_by_field_name("name"),
+                        decl.child_by_field_name("value"),
+                    ) {
+                        (Some(p), Some(v)) => (p, v),
+                        _ => continue,
+                    };
+                    if pattern.kind() != "object_pattern" {
+                        continue;
+                    }
+                    let module_path = extract_require_module(value, code);
+                    if module_path.is_none() {
+                        continue;
+                    }
+                    let mut c2 = pattern.walk();
+                    for pair in pattern.children(&mut c2) {
+                        if pair.kind() != "pair_pattern" {
+                            continue;
+                        }
+                        let key = pair
+                            .child_by_field_name("key")
+                            .and_then(|n| text_of(n, code));
+                        let val = pair
+                            .child_by_field_name("value")
+                            .and_then(|n| text_of(n, code));
+                        if let (Some(orig), Some(al)) = (key, val) {
+                            if orig != al {
+                                bindings.insert(
+                                    al,
+                                    ImportBinding {
+                                        original: orig,
+                                        module_path: module_path.clone(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            // Python: from module import A as B
+            "import_from_statement" => {
+                // Extract module path from the module_name field.
+                let module_path = child
+                    .child_by_field_name("module_name")
+                    .and_then(|m| text_of(m, code));
+
+                let mut c1 = child.walk();
+                for part in child.children(&mut c1) {
+                    if part.kind() != "aliased_import" {
+                        continue;
+                    }
+                    let original = part
+                        .child_by_field_name("name")
+                        .and_then(|n| text_of(n, code));
+                    let alias = part
+                        .child_by_field_name("alias")
+                        .and_then(|a| text_of(a, code));
+                    if let (Some(orig), Some(al)) = (original, alias) {
+                        if orig != al {
+                            bindings.insert(
+                                al,
+                                ImportBinding {
+                                    original: orig,
+                                    module_path: module_path.clone(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            // PHP: use Namespace\ClassName as Alias;
+            "namespace_use_declaration" => {
+                let mut c1 = child.walk();
+                for clause in child.children(&mut c1) {
+                    if clause.kind() != "namespace_use_clause" {
+                        continue;
+                    }
+                    // The alias is accessed via the "alias" field (a `name` node).
+                    // The qualified name has no field — find it by kind.
+                    let alias_node = clause.child_by_field_name("alias");
+                    let mut c2 = clause.walk();
+                    let qname_node = clause
+                        .children(&mut c2)
+                        .find(|n| n.kind() == "qualified_name" || n.kind() == "name");
+                    if let (Some(qn), Some(alias_n)) = (qname_node, alias_node) {
+                        let full_path = text_of(qn, code);
+                        let alias = text_of(alias_n, code);
+                        if let (Some(path_str), Some(al)) = (full_path, alias) {
+                            // Extract the last segment as the original name.
+                            let orig = path_str
+                                .rsplit('\\')
+                                .next()
+                                .unwrap_or(&path_str)
+                                .to_string();
+                            if orig != al {
+                                bindings.insert(
+                                    al,
+                                    ImportBinding {
+                                        original: orig,
+                                        module_path: Some(path_str),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            // Rust: use crate::module::func as alias;
+            "use_declaration" => {
+                // Walk all descendants looking for use_as_clause nodes
+                // (may be nested inside use_list / scoped_use_list).
+                let mut stack = vec![child];
+                while let Some(node) = stack.pop() {
+                    if node.kind() == "use_as_clause" {
+                        let path_node = node.child_by_field_name("path");
+                        let alias_node = node.child_by_field_name("alias");
+                        if let (Some(p), Some(a)) = (path_node, alias_node) {
+                            let path_text = text_of(p, code);
+                            let alias_text = text_of(a, code);
+                            if let (Some(path_str), Some(al)) = (path_text, alias_text) {
+                                // Extract the last segment of the path as the original name.
+                                let orig = path_str
+                                    .rsplit("::")
+                                    .next()
+                                    .unwrap_or(&path_str)
+                                    .to_string();
+                                if orig != al {
+                                    bindings.insert(
+                                        al,
+                                        ImportBinding {
+                                            original: orig,
+                                            module_path: Some(path_str),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        let mut c1 = node.walk();
+                        for ch in node.children(&mut c1) {
+                            stack.push(ch);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    bindings
+}
+
+/// Walk the AST and collect promisify-alias bindings for JS/TS.
+///
+/// Recognises declarations of the forms:
+///   - `const alias = util.promisify(wrapped)`
+///   - `const alias = promisify(wrapped)`   (when `promisify` was destructured
+///     from `util`, matched structurally without tracking the import)
+///
+/// The `wrapped` callee is stored as its canonical textual form (e.g.
+/// `child_process.exec`).  Only single-argument calls are captured; wrappers
+/// that rename more than the first argument are skipped conservatively.
+///
+/// The walk recurses through function bodies so aliases declared inside a
+/// handler are still recorded (they are file-local bindings regardless).
+pub(super) fn extract_promisify_aliases(tree: &Tree, code: &[u8]) -> PromisifyAliases {
+    let mut aliases = PromisifyAliases::new();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        match node.kind() {
+            "lexical_declaration" | "variable_declaration" => {
+                let mut c = node.walk();
+                for decl in node.children(&mut c) {
+                    if decl.kind() != "variable_declarator" {
+                        continue;
+                    }
+                    let (name_node, value_node) = match (
+                        decl.child_by_field_name("name"),
+                        decl.child_by_field_name("value"),
+                    ) {
+                        (Some(n), Some(v)) => (n, v),
+                        _ => continue,
+                    };
+                    if name_node.kind() != "identifier" {
+                        continue;
+                    }
+                    let alias_name = match text_of(name_node, code) {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    if let Some(wrapped) = extract_promisify_wrapped(value_node, code) {
+                        aliases.insert(alias_name, PromisifyAlias { wrapped });
+                    }
+                }
+            }
+            "assignment_expression" => {
+                let (Some(lhs), Some(rhs)) = (
+                    node.child_by_field_name("left"),
+                    node.child_by_field_name("right"),
+                ) else {
+                    continue;
+                };
+                if lhs.kind() != "identifier" {
+                    continue;
+                }
+                let alias_name = match text_of(lhs, code) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                if let Some(wrapped) = extract_promisify_wrapped(rhs, code) {
+                    aliases.insert(alias_name, PromisifyAlias { wrapped });
+                }
+            }
+            _ => {}
+        }
+        let mut c = node.walk();
+        for child in node.children(&mut c) {
+            stack.push(child);
+        }
+    }
+    aliases
+}
+
+/// If `value` is a call expression of the shape `util.promisify(X)` or
+/// `promisify(X)`, return the textual representation of `X` (`child_process.exec`,
+/// `fs.readFile`, `foo`).  Otherwise `None`.
+fn extract_promisify_wrapped(value: Node, code: &[u8]) -> Option<String> {
+    if value.kind() != "call_expression" {
+        return None;
+    }
+    let func = value.child_by_field_name("function")?;
+    let func_text = match func.kind() {
+        "identifier" => text_of(func, code)?,
+        "member_expression" => member_expr_text(func, code)?,
+        _ => return None,
+    };
+    let matches = matches!(func_text.as_str(), "util.promisify" | "promisify");
+    if !matches {
+        return None;
+    }
+    let args = value.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let mut wrapped: Option<String> = None;
+    let mut arg_count = 0;
+    for arg in args.children(&mut cursor) {
+        if arg.is_extra() {
+            continue;
+        }
+        match arg.kind() {
+            "," | "(" | ")" => continue,
+            _ => {}
+        }
+        arg_count += 1;
+        if arg_count == 1 {
+            wrapped = match arg.kind() {
+                "identifier" => text_of(arg, code),
+                "member_expression" => member_expr_text(arg, code),
+                _ => None,
+            };
+        }
+    }
+    if arg_count != 1 {
+        return None;
+    }
+    wrapped
+}
+
+/// Extract the module path from a `require('...')` call expression.
+fn extract_require_module(node: Node, code: &[u8]) -> Option<String> {
+    if node.kind() != "call_expression" {
+        return None;
+    }
+    let func = node.child_by_field_name("function")?;
+    let func_text = text_of(func, code)?;
+    if func_text != "require" {
+        return None;
+    }
+    let args = node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    for arg in args.children(&mut cursor) {
+        if arg.kind() == "string" || arg.kind() == "template_string" {
+            return text_of(arg, code).map(|s| {
+                s.trim_matches(|c| c == '\'' || c == '"' || c == '`')
+                    .to_string()
+            });
+        }
+    }
+    None
+}
+
+// -------------------------------------------------------------------------
+//  === PUBLIC ENTRY POINT =================================================
+// -------------------------------------------------------------------------

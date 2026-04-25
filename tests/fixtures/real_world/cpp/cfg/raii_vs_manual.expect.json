@@ -19,6 +19,17 @@
       ],
       "evidence_contains": [],
       "notes": "fopen at line 14 never fclose'd in read_manual \u2014 aspirational CFG finding"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [
+        14,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "fopen at line 14 in read_manual is never fclose'd \u2014 real resource leak, TP."
     }
   ]
 }

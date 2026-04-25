@@ -1,0 +1,6 @@
+{
+  "description": "Source from os.getenv killed by constant reassignment before reaching os.system sink.",
+  "tags": ["taint", "negative", "reassignment", "safe"],
+  "modes": ["full"],
+  "expected": []
+}

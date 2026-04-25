@@ -1,0 +1,39 @@
+{
+  "description": "Lambda return should not kill parent function control flow; taint from req.getParameter must reach Runtime.exec after lambda",
+  "tags": [
+    "cfg",
+    "cmdi",
+    "lambda",
+    "taint"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        12
+      ],
+      "evidence_contains": [
+        "req.getParameter",
+        "Runtime.exec"
+      ],
+      "notes": "req.getParameter flows to Runtime.exec past lambda with internal return — lambda isolation prevents return from killing parent CFG"
+    },
+    {
+      "rule_id": "java.cmdi.runtime_exec",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        12,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern match on Runtime.getRuntime().exec()"
+    }
+  ]
+}

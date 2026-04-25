@@ -1,0 +1,7 @@
+{
+  "name": "auth-analysis-ownership-multilang-integration",
+  "private": true,
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

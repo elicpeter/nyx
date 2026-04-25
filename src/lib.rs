@@ -39,13 +39,18 @@
 //! See the [`docs/`](https://github.com/elicpeter/nyx/tree/master/docs) directory
 //! for user and contributor documentation.
 
+pub mod abstract_interp;
 pub mod ast;
+pub mod auth_analysis;
 pub mod callgraph;
 pub mod cfg;
 pub mod cfg_analysis;
-pub(crate) mod cli;
+pub mod cli;
 pub mod commands;
+pub mod constraint;
+pub mod convergence_telemetry;
 pub mod database;
+pub mod engine_notes;
 pub mod errors;
 pub mod evidence;
 pub mod fmt;
@@ -54,10 +59,15 @@ pub mod labels;
 pub mod output;
 pub mod patterns;
 pub mod rank;
+pub mod rust_resolve;
+#[cfg(feature = "serve")]
+pub mod server;
+pub mod ssa;
 pub mod state;
 pub mod summary;
 pub mod suppress;
 pub mod symbol;
+pub mod symex;
 pub mod taint;
 pub mod utils;
 pub mod walk;

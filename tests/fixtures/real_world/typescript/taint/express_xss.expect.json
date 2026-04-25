@@ -1,0 +1,53 @@
+{
+  "description": "XSS via req.query flowing into res.send. DOMPurify.sanitize strips HTML_ESCAPE cap.",
+  "tags": ["taint", "xss", "express", "res.send", "typescript"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [3, 7],
+      "evidence_contains": [],
+      "notes": "req.query.name flows directly into res.send via string concatenation — XSS"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [9, 13],
+      "notes": "DOMPurify.sanitize strips HTML_ESCAPE cap so res.send must NOT fire (regression guard)"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [4, 4],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on req parameter"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [4, 4],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on res parameter"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [9, 9],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on req parameter in safe handler"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [9, 9],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on res parameter in safe handler"
+    }
+  ]
+}

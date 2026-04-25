@@ -1,5 +1,5 @@
 {
-  "description": "Stream lifecycle: processStream pipes without error handlers (may leak). processStreamSafe handles errors and destroys streams.",
+  "description": "Stream lifecycle: processStream pipes without error handlers (leaks). processStreamSafe handles errors and destroys streams.",
   "tags": [
     "state",
     "resource-leak",
@@ -12,14 +12,56 @@
   "expected": [
     {
       "rule_id": "state-resource-leak",
-      "severity": null,
-      "must_match": false,
+      "severity": "MEDIUM",
+      "must_match": true,
       "line_range": [
-        2,
-        9
+        4,
+        4
       ],
       "evidence_contains": [],
-      "notes": "Streams created without error handlers may leak on pipe failure; scanner likely cannot track stream lifecycle"
+      "notes": "createReadStream at line 4 in processStream never closed — definite leak (per-function scoped)"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [
+        5,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "createWriteStream at line 5 in processStream never closed — definite leak (per-function scoped)"
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": false,
+      "line_range": [
+        11,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "processStreamSafe: possible leak via error paths before destroy()"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        11,
+        11
+      ],
+      "notes": "Duplicate-suppression: cfg-resource-leak deduplicates against state findings (regression guard)"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        12,
+        12
+      ],
+      "notes": "Duplicate-suppression: cfg-resource-leak deduplicates against state findings (regression guard)"
     }
   ]
 }

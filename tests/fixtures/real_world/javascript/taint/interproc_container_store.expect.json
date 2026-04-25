@@ -1,0 +1,28 @@
+{
+  "description": "XSS through inter-procedural container store: storeInto pushes tainted value into array param",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "array",
+    "container",
+    "heap",
+    "interproc"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "inter-procedural container store: storeInto stores value param into arr param, modeled at call site via param_to_container_store"
+    }
+  ]
+}

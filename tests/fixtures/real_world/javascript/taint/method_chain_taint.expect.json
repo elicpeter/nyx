@@ -1,0 +1,25 @@
+{
+  "description": "XSS through method chaining: req.query.search flows through .trim().toLowerCase() to res.send",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "method-chain"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.search flows through .trim().toLowerCase() to res.send via string concatenation"
+    }
+  ]
+}

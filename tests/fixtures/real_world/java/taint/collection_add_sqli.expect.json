@@ -1,0 +1,26 @@
+{
+  "description": "SQL injection via ArrayList.add: user input added to collection then retrieved and passed to executeQuery",
+  "tags": [
+    "taint",
+    "sqli",
+    "java",
+    "collection",
+    "container"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "req.getParameter('input') added to ArrayList then retrieved via get(0) and passed to executeQuery; requires Java CallMethod container propagation"
+    }
+  ]
+}

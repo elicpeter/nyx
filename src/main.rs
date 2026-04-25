@@ -1,32 +1,11 @@
-mod ast;
-mod callgraph;
-mod cfg;
-mod cfg_analysis;
-mod cli;
-mod commands;
-mod database;
-mod errors;
-mod evidence;
-mod fmt;
-mod interop;
-mod labels;
-mod output;
-mod patterns;
-mod rank;
-mod state;
-mod summary;
-mod suppress;
-mod symbol;
-mod taint;
-mod utils;
-mod walk;
-
-use crate::errors::NyxResult;
-use crate::utils::Config;
 use clap::Parser;
-use cli::Cli;
 use console::style;
 use directories::ProjectDirs;
+use nyx_scanner::cli::Cli;
+use nyx_scanner::commands;
+use nyx_scanner::errors::NyxResult;
+use nyx_scanner::fmt;
+use nyx_scanner::utils::Config;
 use std::fs;
 use std::time::Instant;
 use tracing_subscriber::fmt::time;
@@ -60,6 +39,12 @@ fn main() -> NyxResult<()> {
     init_tracing();
 
     tracing::debug!("CLI starting up");
+
+    if std::env::args().count() == 1 {
+        eprint!("{}", fmt::render_welcome());
+        return Ok(());
+    }
+
     let cli = Cli::parse();
 
     let proj_dirs =
@@ -79,7 +64,8 @@ fn main() -> NyxResult<()> {
         .build_global()
         .expect("set rayon stack size");
 
-    let quiet = config.output.quiet || cli.command.is_structured_output();
+    let is_serve = cli.command.is_serve();
+    let quiet = config.output.quiet || cli.command.is_structured_output(&config);
 
     // Print config note before scanning (human-readable mode only).
     if let Some(note) = config_note.filter(|_| !quiet) {
@@ -88,7 +74,7 @@ fn main() -> NyxResult<()> {
 
     commands::handle_command(cli.command, database_dir, config_dir, &mut config)?;
 
-    if !quiet {
+    if !quiet && !is_serve {
         eprintln!(
             "{} in {:.3}s.",
             style("Finished").green().bold(),

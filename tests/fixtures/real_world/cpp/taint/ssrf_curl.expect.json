@@ -1,0 +1,24 @@
+{
+  "description": "SSRF: environment variable flows through curl handle to curl_easy_perform()",
+  "tags": [
+    "taint",
+    "ssrf",
+    "curl"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "getenv(\"TARGET_URL\") flows to curl_easy_setopt then curl_easy_perform \u2014 handle propagation enables detection"
+    }
+  ]
+}

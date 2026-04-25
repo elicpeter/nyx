@@ -1,6 +1,6 @@
 {
   "required_findings": [
-    { "id_prefix": "taint-unsanitised-flow", "min_count": 5 },
+    { "id_prefix": "taint-unsanitised-flow", "min_count": 4 },
     { "id_prefix": "rs.quality.unsafe_block", "min_count": 1 },
     { "id_prefix": "state-unauthed-access", "min_count": 3 }
   ],

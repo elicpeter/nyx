@@ -1,0 +1,23 @@
+{
+  "description": "os.Open fed by locally-constructed path via filepath.Join \u2014 no taint source involved.",
+  "tags": [
+    "taint",
+    "negative",
+    "file-io"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_not_match": true,
+      "line_range": [
+        13,
+        13
+      ],
+      "notes": "f.Close() properly deferred — state-resource-leak-possible must NOT fire (regression guard for defer)"
+    }
+  ]
+}

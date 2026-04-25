@@ -1,0 +1,15 @@
+{
+  "description": "Object destructuring from tainted source — each binding carries source taint.",
+  "tags": ["taint", "xss", "destructuring"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 6],
+      "evidence_contains": [],
+      "notes": "var { name, age } = req.query — destructured binding name flows to res.send"
+    }
+  ]
+}

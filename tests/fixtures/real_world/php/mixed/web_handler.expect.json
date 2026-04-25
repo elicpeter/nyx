@@ -56,6 +56,17 @@
       ],
       "evidence_contains": [],
       "notes": "File handle opened in read branch but never closed"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        8,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "TP: $_POST['data'] (source at line 3) flows into eval($input) at line 8; code execution via user-controlled POST data"
     }
   ]
 }

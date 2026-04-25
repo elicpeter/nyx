@@ -1,0 +1,13 @@
+{
+  "description": "Destructuring a sanitized value — bindings should not carry taint.",
+  "tags": ["taint", "xss", "destructuring", "sanitizer"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [5, 8],
+      "notes": "DOMPurify.sanitize applied before destructuring — bindings are safe (regression guard)"
+    }
+  ]
+}

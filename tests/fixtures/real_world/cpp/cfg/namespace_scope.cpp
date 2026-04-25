@@ -13,7 +13,8 @@ namespace execution {
     }
 }
 
-void handler(const char *user_input) {
+void handler() {
+    const char *user_input = std::getenv("USER_INPUT");
     security::validate(user_input);
     execution::run(user_input);
 }

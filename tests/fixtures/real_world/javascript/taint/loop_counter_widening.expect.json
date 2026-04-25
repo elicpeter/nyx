@@ -1,0 +1,15 @@
+{
+  "description": "Loop counter widening: the loop counter i starts at 0 and increments. The abstract interpretation framework must widen at the loop head to ensure termination. The taint finding for data flowing to res.send must still be emitted.",
+  "tags": ["taint", "xss", "abstract-interp", "widening"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [5, 10],
+      "evidence_contains": [],
+      "notes": "TP: data flows from req.query.input to res.send — loop counter widening must not interfere with taint detection"
+    }
+  ]
+}

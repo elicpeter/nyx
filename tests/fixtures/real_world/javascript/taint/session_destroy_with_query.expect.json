@@ -1,0 +1,13 @@
+{
+  "description": "Session destroy with unrelated req.query access — no flow to sink",
+  "tags": ["taint", "express", "safe"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [4, 9],
+      "notes": "req.query.next is assigned to returnTo but never flows to a sink — must NOT fire (regression guard)"
+    }
+  ]
+}

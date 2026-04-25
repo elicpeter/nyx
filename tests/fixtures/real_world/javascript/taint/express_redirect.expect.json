@@ -1,0 +1,23 @@
+{
+  "description": "Open redirect via req.query flowing into res.redirect. encodeURIComponent strips URL_ENCODE but SSRF cap remains.",
+  "tags": ["taint", "redirect", "express", "open-redirect"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [3, 7],
+      "evidence_contains": [],
+      "notes": "req.query.url flows directly into res.redirect — open redirect"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [9, 13],
+      "evidence_contains": [],
+      "notes": "encodeURIComponent strips URL_ENCODE cap but res.redirect requires SSRF cap — still fires"
+    }
+  ]
+}

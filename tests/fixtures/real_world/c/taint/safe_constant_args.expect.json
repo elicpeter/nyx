@@ -1,0 +1,46 @@
+{
+  "description": "sprintf/strcpy/strcat called with only hardcoded string literals \u2014 no taint source.",
+  "tags": [
+    "taint",
+    "negative",
+    "buffer"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "c.memory.sprintf",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        5,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "sprintf(buf, ...) is a dangerous function even with constant args \u2014 AST pattern match is correct."
+    },
+    {
+      "rule_id": "c.memory.strcpy",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        6,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "strcpy(buf, \"constant value\") is a dangerous function even with constant args \u2014 AST pattern match is correct."
+    },
+    {
+      "rule_id": "c.memory.strcat",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        7,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "strcat(buf, \" appended\") is a dangerous function even with constant args \u2014 AST pattern match is correct."
+    }
+  ]
+}

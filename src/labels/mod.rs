@@ -12,6 +12,8 @@ mod typescript;
 use bitflags::bitflags;
 use once_cell::sync::Lazy;
 use phf::Map;
+use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::collections::HashMap;
 
 /// A single rule: if the AST text equals (or ends with) one of the `matchers`,
@@ -20,18 +22,147 @@ use std::collections::HashMap;
 pub struct LabelRule {
     pub matchers: &'static [&'static str],
     pub label: DataLabel,
+    pub case_sensitive: bool,
+}
+
+/// Sentinel returned by [`classify_gated_sink`] for the dynamic/unknown-activation
+/// branch: the gate fires conservatively and every positional argument must be
+/// considered a potential tainted payload, not just the explicit `payload_args`.
+/// Downstream code (`cfg.rs` node construction) detects this sentinel and
+/// expands it to `(0..arity)` using the actual call arity.
+///
+/// The value `usize::MAX` is used because `args.get(usize::MAX)` is a guaranteed
+/// miss for any real argument list — an accidental direct-lookup would be a no-op
+/// rather than silently aliasing position 0.
+pub const ALL_ARGS_PAYLOAD: &[usize] = &[usize::MAX];
+
+/// How a gate decides to activate.
+///
+/// A gate's activation determines whether the callee is treated as a sink at
+/// a given call site. `ValueMatch` inspects a literal/kwarg for dangerous
+/// values; `Destination` fires unconditionally on taint reaching declared
+/// destination-bearing positions or fields.
+#[derive(Debug, Clone, Copy)]
+pub enum GateActivation {
+    /// Legacy literal-value activation.  The gate fires when the constant
+    /// value at `arg_index` (or keyword arg, if `keyword_name`/`dangerous_kwargs`
+    /// is set) matches `dangerous_values` / `dangerous_prefixes`, or when that
+    /// value is dynamic/unknown (conservative).
+    ///
+    /// Used for argument-role-aware sinks like `setAttribute` (activation arg
+    /// selects which attribute is being set) and `parseFromString` (activation
+    /// arg selects the MIME type).
+    ValueMatch,
+    /// Destination-bearing flow activation.  The gate fires when taint reaches
+    /// a declared destination location at the call site — no literal
+    /// inspection, no prefix heuristic.
+    ///
+    /// For callees whose destination is a positional argument (e.g. `fetch`'s
+    /// first arg, `axios.post`'s first arg), set `object_destination_fields`
+    /// to `&[]`: the whole positional argument at each index in the gate's
+    /// `payload_args` is treated as the destination.
+    ///
+    /// For callees that accept a config/options object whose fields designate
+    /// the destination (`axios({url,baseURL,...})`, `http.request({host,path,port})`,
+    /// `got({url,prefixUrl,...})`, `undici.request({origin,path,...})`), list
+    /// the destination-bearing field names here.  When the positional arg is
+    /// an object literal at call time, sink taint checks are restricted to
+    /// identifiers found under those fields; non-destination fields (`body`,
+    /// `data`, `json`, `headers`, ...) are silenced.
+    ///
+    /// When the positional arg is not an object literal (plain string / ident
+    /// / expression), the whole arg is treated as the destination (same as
+    /// the empty-field case).  This keeps `http.request(urlString, cb)` and
+    /// `http.request({host,path}, cb)` both covered by a single gate.
+    Destination {
+        object_destination_fields: &'static [&'static str],
+    },
+}
+
+/// Argument-sensitive sink activation.  Whether a call becomes a sink is
+/// determined by the gate's [`GateActivation`] mode — literal-value matching
+/// for traditional role-selector APIs, or destination-flow activation for
+/// outbound HTTP clients and other APIs where a specific location in the
+/// call carries the attacker-controlled destination.
+///
+/// `payload_args` specifies which argument positions carry the tainted payload.
+/// When non-empty, only variables from those argument positions are checked for
+/// taint at the sink.  When empty, all arguments are considered payloads
+/// (backward-compatible default for `ValueMatch`).
+#[derive(Debug, Clone, Copy)]
+pub struct SinkGate {
+    pub callee_matcher: &'static str,
+    pub arg_index: usize,
+    pub dangerous_values: &'static [&'static str],
+    pub dangerous_prefixes: &'static [&'static str],
+    pub label: DataLabel,
+    pub case_sensitive: bool,
+    pub payload_args: &'static [usize],
+    /// Optional keyword argument name for languages that support keyword args
+    /// (e.g. Python `shell=True` in `subprocess.Popen`).  When set, the
+    /// activation value is extracted from the named keyword argument instead
+    /// of the positional argument at `arg_index`.
+    pub keyword_name: Option<&'static str>,
+    /// Multi-keyword activation rules.  Each entry is `(kwarg_name, values)`
+    /// where any listed value makes the call dangerous.  Gate semantics when
+    /// non-empty:
+    ///   * A listed kwarg with a matching literal value → activate.
+    ///   * A listed kwarg present with a non-literal (dynamic) value →
+    ///     activate conservatively.
+    ///   * A listed kwarg present but with an explicitly safe literal → does
+    ///     not by itself activate.
+    ///   * No listed kwarg present → does not activate (matches the language
+    ///     default, e.g. Python `shell=False` implicit for `subprocess.run`).
+    ///
+    /// When both `keyword_name` and `dangerous_kwargs` are set, `keyword_name`
+    /// wins (back-compat for existing single-kwarg gates).  `&[]` is the
+    /// default and disables this branch.
+    pub dangerous_kwargs: &'static [(&'static str, &'static [&'static str])],
+    /// Activation mode.  [`GateActivation::ValueMatch`] is the legacy default;
+    /// [`GateActivation::Destination`] is used for destination-flow modeling
+    /// (outbound HTTP clients etc.).
+    pub activation: GateActivation,
 }
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct Cap: u8 {
-        const ENV_VAR      = 0b0000_0001;
-        const HTML_ESCAPE  = 0b0000_0010;
-        const SHELL_ESCAPE = 0b0000_0100;
-        const URL_ENCODE   = 0b0000_1000;
-        const JSON_PARSE   = 0b0001_0000;
-        const FILE_IO      = 0b0010_0000;
-        const FMT_STRING   = 0b0100_0000;
+    pub struct Cap: u16 {
+        const ENV_VAR         = 0b0000_0000_0000_0001;  // bit 0
+        const HTML_ESCAPE     = 0b0000_0000_0000_0010;  // bit 1
+        const SHELL_ESCAPE    = 0b0000_0000_0000_0100;  // bit 2
+        const URL_ENCODE      = 0b0000_0000_0000_1000;  // bit 3
+        const JSON_PARSE      = 0b0000_0000_0001_0000;  // bit 4
+        const FILE_IO         = 0b0000_0000_0010_0000;  // bit 5
+        const FMT_STRING      = 0b0000_0000_0100_0000;  // bit 6
+        const SQL_QUERY       = 0b0000_0000_1000_0000;  // bit 7
+        const DESERIALIZE     = 0b0000_0001_0000_0000;  // bit 8
+        const SSRF            = 0b0000_0010_0000_0000;  // bit 9
+        const CODE_EXEC       = 0b0000_0100_0000_0000;  // bit 10
+        const CRYPTO          = 0b0000_1000_0000_0000;  // bit 11
+        /// Request-bound, caller-supplied identifier that has not yet been
+        /// validated against an ownership/membership check.  Used as the
+        /// carrier cap for folding `auth_analysis` into the SSA/taint
+        /// engine.
+        const UNAUTHORIZED_ID = 0b0001_0000_0000_0000;  // bit 12
+    }
+}
+
+impl Default for Cap {
+    fn default() -> Self {
+        Cap::empty()
+    }
+}
+
+impl serde::Serialize for Cap {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u16(self.bits())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Cap {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let bits = u16::deserialize(d)?;
+        Ok(Cap::from_bits_truncate(bits))
     }
 }
 
@@ -52,11 +183,23 @@ pub enum Kind {
     Function,
     Assignment,
     CallWrapper,
+    Try,
+    Throw,
+    /// Multi-way dispatch (switch/match): a discriminant evaluates and routes
+    /// control to one of many case bodies. Cases with no terminating jump fall
+    /// through to the next case (where the surface language allows). The CFG
+    /// builder gives each case body the dispatch header as a predecessor so
+    /// reachability does not depend on sibling-case execution order.
+    Switch,
     Trivia,
+    /// Simple sequential expression (e.g. cast/type-assertion) — treated like
+    /// any other sequential statement in the CFG but explicitly classified so
+    /// code that inspects `Kind` can recognise it.
+    Seq,
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DataLabel {
     Source(Cap),
     Sanitizer(Cap),
@@ -82,6 +225,54 @@ static DEFAULT_PARAM_CONFIG: ParamConfig = ParamConfig {
     self_param_kinds: &[],
     ident_fields: &["name", "pattern"],
 };
+
+/// Describes taint propagation from input arguments to output arguments
+/// for known C/C++ functions (e.g., inet_pton copies network address from arg 1 to arg 2).
+pub struct ArgPropagation {
+    pub callee: &'static str,
+    pub from_args: &'static [usize],
+    pub to_args: &'static [usize],
+}
+
+/// Look up output-parameter positions for Source-labeled C/C++ functions.
+/// Returns argument indices that receive taint alongside the return value.
+pub fn output_param_source_positions(lang: &str, callee: &str) -> Option<&'static [usize]> {
+    let registry: &[(&str, &[usize])] = match lang {
+        "c" => c::OUTPUT_PARAM_SOURCES,
+        "cpp" => cpp::OUTPUT_PARAM_SOURCES,
+        _ => return None,
+    };
+    let normalized = callee
+        .rsplit("::")
+        .next()
+        .unwrap_or(callee)
+        .rsplit('.')
+        .next()
+        .unwrap_or(callee);
+    registry
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(normalized))
+        .map(|(_, positions)| *positions)
+}
+
+/// Look up arg-to-arg propagation rules for known C/C++ functions.
+pub fn arg_propagation(lang: &str, callee: &str) -> Option<&'static ArgPropagation> {
+    let registry: &[ArgPropagation] = match lang {
+        "c" => c::ARG_PROPAGATIONS,
+        "cpp" => cpp::ARG_PROPAGATIONS,
+        _ => return None,
+    };
+    let normalized = callee
+        .rsplit("::")
+        .next()
+        .unwrap_or(callee)
+        .rsplit('.')
+        .next()
+        .unwrap_or(callee);
+    registry
+        .iter()
+        .find(|p| p.callee.eq_ignore_ascii_case(normalized))
+}
 
 static REGISTRY: Lazy<HashMap<&'static str, &'static [LabelRule]>> = Lazy::new(|| {
     let mut m = HashMap::new();
@@ -113,6 +304,44 @@ static REGISTRY: Lazy<HashMap<&'static str, &'static [LabelRule]>> = Lazy::new(|
 
     m
 });
+
+static GATED_REGISTRY: Lazy<HashMap<&'static str, &'static [SinkGate]>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert("javascript", javascript::GATED_SINKS);
+    m.insert("js", javascript::GATED_SINKS);
+    m.insert("typescript", typescript::GATED_SINKS);
+    m.insert("ts", typescript::GATED_SINKS);
+    m.insert("python", python::GATED_SINKS);
+    m.insert("py", python::GATED_SINKS);
+    m
+});
+
+/// Per-language exclusion patterns: callee text that must never be classified.
+static EXCLUDES: Lazy<HashMap<&'static str, &'static [&'static str]>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert("javascript", javascript::EXCLUDES);
+    m.insert("js", javascript::EXCLUDES);
+    m.insert("typescript", typescript::EXCLUDES);
+    m.insert("ts", typescript::EXCLUDES);
+    m
+});
+
+/// Check whether `text` matches a per-language exclusion pattern.
+pub(crate) fn is_excluded(lang: &str, trimmed: &[u8]) -> bool {
+    let excludes = match EXCLUDES.get(lang).or_else(|| {
+        let key = lang.to_ascii_lowercase();
+        EXCLUDES.get(key.as_str())
+    }) {
+        Some(e) => *e,
+        None => return false,
+    };
+    for &pat in excludes {
+        if match_suffix_cs(trimmed, pat.as_bytes(), false) {
+            return true;
+        }
+    }
+    false
+}
 
 type FastMap = &'static Map<&'static str, Kind>;
 
@@ -186,6 +415,43 @@ pub fn param_config(lang: &str) -> &'static ParamConfig {
         .unwrap_or(&DEFAULT_PARAM_CONFIG)
 }
 
+/// Lowercase names whose use as a JS/TS function parameter strongly suggests
+/// the binding carries attacker-controlled input (handler dispatch functions,
+/// controller methods, command wrappers).  When the taint engine enters a
+/// function whose formal parameter matches one of these names and no caller
+/// taint has been supplied, it auto-seeds the parameter as a `UserInput`
+/// source so sinks downstream of the parameter still fire.
+const JS_TS_HANDLER_PARAM_NAMES: &[&str] = &["userinput", "userid", "payload", "cmd", "input"];
+
+/// Check whether a JS/TS formal parameter name strongly implies user input.
+///
+/// Matches the curated exact-name list (case-insensitive) *and* any identifier
+/// that begins with a `user` prefix followed by an uppercase letter (camelCase)
+/// or underscore (snake_case).  The prefix rule captures common handler
+/// parameter names such as `userCmd`, `userPath`, `userData`, and `user_input`
+/// without broadening into generic words that just contain "user".
+pub fn is_js_ts_handler_param_name(name: &str) -> bool {
+    if name.is_empty() || !name.is_ascii() {
+        return false;
+    }
+    if JS_TS_HANDLER_PARAM_NAMES
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(name))
+    {
+        return true;
+    }
+    // camelCase / snake_case `user*` prefix: requires at least one
+    // distinguishing character after the prefix so `user` alone does not match.
+    let bytes = name.as_bytes();
+    if bytes.len() >= 5
+        && bytes[..4].eq_ignore_ascii_case(b"user")
+        && (bytes[4].is_ascii_uppercase() || bytes[4] == b'_')
+    {
+        return true;
+    }
+    false
+}
+
 #[inline(always)]
 pub fn lookup(lang: &str, raw: &str) -> Kind {
     CLASSIFIERS
@@ -195,7 +461,8 @@ pub fn lookup(lang: &str, raw: &str) -> Kind {
 }
 
 /// The kind of taint source, used to refine finding severity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     /// Direct user input (request params, argv, stdin, form data)
     UserInput,
@@ -205,6 +472,8 @@ pub enum SourceKind {
     FileSystem,
     /// Database query results
     Database,
+    /// Caught exception — may carry user-controlled data
+    CaughtException,
     /// Could not determine — treat conservatively
     Unknown,
 }
@@ -224,6 +493,9 @@ pub fn infer_source_kind(caps: Cap, callee: &str) -> SourceKind {
         || cl.contains("body")
         || cl.contains("header")
         || cl.contains("cookie")
+        || cl.contains("location")
+        || cl.contains("document.url")
+        || cl.contains("document.referrer")
     {
         return SourceKind::UserInput;
     }
@@ -266,6 +538,7 @@ pub fn severity_for_source_kind(kind: SourceKind) -> crate::patterns::Severity {
         SourceKind::EnvironmentConfig => crate::patterns::Severity::High,
         SourceKind::FileSystem => crate::patterns::Severity::Medium,
         SourceKind::Database => crate::patterns::Severity::Medium,
+        SourceKind::CaughtException => crate::patterns::Severity::Medium,
         SourceKind::Unknown => crate::patterns::Severity::High,
     }
 }
@@ -275,9 +548,13 @@ pub fn severity_for_source_kind(kind: SourceKind) -> crate::patterns::Severity {
 pub struct RuntimeLabelRule {
     pub matchers: Vec<String>,
     pub label: DataLabel,
+    pub case_sensitive: bool,
 }
 
 /// Parse a capability name string into a `Cap` bitflag.
+///
+/// Prefer `CapName` enum for config values; this remains for ad-hoc string parsing.
+#[allow(dead_code)]
 pub fn parse_cap(s: &str) -> Option<Cap> {
     match s.to_ascii_lowercase().as_str() {
         "env_var" => Some(Cap::ENV_VAR),
@@ -287,6 +564,12 @@ pub fn parse_cap(s: &str) -> Option<Cap> {
         "json_parse" => Some(Cap::JSON_PARSE),
         "file_io" => Some(Cap::FILE_IO),
         "fmt_string" => Some(Cap::FMT_STRING),
+        "sql_query" => Some(Cap::SQL_QUERY),
+        "deserialize" => Some(Cap::DESERIALIZE),
+        "ssrf" => Some(Cap::SSRF),
+        "code_exec" => Some(Cap::CODE_EXEC),
+        "crypto" => Some(Cap::CRYPTO),
+        "unauthorized_id" => Some(Cap::UNAUTHORIZED_ID),
         "all" => Some(Cap::all()),
         _ => None,
     }
@@ -299,6 +582,7 @@ pub struct LangAnalysisRules {
     pub extra_labels: Vec<RuntimeLabelRule>,
     pub terminators: Vec<String>,
     pub event_handlers: Vec<String>,
+    pub frameworks: Vec<crate::utils::project::DetectedFramework>,
 }
 
 /// Build `LangAnalysisRules` from a `Config` for a given language slug.
@@ -306,58 +590,130 @@ pub fn build_lang_rules(
     config: &crate::utils::config::Config,
     lang_slug: &str,
 ) -> LangAnalysisRules {
-    let Some(lang_cfg) = config.analysis.languages.get(lang_slug) else {
-        return LangAnalysisRules::default();
-    };
+    let mut extra_labels: Vec<RuntimeLabelRule> = Vec::new();
+    let mut terminators = Vec::new();
+    let mut event_handlers = Vec::new();
 
-    let extra_labels = lang_cfg
-        .rules
-        .iter()
-        .filter_map(|r| {
-            let cap = parse_cap(&r.cap)?;
-            let label = match r.kind.as_str() {
-                "source" => DataLabel::Source(cap),
-                "sanitizer" => DataLabel::Sanitizer(cap),
-                "sink" => DataLabel::Sink(cap),
-                _ => return None,
+    if let Some(lang_cfg) = config.analysis.languages.get(lang_slug) {
+        extra_labels.extend(lang_cfg.rules.iter().map(|r| {
+            use crate::utils::config::RuleKind;
+            let cap = r.cap.to_cap();
+            let label = match r.kind {
+                RuleKind::Source => DataLabel::Source(cap),
+                RuleKind::Sanitizer => DataLabel::Sanitizer(cap),
+                RuleKind::Sink => DataLabel::Sink(cap),
             };
-            Some(RuntimeLabelRule {
+            RuntimeLabelRule {
                 matchers: r.matchers.clone(),
                 label,
-            })
-        })
-        .collect();
+                case_sensitive: r.case_sensitive,
+            }
+        }));
+        terminators = lang_cfg.terminators.clone();
+        event_handlers = lang_cfg.event_handlers.clone();
+    }
+
+    // Append framework-conditional rules when frameworks are detected.
+    let frameworks = if let Some(ref fw_ctx) = config.framework_ctx {
+        extra_labels.extend(framework_rules_for_lang(lang_slug, fw_ctx));
+        fw_ctx.frameworks.clone()
+    } else {
+        Vec::new()
+    };
+
+    // Phase C: fold `auth_analysis` into the taint engine by injecting
+    // `Cap::UNAUTHORIZED_ID` sink/sanitizer rules.  Gated by config; default
+    // OFF so the standalone `auth_analysis` subsystem remains authoritative.
+    if config.scanner.enable_auth_as_taint {
+        extra_labels.extend(phase_c_auth_rules_for_lang(lang_slug));
+    }
 
     LangAnalysisRules {
         extra_labels,
-        terminators: lang_cfg.terminators.clone(),
-        event_handlers: lang_cfg.event_handlers.clone(),
+        terminators,
+        event_handlers,
+        frameworks,
     }
 }
 
-/// Case-insensitive suffix check (ASCII).
+/// Return Phase C auth-as-taint rules for a given language (currently Rust-only).
+fn phase_c_auth_rules_for_lang(lang_slug: &str) -> Vec<RuntimeLabelRule> {
+    match lang_slug {
+        "rust" | "rs" => rust::phase_c_auth_rules(),
+        _ => Vec::new(),
+    }
+}
+
+/// Public re-export used by [`crate::ast::ParsedFile::from_source`] to
+/// augment per-file rule sets when imports reveal frameworks that the
+/// manifest-level detector missed.
+pub fn framework_rules_for_lang_pub(
+    lang_slug: &str,
+    ctx: &crate::utils::project::FrameworkContext,
+) -> Vec<RuntimeLabelRule> {
+    framework_rules_for_lang(lang_slug, ctx)
+}
+
+/// Return framework-conditional label rules for a given language.
+fn framework_rules_for_lang(
+    lang_slug: &str,
+    ctx: &crate::utils::project::FrameworkContext,
+) -> Vec<RuntimeLabelRule> {
+    match lang_slug {
+        "go" => go::framework_rules(ctx),
+        "ruby" | "rb" => ruby::framework_rules(ctx),
+        "java" => java::framework_rules(ctx),
+        "php" => php::framework_rules(ctx),
+        "python" | "py" => python::framework_rules(ctx),
+        "rust" | "rs" => rust::framework_rules(ctx),
+        "javascript" | "js" => javascript::framework_rules(ctx),
+        "typescript" | "ts" => typescript::framework_rules(ctx),
+        _ => Vec::new(),
+    }
+}
+
+/// Suffix check with configurable case sensitivity.
 #[inline]
-fn ends_with_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
+fn ends_with_cs(haystack: &[u8], needle: &[u8], case_sensitive: bool) -> bool {
     if needle.len() > haystack.len() {
         return false;
     }
     let start = haystack.len() - needle.len();
-    haystack[start..]
-        .iter()
-        .zip(needle)
-        .all(|(h, n)| h.eq_ignore_ascii_case(n))
+    if case_sensitive {
+        haystack[start..] == *needle
+    } else {
+        haystack[start..]
+            .iter()
+            .zip(needle)
+            .all(|(h, n)| h.eq_ignore_ascii_case(n))
+    }
 }
 
-/// Case-insensitive prefix check (ASCII).
+/// Prefix check with configurable case sensitivity.
 #[inline]
-fn starts_with_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
+fn starts_with_cs(haystack: &[u8], needle: &[u8], case_sensitive: bool) -> bool {
     if needle.len() > haystack.len() {
         return false;
     }
-    haystack[..needle.len()]
-        .iter()
-        .zip(needle)
-        .all(|(h, n)| h.eq_ignore_ascii_case(n))
+    if case_sensitive {
+        haystack[..needle.len()] == *needle
+    } else {
+        haystack[..needle.len()]
+            .iter()
+            .zip(needle)
+            .all(|(h, n)| h.eq_ignore_ascii_case(n))
+    }
+}
+
+/// Word-boundary suffix match with configurable case sensitivity.
+#[inline]
+fn match_suffix_cs(text: &[u8], matcher: &[u8], case_sensitive: bool) -> bool {
+    if ends_with_cs(text, matcher, case_sensitive) {
+        let start = text.len() - matcher.len();
+        start == 0 || matches!(text[start - 1], b'.' | b':')
+    } else {
+        false
+    }
 }
 
 /// Try to classify a piece of syntax text.
@@ -374,6 +730,11 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
     let head = text.split(['(', '<']).next().unwrap_or("");
     let trimmed = head.trim().as_bytes();
 
+    // Early out: exclude known-benign framework patterns.
+    if is_excluded(lang, trimmed) {
+        return None;
+    }
+
     // For chained calls like `r.URL.Query().Get`, also strip internal
     // `().` segments to produce a normalized form like `r.URL.Query.Get`.
     let full_normalized = normalize_chained_call(text);
@@ -388,7 +749,9 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
                 if m.last() == Some(&b'_') {
                     continue;
                 }
-                if match_suffix(trimmed, m) || match_suffix(full_norm_bytes, m) {
+                if match_suffix_cs(trimmed, m, rule.case_sensitive)
+                    || match_suffix_cs(full_norm_bytes, m, rule.case_sensitive)
+                {
                     return Some(rule.label);
                 }
             }
@@ -398,8 +761,8 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
             for raw in &rule.matchers {
                 let m = raw.as_bytes();
                 if m.last() == Some(&b'_')
-                    && (starts_with_ignore_case(trimmed, m)
-                        || starts_with_ignore_case(full_norm_bytes, m))
+                    && (starts_with_cs(trimmed, m, rule.case_sensitive)
+                        || starts_with_cs(full_norm_bytes, m, rule.case_sensitive))
                 {
                     return Some(rule.label);
                 }
@@ -420,7 +783,9 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
             if m.last() == Some(&b'_') {
                 continue;
             }
-            if match_suffix(trimmed, m) || match_suffix(full_norm_bytes, m) {
+            if match_suffix_cs(trimmed, m, rule.case_sensitive)
+                || match_suffix_cs(full_norm_bytes, m, rule.case_sensitive)
+            {
                 return Some(rule.label);
             }
         }
@@ -431,8 +796,8 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
         for raw in rule.matchers {
             let m = raw.as_bytes();
             if m.last() == Some(&b'_')
-                && (starts_with_ignore_case(trimmed, m)
-                    || starts_with_ignore_case(full_norm_bytes, m))
+                && (starts_with_cs(trimmed, m, rule.case_sensitive)
+                    || starts_with_cs(full_norm_bytes, m, rule.case_sensitive))
             {
                 return Some(rule.label);
             }
@@ -442,15 +807,260 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
     None
 }
 
-/// Check if `text` ends with `matcher` at a word boundary (`.` or `:`).
-#[inline]
-fn match_suffix(text: &[u8], matcher: &[u8]) -> bool {
-    if ends_with_ignore_case(text, matcher) {
-        let start = text.len() - matcher.len();
-        start == 0 || matches!(text[start - 1], b'.' | b':')
-    } else {
-        false
+/// Classify a piece of syntax text, returning **all** matching labels.
+///
+/// Same two-pass (exact/suffix then prefix) structure as [`classify()`], but
+/// collects every match instead of returning on first hit.  Deduplicates
+/// exact `(variant, caps)` pairs.
+pub fn classify_all(
+    lang: &str,
+    text: &str,
+    extra: Option<&[RuntimeLabelRule]>,
+) -> SmallVec<[DataLabel; 2]> {
+    let head = text.split(['(', '<']).next().unwrap_or("");
+    let trimmed = head.trim().as_bytes();
+
+    // Early out: exclude known-benign framework patterns.
+    if is_excluded(lang, trimmed) {
+        return SmallVec::new();
     }
+
+    let full_normalized = normalize_chained_call(text);
+    let full_norm_bytes = full_normalized.as_bytes();
+
+    let mut out: SmallVec<[DataLabel; 2]> = SmallVec::new();
+
+    // Helper: push if not already present (dedup by variant+caps equality).
+    #[inline]
+    fn push_dedup(out: &mut SmallVec<[DataLabel; 2]>, label: DataLabel) {
+        if !out.contains(&label) {
+            out.push(label);
+        }
+    }
+
+    // ── Check runtime (config) rules first — they take priority ──────
+    if let Some(extras) = extra {
+        // Pass 1: exact / suffix
+        for rule in extras {
+            for raw in &rule.matchers {
+                let m = raw.as_bytes();
+                if m.last() == Some(&b'_') {
+                    continue;
+                }
+                if match_suffix_cs(trimmed, m, rule.case_sensitive)
+                    || match_suffix_cs(full_norm_bytes, m, rule.case_sensitive)
+                {
+                    push_dedup(&mut out, rule.label);
+                }
+            }
+        }
+        // Pass 2: prefix
+        for rule in extras {
+            for raw in &rule.matchers {
+                let m = raw.as_bytes();
+                if m.last() == Some(&b'_')
+                    && (starts_with_cs(trimmed, m, rule.case_sensitive)
+                        || starts_with_cs(full_norm_bytes, m, rule.case_sensitive))
+                {
+                    push_dedup(&mut out, rule.label);
+                }
+            }
+        }
+    }
+
+    // ── Built-in static rules ────────────────────────────────────────
+    let rules = REGISTRY.get(lang).or_else(|| {
+        let key = lang.to_ascii_lowercase();
+        REGISTRY.get(key.as_str())
+    });
+
+    if let Some(rules) = rules {
+        // Pass 1: exact / suffix matches (high confidence)
+        for rule in *rules {
+            for raw in rule.matchers {
+                let m = raw.as_bytes();
+                if m.last() == Some(&b'_') {
+                    continue;
+                }
+                if match_suffix_cs(trimmed, m, rule.case_sensitive)
+                    || match_suffix_cs(full_norm_bytes, m, rule.case_sensitive)
+                {
+                    push_dedup(&mut out, rule.label);
+                }
+            }
+        }
+
+        // Pass 2: prefix matches (catch-all, lower priority)
+        for rule in *rules {
+            for raw in rule.matchers {
+                let m = raw.as_bytes();
+                if m.last() == Some(&b'_')
+                    && (starts_with_cs(trimmed, m, rule.case_sensitive)
+                        || starts_with_cs(full_norm_bytes, m, rule.case_sensitive))
+                {
+                    push_dedup(&mut out, rule.label);
+                }
+            }
+        }
+    }
+
+    out
+}
+
+/// Result of a gated-sink classification.
+///
+/// `label` is the sink capability the callee contributes at this site.
+/// `payload_args` identifies positional args that carry the tainted payload
+/// (or [`ALL_ARGS_PAYLOAD`] for dynamic-activation conservative fallback).
+/// `object_destination_fields`, when non-empty, restricts sink-taint checks
+/// to identifiers found under those field names within an object-literal
+/// positional argument — used by destination-aware outbound-HTTP gates so
+/// `fetch({url, body})` fires only when taint reaches `url`, not `body`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GateMatch {
+    pub label: DataLabel,
+    pub payload_args: &'static [usize],
+    pub object_destination_fields: &'static [&'static str],
+}
+
+/// Classify a call against gated sink rules.
+///
+/// Returns `Some(GateMatch)` if the callee matches a gated rule AND the
+/// activation conditions fire.  Returns `None` if the callee doesn't match
+/// any gated rule, or matches but the activation is provably safe.
+///
+/// `const_arg_at` extracts positional argument values.
+/// `const_keyword_arg` extracts keyword argument values (for languages like Python).
+pub fn classify_gated_sink(
+    lang: &str,
+    callee_text: &str,
+    const_arg_at: impl Fn(usize) -> Option<String>,
+    const_keyword_arg: impl Fn(&str) -> Option<String>,
+    kwarg_present: impl Fn(&str) -> bool,
+) -> Option<GateMatch> {
+    let gates = GATED_REGISTRY.get(lang).or_else(|| {
+        let key = lang.to_ascii_lowercase();
+        GATED_REGISTRY.get(key.as_str())
+    })?;
+
+    let callee_bytes = callee_text.as_bytes();
+
+    for gate in *gates {
+        let matcher = gate.callee_matcher.as_bytes();
+        if !match_suffix_cs(callee_bytes, matcher, gate.case_sensitive) {
+            continue;
+        }
+
+        // Destination-flow activation: always fires.  Downstream filters sink
+        // taint checks to `payload_args` (and, for object-literal args, further
+        // to `object_destination_fields`).
+        if let GateActivation::Destination {
+            object_destination_fields,
+        } = gate.activation
+        {
+            return Some(GateMatch {
+                label: gate.label,
+                payload_args: gate.payload_args,
+                object_destination_fields,
+            });
+        }
+
+        // ── ValueMatch activation (legacy) ───────────────────────────────
+
+        // Multi-kwarg gate path.  Takes precedence over positional / single-kwarg
+        // inspection when populated.  Semantics are presence-aware: an absent
+        // kwarg is treated as the language default (safe) and does not alone
+        // activate the gate.
+        if !gate.dangerous_kwargs.is_empty() && gate.keyword_name.is_none() {
+            let mut any_dangerous = false;
+            let mut any_dynamic_present = false;
+            for (name, values) in gate.dangerous_kwargs {
+                if !kwarg_present(name) {
+                    continue; // absent → takes language default (safe)
+                }
+                match const_keyword_arg(name) {
+                    Some(v) => {
+                        let lower = v.to_ascii_lowercase();
+                        if values.iter().any(|dv| lower == dv.to_ascii_lowercase()) {
+                            any_dangerous = true;
+                            break;
+                        }
+                        // Present with a safe literal — continue checking other kwargs.
+                    }
+                    None => {
+                        any_dynamic_present = true;
+                    }
+                }
+            }
+            if any_dangerous {
+                return Some(GateMatch {
+                    label: gate.label,
+                    payload_args: gate.payload_args,
+                    object_destination_fields: &[],
+                });
+            }
+            if any_dynamic_present {
+                // Dynamic kwarg value — we can't prove safe. Conservatively
+                // flag every positional arg so the activation pathway isn't
+                // silently narrowed to the gate's declared `payload_args`.
+                return Some(GateMatch {
+                    label: gate.label,
+                    payload_args: ALL_ARGS_PAYLOAD,
+                    object_destination_fields: &[],
+                });
+            }
+            return None; // all listed kwargs absent or safe-literal → suppress
+        }
+
+        // Single-kwarg / positional gate path (original semantics).
+        let activation_value = if let Some(kw) = gate.keyword_name {
+            const_keyword_arg(kw)
+        } else {
+            const_arg_at(gate.arg_index)
+        };
+
+        match activation_value {
+            Some(value) => {
+                let lower = value.to_ascii_lowercase();
+                let is_dangerous = gate
+                    .dangerous_values
+                    .iter()
+                    .any(|v| lower == v.to_ascii_lowercase())
+                    || gate
+                        .dangerous_prefixes
+                        .iter()
+                        .any(|p| lower.starts_with(&p.to_ascii_lowercase()));
+                if is_dangerous {
+                    return Some(GateMatch {
+                        label: gate.label,
+                        payload_args: gate.payload_args,
+                        object_destination_fields: &[],
+                    });
+                }
+                return None; // safe constant → suppress
+            }
+            // Unknown / dynamic activation arg: the gate fires conservatively,
+            // but we can't prove that only the declared `payload_args` carry
+            // risk — a tainted activation arg (e.g. `setAttribute(userAttr, …)`
+            // where `userAttr` is user-controlled) is itself a vulnerability
+            // path. Return ALL_ARGS_PAYLOAD so downstream sink scanning
+            // considers every positional argument.
+            None => {
+                return Some(GateMatch {
+                    label: gate.label,
+                    payload_args: ALL_ARGS_PAYLOAD,
+                    object_destination_fields: &[],
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Public wrapper for [`normalize_chained_call`] so callers outside the module
+/// can share the same normalization used by the label classifier.
+pub fn normalize_chained_call_for_classify(text: &str) -> String {
+    normalize_chained_call(text)
 }
 
 /// Normalize a chained method call: strip `()` between `.` segments.
@@ -494,9 +1104,182 @@ fn normalize_chained_call(text: &str) -> String {
     result
 }
 
+// ── Rule enumeration ─────────────────────────────────────────────────────────
+
+/// All canonical language slugs (no aliases).
+const CANONICAL_LANGS: &[&str] = &[
+    "javascript",
+    "typescript",
+    "python",
+    "go",
+    "java",
+    "c",
+    "cpp",
+    "php",
+    "ruby",
+    "rust",
+];
+
+/// Map alias slugs to canonical language name.
+pub fn canonical_lang(slug: &str) -> &str {
+    // Check exact matches first (fast path, no allocation)
+    match slug {
+        "javascript" | "js" => "javascript",
+        "typescript" | "ts" => "typescript",
+        "python" | "py" => "python",
+        "go" => "go",
+        "java" => "java",
+        "c" => "c",
+        "cpp" | "c++" => "cpp",
+        "php" => "php",
+        "ruby" | "rb" => "ruby",
+        "rust" | "rs" => "rust",
+        // For unknown slugs, return as-is (the caller's borrow keeps it alive)
+        _ => slug,
+    }
+}
+
+/// Human-readable name for a Cap bitflag value.
+pub fn cap_to_name(cap: Cap) -> &'static str {
+    if cap == Cap::all() {
+        return "all";
+    }
+    match cap {
+        Cap::ENV_VAR => "env_var",
+        Cap::HTML_ESCAPE => "html_escape",
+        Cap::SHELL_ESCAPE => "shell_escape",
+        Cap::URL_ENCODE => "url_encode",
+        Cap::JSON_PARSE => "json_parse",
+        Cap::FILE_IO => "file_io",
+        Cap::FMT_STRING => "fmt_string",
+        Cap::SQL_QUERY => "sql_query",
+        Cap::DESERIALIZE => "deserialize",
+        Cap::SSRF => "ssrf",
+        Cap::CODE_EXEC => "code_exec",
+        Cap::CRYPTO => "crypto",
+        Cap::UNAUTHORIZED_ID => "unauthorized_id",
+        _ => "unknown",
+    }
+}
+
+/// Generate a stable rule ID from language, kind, and matchers.
+pub fn rule_id(lang: &str, kind: &str, matchers: &[&str]) -> String {
+    let mut sorted: Vec<&str> = matchers.to_vec();
+    sorted.sort_unstable();
+    let joined = sorted.join("\0");
+    let hash = blake3::hash(joined.as_bytes());
+    let hex = hash.to_hex();
+    format!("{}.{}.{}", lang, kind, &hex[..8])
+}
+
+/// Metadata-enriched view of a label rule (built-in or custom).
+#[derive(Debug, Clone, Serialize)]
+pub struct RuleInfo {
+    pub id: String,
+    pub title: String,
+    pub language: String,
+    pub kind: String,
+    pub cap: String,
+    pub cap_bits: u16,
+    pub matchers: Vec<String>,
+    pub case_sensitive: bool,
+    pub is_custom: bool,
+    pub is_gated: bool,
+    pub enabled: bool,
+}
+
+/// Enumerate all built-in rules across all languages.
+pub fn enumerate_builtin_rules() -> Vec<RuleInfo> {
+    let mut out = Vec::new();
+
+    for &lang in CANONICAL_LANGS {
+        if let Some(rules) = REGISTRY.get(lang) {
+            for rule in *rules {
+                let (kind_str, cap) = match rule.label {
+                    DataLabel::Source(c) => ("source", c),
+                    DataLabel::Sanitizer(c) => ("sanitizer", c),
+                    DataLabel::Sink(c) => ("sink", c),
+                };
+                let matchers_strs: Vec<&str> = rule.matchers.to_vec();
+                let id = rule_id(lang, kind_str, &matchers_strs);
+                let first = rule.matchers.first().copied().unwrap_or("?");
+                let title = format!("{} ({})", first, kind_str);
+                out.push(RuleInfo {
+                    id,
+                    title,
+                    language: lang.to_string(),
+                    kind: kind_str.to_string(),
+                    cap: cap_to_name(cap).to_string(),
+                    cap_bits: cap.bits(),
+                    matchers: rule.matchers.iter().map(|s| s.to_string()).collect(),
+                    case_sensitive: rule.case_sensitive,
+                    is_custom: false,
+                    is_gated: false,
+                    enabled: true,
+                });
+            }
+        }
+
+        // Include gated sink entries
+        if let Some(gates) = GATED_REGISTRY.get(lang) {
+            for gate in *gates {
+                let cap = match gate.label {
+                    DataLabel::Source(c) | DataLabel::Sanitizer(c) | DataLabel::Sink(c) => c,
+                };
+                let kind_str = "sink";
+                let matchers_strs = &[gate.callee_matcher];
+                let id = rule_id(lang, &format!("gated_{}", kind_str), matchers_strs);
+                let title = format!("{} (gated {})", gate.callee_matcher, kind_str);
+                out.push(RuleInfo {
+                    id,
+                    title,
+                    language: lang.to_string(),
+                    kind: kind_str.to_string(),
+                    cap: cap_to_name(cap).to_string(),
+                    cap_bits: cap.bits(),
+                    matchers: vec![gate.callee_matcher.to_string()],
+                    case_sensitive: gate.case_sensitive,
+                    is_custom: false,
+                    is_gated: true,
+                    enabled: true,
+                });
+            }
+        }
+    }
+
+    out
+}
+
+/// Generate a custom rule ID with `custom.` prefix.
+pub fn custom_rule_id(lang: &str, kind: &str, matchers: &[String]) -> String {
+    let refs: Vec<&str> = matchers.iter().map(|s| s.as_str()).collect();
+    format!("custom.{}", rule_id(lang, kind, &refs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handler_param_names_exact_and_prefix() {
+        // Exact names still match.
+        assert!(is_js_ts_handler_param_name("cmd"));
+        assert!(is_js_ts_handler_param_name("input"));
+        assert!(is_js_ts_handler_param_name("userId"));
+        assert!(is_js_ts_handler_param_name("USERID"));
+        // camelCase `user*` prefix.
+        assert!(is_js_ts_handler_param_name("userCmd"));
+        assert!(is_js_ts_handler_param_name("userData"));
+        assert!(is_js_ts_handler_param_name("userPath"));
+        // snake_case prefix.
+        assert!(is_js_ts_handler_param_name("user_cmd"));
+        // Bare `user` does not match (no distinguishing suffix).
+        assert!(!is_js_ts_handler_param_name("user"));
+        assert!(!is_js_ts_handler_param_name("userx"));
+        // Other names unaffected.
+        assert!(!is_js_ts_handler_param_name("url"));
+        assert!(!is_js_ts_handler_param_name("value"));
+    }
 
     #[test]
     fn classify_none_extra_unchanged() {
@@ -514,6 +1297,7 @@ mod tests {
         let extras = vec![RuntimeLabelRule {
             matchers: vec!["escapeHtml".into()],
             label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+            case_sensitive: false,
         }];
 
         let result = classify("javascript", "escapeHtml", Some(&extras));
@@ -530,6 +1314,7 @@ mod tests {
         let extras = vec![RuntimeLabelRule {
             matchers: vec!["innerHTML".into()],
             label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+            case_sensitive: false,
         }];
 
         let result = classify("javascript", "innerHTML", Some(&extras));
@@ -550,6 +1335,63 @@ mod tests {
     }
 
     #[test]
+    fn classify_case_insensitive_is_default() {
+        let extras = vec![RuntimeLabelRule {
+            matchers: vec!["myCustomSink".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: false,
+        }];
+        // Default case_sensitive=false: case-insensitive match
+        let result = classify("javascript", "MYCUSTOMSINK", Some(&extras));
+        assert_eq!(result, Some(DataLabel::Sink(Cap::HTML_ESCAPE)));
+    }
+
+    #[test]
+    fn classify_case_sensitive_exact_match() {
+        let extras = vec![RuntimeLabelRule {
+            matchers: vec!["MyExactSink".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: true,
+        }];
+        // Exact case matches
+        let result = classify("javascript", "MyExactSink", Some(&extras));
+        assert_eq!(result, Some(DataLabel::Sink(Cap::HTML_ESCAPE)));
+        // Wrong case does NOT match
+        let result = classify("javascript", "myexactsink", Some(&extras));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn classify_case_sensitive_prefix() {
+        let extras = vec![RuntimeLabelRule {
+            matchers: vec!["Sanitize_".into()],
+            label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+            case_sensitive: true,
+        }];
+        // Correct case prefix matches
+        let result = classify("javascript", "Sanitize_input", Some(&extras));
+        assert_eq!(result, Some(DataLabel::Sanitizer(Cap::HTML_ESCAPE)));
+        // Wrong case does NOT match
+        let result = classify("javascript", "sanitize_input", Some(&extras));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn classify_case_sensitive_suffix_boundary() {
+        let extras = vec![RuntimeLabelRule {
+            matchers: vec!["RunQuery".into()],
+            label: DataLabel::Sink(Cap::SQL_QUERY),
+            case_sensitive: true,
+        }];
+        // Correct case with dot boundary
+        let result = classify("javascript", "db.RunQuery", Some(&extras));
+        assert_eq!(result, Some(DataLabel::Sink(Cap::SQL_QUERY)));
+        // Wrong case does NOT match
+        let result = classify("javascript", "db.runquery", Some(&extras));
+        assert_eq!(result, None);
+    }
+
+    #[test]
     fn parse_cap_works() {
         assert_eq!(parse_cap("html_escape"), Some(Cap::HTML_ESCAPE));
         assert_eq!(parse_cap("shell_escape"), Some(Cap::SHELL_ESCAPE));
@@ -559,6 +1401,552 @@ mod tests {
         assert_eq!(parse_cap("file_io"), Some(Cap::FILE_IO));
         assert_eq!(parse_cap("all"), Some(Cap::all()));
         assert_eq!(parse_cap("ALL"), Some(Cap::all()));
+        assert_eq!(parse_cap("sql_query"), Some(Cap::SQL_QUERY));
+        assert_eq!(parse_cap("deserialize"), Some(Cap::DESERIALIZE));
+        assert_eq!(parse_cap("ssrf"), Some(Cap::SSRF));
+        assert_eq!(parse_cap("code_exec"), Some(Cap::CODE_EXEC));
+        assert_eq!(parse_cap("crypto"), Some(Cap::CRYPTO));
         assert_eq!(parse_cap("invalid"), None);
+    }
+
+    /// No-op keyword arg extractor for tests (JS/TS have no keyword gates).
+    fn no_kw(_: &str) -> Option<String> {
+        None
+    }
+
+    /// No-op kwarg presence check for tests that don't exercise the multi-kwarg path.
+    fn no_kw_present(_: &str) -> bool {
+        false
+    }
+
+    #[test]
+    fn gated_sink_dangerous_exact() {
+        let result = classify_gated_sink(
+            "javascript",
+            "setAttribute",
+            |_| Some("href".to_string()),
+            no_kw,
+            no_kw_present,
+        );
+        assert_eq!(
+            result,
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::HTML_ESCAPE),
+                payload_args: [1usize].as_slice(),
+                object_destination_fields: &[],
+            })
+        );
+    }
+
+    #[test]
+    fn gated_sink_dangerous_prefix() {
+        let result = classify_gated_sink(
+            "javascript",
+            "setAttribute",
+            |_| Some("onclick".to_string()),
+            no_kw,
+            no_kw_present,
+        );
+        assert_eq!(
+            result,
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::HTML_ESCAPE),
+                payload_args: [1usize].as_slice(),
+                object_destination_fields: &[],
+            })
+        );
+    }
+
+    #[test]
+    fn gated_sink_safe_suppressed() {
+        let result = classify_gated_sink(
+            "javascript",
+            "setAttribute",
+            |_| Some("class".to_string()),
+            no_kw,
+            no_kw_present,
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn gated_sink_dynamic_conservative() {
+        // Dynamic activation (e.g. `setAttribute(attrVar, val)`) returns the
+        // ALL_ARGS_PAYLOAD sentinel so callers expand payload tracking to
+        // every positional arg — the activation arg itself is a vulnerability
+        // path when attacker-controlled.
+        let result =
+            classify_gated_sink("javascript", "setAttribute", |_| None, no_kw, no_kw_present);
+        assert_eq!(
+            result,
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::HTML_ESCAPE),
+                payload_args: ALL_ARGS_PAYLOAD,
+                object_destination_fields: &[],
+            })
+        );
+    }
+
+    #[test]
+    fn gated_sink_no_match() {
+        let result = classify_gated_sink(
+            "rust",
+            "setAttribute",
+            |_| Some("href".to_string()),
+            no_kw,
+            no_kw_present,
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn gated_sink_returns_payload_args() {
+        // setAttribute: payload is arg 1
+        let result = classify_gated_sink(
+            "javascript",
+            "setAttribute",
+            |_| Some("href".to_string()),
+            no_kw,
+            no_kw_present,
+        );
+        assert_eq!(result.unwrap().payload_args, &[1]);
+
+        // parseFromString: payload is arg 0
+        let result = classify_gated_sink(
+            "javascript",
+            "parseFromString",
+            |idx| {
+                if idx == 1 {
+                    Some("text/html".to_string())
+                } else {
+                    None
+                }
+            },
+            no_kw,
+            no_kw_present,
+        );
+        assert_eq!(result.unwrap().payload_args, &[0]);
+    }
+
+    #[test]
+    fn gated_sink_parse_from_string_safe_mime() {
+        let result = classify_gated_sink(
+            "javascript",
+            "parseFromString",
+            |idx| {
+                if idx == 1 {
+                    Some("text/xml".to_string())
+                } else {
+                    None
+                }
+            },
+            no_kw,
+            no_kw_present,
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn gated_sink_python_popen_shell_true() {
+        let result = classify_gated_sink(
+            "python",
+            "Popen",
+            |_| None,
+            |kw| {
+                if kw == "shell" {
+                    Some("True".to_string())
+                } else {
+                    None
+                }
+            },
+            |kw| kw == "shell",
+        );
+        assert_eq!(
+            result,
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+                payload_args: [0usize].as_slice(),
+                object_destination_fields: &[],
+            })
+        );
+    }
+
+    #[test]
+    fn gated_sink_python_popen_shell_false() {
+        let result = classify_gated_sink(
+            "python",
+            "Popen",
+            |_| None,
+            |kw| {
+                if kw == "shell" {
+                    Some("False".to_string())
+                } else {
+                    None
+                }
+            },
+            |kw| kw == "shell",
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn gated_sink_python_popen_no_shell_conservative() {
+        // `Popen(cmd)` uses the single-kwarg / positional gate path: no `shell`
+        // literal available → unknown activation → ALL_ARGS_PAYLOAD sentinel.
+        let result = classify_gated_sink("python", "Popen", |_| None, |_| None, no_kw_present);
+        assert_eq!(
+            result,
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+                payload_args: ALL_ARGS_PAYLOAD,
+                object_destination_fields: &[],
+            })
+        );
+    }
+
+    // ── New multi-kwarg gate path (dangerous_kwargs) tests ─────────────────
+
+    /// `subprocess.run(cmd, shell=True)` → activates via multi-kwarg gate.
+    #[test]
+    fn gated_sink_subprocess_run_shell_true() {
+        let result = classify_gated_sink(
+            "python",
+            "subprocess.run",
+            |_| None,
+            |kw| {
+                if kw == "shell" {
+                    Some("True".to_string())
+                } else {
+                    None
+                }
+            },
+            |kw| kw == "shell",
+        );
+        assert_eq!(
+            result,
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+                payload_args: [0usize].as_slice(),
+                object_destination_fields: &[],
+            })
+        );
+    }
+
+    /// `subprocess.run(cmd, shell=False)` → explicit safe literal suppresses the gate.
+    #[test]
+    fn gated_sink_subprocess_run_shell_false() {
+        let result = classify_gated_sink(
+            "python",
+            "subprocess.run",
+            |_| None,
+            |kw| {
+                if kw == "shell" {
+                    Some("False".to_string())
+                } else {
+                    None
+                }
+            },
+            |kw| kw == "shell",
+        );
+        assert_eq!(result, None);
+    }
+
+    /// `subprocess.run(cmd)` → no shell kwarg → presence-aware gate suppresses.
+    /// This is the behavioural difference from the legacy `Popen` gate path.
+    #[test]
+    fn gated_sink_subprocess_run_shell_absent_suppresses() {
+        let result = classify_gated_sink(
+            "python",
+            "subprocess.run",
+            |_| None,
+            |_| None,
+            no_kw_present,
+        );
+        assert_eq!(result, None);
+    }
+
+    /// `subprocess.run(cmd, shell=flag)` → shell kwarg present but dynamic →
+    /// conservative activate. Multi-kwarg dynamic-present branch also returns
+    /// ALL_ARGS_PAYLOAD so the activation pathway is not narrowed.
+    #[test]
+    fn gated_sink_subprocess_run_shell_dynamic_conservative() {
+        let result = classify_gated_sink(
+            "python",
+            "subprocess.run",
+            |_| None,
+            |_| None, // dynamic: no literal available
+            |kw| kw == "shell",
+        );
+        assert_eq!(
+            result,
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+                payload_args: ALL_ARGS_PAYLOAD,
+                object_destination_fields: &[],
+            })
+        );
+    }
+
+    /// Destination-flow gate always fires; returns `object_destination_fields`
+    /// verbatim for the caller to apply object-literal field filtering.
+    #[test]
+    fn gated_sink_destination_positional_always_fires() {
+        // `fetch(url)` — arg 0 is the URL (positional destination) OR an
+        // object with a `url` field. The gate fires unconditionally, with
+        // `url` declared as the object-literal destination-field for the
+        // `fetch({url, body})` shape.
+        let result = classify_gated_sink(
+            "javascript",
+            "fetch",
+            |_| None, // no literal — Destination mode doesn't inspect it
+            no_kw,
+            no_kw_present,
+        );
+        let m = result.expect("fetch gate should fire");
+        assert_eq!(m.label, DataLabel::Sink(Cap::SSRF));
+        assert_eq!(m.payload_args, &[0]);
+        assert_eq!(m.object_destination_fields, &["url"]);
+    }
+
+    /// Destination gate with `object_destination_fields` surfaces them for
+    /// the CFG caller to drive object-literal field filtering.
+    #[test]
+    fn gated_sink_destination_object_fields_surfaced() {
+        // `http.request(opts, cb)` — opts is an object with destination fields.
+        let result =
+            classify_gated_sink("javascript", "http.request", |_| None, no_kw, no_kw_present);
+        let m = result.expect("http.request gate should fire");
+        assert_eq!(m.label, DataLabel::Sink(Cap::SSRF));
+        assert_eq!(m.payload_args, &[0]);
+        assert!(
+            m.object_destination_fields
+                .iter()
+                .any(|&f| f == "host" || f == "hostname"),
+            "expected host/hostname in destination fields, got {:?}",
+            m.object_destination_fields,
+        );
+    }
+
+    #[test]
+    fn classify_all_single_label() {
+        let result = classify_all("javascript", "innerHTML", None);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], DataLabel::Sink(Cap::HTML_ESCAPE));
+    }
+
+    #[test]
+    fn classify_all_dual_label_php() {
+        let result = classify_all("php", "file_get_contents", None);
+        assert!(result.len() >= 2, "expected dual label, got {:?}", result);
+        assert!(
+            result.contains(&DataLabel::Source(Cap::all())),
+            "expected Source(all), got {:?}",
+            result
+        );
+        assert!(
+            result.contains(&DataLabel::Sink(Cap::SSRF)),
+            "expected Sink(SSRF), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn classify_all_dual_label_java() {
+        let result = classify_all("java", "readObject", None);
+        assert!(result.len() >= 2, "expected dual label, got {:?}", result);
+        assert!(
+            result.contains(&DataLabel::Source(Cap::all())),
+            "expected Source(all), got {:?}",
+            result
+        );
+        assert!(
+            result.contains(&DataLabel::Sink(Cap::DESERIALIZE)),
+            "expected Sink(DESERIALIZE), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn classify_go_echo_sinks_with_runtime_rules() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::Echo],
+        };
+        let rules = go::framework_rules(&ctx);
+        let extras = rules.to_vec();
+
+        assert_eq!(
+            classify("go", "c.String", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("go", "c.HTML", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("go", "c.JSON", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+
+        // Without Echo framework, these should not match
+        let empty = go::framework_rules(&FrameworkContext::default());
+        assert_eq!(classify("go", "c.String", Some(&empty)), None);
+    }
+
+    #[test]
+    fn classify_javascript_koa_runtime_rules() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::Koa],
+        };
+        let extras = javascript::framework_rules(&ctx);
+
+        assert_eq!(
+            classify("javascript", "ctx.query", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("javascript", "ctx.cookies.get", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("javascript", "ctx.body", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("javascript", "ctx.redirect", Some(&extras)),
+            Some(DataLabel::Sink(Cap::SSRF)),
+        );
+
+        let empty = javascript::framework_rules(&FrameworkContext::default());
+        assert_eq!(classify("javascript", "ctx.query", Some(&empty)), None);
+    }
+
+    #[test]
+    fn classify_typescript_fastify_runtime_rules() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::Fastify],
+        };
+        let extras = typescript::framework_rules(&ctx);
+
+        assert_eq!(
+            classify("typescript", "request.query", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("typescript", "reply.send", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("typescript", "reply.redirect", Some(&extras)),
+            Some(DataLabel::Sink(Cap::SSRF)),
+        );
+
+        let empty = typescript::framework_rules(&FrameworkContext::default());
+        assert_eq!(classify("typescript", "request.query", Some(&empty)), None);
+    }
+
+    #[test]
+    fn classify_ruby_sinatra_template_sinks() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::Sinatra],
+        };
+        let rules = ruby::framework_rules(&ctx);
+        let extras = rules.to_vec();
+
+        assert_eq!(
+            classify("ruby", "erb", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("ruby", "haml", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+
+        // Without Sinatra, erb should not match
+        let empty = ruby::framework_rules(&FrameworkContext::default());
+        assert_eq!(classify("ruby", "erb", Some(&empty)), None);
+    }
+
+    #[test]
+    fn classify_rust_axum_runtime_rules() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::Axum],
+        };
+        let extras = rust::framework_rules(&ctx);
+
+        assert_eq!(
+            classify("rust", "Path<String>", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("rust", "HeaderMap.get(\"x-user\")", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("rust", "Html(name)", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("rust", "Redirect::to(next)", Some(&extras)),
+            Some(DataLabel::Sink(Cap::SSRF)),
+        );
+
+        let empty = rust::framework_rules(&FrameworkContext::default());
+        assert_eq!(classify("rust", "Html(name)", Some(&empty)), None);
+    }
+
+    #[test]
+    fn classify_rust_actix_runtime_rules() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::ActixWeb],
+        };
+        let extras = rust::framework_rules(&ctx);
+
+        assert_eq!(
+            classify("rust", "web::Json<String>", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("rust", "HttpRequest.match_info()", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("rust", "HttpResponse.body(payload)", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+    }
+
+    #[test]
+    fn classify_rust_rocket_runtime_rules() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::Rocket],
+        };
+        let extras = rust::framework_rules(&ctx);
+
+        assert_eq!(
+            classify("rust", "CookieJar.get_private(\"sid\")", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("rust", "content::RawHtml(name)", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("rust", "Redirect::to(next)", Some(&extras)),
+            Some(DataLabel::Sink(Cap::SSRF)),
+        );
     }
 }

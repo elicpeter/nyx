@@ -9,6 +9,9 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
@@ -20,6 +23,49 @@
       ],
       "evidence_contains": [],
       "notes": "$_GET['cmd'] flows directly into shell_exec without sanitization"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "shell_exec output assigned to $output and echoed — tainted shell output flows to echo (XSS-style response sink)"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        9,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "escapeshellarg sanitizes CMDI but not XSS; tainted shell output still flows to echo. Scanner produces this XSS-like flow; aspirationally this secondary flow might be clamped if XSS models recognized shell_exec-of-sanitized-input as non-propagating"
+    },
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        3,
+        3
+      ],
+      "evidence_contains": [],
+      "notes": "TP: AST pattern match on shell_exec($cmd) at line 3; $_GET['cmd'] flows unsanitized into shell_exec"
+    },
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": "HIGH",
+      "must_not_match": true,
+      "line_range": [
+        8,
+        8
+      ],
+      "notes": "escapeshellarg sanitizes input at line 7 — php.cmdi.system must NOT fire on line 8 (regression guard, Layer B suppression)"
     }
   ]
 }

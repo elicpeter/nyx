@@ -12,11 +12,43 @@ pub mod unreachable;
 use crate::cfg::{FuncSummaries, NodeInfo, StmtKind};
 use crate::labels::{DataLabel, LangAnalysisRules};
 use crate::patterns::Severity;
+use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::type_facts::TypeFactResult;
+use crate::ssa::{SsaBody, SsaValue};
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
 use crate::taint;
 use petgraph::graph::NodeIndex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+/// Per-body SSA facts used by structural analyses for finer-grained
+/// constancy checks.  Produced once per body in `run_cfg_analyses` and
+/// passed via `AnalysisContext::body_const_facts`.
+pub struct BodyConstFacts {
+    pub ssa: SsaBody,
+    pub const_values: HashMap<SsaValue, ConstLattice>,
+    pub type_facts: TypeFactResult,
+}
+
+/// Lower a body to SSA and run constant propagation.  Returns `None` when
+/// lowering fails (empty CFG, invalid entry) — callers treat absence as
+/// "no SSA facts available" and fall back to the syntactic path.
+pub fn build_body_const_facts(body: &crate::cfg::BodyCfg, lang: Lang) -> Option<BodyConstFacts> {
+    let mut ssa = crate::ssa::lower_to_ssa_with_params(
+        &body.graph,
+        body.entry,
+        body.meta.name.as_deref(),
+        body.meta.parent_body_id.is_none(),
+        &body.meta.params,
+    )
+    .ok()?;
+    let opt = crate::ssa::optimize_ssa(&mut ssa, &body.graph, Some(lang));
+    Some(BodyConstFacts {
+        ssa,
+        const_values: opt.const_values,
+        type_facts: opt.type_facts,
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Confidence {
@@ -55,6 +87,24 @@ pub struct AnalysisContext<'a> {
     /// existed and taint engine ran).  When false, structural findings without
     /// taint confirmation should be treated with lower confidence.
     pub taint_active: bool,
+    /// Optional per-body SSA + constant-propagation facts.  When present,
+    /// structural analyses can use SSA const-prop to prove that all argument
+    /// flows into a sink resolve to literal constants, suppressing false
+    /// positives that the one-hop CFG trace alone cannot.
+    pub body_const_facts: Option<&'a BodyConstFacts>,
+    /// Optional per-body type-fact result produced by `optimize_ssa`.
+    /// Structural analyses use it to suppress findings when a sink's argument
+    /// SSA values are proven to carry non-injectable types (e.g. integers
+    /// parsed from a raw source can't form SHELL/SQL/path payloads).  Sourced
+    /// from `body_const_facts` when present — keep both pointers coherent.
+    pub type_facts: Option<&'a TypeFactResult>,
+    /// Decorators / annotations / attributes attached to the body's
+    /// declaration (e.g. Python `@login_required`, Java `@PreAuthorize`,
+    /// Symfony `#[IsGranted(...)]`).  Consumed by the AuthGap analysis to
+    /// suppress `cfg-auth-gap` when the framework already enforces auth at
+    /// the function-declaration level — the gap only matters when the
+    /// auth call has to live inside the body.
+    pub auth_decorators: &'a [String],
 }
 
 pub trait CfgAnalysis {
@@ -79,7 +129,7 @@ pub fn run_all(ctx: &AnalysisContext) -> Vec<CfgFinding> {
     let taint_spans: HashSet<(usize, usize)> = ctx
         .taint_findings
         .iter()
-        .map(|f| ctx.cfg[f.sink].span)
+        .map(|f| ctx.cfg[f.sink].ast.span)
         .collect();
 
     findings.retain(|f| {
@@ -123,7 +173,7 @@ pub(crate) fn is_guard_call(
     if info.kind != StmtKind::Call {
         return false;
     }
-    if let Some(callee) = &info.callee {
+    if let Some(callee) = &info.call.callee {
         // Check config sanitizer rules
         if let Some(extras) = analysis_rules {
             let callee_lower = callee.to_ascii_lowercase();
@@ -168,7 +218,7 @@ pub(crate) fn is_auth_call(info: &NodeInfo, lang: Lang) -> bool {
     if info.kind != StmtKind::Call {
         return false;
     }
-    if let Some(callee) = &info.callee {
+    if let Some(callee) = &info.call.callee {
         let auth_rules = rules::auth_rules(lang);
         let callee_lower = callee.to_ascii_lowercase();
         for rule in auth_rules {
@@ -209,5 +259,8 @@ pub(crate) fn is_entry_point_func(func_name: &str, lang: Lang) -> bool {
 
 /// Helper: check if a node is a sink.
 pub(crate) fn is_sink(info: &NodeInfo) -> bool {
-    matches!(info.label, Some(DataLabel::Sink(_)))
+    info.taint
+        .labels
+        .iter()
+        .any(|l| matches!(l, DataLabel::Sink(_)))
 }

@@ -32,6 +32,28 @@
       ],
       "evidence_contains": [],
       "notes": "params[:cmd] flows directly into system() without sanitization"
+    },
+    {
+      "rule_id": "rb.cmdi.system_interp",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        13,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "TP: system(cmd) on safe route — AST-level rule fires on any system() call; allowlist guard not visible to pattern matcher"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        13,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "noise: taint-unsanitised-flow — secondary flow or cross-function leakage"
     }
   ]
 }

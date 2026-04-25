@@ -50,7 +50,37 @@ function triggerLocationAssign(url: string): void {
     window.location = url;
 }
 
+// ts.secrets.hardcoded_secret
+const config = { secret: "keyboard-cat-fallback", password: "admin123" };
+
+// ts.crypto.weak_hash
+function triggerWeakHash(): void {
+    const hash = crypto.createHash("md5");
+}
+
+// ts.crypto.weak_hash_import
+function triggerWeakHashImport(password: string): void {
+    const hash = md5(password);
+}
+
 // ts.xss.cookie_write
 function triggerCookieWrite(sid: string): void {
     document.cookie = "session=" + sid;
+}
+
+// ts.config.reject_unauthorized
+const opts = { rejectUnauthorized: false, timeout: 3000 };
+
+// ts.secrets.fallback_secret
+const sessionSecret: string = process.env.SESSION_SECRET || "fake-default-session-secret";
+
+// ts.config.verbose_error_response
+function errorHandler(err: Error, req: any, res: any): void {
+    const error = err;
+    res.status(500).render("errors/error", { title: "Server Error", error });
+}
+
+// ts.config.cors_dynamic_origin
+function setCors(req: any, res: any): void {
+    res.setHeader("Access-Control-Allow-Origin", origin);
 }

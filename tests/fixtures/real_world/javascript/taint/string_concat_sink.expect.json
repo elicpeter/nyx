@@ -1,0 +1,15 @@
+{
+  "description": "Command injection via req.query.domain flowing through string concatenation into child_process.exec.",
+  "tags": ["taint", "cmdi", "express", "exec", "string-concat"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 11],
+      "evidence_contains": [],
+      "notes": "req.query.domain flows through string concat into child_process.exec — command injection"
+    }
+  ]
+}

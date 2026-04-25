@@ -1,0 +1,34 @@
+{
+  "description": "system/puts fed by locally-constructed strings \u2014 no taint source involved.",
+  "tags": [
+    "taint",
+    "negative",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "rb.cmdi.system_interp",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        3,
+        3
+      ],
+      "evidence_contains": [],
+      "notes": "noise: AST pattern fires on system() with variable arg (variable is constant) — aspirational suppression via const-folding, engine does not yet propagate const through AST rule"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        3,
+        3
+      ],
+      "notes": "No taint source in fixture — cfg-unguarded-sink must NOT fire (regression guard)"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "description": "Ruby infeasible nested equality: action == 'safe' AND action == 'dangerous' is contradictory.",
+  "tags": ["taint", "constraint", "infeasible", "equality", "ruby"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 11],
+      "evidence_contains": [],
+      "notes": "params[:action] flows to outer system — reachable path"
+    }
+  ]
+}

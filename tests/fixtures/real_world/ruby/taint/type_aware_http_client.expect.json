@@ -1,0 +1,15 @@
+{
+  "description": "SSRF: user-controlled host flows through typed HttpClient to client.request()",
+  "tags": ["taint", "ssrf", "type-aware", "ruby"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [3, 7],
+      "evidence_contains": [],
+      "notes": "params[:host] flows to Net::HTTP.new (types as HttpClient), then client.request detected via type-qualified HttpClient.request"
+    }
+  ]
+}

@@ -10,18 +10,10 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
-    {
-      "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": true,
-      "line_range": [
-        1,
-        8
-      ],
-      "evidence_contains": [],
-      "notes": "$_FILES filename flows through concatenation into system() chmod call"
-    },
     {
       "rule_id": "php.cmdi.system",
       "severity": null,
@@ -32,6 +24,30 @@
       ],
       "evidence_contains": [],
       "notes": "system() with string concatenation containing user-controlled filename"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        5,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "TP: $_FILES['file']['tmp_name'] (source at line 3) flows to move_uploaded_file at line 5; user-controlled tmp path used in file operation Exactly one finding after dedup.",
+      "max_count": 1
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        6,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "TP: $_FILES['file']['name'] (source at line 2) flows through $target concatenation into system() chmod call at line 6; command injection via filename Exactly one finding after dedup.",
+      "max_count": 1
     }
   ]
 }

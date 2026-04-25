@@ -1,0 +1,15 @@
+{
+  "description": "Infeasible null/equality: cmd is None AND cmd == 'rm -rf' is contradictory. Only the outer subprocess.call should produce a finding.",
+  "tags": ["taint", "constraint", "infeasible", "null"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [5, 10],
+      "evidence_contains": [],
+      "notes": "os.environ.get flows to outer subprocess.call — reachable path"
+    }
+  ]
+}

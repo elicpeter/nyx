@@ -1,0 +1,43 @@
+{
+  "description": "SQL injection via string concatenation with Django request.GET in cursor.execute",
+  "tags": [
+    "taint",
+    "sqli",
+    "django"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "request.GET.get('q') flows into cursor.execute — SQL injection"
+    },
+    {
+      "rule_id": "py.sqli.execute_format",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [
+        7,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "cursor.execute with string concatenation — AST pattern match"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [6, 6],
+      "evidence_contains": [],
+      "notes": "noise: connection.cursor() not explicitly closed — Django manages cursor lifecycle via connection"
+    }
+  ]
+}

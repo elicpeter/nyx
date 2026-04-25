@@ -1,0 +1,39 @@
+{
+  "description": "Safe parameterized SQL queries in Go — $1 with db.Query, ? with db.Exec, multi-param $1/$2",
+  "tags": ["taint", "sqli", "go", "safe", "parameterized"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [12, 21],
+      "evidence_contains": [],
+      "notes": "db.Query with $1 placeholder — parameterized, should not fire"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [24, 28],
+      "evidence_contains": [],
+      "notes": "db.Exec with ? placeholder — parameterized, should not fire"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [31, 41],
+      "evidence_contains": [],
+      "notes": "db.Query with $1/$2 multi-param — parameterized, should not fire"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [1, 41],
+      "evidence_contains": [],
+      "notes": "No cfg-unguarded-sink should fire for parameterized queries"
+    }
+  ]
+}

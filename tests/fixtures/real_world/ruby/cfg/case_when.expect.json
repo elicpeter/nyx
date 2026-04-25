@@ -33,6 +33,28 @@
       ],
       "evidence_contains": [],
       "notes": "system() called in case/when branch with function parameter"
+    },
+    {
+      "rule_id": "state-unauthed-access",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "noise: state-unauthed-access \u2014 no auth model in this fixture"
+    },
+    {
+      "rule_id": "state-unauthed-access",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        6,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "noise: state-unauthed-access \u2014 no auth model in this fixture"
     }
   ]
 }

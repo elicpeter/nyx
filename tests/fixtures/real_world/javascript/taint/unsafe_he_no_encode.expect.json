@@ -1,0 +1,15 @@
+{
+  "description": "req.query.name flows directly into res.send without encoding — regression guard for XSS detection",
+  "tags": ["taint", "xss", "express", "regression"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 7],
+      "evidence_contains": [],
+      "notes": "req.query.name flows unsanitized into res.send — XSS"
+    }
+  ]
+}

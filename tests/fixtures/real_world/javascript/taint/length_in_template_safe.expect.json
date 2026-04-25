@@ -1,0 +1,13 @@
+{
+  "description": "Reading the .length property of a tainted value yields an integer; its decimal representation cannot contain HTML metacharacters. Even though req.query.items is tainted, count = items.length is TypeKind::Int and should not fire taint-unsanitised-flow when concatenated into an innerHTML sink.",
+  "tags": ["taint", "xss", "type-suppression", "html-escape", "length"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [5, 8],
+      "notes": "arr.length is always numeric — inferred as TypeKind::Int by type-fact analysis, so HTML_ESCAPE on innerHTML is suppressed (numeric value cannot XSS)"
+    }
+  ]
+}

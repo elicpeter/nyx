@@ -1,0 +1,25 @@
+{
+  "description": "Direct recursion: traverse calls itself. Tests recursion limit enforcement — should gracefully cut off after max re-entries while preserving taint.",
+  "tags": [
+    "taint",
+    "xss",
+    "symex",
+    "interproc"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        12,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.input flows through traverse (with recursive descent) to res.send"
+    }
+  ]
+}

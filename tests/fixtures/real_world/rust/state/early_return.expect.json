@@ -1,6 +1,12 @@
 {
   "description": "Rust early return with RAII: File dropped automatically on all paths including early return",
-  "tags": ["state", "raii", "early-return"],
-  "modes": ["full"],
+  "tags": [
+    "state",
+    "raii",
+    "early-return"
+  ],
+  "modes": [
+    "full"
+  ],
   "expected": []
 }

@@ -1,0 +1,15 @@
+{
+  "description": "SSRF via req.body.payload flowing into http.request through string concatenation in nested callbacks.",
+  "tags": ["taint", "ssrf", "express", "http.request", "callback"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 16],
+      "evidence_contains": [],
+      "notes": "req.body.payload flows into http.request via string concat — SSRF"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "description": "SSRF: user-controlled URL from getParameter flows to openConnection()",
+  "tags": ["taint", "ssrf", "servlet"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [6, 11],
+      "evidence_contains": [],
+      "notes": "getParameter(\"url\") flows to url.openConnection() without URL validation"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [6, 11],
+      "evidence_contains": [],
+      "notes": "noise: state-resource-leak on HttpURLConnection"
+    }
+  ]
+}

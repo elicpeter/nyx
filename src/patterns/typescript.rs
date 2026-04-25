@@ -82,6 +82,31 @@ pub const PATTERNS: &[Pattern] = &[
     },
     // ── Tier A: Weak crypto ────────────────────────────────────────────
     Pattern {
+        id: "ts.crypto.weak_hash",
+        description: "crypto.createHash with weak algorithm (md5/sha1)",
+        query: r#"(call_expression
+                     function: (member_expression
+                       property: (property_identifier) @prop (#eq? @prop "createHash"))
+                     arguments: (arguments
+                       (string) @alg (#match? @alg "\"(md5|sha1)\"")))
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
+    },
+    Pattern {
+        id: "ts.crypto.weak_hash_import",
+        description: "Direct md5()/sha1() call — weak hash from imported package",
+        query: r#"(call_expression
+                     function: (identifier) @id (#match? @id "^(md5|sha1)$"))
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
+    },
+    Pattern {
         id: "ts.crypto.math_random",
         description: "Math.random() — not cryptographically secure",
         query: r#"(call_expression
@@ -92,6 +117,20 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
+    },
+    // ── Tier A: Hardcoded secrets ───────────────────────────────────────
+    Pattern {
+        id: "ts.secrets.hardcoded_secret",
+        description: "Hardcoded secret/password/API key in source code",
+        query: r#"(pair
+                     key: (property_identifier) @key
+                       (#match? @key "^(secret|password|api_key|apiKey|apiSecret|api_secret|SESSION_SECRET|secretKey|secret_key|privateKey|private_key)$")
+                     value: (string) @val)
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::Secrets,
         confidence: Confidence::Medium,
     },
     // ── Tier A: TypeScript-specific type-safety escapes ────────────────
@@ -152,6 +191,110 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Xss,
+        confidence: Confidence::Medium,
+    },
+    // ── Tier A: Insecure session / cookie configuration ─────────────────
+    Pattern {
+        id: "ts.config.insecure_session_httponly",
+        description: "Session cookie with httpOnly: false — allows XSS-based session theft",
+        query: r#"(pair
+                     key: (property_identifier) @key (#eq? @key "httpOnly")
+                     value: (false) @val)
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureConfig,
+        confidence: Confidence::High,
+    },
+    Pattern {
+        id: "ts.config.insecure_session_secure",
+        description: "Session cookie with secure: false — cookie sent over plain HTTP",
+        query: r#"(pair
+                     key: (property_identifier) @key (#eq? @key "secure")
+                     value: (false) @val)
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureConfig,
+        confidence: Confidence::Medium,
+    },
+    Pattern {
+        id: "ts.config.insecure_session_samesite",
+        description: "sameSite: \"none\" allows cross-origin cookie sending, increasing CSRF risk",
+        query: r#"(pair
+                     key: (property_identifier) @key (#eq? @key "sameSite")
+                     value: (string) @val (#match? @val "^[\"']none[\"']$"))
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureConfig,
+        confidence: Confidence::High,
+    },
+    // ── Tier A: TLS verification disabled ─────────────────────────────
+    Pattern {
+        id: "ts.config.reject_unauthorized",
+        description: "TLS certificate verification disabled via rejectUnauthorized: false",
+        query: r#"(pair
+                     key: (property_identifier) @key (#eq? @key "rejectUnauthorized")
+                     value: (false) @val)
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureConfig,
+        confidence: Confidence::High,
+    },
+    // ── Tier A: Hardcoded fallback secret ──────────────────────────────
+    Pattern {
+        id: "ts.secrets.fallback_secret",
+        description: "Environment variable with secret-like name has hardcoded fallback value",
+        query: r#"(binary_expression
+                     left: (member_expression
+                       object: (member_expression
+                         object: (identifier) @proc (#eq? @proc "process")
+                         property: (property_identifier) @env (#eq? @env "env"))
+                       property: (property_identifier) @key
+                         (#match? @key "(?i)(secret|password|key|token)"))
+                     operator: "||"
+                     right: (string) @fallback)
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Secrets,
+        confidence: Confidence::Medium,
+    },
+    // ── Tier A: Verbose error response ────────────────────────────────
+    Pattern {
+        id: "ts.config.verbose_error_response",
+        description: "Error object passed to response renderer — may leak stack traces to users",
+        query: r#"(call_expression
+                     function: (member_expression
+                       property: (property_identifier) @method
+                         (#match? @method "^(render|send|json)$"))
+                     arguments: (arguments
+                       (_)
+                       (object
+                         (shorthand_property_identifier) @prop
+                           (#eq? @prop "error"))))
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureConfig,
+        confidence: Confidence::Medium,
+    },
+    // ── Tier B: CORS dynamic origin reflection ────────────────────────
+    Pattern {
+        id: "ts.config.cors_dynamic_origin",
+        description: "CORS Access-Control-Allow-Origin set to dynamic value — may reflect arbitrary origins",
+        query: r#"(call_expression
+                     function: (member_expression
+                       property: (property_identifier) @method (#eq? @method "setHeader"))
+                     arguments: (arguments
+                       (string) @header_name (#match? @header_name "Access-Control-Allow-Origin")
+                       . (identifier) @value))
+                   @vuln"#,
+        severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureConfig,
         confidence: Confidence::Medium,
     },
 ];

@@ -18,17 +18,6 @@
       ],
       "evidence_contains": [],
       "notes": "scanf(\"%s\", name) \u2014 unbounded read into stack buffer"
-    },
-    {
-      "rule_id": "c.memory.scanf_percent_s",
-      "severity": null,
-      "must_match": false,
-      "line_range": [
-        9,
-        13
-      ],
-      "evidence_contains": [],
-      "notes": "scanf(\"%31s\", name) \u2014 bounded read, ideally no finding but AST pattern may still fire"
     }
   ]
 }

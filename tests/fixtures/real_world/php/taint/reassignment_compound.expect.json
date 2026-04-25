@@ -1,0 +1,15 @@
+{
+  "description": "Compound assignment preserves taint: source concatenated with literal still carries taint to eval sink.",
+  "tags": ["taint", "reassignment", "compound"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [1, 4],
+      "evidence_contains": [],
+      "notes": "$_GET flows through $name . suffix concatenation into eval"
+    }
+  ]
+}

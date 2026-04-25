@@ -1,0 +1,25 @@
+{
+  "description": "5-level deep call chain (a -> b -> c -> d -> e) that may exceed default depth budget (3). Tests that budget exhaustion produces conservative taint-preserving results.",
+  "tags": [
+    "taint",
+    "sqli",
+    "symex",
+    "interproc"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        11,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.input flows through a->b->c->d->e chain to client.query — depth cutoff should preserve taint conservatively"
+    }
+  ]
+}

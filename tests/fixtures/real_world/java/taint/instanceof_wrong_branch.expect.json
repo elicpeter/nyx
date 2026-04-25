@@ -1,0 +1,15 @@
+{
+  "description": "instanceof on the true branch does not narrow the false/continuation branch — SQL injection finding must still be reported (negative regression test for type-flow)",
+  "tags": ["taint", "type-flow", "instanceof", "sqli", "negative-regression"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [6, 13],
+      "evidence_contains": [],
+      "notes": "req.getParameter(\"id\") is only narrowed inside the if-true branch — on continuation after the if block, input is NOT narrowed and flows into stmt.executeQuery. Currently suppressed by type-flow solver (known limitation: instanceof narrowing leaks to post-merge path)."
+    }
+  ]
+}

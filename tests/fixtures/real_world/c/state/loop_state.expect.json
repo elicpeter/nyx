@@ -11,14 +11,25 @@
   "expected": [
     {
       "rule_id": "state-resource-leak",
-      "severity": null,
-      "must_match": false,
+      "severity": "MEDIUM",
+      "must_match": true,
       "line_range": [
         4,
         11
       ],
       "evidence_contains": [],
-      "notes": "fopen inside loop body without fclose \u2014 leaked each iteration. Aspirational: loop-scoped leak detection."
+      "notes": "fopen at line 6 in loop_leak without fclose — file handle leaked. Definite leak (per-function scoped detection)."
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": false,
+      "line_range": [
+        13,
+        21
+      ],
+      "evidence_contains": [],
+      "notes": "loop_close: possible leak from loop condition false-branch (loop might not execute)"
     }
   ]
 }

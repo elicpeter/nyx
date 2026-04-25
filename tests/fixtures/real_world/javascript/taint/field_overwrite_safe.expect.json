@@ -1,0 +1,13 @@
+{
+  "description": "Field taint killed by constant overwrite — no finding expected.",
+  "tags": ["taint", "field-access", "safe"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [4, 9],
+      "notes": "obj.data overwritten with constant before sink — taint killed (regression guard)"
+    }
+  ]
+}

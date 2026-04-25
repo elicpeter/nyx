@@ -20,6 +20,17 @@
       ],
       "evidence_contains": [],
       "notes": "else branch opens file manually and never closes it"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [
+        15,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "open() in else branch without with statement \u2014 f never closed, real resource leak"
     }
   ]
 }

@@ -58,6 +58,17 @@
       "notes": "eval() is a dangerous function - AST pattern match"
     },
     {
+      "rule_id": "py.cmdi.subprocess_shell",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        10,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "subprocess.run(cmd, shell=True) \u2014 AST pattern match for subprocess with shell=True"
+    },
+    {
       "rule_id": "state-resource-leak",
       "severity": null,
       "must_match": false,

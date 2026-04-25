@@ -32,6 +32,17 @@
       ],
       "evidence_contains": [],
       "notes": "system() called with potentially null array access"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        8,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 8 \u2014 taint active but no confirmed flow"
     }
   ]
 }

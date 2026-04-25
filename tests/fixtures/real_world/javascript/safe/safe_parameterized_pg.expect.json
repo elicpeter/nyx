@@ -1,0 +1,23 @@
+{
+  "description": "Safe parameterized PostgreSQL query — tainted data in bind array with $1 placeholder",
+  "tags": ["taint", "sqli", "pg", "safe"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [3, 9],
+      "evidence_contains": [],
+      "notes": "userId flows into bind parameter array, not into the SQL string — should not fire"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [3, 9],
+      "evidence_contains": [],
+      "notes": "Parameterized query should suppress cfg-unguarded-sink as well"
+    }
+  ]
+}

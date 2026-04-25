@@ -1,0 +1,15 @@
+{
+  "description": "Multiple field reads from source — each req.query.field independently taints its binding.",
+  "tags": ["taint", "xss", "field-access"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [5, 8],
+      "evidence_contains": [],
+      "notes": "req.query.age (second field read) should be tainted and flow to res.send"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "description": "Feasible nested relational: a < b and a < 100 are compatible. Taint finding should be produced.",
+  "tags": ["taint", "constraint", "relational"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [5, 12],
+      "evidence_contains": [],
+      "notes": "cmd flows to eval on feasible path"
+    }
+  ]
+}

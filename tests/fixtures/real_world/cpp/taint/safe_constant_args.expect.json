@@ -1,0 +1,24 @@
+{
+  "description": "strcpy/strcat/sprintf called with only hardcoded string literals \u2014 no taint source.",
+  "tags": [
+    "taint",
+    "negative",
+    "buffer"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cpp.memory.strcpy",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        4,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "FP: scanner does not fire cpp.memory.strcpy on std::strcpy \u2014 qualified name not matched by AST rule"
+    }
+  ]
+}

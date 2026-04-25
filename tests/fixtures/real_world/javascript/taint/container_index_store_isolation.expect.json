@@ -1,0 +1,16 @@
+{
+  "description": "No XSS: taint stored at Map index 0 does not pollute index 1 when both indices are constant",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "container",
+    "heap",
+    "index",
+    "negative"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": []
+}

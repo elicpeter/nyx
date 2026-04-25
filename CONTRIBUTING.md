@@ -25,7 +25,7 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
 ### Prerequisites
 
-- **Rust 1.85+** (edition 2024)
+- **Rust 1.88+** (edition 2024)
 - Git
 
 ### Building
@@ -284,6 +284,8 @@ cargo clippy --all -- -D warnings
 
 ## Pull Request Guidelines
 
+First-time contributors are welcome. If you are unsure where to start, open an issue and we can help identify a focused starter task.
+
 1. **Branch from `master`**. Use descriptive branch names: `feat/add-kotlin-support`, `fix/false-positive-sql-concat`, `docs/update-rule-reference`.
 
 2. **Keep PRs focused**. One logical change per PR.
@@ -305,6 +307,8 @@ cargo clippy --all -- -D warnings
 5. **Document new rules**. If you add patterns or taint rules, update the corresponding `docs/rules/<lang>.md` page.
 
 6. **Include test cases** for any new detection rules.
+
+7. **Disclose material AI assistance** in the PR description if the change was drafted, generated, or substantially refactored by an AI tool. One line is enough. See [AI-POLICY.md](AI-POLICY.md) for the full policy and the bar we hold AI-assisted contributions to.
 
 ---
 
@@ -348,4 +352,20 @@ Please do **not** open public issues for security-sensitive bugs. See [SECURITY.
 
 ## License
 
-By contributing to Nyx, you agree that your contributions will be licensed under the [GPL-3.0](./LICENSE).
+### Contributions are released under GPL-3.0-or-later
+
+By submitting a pull request, patch, or other contribution to Nyx, you agree that your contribution will be released under the [GPL-3.0-or-later](./LICENSE), the same license as the project.
+
+### Developer Certificate of Origin
+
+We use the Developer Certificate of Origin (DCO) as a lightweight baseline for contributions. All commits must include a `Signed-off-by:` trailer, which certifies that you wrote the code yourself or otherwise have the right to submit it under the project license.
+
+Use `git commit -s` to add this automatically.
+
+### Contributor License Agreement
+
+Before your first contribution can be merged, you must sign the Nyx [Contributor License Agreement](./CLA.md).
+
+The CLA does not transfer ownership of your work. You retain copyright to your contributions. It grants Nyx the rights needed to maintain, distribute, and evolve the project over time, including the flexibility to support long-term sustainability through future licensing or commercial offerings.
+
+If you do not agree to these terms, please do not submit contributions to Nyx.

@@ -1,11 +1,14 @@
 {
-  "description": "getenv flows directly to system() call \u2014 classic command injection. Safe version uses allowlist comparison.",
+  "description": "getenv flows directly to system() call — classic command injection. Safe version uses allowlist comparison.",
   "tags": [
     "taint",
     "cmdi"
   ],
   "modes": [
     "full"
+  ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
   ],
   "expected": [
     {
@@ -39,7 +42,19 @@
         16
       ],
       "evidence_contains": [],
-      "notes": "AST pattern still fires on system() in safe version \u2014 pattern is syntactic"
+      "notes": "AST pattern still fires on system() in safe version — pattern is syntactic"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "max_count": 1,
+      "line_range": [
+        14,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "TP: getenv at line 11 flows to system(cmd) at line 14 in run_safe — scanner does not model strcmp as a validator, so the allowlist check does not sanitize. Exactly one finding after dedup."
     },
     {
       "rule_id": "taint-unsanitised-flow",
@@ -50,7 +65,7 @@
         16
       ],
       "evidence_contains": [],
-      "notes": "Safe version with strcmp allowlist \u2014 ideally suppressed but scanner may not model strcmp as validation"
+      "notes": "Safe version with strcmp allowlist — ideally suppressed but scanner may not model strcmp as validation"
     }
   ]
 }

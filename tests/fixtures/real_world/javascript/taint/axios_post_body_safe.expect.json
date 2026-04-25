@@ -1,0 +1,13 @@
+{
+  "description": "axios.post(url, data) with a fixed URL and tainted data — data is the request body, not the destination. Must not fire as SSRF.",
+  "tags": ["taint", "ssrf", "axios", "destination-aware", "regression-fp"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [6, 10],
+      "notes": "axios.post fixed URL + tainted body/data — destination fixed, not SSRF."
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "description": "SSRF negative: URL validated against allowlist before httpx.get \u2014 taint may or may not fire",
+  "tags": [
+    "taint",
+    "ssrf",
+    "negative"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        1,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": "Allowlist check guards the request; scanner may still flag because it does not model 'not in' as validation"
+    }
+  ]
+}

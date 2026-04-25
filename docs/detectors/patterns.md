@@ -1,110 +1,83 @@
-# AST Pattern Matching
+# AST patterns
 
-## Summary
+AST patterns are tree-sitter queries that match dangerous structural shapes in source. No dataflow, no CFG. A match means the construct is present; it's not proof the construct is exploitable.
 
-AST patterns are tree-sitter queries that match specific structural code constructs. They are the simplest and fastest detector family — no dataflow, no CFG, just structural presence. A match means the dangerous construct exists in the code; it does not prove the code is exploitable.
-
-AST patterns run in all analysis modes, including `--mode ast` (where they are the only active detector).
+Patterns run in every analysis mode. In `--mode ast` they're the only active detector.
 
 ## Rule IDs
 
-Pattern rule IDs follow the format `<lang>.<category>.<specific>`:
-
 ```
-rs.memory.transmute
-js.code_exec.eval
-py.deser.pickle_loads
-c.memory.gets
-java.sqli.execute_concat
+<lang>.<category>.<name>
 ```
 
-See the [Rule Reference](../rules/index.md) for a complete listing per language.
+Examples: `js.code_exec.eval`, `py.deser.pickle_loads`, `c.memory.gets`, `java.sqli.execute_concat`.
 
-## Pattern Tiers
+Full list: [rules.md](../rules.md).
 
-| Tier | Meaning | Examples |
-|------|---------|---------|
-| **A** | Structural presence alone is high-signal | `gets()`, `eval()`, `pickle.loads()`, `mem::transmute` |
-| **B** | Query includes a heuristic guard | SQL `execute` with concatenated arg, `printf(var)` with non-literal format |
+## Tiers
 
-Tier B patterns use additional tree-sitter predicates to reduce false positives. For example, `java.sqli.execute_concat` only fires when `executeQuery()` receives a `binary_expression` (string concatenation) as its argument, not when it receives a literal or parameter placeholder.
+| Tier | Meaning |
+|---|---|
+| **A** | Structural presence alone is high-signal. `gets`, `eval`, `pickle.loads`, `mem::transmute` |
+| **B** | Pattern includes a tree-sitter heuristic guard. Example: `java.sqli.execute_concat` only fires when `executeQuery` receives a `binary_expression` (string concatenation), not a literal or a parameterized statement |
 
-## What It Detects
+## Categories
 
-### By category
+| Category | Examples |
+|---|---|
+| CommandExec | `system`, `os.system`, `Runtime.exec`, backticks |
+| CodeExec | `eval`, `Function`, PHP `assert("string")`, `class_eval`, `instance_eval` |
+| Deserialization | `pickle.loads`, `yaml.load`, `Marshal.load`, `readObject`, `unserialize` |
+| SqlInjection | `executeQuery`/`Query`/`execute` with concatenated argument (Tier B) |
+| PathTraversal | PHP `include $var` |
+| Xss | `document.write`, `outerHTML`, `insertAdjacentHTML`, `getWriter().print` |
+| Crypto | `md5`, `sha1`, `Math.random`, `java.util.Random` for security use |
+| Secrets | hardcoded API keys (Go, JS, TS) |
+| InsecureTransport | `InsecureSkipVerify`, `fetch("http://...")` |
+| Reflection | `Class.forName`, `Method.invoke`, `send`, `constantize` |
+| MemorySafety | `transmute`, `unsafe`, `gets`, `strcpy`, `sprintf` |
+| Prototype | `__proto__` assignment, `Object.prototype.*` |
+| Config | CORS dynamic origin, `rejectUnauthorized: false`, insecure session settings |
+| CodeQuality | `unwrap`, `panic!`, `as any` |
 
-| Category | What it matches | Example languages |
-|----------|----------------|-------------------|
-| **CommandExec** | Shell command execution functions | C (`system`), Python (`os.system`), Ruby (backticks) |
-| **CodeExec** | Dynamic code evaluation | JS (`eval`, `new Function()`), Python (`exec`), PHP (`eval`) |
-| **Deserialization** | Unsafe object deserialization | Java (`readObject`), Python (`pickle.loads`), Ruby (`Marshal.load`) |
-| **SqlInjection** | SQL with string concatenation | Java, Go, Python, PHP (Tier B heuristic) |
-| **PathTraversal** | File inclusion with variable path | PHP (`include $var`) |
-| **Xss** | XSS sink functions | JS (`document.write`, `outerHTML`), Java (`getWriter().print`) |
-| **Crypto** | Weak cryptographic algorithms | All languages (`md5`, `sha1`, `Math.random()`) |
-| **Secrets** | Hardcoded credentials | Go (variable name matching) |
-| **InsecureTransport** | Unencrypted communication | Go (`InsecureSkipVerify`), JS (`fetch("http://")`) |
-| **Reflection** | Dynamic class/method dispatch | Java (`Class.forName`, `Method.invoke`), Ruby (`send`, `constantize`) |
-| **MemorySafety** | Memory safety violations | Rust (`transmute`, `unsafe`), C (`gets`, `strcpy`, `sprintf`) |
-| **Prototype** | Prototype pollution | JS/TS (`__proto__` assignment) |
-| **CodeQuality** | Panic/abort/type-safety issues | Rust (`unwrap`, `panic!`), TS (`as any`) |
+## What patterns can't tell you
 
-## What It Cannot Detect
+- **Dataflow.** `eval("1+1")` (safe) and `eval(userInput)` (dangerous) both match `js.code_exec.eval`. The taint detector is the one that distinguishes them.
+- **Reachability.** A pattern in dead code matches identically.
+- **Semantics.** `strcpy(dst, src)` always matches, regardless of buffer sizes.
+- **Indirect calls.** `let e = eval; e(input)` doesn't match `eval`.
+- **Aliased imports.** `from os import system as s; s(cmd)` won't match `system`.
+- **Macro expansions.** Tree-sitter parses the macro call site, not the expansion.
 
-- **Dataflow**: Patterns don't track whether the dangerous function receives tainted input. `eval("hello")` (safe) and `eval(userInput)` (dangerous) both match `js.code_exec.eval`.
-- **Context**: Patterns don't understand whether the code is reachable, guarded, or inside a test.
-- **Semantics**: `strcpy(dst, src)` always matches — it cannot determine buffer sizes.
-- **Indirect calls**: Function pointers, dynamic dispatch, and aliased references are invisible.
+## Common false positives
 
-## Common False Positives
+| Scenario | Why | Mitigation |
+|---|---|---|
+| `eval("hardcoded literal")` | Pattern matches structure | Run `--mode cfg` to drop AST patterns and rely on taint |
+| `unsafe` block with sound justification | Every `unsafe` matches `rs.quality.unsafe_block` | Filter `>=MEDIUM` (it's Medium) or accept the noise |
+| `.unwrap()` in tests | Acceptable in test code | Default non-prod severity downgrade reduces it |
+| `md5` for non-cryptographic checksums | Pattern can't see intent | Suppress with `--severity ">=MEDIUM"` or per-line `nyx:ignore` |
+| SQL concat with trusted data (Tier B) | Heuristic can't verify the source | Taint is more precise; or convert to a parameterized query |
 
-| Scenario | Why it fires | Mitigation |
-|----------|-------------|------------|
-| `eval()` with a hardcoded string literal | Pattern matches structural presence | Taint analysis won't flag this — use `--mode cfg` for fewer false positives |
-| `unsafe` block in Rust with sound justification | All unsafe blocks match | Filter with `--severity ">=MEDIUM"` (unsafe_block is Medium) |
-| `.unwrap()` in test code | Acceptable in tests | Default non-prod downgrade reduces severity |
-| `md5()` used for checksums (not security) | Pattern doesn't know usage intent | Filter Low severity or add to exclusions |
-| SQL concatenation with trusted data | Tier B heuristic can't verify data source | Taint analysis is more precise here |
+## Confidence levels
 
-## Common False Negatives
+Every AST pattern carries an explicit confidence:
 
-| Scenario | Why it's missed |
-|----------|----------------|
-| `eval` called via alias (`let e = eval; e(input)`) | Pattern matches the identifier `eval`, not the resolved function |
-| Dangerous function in a macro expansion | Tree-sitter parses the macro call, not the expansion |
-| SQL injection via ORM query builder | No pattern for ORM-specific query building |
-| Imported function under different name | `from os import system as s; s(cmd)` — pattern looks for `system` |
+| Confidence | Use |
+|---|---|
+| High | Inherently dangerous construct with no safe usage. `gets`, `pickle.loads`, `eval` with no guard |
+| Medium | Likely issue, context may change the call. SQL concatenation (Tier B), `unsafe` blocks, `exec` |
+| Low | Heuristic. Often appears in safe code. Weak crypto for checksums, `unwrap` outside tests, `Math.random` |
 
-## Confidence Signals
+`--min-confidence medium` (or `output.min_confidence = "medium"`) drops Low-confidence matches.
 
-| Signal | Meaning |
-|--------|---------|
-| **Tier A** | High confidence — the function itself is dangerous |
-| **Tier B** | Moderate confidence — heuristic guard reduces false positives |
-| **High severity** | Critical vulnerability class (command exec, deserialization) |
-| **Low severity** | Informational (weak crypto, code quality) |
-| **Non-prod path** | Finding in test/vendor code — downgraded by default |
-
-## Tuning and Noise Controls
-
-### Severity filtering
+## Tuning
 
 ```bash
-# Skip code-quality and weak-crypto findings
-nyx scan . --severity ">=MEDIUM"
-
-# Only critical findings
-nyx scan . --severity HIGH
+nyx scan . --severity ">=MEDIUM"        # drop Low-tier patterns
+nyx scan . --severity HIGH              # banned APIs and code-exec only
+nyx scan . --mode cfg                   # drop AST patterns; keep taint + state + cfg
 ```
-
-### Use taint for precision
-
-```bash
-# Taint-only mode: only report findings with confirmed dataflow
-nyx scan . --mode cfg
-```
-
-### Exclude directories
 
 ```toml
 [scanner]
@@ -113,37 +86,29 @@ excluded_directories = ["node_modules", "vendor", "generated"]
 
 ## Examples
 
-### Tier A — structural presence
+Tier A, structural presence:
 
-**C: Banned function**
 ```c
 char buf[64];
-gets(buf);  // c.memory.gets — always dangerous, no safe usage
+gets(buf);                              // c.memory.gets
 ```
 
-**Python: Unsafe deserialization**
 ```python
 import pickle
-data = pickle.loads(user_input)  # py.deser.pickle_loads
+data = pickle.loads(user_input)         // py.deser.pickle_loads
 ```
 
-### Tier B — heuristic-guarded
+Tier B, heuristic guard:
 
-**Java: SQL concatenation**
 ```java
 // Fires: concatenated argument
-stmt.executeQuery("SELECT * FROM users WHERE id=" + userId);
-// java.sqli.execute_concat
+stmt.executeQuery("SELECT * FROM users WHERE id=" + userId);  // java.sqli.execute_concat
 
-// Does NOT fire: parameterized query
+// Does not fire: parameterized
 stmt.executeQuery(preparedSql);
 ```
 
-**C: Format string**
 ```c
-// Fires: variable as first argument
-printf(user_input);  // c.memory.printf_no_fmt
-
-// Does NOT fire: literal format string
-printf("%s", user_input);
+printf(user_input);                     // c.memory.printf_no_fmt: fires (variable as fmt)
+printf("%s", user_input);               // does not fire (literal fmt)
 ```

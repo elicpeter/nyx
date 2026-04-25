@@ -1,5 +1,5 @@
 {
-  "description": "HttpServletRequest.getParameter flows directly to Runtime.exec \u2014 classic command injection",
+  "description": "HttpServletRequest.getParameter flows directly to Runtime.exec — classic command injection",
   "tags": [
     "taint",
     "cmdi",
@@ -30,6 +30,17 @@
       ],
       "evidence_contains": [],
       "notes": "No validation or auth check before exec call"
+    },
+    {
+      "rule_id": "java.cmdi.runtime_exec",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        8,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "Runtime.getRuntime().exec(cmd) with user-controlled cmd from request.getParameter; AST pattern correctly matches"
     }
   ]
 }

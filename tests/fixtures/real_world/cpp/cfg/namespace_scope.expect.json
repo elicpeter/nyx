@@ -1,5 +1,5 @@
 {
-  "description": "system() in namespace \u2014 validation function does not actually sanitize input",
+  "description": "system() in namespace — validation function does not actually sanitize input",
   "tags": [
     "cmdi",
     "cfg",
@@ -18,18 +18,18 @@
         14
       ],
       "evidence_contains": [],
-      "notes": "system(cmd) in execution::run \u2014 AST pattern detects system() call"
+      "notes": "system(cmd) in execution::run — AST pattern detects system() call"
     },
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
-        15,
+        10,
         20
       ],
       "evidence_contains": [],
-      "notes": "user_input flows through validate (which only null-checks) to system \u2014 aspirational cross-function taint"
+      "notes": "std::getenv in handler flows through namespace-qualified execution::run to system — cross-function taint through namespace-scoped helper"
     }
   ]
 }

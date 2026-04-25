@@ -1,0 +1,20 @@
+[book]
+title = "Nyx"
+authors = ["Eli Peter"]
+description = " Multi-language static analysis with cross-file taint tracking. Scan your repo, triage findings in your browser, commit triage state with your code. No cloud, no account."
+language = "en"
+src = "docs"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/elicpeter/nyx"
+edit-url-template = "https://github.com/elicpeter/nyx/edit/master/{path}"
+site-url = "/nyx/"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true

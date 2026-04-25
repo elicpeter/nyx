@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::{Deserialize, Serialize};
 
 #[derive(Parser)]
 #[command(name = "nyx")]
@@ -6,19 +7,36 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(version)]
 pub struct Cli {
     #[command(subcommand)]
-    pub(crate) command: Commands,
+    pub command: Commands,
 }
 
 impl Commands {
+    /// Resolve the effective output format, using the config default when the
+    /// CLI flag is omitted.
+    pub fn effective_format(&self, config: &crate::utils::config::Config) -> OutputFormat {
+        match self {
+            Commands::Scan { format, .. } => format.unwrap_or(config.output.default_format),
+            _ => OutputFormat::Console,
+        }
+    }
+
     /// Whether this command produces structured (machine-readable) output on
     /// stdout, meaning human status messages must be suppressed entirely.
-    pub fn is_structured_output(&self) -> bool {
-        matches!(self, Commands::Scan { format, .. } if *format == OutputFormat::Json || *format == OutputFormat::Sarif)
+    pub fn is_structured_output(&self, config: &crate::utils::config::Config) -> bool {
+        let fmt = self.effective_format(config);
+        matches!(self, Commands::Scan { .. })
+            && (fmt == OutputFormat::Json || fmt == OutputFormat::Sarif)
+    }
+
+    /// Whether this is a long-running server command (skip timing output).
+    pub fn is_serve(&self) -> bool {
+        matches!(self, Commands::Serve { .. })
     }
 }
 
 /// Output format for scan results.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     #[default]
     Console,
@@ -51,15 +69,93 @@ pub enum IndexMode {
 /// Analysis mode for scan operations.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Default)]
 pub enum ScanMode {
-    /// Run all analyses: AST patterns + CFG + taint (default)
+    /// Run all analyses: AST analyses + CFG + taint (default)
     #[default]
     Full,
-    /// Run AST pattern queries only (no CFG/taint)
+    /// Run AST analyses only (tree-sitter patterns + auth analysis; no CFG/taint/state)
     Ast,
-    /// Run CFG structural analyses + taint only (no AST patterns)
+    /// Run CFG structural analyses + taint only (no AST analyses)
     Cfg,
     /// Alias for cfg (CFG + taint analysis)
     Taint,
+}
+
+/// Engine-depth profile that sets the full stack of analysis toggles
+/// in one shot.  Individual engine flags override the profile.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum EngineProfile {
+    /// AST + CFG + basic taint. Disables symex, abstract-interp,
+    /// context-sensitive, backwards-analysis, and SMT.
+    Fast,
+    /// AST + CFG + SSA taint + abstract interpretation + context-sensitive
+    /// inlining. Disables symex, backwards-analysis, and SMT.
+    /// (This is the default engine posture.)
+    Balanced,
+    /// Everything in `balanced` plus symex (including cross-file and
+    /// interprocedural) and backwards-analysis. Still disables SMT
+    /// (requires the `smt` cargo feature).
+    Deep,
+}
+
+impl EngineProfile {
+    /// Apply this profile to an `AnalysisOptions` struct, returning the
+    /// new options.  Individual CLI flags are layered on top by the
+    /// caller after this runs.
+    pub fn apply(
+        &self,
+        mut opts: crate::utils::analysis_options::AnalysisOptions,
+    ) -> crate::utils::analysis_options::AnalysisOptions {
+        use crate::utils::analysis_options::SymexOptions;
+        match self {
+            EngineProfile::Fast => {
+                opts.constraint_solving = false;
+                opts.abstract_interpretation = false;
+                opts.context_sensitive = false;
+                opts.symex = SymexOptions {
+                    enabled: false,
+                    cross_file: false,
+                    interprocedural: false,
+                    smt: false,
+                };
+                opts.backwards_analysis = false;
+            }
+            EngineProfile::Balanced => {
+                opts.constraint_solving = true;
+                opts.abstract_interpretation = true;
+                opts.context_sensitive = true;
+                opts.symex = SymexOptions {
+                    enabled: false,
+                    cross_file: false,
+                    interprocedural: false,
+                    smt: false,
+                };
+                opts.backwards_analysis = false;
+            }
+            EngineProfile::Deep => {
+                opts.constraint_solving = true;
+                opts.abstract_interpretation = true;
+                opts.context_sensitive = true;
+                opts.symex = SymexOptions {
+                    enabled: true,
+                    cross_file: true,
+                    interprocedural: true,
+                    smt: false,
+                };
+                opts.backwards_analysis = true;
+            }
+        }
+        opts
+    }
+}
+
+impl std::fmt::Display for EngineProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EngineProfile::Fast => write!(f, "fast"),
+            EngineProfile::Balanced => write!(f, "balanced"),
+            EngineProfile::Deep => write!(f, "deep"),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -74,9 +170,9 @@ pub enum Commands {
         #[arg(long, value_enum, default_value_t = IndexMode::Auto)]
         index: IndexMode,
 
-        /// Output format
-        #[arg(short, long, value_enum, default_value_t = OutputFormat::Console)]
-        format: OutputFormat,
+        /// Output format (defaults to config's default_format, or "console")
+        #[arg(short, long, value_enum)]
+        format: Option<OutputFormat>,
 
         /// Severity filter expression: HIGH, HIGH,MEDIUM, or >=MEDIUM
         ///
@@ -89,6 +185,25 @@ pub enum Commands {
         /// Analysis mode: full (default), ast, cfg, taint
         #[arg(long, value_enum, default_value_t = ScanMode::Full)]
         mode: ScanMode,
+
+        /// Named scan profile to apply (e.g. quick, full, ci, taint_only, conservative_large_repo)
+        ///
+        /// Profiles override scan-related config settings. CLI flags still
+        /// take precedence over profile values.
+        #[arg(long)]
+        profile: Option<String>,
+
+        /// Engine-depth shortcut: fast, balanced, or deep.  Sets the full
+        /// stack of analysis toggles at once; individual engine flags still
+        /// override this after application.
+        #[arg(long, value_enum)]
+        engine_profile: Option<EngineProfile>,
+
+        /// Print the effective engine configuration and exit without
+        /// scanning.  Useful for understanding how CLI flags and config
+        /// values resolve together.
+        #[arg(long)]
+        explain_engine: bool,
 
         /// Scan all targets (alias for --mode full)
         #[arg(long, hide = true)]
@@ -110,6 +225,10 @@ pub enum Commands {
         /// Useful for CI gating. Example: --fail-on HIGH
         #[arg(long)]
         fail_on: Option<String>,
+
+        /// Disable state-model analysis (resource lifecycle, auth state)
+        #[arg(long)]
+        no_state: bool,
 
         /// Disable attack-surface ranking (findings are sorted by exploitability by default)
         #[arg(long)]
@@ -162,6 +281,101 @@ pub enum Commands {
         #[arg(long)]
         min_confidence: Option<String>,
 
+        /// Drop findings emitted from capped / widened / bailed analysis
+        ///
+        /// Suppresses any finding whose engine provenance notes indicate
+        /// over-reporting (predicate/path widening) or analysis bail
+        /// (SSA lowering failure, parse timeout).  Under-report notes —
+        /// where the emitted finding is still a real flow but the
+        /// result set is a lower bound — are kept.
+        ///
+        /// Intended for strict CI gates where a finding from non-converged
+        /// analysis is worse than no finding.  Applied after ranking and
+        /// before the `max_results` truncation.
+        #[arg(long)]
+        require_converged: bool,
+
+        // ── Analysis engine toggles (override [analysis.engine] config) ───
+        /// Enable path-constraint solving (default: on)
+        #[arg(long, overrides_with = "no_constraint_solving")]
+        constraint_solving: bool,
+        /// Disable path-constraint solving
+        #[arg(long, overrides_with = "constraint_solving")]
+        no_constraint_solving: bool,
+
+        /// Enable abstract interpretation (default: on)
+        #[arg(long, overrides_with = "no_abstract_interp")]
+        abstract_interp: bool,
+        /// Disable abstract interpretation
+        #[arg(long, overrides_with = "abstract_interp")]
+        no_abstract_interp: bool,
+
+        /// Enable k=1 context-sensitive callee inlining (default: on)
+        #[arg(long, overrides_with = "no_context_sensitive")]
+        context_sensitive: bool,
+        /// Disable context-sensitive callee inlining
+        #[arg(long, overrides_with = "context_sensitive")]
+        no_context_sensitive: bool,
+
+        /// Enable the symex pipeline (default: on)
+        #[arg(long, overrides_with = "no_symex")]
+        symex: bool,
+        /// Disable the symex pipeline entirely
+        #[arg(long, overrides_with = "symex")]
+        no_symex: bool,
+
+        /// Enable cross-file symbolic body execution (default: on)
+        #[arg(long, overrides_with = "no_cross_file_symex")]
+        cross_file_symex: bool,
+        /// Disable cross-file symbolic body execution
+        #[arg(long, overrides_with = "cross_file_symex")]
+        no_cross_file_symex: bool,
+
+        /// Enable interprocedural symex frame stack (default: on)
+        #[arg(long, overrides_with = "no_symex_interproc")]
+        symex_interproc: bool,
+        /// Disable interprocedural symex
+        #[arg(long, overrides_with = "symex_interproc")]
+        no_symex_interproc: bool,
+
+        /// Enable SMT solver backend when nyx is built with the `smt` feature (default: on)
+        #[arg(long, overrides_with = "no_smt")]
+        smt: bool,
+        /// Disable SMT solver backend
+        #[arg(long, overrides_with = "smt")]
+        no_smt: bool,
+
+        /// Enable demand-driven backwards analysis (default: off)
+        #[arg(long, overrides_with = "no_backwards_analysis")]
+        backwards_analysis: bool,
+        /// Disable demand-driven backwards analysis
+        #[arg(long, overrides_with = "backwards_analysis")]
+        no_backwards_analysis: bool,
+
+        /// Override per-file tree-sitter parse timeout (ms). 0 disables the cap.
+        #[arg(long)]
+        parse_timeout_ms: Option<u64>,
+
+        /// Maximum taint origins retained per lattice value (default: 32).
+        ///
+        /// When origin sets exceed this cap, origins are truncated
+        /// deterministically (by source location) and an
+        /// `OriginsTruncated` engine note is recorded on affected findings.
+        /// Raise for very wide codebases where truncation is observed;
+        /// lower only when lattice width is a measured bottleneck.
+        #[arg(long)]
+        max_origins: Option<u32>,
+
+        /// Maximum abstract heap objects retained per points-to set (default: 32).
+        ///
+        /// When an intra-procedural points-to set would exceed this cap,
+        /// the largest-keyed heap objects are dropped and a
+        /// `PointsToTruncated` engine note is recorded on affected findings.
+        /// Raise for factory-heavy codebases where truncation is observed;
+        /// lower only when points-to width is a measured bottleneck.
+        #[arg(long)]
+        max_pointsto: Option<u32>,
+
         // ── Deprecated aliases (hidden) ─────────────────────────────────
         /// Deprecated: use --index off
         #[arg(long, hide = true)]
@@ -211,6 +425,25 @@ pub enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+
+    /// Start the local web UI for browsing scan results
+    Serve {
+        /// Path to scan root (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: String,
+
+        /// Port to bind to (overrides config)
+        #[arg(short, long)]
+        port: Option<u16>,
+
+        /// Host to bind to (overrides config)
+        #[arg(long)]
+        host: Option<String>,
+
+        /// Don't open browser automatically
+        #[arg(long)]
+        no_browser: bool,
     },
 }
 

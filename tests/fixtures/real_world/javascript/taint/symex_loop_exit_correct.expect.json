@@ -1,0 +1,26 @@
+{
+  "description": "Loop with trim() in body, SQL injection sink after loop. Tests that loop exit edge is correctly identified via natural loop body and taint reaches post-loop sink.",
+  "tags": [
+    "taint",
+    "sqli",
+    "symex",
+    "loop",
+    "exit-regression"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.data flows through trim loop into SQL query — exit edge selection must be correct"
+    }
+  ]
+}

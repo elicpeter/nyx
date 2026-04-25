@@ -20,6 +20,27 @@
       ],
       "evidence_contains": [],
       "notes": "fd leaks when throw fires at line 22 before closeSync at line 24; scanner may not track fd lifecycle in JS"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        6,
+        6
+      ],
+      "notes": "fd IS properly closed in finally block at line 13 — state-resource-leak must NOT fire (regression guard for finally tracking)"
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": false,
+      "line_range": [
+        6,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "noise: state-resource-leak-possible fires because close is inside `if (fd !== undefined)` conditional; conservative may-leak signal is actually reasonable"
     }
   ]
 }

@@ -1,0 +1,6 @@
+{
+  "description": "Sanitized input in begin/rescue — no taint finding expected",
+  "tags": ["taint", "cmdi", "begin-rescue", "safe", "ruby"],
+  "modes": ["full"],
+  "expected": []
+}

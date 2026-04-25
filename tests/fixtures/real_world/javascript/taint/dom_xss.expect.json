@@ -1,0 +1,37 @@
+{
+  "description": "DOM XSS via location.search flowing into document.write. DOMPurify.sanitize strips HTML_ESCAPE cap.",
+  "tags": ["taint", "xss", "dom", "document.write"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [1, 4],
+      "evidence_contains": [],
+      "notes": "location.search flows into document.write via string concatenation — DOM XSS"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [6, 7],
+      "notes": "DOMPurify.sanitize strips HTML_ESCAPE cap so document.write must NOT fire (regression guard)"
+    },
+    {
+      "rule_id": "js.xss.document_write",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [4, 4],
+      "evidence_contains": [],
+      "notes": "AST pattern detects document.write with unsanitized input — DOM XSS"
+    },
+    {
+      "rule_id": "js.xss.document_write",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [7, 7],
+      "evidence_contains": [],
+      "notes": "noise: document.write after DOMPurify.sanitize — AST pattern cannot track sanitization (Layer B suppression still relies on taint signal)"
+    }
+  ]
+}

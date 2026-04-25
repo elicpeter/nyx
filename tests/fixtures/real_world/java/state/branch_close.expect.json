@@ -11,7 +11,7 @@
     {
       "rule_id": "state-resource-leak-possible",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         3,
         13

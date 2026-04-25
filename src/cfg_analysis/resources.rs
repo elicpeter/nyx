@@ -1,9 +1,10 @@
 use super::dominators;
 use super::rules;
 use super::{AnalysisContext, CfgAnalysis, CfgFinding, Confidence};
-use crate::cfg::StmtKind;
+use crate::cfg::{EdgeKind, StmtKind};
 use crate::patterns::Severity;
 use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
 use std::collections::HashSet;
 
 pub struct ResourceMisuse;
@@ -22,7 +23,7 @@ fn find_acquire_nodes(
             if info.kind != StmtKind::Call {
                 return false;
             }
-            if let Some(callee) = &info.callee {
+            if let Some(callee) = &info.call.callee {
                 let callee_lower = callee.to_ascii_lowercase();
                 // Check exclusions first — if the callee matches an exclude
                 // pattern, it is NOT an acquire even if it also matches an
@@ -54,7 +55,7 @@ fn find_release_nodes(ctx: &AnalysisContext, release_patterns: &[&str]) -> Vec<N
             if info.kind != StmtKind::Call {
                 return false;
             }
-            if let Some(callee) = &info.callee {
+            if let Some(callee) = &info.call.callee {
                 let callee_lower = callee.to_ascii_lowercase();
                 release_patterns.iter().any(|p| {
                     let pl = p.to_ascii_lowercase();
@@ -68,6 +69,14 @@ fn find_release_nodes(ctx: &AnalysisContext, release_patterns: &[&str]) -> Vec<N
 }
 
 /// Check if a release node is on all paths from acquire to every exit.
+///
+/// Treats null-guard-false edges as not-applicable: when control reaches an
+/// `if (acquire_var)` (or `if (!acquire_var)`) and the edge represents
+/// "acquire_var is null", the resource was never actually produced on that
+/// path, so a release is unnecessary.  This closes the canonical
+/// `FILE *f = fopen(...); if (f) fclose(f);` idiom — without this rule the
+/// false edge of the null check provides a path acquire→exit that misses
+/// the release, producing a may-leak FP.
 fn release_on_all_exit_paths(
     ctx: &AnalysisContext,
     acquire: NodeIndex,
@@ -83,18 +92,65 @@ fn release_on_all_exit_paths(
         }
     }
 
-    // Fall back to path enumeration via DFS
-    // Check if all paths from acquire to exit pass through a release
+    // Fall back to path enumeration with null-guard pruning.
+    let acquire_var = ctx.cfg[acquire].taint.defines.as_deref();
     let release_set: HashSet<_> = release_nodes.iter().copied().collect();
-    all_paths_pass_through(ctx, acquire, exit, &release_set)
+    all_paths_pass_through(ctx, acquire, exit, &release_set, acquire_var)
 }
 
-/// Check if all paths from `from` to `to` pass through at least one node in `through`.
+/// Identify whether a CFG edge is the "null-guard false edge" for the named
+/// acquired variable.  Returns `true` for the edge that, if traversed, means
+/// the resource handle is null/falsy and therefore not actually acquired.
+///
+/// Recognises:
+///   * `if (var)` — false edge means `var` is null
+///   * `if (!var)` — true edge means `var` is null
+///
+/// Rejects comparisons (`if (var != NULL)`), method calls
+/// (`if (var.is_valid())`), and composite conditions (`if (var && cond)`).
+fn is_null_guard_false_edge(
+    ctx: &AnalysisContext,
+    src: NodeIndex,
+    edge_kind: EdgeKind,
+    acquire_var: &str,
+) -> bool {
+    let info = &ctx.cfg[src];
+    if info.kind != StmtKind::If {
+        return false;
+    }
+    if info.condition_vars.len() != 1 || info.condition_vars[0] != acquire_var {
+        return false;
+    }
+    let Some(text) = info.condition_text.as_deref() else {
+        return false;
+    };
+    let stripped = text
+        .trim()
+        .trim_start_matches('!')
+        .trim()
+        .trim_matches(|c: char| c == '(' || c == ')')
+        .trim();
+    if stripped != acquire_var {
+        return false;
+    }
+    // Choose the null edge: false for plain truth check, true for negated.
+    let null_edge = if info.condition_negated {
+        EdgeKind::True
+    } else {
+        EdgeKind::False
+    };
+    edge_kind == null_edge
+}
+
+/// Check if all paths from `from` to `to` pass through at least one node in `through`,
+/// pruning null-guard-false edges for the acquired variable so the canonical
+/// `if (var) release(var);` idiom is recognised as a complete release.
 fn all_paths_pass_through(
     ctx: &AnalysisContext,
     from: NodeIndex,
     to: NodeIndex,
     through: &HashSet<NodeIndex>,
+    acquire_var: Option<&str>,
 ) -> bool {
     use std::collections::VecDeque;
 
@@ -116,7 +172,15 @@ fn all_paths_pass_through(
             continue;
         }
 
-        for succ in ctx.cfg.neighbors(node) {
+        for edge in ctx.cfg.edges(node) {
+            // Prune null-guard-false edges: those represent "var is null",
+            // a path on which the resource was never actually acquired.
+            if let Some(var) = acquire_var
+                && is_null_guard_false_edge(ctx, node, *edge.weight(), var)
+            {
+                continue;
+            }
+            let succ = edge.target();
             let new_passed = passed || through.contains(&succ);
             let state = (succ, new_passed);
             if visited.insert(state) {
@@ -137,7 +201,7 @@ fn all_paths_pass_through(
 /// If the variable is transferred, there is no leak — the receiving struct is
 /// responsible for the lifetime.
 fn is_ownership_transferred(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
-    let acquired_var = match &ctx.cfg[acquire].defines {
+    let acquired_var = match &ctx.cfg[acquire].taint.defines {
         Some(v) => v.clone(),
         None => return false,
     };
@@ -155,12 +219,16 @@ fn is_ownership_transferred(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
 
     while let Some(node) = queue.pop_front() {
         let info = &ctx.cfg[node];
-        let (start, end) = info.span;
+        let (start, end) = info.ast.span;
 
         // Check the source text at this node's span for the acquired variable
         // appearing in a struct-field store context.
-        let references_var = info.uses.iter().any(|u| u == &acquired_var)
-            || info.defines.as_ref().is_some_and(|d| d == &acquired_var);
+        let references_var = info.taint.uses.iter().any(|u| u == &acquired_var)
+            || info
+                .taint
+                .defines
+                .as_ref()
+                .is_some_and(|d| d == &acquired_var);
 
         if references_var && start < end && end <= ctx.source_bytes.len() {
             let span_text = &ctx.source_bytes[start..end];
@@ -177,7 +245,12 @@ fn is_ownership_transferred(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
         // If the variable is truly redefined (not a field write), stop
         // following this path. A true redefinition is when `defines` matches
         // but the span doesn't contain `->` or `.field =` patterns.
-        if info.defines.as_ref().is_some_and(|d| d == &acquired_var) {
+        if info
+            .taint
+            .defines
+            .as_ref()
+            .is_some_and(|d| d == &acquired_var)
+        {
             let is_field_write = if start < end && end <= ctx.source_bytes.len() {
                 let span_text = &ctx.source_bytes[start..end];
                 span_text.windows(2).any(|w| w == b"->") || has_dot_field_assignment(span_text)
@@ -242,7 +315,7 @@ fn is_consumed_by_owner(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
         "make_response",
     ];
 
-    let acquired_var = match &ctx.cfg[acquire].defines {
+    let acquired_var = match &ctx.cfg[acquire].taint.defines {
         Some(v) => v.clone(),
         None => return false,
     };
@@ -261,19 +334,19 @@ fn is_consumed_by_owner(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
 
         // Check Call nodes with callee that matches a consuming sink
         if info.kind == StmtKind::Call
-            && let Some(callee) = &info.callee
+            && let Some(callee) = &info.call.callee
         {
             let callee_lower = callee.to_ascii_lowercase();
             let is_consuming = CONSUMING_SINKS.iter().any(|s| callee_lower.ends_with(s));
-            if is_consuming && info.uses.iter().any(|u| u == &acquired_var) {
+            if is_consuming && info.taint.uses.iter().any(|u| u == &acquired_var) {
                 return true;
             }
         }
 
         // Also check the span text for consuming calls — handles cases where
         // the call is embedded in a return statement (e.g. `return FileResponse(f)`)
-        if info.uses.iter().any(|u| u == &acquired_var) {
-            let (start, end) = info.span;
+        if info.taint.uses.iter().any(|u| u == &acquired_var) {
+            let (start, end) = info.ast.span;
             if start < end && end <= ctx.source_bytes.len() {
                 let span_lower: Vec<u8> = ctx.source_bytes[start..end]
                     .iter()
@@ -302,7 +375,7 @@ fn is_consumed_by_owner(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
 /// exists on the acquired variable in the CFG.  If only the constructor
 /// (e.g. `threading.Lock()`) is observed without acquire, skip the finding.
 fn has_explicit_lock_acquire(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
-    let acquired_var = match &ctx.cfg[acquire].defines {
+    let acquired_var = match &ctx.cfg[acquire].taint.defines {
         Some(v) => v.clone(),
         None => return false,
     };
@@ -312,12 +385,12 @@ fn has_explicit_lock_acquire(ctx: &AnalysisContext, acquire: NodeIndex) -> bool 
         if info.kind != StmtKind::Call {
             continue;
         }
-        if let Some(callee) = &info.callee {
+        if let Some(callee) = &info.call.callee {
             let callee_lower = callee.to_ascii_lowercase();
             let is_lock_call = callee_lower.ends_with(".acquire")
                 || callee_lower.ends_with(".lock")
                 || callee_lower == "pthread_mutex_lock";
-            if is_lock_call && info.uses.iter().any(|u| u == &acquired_var) {
+            if is_lock_call && info.taint.uses.iter().any(|u| u == &acquired_var) {
                 return true;
             }
         }
@@ -345,6 +418,22 @@ impl CfgAnalysis for ResourceMisuse {
             let release_nodes = find_release_nodes(ctx, pair.release);
 
             for &acquire in &acquire_nodes {
+                // Suppress resources inside managed cleanup scopes
+                // (Python `with`, Java try-with-resources).
+                if ctx.cfg[acquire].managed_resource {
+                    continue;
+                }
+                // Suppress resources with a deferred release (Go `defer f.Close()`).
+                // Defer guarantees cleanup on all exit paths including early returns.
+                if let Some(acquired_var) = ctx.cfg[acquire].taint.defines.as_deref() {
+                    let has_deferred_release = release_nodes.iter().any(|&r| {
+                        ctx.cfg[r].in_defer
+                            && ctx.cfg[r].taint.uses.iter().any(|u| u == acquired_var)
+                    });
+                    if has_deferred_release {
+                        continue;
+                    }
+                }
                 if !release_on_all_exit_paths(ctx, acquire, &release_nodes, exit)
                     && !is_ownership_transferred(ctx, acquire)
                     && !is_consumed_by_owner(ctx, acquire)
@@ -354,7 +443,7 @@ impl CfgAnalysis for ResourceMisuse {
                         continue;
                     }
                     let info = &ctx.cfg[acquire];
-                    let callee_desc = info.callee.as_deref().unwrap_or("(acquire)");
+                    let callee_desc = info.call.callee.as_deref().unwrap_or("(acquire)");
 
                     findings.push(CfgFinding {
                         rule_id: if pair.resource_name == "mutex" {
@@ -365,7 +454,7 @@ impl CfgAnalysis for ResourceMisuse {
                         title: format!("{} may leak", pair.resource_name),
                         severity: Severity::Medium,
                         confidence: Confidence::Medium,
-                        span: info.span,
+                        span: info.ast.span,
                         message: format!(
                             "`{callee_desc}` acquires {} but not all exit paths \
                              release it",

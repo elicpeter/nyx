@@ -1,0 +1,25 @@
+{
+  "description": "SSTI via render_template_string with user input from Flask request",
+  "tags": [
+    "taint",
+    "ssti",
+    "flask",
+    "code-exec"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "request.args.get('name') flows into render_template_string — SSTI"
+    }
+  ]
+}

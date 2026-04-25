@@ -3,8 +3,10 @@ pub mod config;
 pub mod index;
 pub mod list;
 pub mod scan;
+#[cfg(feature = "serve")]
+pub mod serve;
 
-use crate::cli::{Commands, IndexMode, ScanMode};
+use crate::cli::{Commands, EngineProfile, IndexMode, ScanMode};
 use crate::errors::NyxResult;
 use crate::patterns::{Severity, SeverityFilter};
 use crate::utils::config::{AnalysisMode, Config};
@@ -16,6 +18,22 @@ pub fn handle_command(
     config_dir: &Path,
     config: &mut Config,
 ) -> NyxResult<()> {
+    // Resolve engine options once for the whole process.  Scan overlays CLI
+    // flags below; other subcommands use the config values verbatim.  The
+    // install is a no-op after the first call, so Scan's overlay must happen
+    // before we reach this point for its own call path — we delay the install
+    // to the Scan arm and gate non-scan commands behind a fallback install of
+    // the bare config values.
+    let install_from_config = |config: &Config| {
+        if config.analysis.engine.parse_timeout_ms == 0 {
+            tracing::warn!(
+                "parse_timeout_ms = 0 disables tree-sitter parse timeout entirely; \
+                 this is unsafe for untrusted input."
+            );
+        }
+        let _ = crate::utils::analysis_options::install(config.analysis.engine);
+    };
+
     match command {
         Commands::Scan {
             path,
@@ -23,10 +41,14 @@ pub fn handle_command(
             format,
             severity,
             mode,
+            profile,
+            engine_profile,
+            explain_engine,
             all_targets,
             keep_nonprod_severity,
             quiet,
             fail_on,
+            no_state,
             no_rank,
             show_suppressed,
             show_all,
@@ -38,6 +60,27 @@ pub fn handle_command(
             show_instances,
             min_score,
             min_confidence,
+            require_converged,
+            // Analysis engine toggles
+            constraint_solving,
+            no_constraint_solving,
+            abstract_interp,
+            no_abstract_interp,
+            context_sensitive,
+            no_context_sensitive,
+            symex,
+            no_symex,
+            cross_file_symex,
+            no_cross_file_symex,
+            symex_interproc,
+            no_symex_interproc,
+            smt,
+            no_smt,
+            backwards_analysis,
+            no_backwards_analysis,
+            parse_timeout_ms,
+            max_origins,
+            max_pointsto,
             // Deprecated aliases
             no_index,
             rebuild_index,
@@ -45,6 +88,11 @@ pub fn handle_command(
             ast_only,
             cfg_only,
         } => {
+            // ── Apply profile first (CLI flags override after) ──────────
+            if let Some(ref name) = profile {
+                config.apply_profile(name)?;
+            }
+
             // ── Resolve deprecated aliases ──────────────────────────────
 
             // Index mode: explicit --index wins, then deprecated flags
@@ -92,7 +140,8 @@ pub fn handle_command(
             match effective_mode {
                 ScanMode::Full => config.scanner.mode = AnalysisMode::Full,
                 ScanMode::Ast => config.scanner.mode = AnalysisMode::Ast,
-                ScanMode::Cfg | ScanMode::Taint => config.scanner.mode = AnalysisMode::Taint,
+                ScanMode::Cfg => config.scanner.mode = AnalysisMode::Cfg,
+                ScanMode::Taint => config.scanner.mode = AnalysisMode::Taint,
             }
 
             if keep_nonprod_severity {
@@ -101,6 +150,10 @@ pub fn handle_command(
 
             if quiet {
                 config.output.quiet = true;
+            }
+
+            if no_state {
+                config.scanner.enable_state_analysis = false;
             }
 
             if no_rank {
@@ -120,6 +173,10 @@ pub fn handle_command(
                     })?);
             }
 
+            if require_converged {
+                config.output.require_converged = true;
+            }
+
             if show_all {
                 config.output.show_all = true;
             }
@@ -132,10 +189,100 @@ pub fn handle_command(
             config.output.max_low_per_rule = max_low_per_rule;
             config.output.rollup_examples = rollup_examples;
 
+            // ── Analysis engine toggles: resolve CLI → config ───────────
+            // Each pair is a tri-state (flag set ⇒ true, no-flag set ⇒ false,
+            // neither ⇒ inherit config default).
+            //
+            // Application order: profile first (wholesale reset), then
+            // individual flags layered on top so users can mix a profile
+            // with a targeted override (e.g. `--engine-profile fast
+            // --backwards-analysis`).
+            let mut engine = config.analysis.engine;
+            if let Some(ref prof) = engine_profile {
+                engine = prof.apply(engine);
+            }
+            if constraint_solving {
+                engine.constraint_solving = true;
+            }
+            if no_constraint_solving {
+                engine.constraint_solving = false;
+            }
+            if abstract_interp {
+                engine.abstract_interpretation = true;
+            }
+            if no_abstract_interp {
+                engine.abstract_interpretation = false;
+            }
+            if context_sensitive {
+                engine.context_sensitive = true;
+            }
+            if no_context_sensitive {
+                engine.context_sensitive = false;
+            }
+            if symex {
+                engine.symex.enabled = true;
+            }
+            if no_symex {
+                engine.symex.enabled = false;
+            }
+            if cross_file_symex {
+                engine.symex.cross_file = true;
+            }
+            if no_cross_file_symex {
+                engine.symex.cross_file = false;
+            }
+            if symex_interproc {
+                engine.symex.interprocedural = true;
+            }
+            if no_symex_interproc {
+                engine.symex.interprocedural = false;
+            }
+            if smt {
+                engine.symex.smt = true;
+            }
+            if no_smt {
+                engine.symex.smt = false;
+            }
+            if backwards_analysis {
+                engine.backwards_analysis = true;
+            }
+            if no_backwards_analysis {
+                engine.backwards_analysis = false;
+            }
+            if let Some(ms) = parse_timeout_ms {
+                engine.parse_timeout_ms = ms;
+            }
+            if let Some(n) = max_origins {
+                engine.max_origins = n.max(crate::utils::analysis_options::MIN_MAX_ORIGINS);
+            }
+            if let Some(n) = max_pointsto {
+                engine.max_pointsto = n.max(crate::utils::analysis_options::MIN_MAX_POINTSTO);
+            }
+            config.analysis.engine = engine;
+            if engine.parse_timeout_ms == 0 {
+                tracing::warn!(
+                    "parse_timeout_ms = 0 disables tree-sitter parse timeout entirely; \
+                     this is unsafe for untrusted input."
+                );
+            }
+            if !crate::utils::analysis_options::install(engine) {
+                tracing::warn!(
+                    "analysis-engine runtime already installed; CLI engine flags ignored"
+                );
+            }
+
+            // ── --explain-engine: print resolved config and exit ────────
+            if explain_engine {
+                print_engine_explanation(config, engine_profile);
+                return Ok(());
+            }
+
+            let effective_format = format.unwrap_or(config.output.default_format);
+
             scan::handle(
                 &path,
                 effective_index,
-                format,
+                effective_format,
                 severity_filter,
                 fail_on_sev,
                 show_suppressed,
@@ -145,6 +292,7 @@ pub fn handle_command(
             )?;
         }
         Commands::Index { action } => {
+            install_from_config(config);
             index::handle(action, database_dir, config)?;
         }
         Commands::List { verbose } => {
@@ -169,6 +317,131 @@ pub fn handle_command(
                 }
             }
         }
+        Commands::Serve {
+            path,
+            port,
+            host,
+            no_browser,
+        } => {
+            install_from_config(config);
+            #[cfg(feature = "serve")]
+            {
+                serve::handle(
+                    &path,
+                    port,
+                    host.as_deref(),
+                    no_browser,
+                    config_dir,
+                    database_dir,
+                    config,
+                )?;
+            }
+            #[cfg(not(feature = "serve"))]
+            {
+                let _ = (path, port, host, no_browser);
+                return Err(crate::errors::NyxError::Msg(
+                    "The `serve` feature is not enabled. Rebuild with `cargo build --features serve`.".into(),
+                ));
+            }
+        }
     }
     Ok(())
+}
+
+/// Pretty-print the effective analysis-engine configuration for
+/// `nyx scan --explain-engine`.  Writes to stdout so it composes with
+/// standard shell redirection and process substitution.
+fn print_engine_explanation(config: &Config, engine_profile: Option<EngineProfile>) {
+    fn onoff(b: bool) -> &'static str {
+        if b { "on" } else { "off" }
+    }
+
+    let engine = config.analysis.engine;
+    let scanner = &config.scanner;
+    let profile_label = engine_profile
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "(none — using config defaults)".to_string());
+    let smt_compiled = cfg!(feature = "smt");
+
+    println!("Effective engine configuration:");
+    println!("  Engine profile:          {profile_label}");
+    println!("  AST patterns:            on");
+    println!(
+        "  CFG construction:        {}",
+        onoff(matches!(
+            config.scanner.mode,
+            AnalysisMode::Full | AnalysisMode::Cfg | AnalysisMode::Taint
+        ))
+    );
+    println!(
+        "  CFG analysis:            {}",
+        onoff(matches!(
+            config.scanner.mode,
+            AnalysisMode::Full | AnalysisMode::Cfg | AnalysisMode::Taint
+        ))
+    );
+    println!(
+        "  Taint (SSA):             {}",
+        onoff(matches!(
+            config.scanner.mode,
+            AnalysisMode::Full | AnalysisMode::Cfg | AnalysisMode::Taint
+        ))
+    );
+    println!(
+        "  Abstract interpretation: {}   (--abstract-interp / NYX_ABSTRACT_INTERP)",
+        onoff(engine.abstract_interpretation)
+    );
+    println!(
+        "  Context sensitivity:     {}   (--context-sensitive / NYX_CONTEXT_SENSITIVE, k=1)",
+        onoff(engine.context_sensitive)
+    );
+    println!(
+        "  Constraint solving:      {}   (--constraint-solving / NYX_CONSTRAINT)",
+        onoff(engine.constraint_solving)
+    );
+    println!(
+        "  Symbolic execution:      {}   (--symex / NYX_SYMEX)",
+        onoff(engine.symex.enabled)
+    );
+    println!(
+        "  Cross-file symex:        {}   (--cross-file-symex / NYX_CROSS_FILE_SYMEX)",
+        onoff(engine.symex.cross_file)
+    );
+    println!(
+        "  Interproc symex:         {}   (--symex-interproc / NYX_SYMEX_INTERPROC)",
+        onoff(engine.symex.interprocedural)
+    );
+    println!(
+        "  Backwards taint:         {}   (--backwards-analysis / NYX_BACKWARDS)",
+        onoff(engine.backwards_analysis)
+    );
+    println!(
+        "  SMT (Z3):                {}   (--smt{}; requires --features smt)",
+        onoff(engine.symex.smt && smt_compiled),
+        if smt_compiled {
+            ""
+        } else {
+            ", binary built WITHOUT smt feature"
+        }
+    );
+    println!(
+        "  State analysis:          {}   (scanner.enable_state_analysis)",
+        onoff(scanner.enable_state_analysis)
+    );
+    println!(
+        "  Auth analysis:           {}   (scanner.enable_auth_analysis)",
+        onoff(scanner.enable_auth_analysis)
+    );
+    println!(
+        "  Parse timeout:           {} ms  (--parse-timeout-ms / NYX_PARSE_TIMEOUT_MS; 0 disables)",
+        engine.parse_timeout_ms
+    );
+    println!(
+        "  Max taint origins:       {}      (--max-origins / NYX_MAX_ORIGINS; per-lattice-value cap)",
+        engine.max_origins
+    );
+    println!(
+        "  Max points-to set:       {}      (--max-pointsto / NYX_MAX_POINTSTO; per-variable heap-object cap)",
+        engine.max_pointsto
+    );
 }

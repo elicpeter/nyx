@@ -1,5 +1,5 @@
 use crate::errors::NyxResult;
-use crate::utils::config::{AnalysisRulesConfig, Config, ConfigLabelRule};
+use crate::utils::config::{AnalysisRulesConfig, CapName, Config, ConfigLabelRule, RuleKind};
 use console::style;
 use std::fs;
 use std::path::Path;
@@ -26,20 +26,12 @@ pub fn add_rule(
     kind: &str,
     cap: &str,
 ) -> NyxResult<()> {
-    // Validate kind
-    if !["source", "sanitizer", "sink"].contains(&kind) {
-        return Err(
-            format!("Invalid kind '{kind}'. Must be one of: source, sanitizer, sink").into(),
-        );
-    }
-
-    // Validate cap
-    if crate::labels::parse_cap(cap).is_none() {
-        return Err(format!(
-            "Invalid cap '{cap}'. Must be one of: env_var, html_escape, shell_escape, url_encode, json_parse, file_io, all"
-        )
-        .into());
-    }
+    let rule_kind: RuleKind = kind
+        .parse()
+        .map_err(|e: String| crate::errors::NyxError::Msg(e))?;
+    let cap_name: CapName = cap
+        .parse()
+        .map_err(|e: String| crate::errors::NyxError::Msg(e))?;
 
     let local_path = config_dir.join("nyx.local");
     let mut config: Config = if local_path.exists() {
@@ -57,8 +49,9 @@ pub fn add_rule(
 
     let new_rule = ConfigLabelRule {
         matchers: vec![matcher.to_string()],
-        kind: kind.to_string(),
-        cap: cap.to_string(),
+        kind: rule_kind,
+        cap: cap_name,
+        case_sensitive: false,
     };
 
     // Dedup
@@ -66,7 +59,7 @@ pub fn add_rule(
         lang_cfg.rules.push(new_rule);
     }
 
-    write_local_config(&local_path, &config)?;
+    save_local_config(&local_path, &config)?;
 
     println!(
         "{}: Added {} rule for `{}` ({}) in {}",
@@ -99,7 +92,7 @@ pub fn add_terminator(config_dir: &Path, lang: &str, name: &str) -> NyxResult<()
         lang_cfg.terminators.push(name.to_string());
     }
 
-    write_local_config(&local_path, &config)?;
+    save_local_config(&local_path, &config)?;
 
     println!(
         "{}: Added terminator `{}` for {}",
@@ -111,11 +104,12 @@ pub fn add_terminator(config_dir: &Path, lang: &str, name: &str) -> NyxResult<()
 }
 
 /// Write only the non-default portions to nyx.local.
-fn write_local_config(path: &Path, config: &Config) -> NyxResult<()> {
-    // Only write the analysis section to nyx.local to keep it minimal.
-    // Other settings keep their defaults unless previously customized.
+pub(crate) fn save_local_config(path: &Path, config: &Config) -> NyxResult<()> {
+    // Write analysis + profiles + server settings to nyx.local.
     let mut local = Config {
         analysis: config.analysis.clone(),
+        profiles: config.profiles.clone(),
+        server: config.server.clone(),
         ..Config::default()
     };
 
@@ -124,8 +118,8 @@ fn write_local_config(path: &Path, config: &Config) -> NyxResult<()> {
         !v.rules.is_empty() || !v.terminators.is_empty() || !v.event_handlers.is_empty()
     });
 
-    // If no analysis rules, only write the analysis section
-    if local.analysis.languages.is_empty() {
+    // If no analysis rules and no disabled rules, clear the analysis section
+    if local.analysis.languages.is_empty() && local.analysis.disabled_rules.is_empty() {
         local.analysis = AnalysisRulesConfig::default();
     }
 
@@ -156,8 +150,8 @@ mod tests {
         let js = config.analysis.languages.get("javascript").unwrap();
         assert_eq!(js.rules.len(), 1);
         assert_eq!(js.rules[0].matchers, vec!["escapeHtml"]);
-        assert_eq!(js.rules[0].kind, "sanitizer");
-        assert_eq!(js.rules[0].cap, "html_escape");
+        assert_eq!(js.rules[0].kind, RuleKind::Sanitizer);
+        assert_eq!(js.rules[0].cap, CapName::HtmlEscape);
     }
 
     #[test]

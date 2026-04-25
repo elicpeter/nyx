@@ -1,0 +1,13 @@
+{
+  "description": "parseInt-coerced request parameter flows into innerHTML attribute context. The value is provably TypeKind::Int (parseInt) with a bounded interval (only reachable decimal digits), so HTML_ESCAPE suppression should fire for both the text and attribute contexts. No taint-unsanitised-flow expected.",
+  "tags": ["taint", "xss", "type-suppression", "html-escape", "parseInt"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [5, 8],
+      "notes": "parseInt return is Int-typed; Int value cannot carry HTML metacharacters (<, >, \", ', &, /, :) in text or attribute context — HTML_ESCAPE sink must be suppressed"
+    }
+  ]
+}

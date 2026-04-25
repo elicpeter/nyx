@@ -18,6 +18,16 @@
       ],
       "evidence_contains": [],
       "notes": "processLeaky throws on line 26 without closing fis \u2014 resource leaked on exception path"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_not_match": true,
+      "line_range": [
+        10,
+        11
+      ],
+      "notes": "e.getMessage() → System.err.println is standard error handling, not a security issue — must NOT fire (regression guard for known-safe callee exclusion)"
     }
   ]
 }

@@ -32,7 +32,7 @@
         9
       ],
       "evidence_contains": [],
-      "notes": "Request body flows into YAML.load - aspirational taint finding"
+      "notes": "request.body source flows into YAML.load — fires in full mode via request.body source rule, but cannot be must_match because ast mode has no taint"
     }
   ]
 }

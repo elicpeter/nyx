@@ -1,0 +1,15 @@
+{
+  "description": "SSRF: user-controlled URL from query param flows to http.NewRequestWithContext()",
+  "tags": ["taint", "ssrf", "http-client"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [8, 13],
+      "evidence_contains": [],
+      "notes": "r.URL.Query().Get(\"url\") flows to http.NewRequestWithContext() without URL validation"
+    }
+  ]
+}

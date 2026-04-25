@@ -1,0 +1,15 @@
+{
+  "description": "SSRF safe: URL has known-safe prefix with scheme + host + path. The attacker can only control the path suffix, not the destination host.",
+  "tags": ["taint", "ssrf", "abstract-interp", "string-domain"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [6, 7],
+      "evidence_contains": [],
+      "notes": "TN: URL prefix 'https://api.internal.example.com/users/' locks the host — SSRF suppressed by the abstract string domain"
+    }
+  ]
+}

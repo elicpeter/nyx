@@ -1,0 +1,1180 @@
+use super::conditions::unwrap_parens;
+use super::{
+    anon_fn_name, collect_idents, collect_idents_with_paths, find_constructor_type_child,
+    first_call_ident, root_receiver_text, text_of,
+};
+use crate::labels::{Cap, Kind, lookup};
+use tree_sitter::Node;
+
+/// Find the inner CallFn/CallMethod/CallMacro node within an AST node.
+/// For direct call nodes, returns the node itself. For wrappers, searches
+/// up to two levels of children.
+pub(super) fn find_call_node<'a>(n: Node<'a>, lang: &str) -> Option<Node<'a>> {
+    match lookup(lang, n.kind()) {
+        Kind::CallFn | Kind::CallMethod | Kind::CallMacro => Some(n),
+        _ => {
+            let mut cursor = n.walk();
+            for c in n.children(&mut cursor) {
+                match lookup(lang, c.kind()) {
+                    Kind::CallFn | Kind::CallMethod | Kind::CallMacro => return Some(c),
+                    _ => {}
+                }
+            }
+            // Recurse one more level (handles `expression_statement > variable_declarator > call`)
+            let mut cursor2 = n.walk();
+            for c in n.children(&mut cursor2) {
+                let mut cursor3 = c.walk();
+                for gc in c.children(&mut cursor3) {
+                    if matches!(
+                        lookup(lang, gc.kind()),
+                        Kind::CallFn | Kind::CallMethod | Kind::CallMacro
+                    ) {
+                        return Some(gc);
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Extract identifiers from specified fields of an object-literal argument.
+///
+/// Returns:
+/// * `Some(names)` if the positional argument at `index` IS an object literal
+///   (JS `object`, TS `object`, Python `dictionary`). `names` contains
+///   identifiers lifted from pair values whose key matches any entry in
+///   `fields` (case-sensitive; JS/TS identifiers). When no destination-field
+///   pairs are present, returns `Some(vec![])` — the sink is effectively
+///   silenced because no destination identifier exists.
+/// * `None` if the arg is absent, is not an object literal (plain string
+///   / ident / expression), or has splat/spread children that break static
+///   per-field reasoning. Callers fall back to the whole-arg positional
+///   filter in this case.
+pub(super) fn extract_destination_field_idents(
+    call_node: Node,
+    arg_index: usize,
+    fields: &[&str],
+    code: &[u8],
+) -> Option<Vec<String>> {
+    if fields.is_empty() {
+        return None;
+    }
+    let args = call_node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let arg = args.named_children(&mut cursor).nth(arg_index)?;
+
+    // Only object / dict literal forms carry per-field destination semantics.
+    // For anything else (identifier, member expression, string, call), return
+    // None so the caller treats the whole arg as destination.
+    if !matches!(arg.kind(), "object" | "dictionary") {
+        return None;
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    let mut c = arg.walk();
+    for child in arg.named_children(&mut c) {
+        match child.kind() {
+            // `spread_element` (JS/TS) / `dictionary_splat` (Python): we can't
+            // statically attribute spread contents to specific fields, so
+            // bail out — caller falls back to the whole-arg filter, matching
+            // the conservative posture used by arg_uses for splats.
+            "spread_element" | "dictionary_splat" => {
+                return None;
+            }
+            // Shorthand property `{ url }` binds the `url` field to a binding
+            // also named `url`. Treat as destination iff the name matches.
+            "shorthand_property_identifier" | "shorthand_property_identifier_pattern" => {
+                let Some(name) = text_of(child, code) else {
+                    continue;
+                };
+                if fields.iter().any(|&f| f == name) && !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+            "pair" => {
+                let Some(key_node) = child.child_by_field_name("key") else {
+                    continue;
+                };
+                let key_text = match key_node.kind() {
+                    // Strip quotes from string-literal keys so `"url"` and `url`
+                    // both match the configured field list.
+                    "string" | "string_literal" => text_of(key_node, code).map(|raw| {
+                        if raw.len() >= 2 {
+                            raw[1..raw.len() - 1].to_string()
+                        } else {
+                            raw
+                        }
+                    }),
+                    // Computed keys like `[someVar]` can't be statically
+                    // resolved — skip (conservative: not a destination field).
+                    "computed_property_name" => continue,
+                    _ => text_of(key_node, code),
+                };
+                let Some(key) = key_text else {
+                    continue;
+                };
+                if !fields.iter().any(|&f| f == key) {
+                    continue;
+                }
+                let Some(val_node) = child.child_by_field_name("value") else {
+                    continue;
+                };
+                let mut idents: Vec<String> = Vec::new();
+                let mut paths: Vec<String> = Vec::new();
+                collect_idents_with_paths(val_node, code, &mut idents, &mut paths);
+                for name in paths.into_iter().chain(idents) {
+                    if !out.contains(&name) {
+                        out.push(name);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(out)
+}
+
+/// Extract the string-literal content at argument position `index` (0-based).
+/// Returns `None` if the argument is not a string literal or the index is out of range.
+pub(super) fn extract_const_string_arg(
+    call_node: Node,
+    index: usize,
+    code: &[u8],
+) -> Option<String> {
+    let args = call_node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let arg = args.named_children(&mut cursor).nth(index)?;
+    match arg.kind() {
+        "string" | "string_literal" => {
+            let raw = text_of(arg, code)?;
+            if raw.len() >= 2 {
+                Some(raw[1..raw.len() - 1].to_string())
+            } else {
+                None
+            }
+        }
+        "template_string" => {
+            // Only treat as constant if no interpolation (no template_substitution children)
+            let mut c = arg.walk();
+            if arg
+                .named_children(&mut c)
+                .any(|ch| ch.kind() == "template_substitution")
+            {
+                return None; // dynamic
+            }
+            let raw = text_of(arg, code)?;
+            if raw.len() >= 2 {
+                Some(raw[1..raw.len() - 1].to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Extract the value of a keyword argument from a call node (e.g. Python `shell=True`).
+/// Walks argument children looking for `keyword_argument` nodes, matches the keyword
+/// name, and extracts the value node text for literals.
+pub(super) fn extract_const_keyword_arg(
+    call_node: Node,
+    keyword_name: &str,
+    code: &[u8],
+) -> Option<String> {
+    let args = call_node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    for child in args.named_children(&mut cursor) {
+        if child.kind() == "keyword_argument" || child.kind() == "named_argument" {
+            // keyword_argument has a "name" field and a "value" field in Python tree-sitter
+            let Some(name_node) = child.child_by_field_name("name") else {
+                continue;
+            };
+            let Some(name_text) = text_of(name_node, code) else {
+                continue;
+            };
+            if name_text != keyword_name {
+                continue;
+            }
+            let value_node = child.child_by_field_name("value")?;
+            // Only return a literal — identifiers / calls / complex exprs are
+            // "dynamic" and must be reported as `None` so the gate can
+            // distinguish literal-safe from dynamic.
+            return match value_node.kind() {
+                "true" | "false" | "none" | "integer" | "float" | "string" | "string_literal"
+                | "identifier" => text_of(value_node, code).map(|s| s.to_string()),
+                _ => None,
+            }
+            .filter(|_| {
+                // identifiers are only "literal" when they're the Python
+                // booleans True/False/None (tree-sitter-python classifies
+                // these as identifiers in older grammar versions).
+                match value_node.kind() {
+                    "identifier" => text_of(value_node, code)
+                        .as_deref()
+                        .is_some_and(|s| matches!(s, "True" | "False" | "None")),
+                    _ => true,
+                }
+            });
+        }
+    }
+    None
+}
+
+/// Return `true` if the call node has a keyword/named argument whose name
+/// matches `keyword_name` (regardless of whether the value is a literal).
+/// Used by gated-sink classification to distinguish an absent kwarg (language
+/// default) from a present-but-dynamic kwarg (conservative).
+pub(super) fn has_keyword_arg(call_node: Node, keyword_name: &str, code: &[u8]) -> bool {
+    let Some(args) = call_node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    for child in args.named_children(&mut cursor) {
+        if child.kind() != "keyword_argument" && child.kind() != "named_argument" {
+            continue;
+        }
+        let Some(name_node) = child.child_by_field_name("name") else {
+            continue;
+        };
+        if text_of(name_node, code).as_deref() == Some(keyword_name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Recursively find a call-expression node within an AST subtree (up to
+/// 4 levels deep).  Unlike `find_call_node` which only checks 2 levels,
+/// this handles `await`-wrapped calls inside declarations.
+pub(super) fn find_call_node_deep<'a>(n: Node<'a>, lang: &str, depth: u8) -> Option<Node<'a>> {
+    if depth == 0 {
+        return None;
+    }
+    match lookup(lang, n.kind()) {
+        Kind::CallFn | Kind::CallMethod | Kind::CallMacro => Some(n),
+        _ => {
+            let mut cursor = n.walk();
+            for c in n.children(&mut cursor) {
+                if let Some(found) = find_call_node_deep(c, lang, depth - 1) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Detect whether a call node is a parameterized SQL query.
+///
+/// Returns `true` when:
+/// 1. The first argument (arg 0) is a string literal (including template
+///    strings without interpolation) containing SQL placeholder patterns:
+///    `$1`..`$N`, `?`, `%s`, or `:identifier`.
+/// 2. The call has at least 2 arguments (the second being the params
+///    array/tuple).
+///
+/// This is intentionally conservative: if arg 0 is dynamic (variable,
+/// concatenation, template with interpolation), returns `false`.
+pub(super) fn is_parameterized_query_call(call_node: Node, code: &[u8]) -> bool {
+    let Some(args) = call_node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    let named: Vec<_> = args.named_children(&mut cursor).collect();
+    // Need at least 2 arguments: query string + params
+    if named.len() < 2 {
+        return false;
+    }
+    let first_arg = named[0];
+    // Extract the raw text of arg 0 — must be a string literal or
+    // template string without interpolation.
+    let query_text = match first_arg.kind() {
+        "string" | "string_literal" | "interpreted_string_literal" | "raw_string_literal" => {
+            text_of(first_arg, code)
+        }
+        "template_string" => {
+            // Only constant templates (no interpolation)
+            let mut c = first_arg.walk();
+            if first_arg
+                .named_children(&mut c)
+                .any(|ch| ch.kind() == "template_substitution")
+            {
+                return false; // dynamic — not safe
+            }
+            text_of(first_arg, code)
+        }
+        // Python concatenated strings: "SELECT" "..." are implicit concat
+        "concatenated_string" => {
+            // If it's a concatenated_string, get the full text
+            text_of(first_arg, code)
+        }
+        _ => return false, // not a literal
+    };
+    let Some(qt) = query_text else {
+        return false;
+    };
+    has_sql_placeholders(&qt)
+}
+
+/// Check whether a string contains SQL parameterized-query placeholders.
+///
+/// Recognised patterns:
+/// - `$1`, `$2`, …, `$N` (PostgreSQL positional)
+/// - `?` (MySQL / SQLite positional)
+/// - `%s` (Python DB-API / psycopg2)
+/// - `:identifier` (Oracle / named parameters) — requires the colon to be
+///   preceded by a space or `=` (to avoid matching JS ternary / object
+///   literals).
+pub(super) fn has_sql_placeholders(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        match bytes[i] {
+            b'$' if i + 1 < len && bytes[i + 1].is_ascii_digit() && bytes[i + 1] != b'0' => {
+                // $N where N is 1..9 (at minimum)
+                return true;
+            }
+            b'?' => return true,
+            b'%' if i + 1 < len && bytes[i + 1] == b's' => {
+                return true;
+            }
+            b':' if i > 0
+                && (bytes[i - 1] == b' '
+                    || bytes[i - 1] == b'='
+                    || bytes[i - 1] == b'('
+                    || bytes[i - 1] == b',')
+                && i + 1 < len
+                && bytes[i + 1].is_ascii_alphabetic() =>
+            {
+                // :identifier — must be preceded by whitespace/= to avoid
+                // false positives on object literals or ternary operators.
+                return true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Returns true when a tree-sitter node is a syntactic literal value.
+///
+/// Intentionally conservative: if in doubt, returns false. It is better
+/// to miss a suppression opportunity than to suppress a real tainted flow.
+///
+/// NOTE: Literal-kind classification also exists in `ast.rs::is_literal_node`.
+/// The two must stay aligned across languages. TODO: consider extracting a
+/// shared literal-kind helper if a third call site appears.
+#[allow(clippy::only_used_in_recursion)]
+pub(super) fn is_syntactic_literal(node: Node, code: &[u8]) -> bool {
+    match node.kind() {
+        // Scalar strings — but reject if they contain interpolation
+        // (e.g. Ruby `"hello #{name}"`, Python f-strings).
+        "string"
+        | "string_literal"
+        | "interpreted_string_literal"
+        | "raw_string_literal"
+        | "string_content"
+        | "string_fragment" => !has_string_interpolation(node),
+
+        // Numbers
+        "integer" | "integer_literal" | "int_literal" | "float" | "float_literal" | "number" => {
+            true
+        }
+
+        // Booleans / null / nil / none
+        "true" | "false" | "null" | "nil" | "none" | "null_literal" | "boolean"
+        | "boolean_literal" => true,
+
+        // PHP encapsed_string: safe only if no variable interpolation
+        "encapsed_string" => !has_interpolation_cfg(node),
+
+        // Wrapper: PHP/Go wrap each arg in an `argument` node — unwrap
+        "argument" => {
+            node.named_child_count() == 1
+                && node
+                    .named_child(0)
+                    .is_some_and(|c| is_syntactic_literal(c, code))
+        }
+
+        // Unary minus on a number literal: `-42`
+        "unary_expression" | "unary_op" => {
+            node.named_child_count() == 1
+                && node
+                    .named_child(0)
+                    .is_some_and(|c| is_syntactic_literal(c, code))
+        }
+
+        // String concatenation of literals: `"a" + "b"` or `"a" . "b"`
+        "binary_expression" | "concatenated_string" => {
+            let count = node.named_child_count();
+            count >= 2
+                && (0..count).all(|i| {
+                    node.named_child(i as u32)
+                        .is_some_and(|c| is_syntactic_literal(c, code))
+                })
+        }
+
+        // JS/TS template string: only if no interpolation substitution
+        "template_string" => {
+            let mut c = node.walk();
+            !node
+                .named_children(&mut c)
+                .any(|ch| ch.kind() == "template_substitution")
+        }
+
+        // Containers: all elements must be syntactic literals
+        "list"
+        | "array"
+        | "array_expression"
+        | "array_creation_expression"
+        | "tuple"
+        | "tuple_expression" => {
+            let mut c = node.walk();
+            node.named_children(&mut c)
+                .all(|ch| is_syntactic_literal(ch, code))
+        }
+
+        // Container entries: `{"key": "value"}` style pairs
+        "pair" => {
+            let mut c = node.walk();
+            node.named_children(&mut c)
+                .all(|ch| is_syntactic_literal(ch, code))
+        }
+
+        _ => false,
+    }
+}
+
+/// Check if a string node contains interpolation children
+/// (e.g. Ruby `"hello #{name}"` has `interpolation` children,
+/// Python f-strings may have `interpolation` children).
+pub(super) fn has_string_interpolation(node: Node) -> bool {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind().contains("interpolation") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if an encapsed_string node contains interpolation (PHP).
+pub(super) fn has_interpolation_cfg(node: Node) -> bool {
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i) {
+            let kind = child.kind();
+            if kind == "variable_name"
+                || kind == "simple_variable"
+                || kind.contains("interpolation")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Extract the raw literal text from the RHS of a declaration/assignment AST node.
+///
+/// Walks the same value/right child paths as `def_use` and returns the text
+/// if the RHS is a syntactic literal. Used to populate `NodeInfo::const_text`.
+pub(super) fn extract_literal_rhs(ast: Node, lang: &str, code: &[u8]) -> Option<String> {
+    use crate::labels::lookup;
+
+    // Direct value/right field (Rust let, Go short_var, etc.)
+    let val_node = ast
+        .child_by_field_name("value")
+        .or_else(|| ast.child_by_field_name("right"));
+
+    if let Some(val) = val_node {
+        if is_syntactic_literal(val, code) {
+            return text_of(val, code);
+        }
+    }
+
+    // Nested declarator pattern (JS let/const → variable_declarator, etc.)
+    if matches!(
+        lookup(lang, ast.kind()),
+        Kind::CallWrapper | Kind::Assignment
+    ) {
+        let mut cursor = ast.walk();
+        for child in ast.children(&mut cursor) {
+            let child_val = child.child_by_field_name("value").or_else(|| {
+                if matches!(lookup(lang, child.kind()), Kind::Assignment) {
+                    child.child_by_field_name("right")
+                } else {
+                    None
+                }
+            });
+            if let Some(val) = child_val {
+                if is_syntactic_literal(val, code) {
+                    return text_of(val, code);
+                }
+            }
+        }
+    }
+
+    // Return statement with a literal argument (`return []`, `return {}`).
+    // Lets SSA's const-return path ([`crate::ssa::lower`] line ~1066) emit
+    // `SsaOp::Const(Some(text))` instead of `Const(None)` so downstream
+    // container-literal detection (heap points-to, fresh-alloc summary)
+    // can recognise the fresh allocation.
+    if matches!(lookup(lang, ast.kind()), Kind::Return) {
+        let mut cursor = ast.walk();
+        for child in ast.named_children(&mut cursor) {
+            if is_syntactic_literal(child, code) {
+                return text_of(child, code);
+            }
+        }
+    }
+
+    None
+}
+
+/// Returns true when every argument in the call's argument list is a
+/// syntactic literal (per `is_syntactic_literal`). Returns true for calls
+/// with zero arguments (no argument-carried taint vector). Returns false
+/// when the argument list cannot be found.
+///
+/// For method chains like `a("x").b(y).c()`, the outermost call node
+/// represents the entire chain. This function walks nested call expressions
+/// to verify ALL argument lists in the chain contain only literals.
+pub(super) fn has_only_literal_args(call_node: Node, code: &[u8]) -> bool {
+    let Some(args) = call_node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    let mut any_arg = false;
+    for ch in args.named_children(&mut cursor) {
+        any_arg = true;
+        if !is_syntactic_literal(ch, code) {
+            return false;
+        }
+    }
+    // Zero-arg calls are not "all literal" — taint can still flow via a
+    // non-literal receiver (e.g. `tainted.readObject()`), and the sink-
+    // suppression gate (`info.all_args_literal`) must not skip these.
+    if !any_arg {
+        return false;
+    }
+    // Walk nested call expressions in the callee chain.
+    check_inner_call_args(call_node, code)
+}
+
+/// Recursively check nested call expressions in a method chain for
+/// non-literal arguments.
+pub(super) fn check_inner_call_args(node: Node, code: &[u8]) -> bool {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        let kind = child.kind();
+        // Skip argument lists — those are checked by the caller.
+        if kind == "arguments" || kind == "argument_list" || kind == "actual_parameters" {
+            continue;
+        }
+        // If this child is itself a call expression, check its arguments.
+        if child.child_by_field_name("arguments").is_some() {
+            if !has_only_literal_args(child, code) {
+                return false;
+            }
+        } else {
+            // Recurse through non-call structural nodes (field_expression, etc.)
+            if !check_inner_call_args(child, code) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Extract per-argument identifiers from a call node's argument list.
+/// Returns one `Vec<String>` per argument (in parameter-position order).
+/// Returns empty if argument list can't be found or contains spread/keyword args.
+pub(super) fn extract_arg_uses(call_node: Node, code: &[u8]) -> Vec<Vec<String>> {
+    // Ruby `subshell` (backticks) has no `arguments` field — its children are
+    // string fragments and `interpolation` nodes. Lift each interpolation's
+    // identifiers into a positional arg so taint flows from `#{var}` into the
+    // synthetic "subshell" sink.
+    if call_node.kind() == "subshell" {
+        let mut result = Vec::new();
+        let mut cursor = call_node.walk();
+        for child in call_node.named_children(&mut cursor) {
+            if child.kind() == "interpolation" {
+                let mut idents = Vec::new();
+                let mut paths = Vec::new();
+                collect_idents_with_paths(child, code, &mut idents, &mut paths);
+                let mut combined = paths;
+                combined.extend(idents);
+                if !combined.is_empty() {
+                    result.push(combined);
+                }
+            }
+        }
+        return result;
+    }
+
+    let Some(args_node) = call_node.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    let mut cursor = args_node.walk();
+    for child in args_node.named_children(&mut cursor) {
+        let kind = child.kind();
+        // Named / keyword arguments are tracked separately in `CallMeta.kwargs`
+        // and do not participate in positional indexing — skip them here so
+        // `arg_uses` remains strictly positional.  Splats (spread/dict splat)
+        // still invalidate positional mapping; bail out in that case.
+        if kind == "spread_element"
+            || kind == "dictionary_splat"
+            || kind == "list_splat"
+            || kind == "splat_argument"
+            || kind == "hash_splat_argument"
+        {
+            return Vec::new();
+        }
+        if kind == "keyword_argument" || kind == "named_argument" {
+            continue;
+        }
+        let mut idents = Vec::new();
+        let mut paths = Vec::new();
+        collect_idents_with_paths(child, code, &mut idents, &mut paths);
+        // Dotted paths first, then individual idents as fallback
+        let mut combined = paths;
+        combined.extend(idents);
+        result.push(combined);
+    }
+    result
+}
+
+/// Extract keyword / named argument bindings for a call node.
+///
+/// Returns `Vec<(name, uses)>` where `uses` are the identifier references
+/// from the keyword's value expression, in the same shape used by
+/// `arg_uses` entries.  Empty for calls with no named arguments, or for
+/// languages whose grammar does not produce `keyword_argument` / `named_argument`
+/// children (C, Java, Go, …).
+pub(super) fn extract_kwargs(call_node: Node, code: &[u8]) -> Vec<(String, Vec<String>)> {
+    let Some(args_node) = call_node.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut cursor = args_node.walk();
+    for child in args_node.named_children(&mut cursor) {
+        let kind = child.kind();
+        if kind != "keyword_argument" && kind != "named_argument" {
+            continue;
+        }
+        // Python `keyword_argument` uses `name`/`value`; Ruby `named_argument`
+        // uses `name`/`value` as well (with `:` syntax in source).  Fall back
+        // to the first/last named children if fields are absent.
+        let named_count = child.named_child_count();
+        let name_node = child
+            .child_by_field_name("name")
+            .or_else(|| child.named_child(0));
+        let value_node = child
+            .child_by_field_name("value")
+            .or_else(|| child.named_child(named_count.saturating_sub(1) as u32));
+        let (Some(nn), Some(vn)) = (name_node, value_node) else {
+            continue;
+        };
+        let Some(name) = text_of(nn, code) else {
+            continue;
+        };
+        let mut idents = Vec::new();
+        let mut paths = Vec::new();
+        collect_idents_with_paths(vn, code, &mut idents, &mut paths);
+        let mut combined = paths;
+        combined.extend(idents);
+        out.push((name, combined));
+    }
+    out
+}
+
+/// Caps that a search literal is known to strip, provided the replacement
+/// itself does not reintroduce any dangerous sequence.
+///
+/// Policy is deliberately narrow and conservative: only literals that contain
+/// *known-dangerous* payloads earn a strip credit, so an arbitrary
+/// `.replace("foo", "bar")` is never promoted to a sanitizer.
+///   * `..`, `/`, `\\`  → path-traversal → `Cap::FILE_IO`
+///   * `<`, `>`         → HTML metachars → `Cap::HTML_ESCAPE`
+pub(super) fn caps_stripped_by_literal_pattern(search: &str) -> Cap {
+    let mut caps = Cap::empty();
+    if search.contains("..") || search.contains('/') || search.contains('\\') {
+        caps |= Cap::FILE_IO;
+    }
+    if search.contains('<') || search.contains('>') {
+        caps |= Cap::HTML_ESCAPE;
+    }
+    caps
+}
+
+/// Maximum number of `.replace(LIT, LIT)` hops we'll walk on a single chain.
+const MAX_REPLACE_CHAIN_HOPS: usize = 16;
+
+/// Recognise a Rust `param.replace(LIT, LIT)[.replace(LIT, LIT)]*` chain whose
+/// receiver bottoms out at a plain identifier, and infer which caps the chain
+/// provably strips.
+///
+/// In tree-sitter-rust a method call is encoded as a `call_expression` whose
+/// `function` field is a `field_expression` (`receiver.method`). Chained method
+/// calls therefore nest `call_expression` nodes recursively through the
+/// `field_expression.value` slot.  The detector walks that nest, requiring
+/// every hop to be a pure literal-to-literal `replace` / `replacen` call and
+/// the innermost receiver to be a bare identifier.  Returns the union of caps
+/// stripped across the chain when at least one literal contains a recognised
+/// dangerous pattern, or `None` when the pattern doesn't apply (so the caller
+/// falls back to normal unresolved-call propagation).
+pub(super) fn detect_rust_replace_chain_sanitizer(call_ast: Node, code: &[u8]) -> Option<Cap> {
+    fn is_rust_str_literal(k: &str) -> bool {
+        matches!(k, "string_literal" | "raw_string_literal")
+    }
+
+    fn extract_rust_str_content<'a>(n: Node<'a>, code: &'a [u8]) -> Option<String> {
+        // A `string_literal` node in tree-sitter-rust has a `string_content`
+        // child that holds the unquoted bytes.  Fall back to whole-node text
+        // with outer-character trimming only as a last resort.
+        let mut cur = n.walk();
+        for c in n.named_children(&mut cur) {
+            if c.kind() == "string_content" {
+                return text_of(c, code);
+            }
+        }
+        let raw = text_of(n, code)?;
+        if raw.len() >= 2 {
+            Some(
+                raw.trim_start_matches('r')
+                    .trim_start_matches('#')
+                    .trim_end_matches('#')
+                    .trim_matches('"')
+                    .to_string(),
+            )
+        } else {
+            None
+        }
+    }
+
+    let mut current = call_ast;
+    let mut earned = Cap::empty();
+
+    for _ in 0..MAX_REPLACE_CHAIN_HOPS {
+        if current.kind() != "call_expression" {
+            // Chain base: must be a plain identifier (parameter / local) to
+            // qualify.  A base that's another expression (field access,
+            // nested non-method call, …) breaks the sanitizer invariant.
+            if current.kind() == "identifier" && !earned.is_empty() {
+                return Some(earned);
+            }
+            return None;
+        }
+
+        // Must be a method-style call: function is a field_expression whose
+        // `field` names a `replace`-like method.
+        let func = current.child_by_field_name("function")?;
+        if func.kind() != "field_expression" {
+            return None;
+        }
+        let method_ident = func.child_by_field_name("field")?;
+        let method_name = text_of(method_ident, code)?;
+        if method_name != "replace" && method_name != "replacen" {
+            return None;
+        }
+
+        let args_node = current.child_by_field_name("arguments")?;
+        let mut cursor = args_node.walk();
+        let positional: Vec<Node<'_>> = args_node
+            .named_children(&mut cursor)
+            .filter(|c| {
+                !matches!(
+                    c.kind(),
+                    "keyword_argument"
+                        | "named_argument"
+                        | "spread_element"
+                        | "list_splat"
+                        | "dictionary_splat"
+                        | "splat_argument"
+                        | "hash_splat_argument"
+                )
+            })
+            .collect();
+        let (arg0, arg1) = match positional.as_slice() {
+            [a, b, ..] => (*a, *b),
+            _ => return None,
+        };
+        if !is_rust_str_literal(arg0.kind()) || !is_rust_str_literal(arg1.kind()) {
+            return None;
+        }
+        let search = extract_rust_str_content(arg0, code)?;
+        let replacement = extract_rust_str_content(arg1, code)?;
+
+        // If the replacement itself contains a dangerous sequence, this hop
+        // can reintroduce the pattern that a later hop tries to strip.  Be
+        // conservative: abandon all credit.
+        if !caps_stripped_by_literal_pattern(&replacement).is_empty() {
+            return None;
+        }
+        earned |= caps_stripped_by_literal_pattern(&search);
+
+        // Walk to receiver via field_expression.value.
+        current = func.child_by_field_name("value")?;
+    }
+
+    None
+}
+
+/// Like `first_call_ident`, but also checks if `n` itself is a call node.
+/// `first_call_ident` only searches children, so when `n` IS the call
+/// expression (e.g. the argument `sanitize(cmd)`), this function catches it.
+pub(super) fn call_ident_of<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> {
+    // C++ new/delete: normalize callee before field extraction.
+    if lang == "cpp" && n.kind() == "new_expression" {
+        return Some("new".to_string());
+    }
+    if lang == "cpp" && n.kind() == "delete_expression" {
+        return Some("delete".to_string());
+    }
+    match lookup(lang, n.kind()) {
+        Kind::Function => {
+            // Function/closure expression passed as argument — return the same
+            // synthetic anon name used by build_sub so callback_bindings and
+            // source_to_callback can match it to the extracted BodyCfg.
+            n.child_by_field_name("name")
+                .and_then(|nm| text_of(nm, code))
+                .or_else(|| Some(anon_fn_name(n.start_byte())))
+        }
+        Kind::CallFn => n
+            .child_by_field_name("function")
+            .or_else(|| n.child_by_field_name("method"))
+            .or_else(|| n.child_by_field_name("name"))
+            .or_else(|| n.child_by_field_name("type"))
+            .or_else(|| find_constructor_type_child(n))
+            .and_then(|f| {
+                let unwrapped = unwrap_parens(f);
+                if lookup(lang, unwrapped.kind()) == Kind::Function {
+                    Some(anon_fn_name(unwrapped.start_byte()))
+                } else {
+                    text_of(f, code)
+                }
+            }),
+        Kind::CallMethod => {
+            let func = n
+                .child_by_field_name("method")
+                .or_else(|| n.child_by_field_name("name"))
+                .and_then(|f| text_of(f, code));
+            let recv = n
+                .child_by_field_name("object")
+                .or_else(|| n.child_by_field_name("receiver"))
+                .or_else(|| n.child_by_field_name("scope"))
+                .and_then(|f| root_receiver_text(f, lang, code));
+            match (recv, func) {
+                (Some(r), Some(f)) => Some(format!("{r}.{f}")),
+                (_, Some(f)) => Some(f),
+                _ => None,
+            }
+        }
+        Kind::CallMacro => n
+            .child_by_field_name("macro")
+            .and_then(|f| text_of(f, code)),
+        _ => first_call_ident(n, lang, code),
+    }
+}
+
+/// For each argument of `call_node`, return `Some(s)` when the argument is a
+/// syntactic string literal (unquoted contents) and `None` otherwise.  The
+/// returned vector is parallel to [`extract_arg_uses`] / [`extract_arg_callees`].
+///
+/// Bails on splats so that a variadic call (`f(*args)`, `f(...xs)`) produces
+/// an empty vector — positional indices past the splat are meaningless and
+/// downstream passes already treat an empty vector as "no info".
+pub(super) fn extract_arg_string_literals(call_node: Node, code: &[u8]) -> Vec<Option<String>> {
+    let Some(args_node) = call_node.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    let mut cursor = args_node.walk();
+    for child in args_node.named_children(&mut cursor) {
+        let kind = child.kind();
+        // Splat → positional indexing breaks; bail.
+        if kind == "spread_element"
+            || kind == "dictionary_splat"
+            || kind == "list_splat"
+            || kind == "splat_argument"
+            || kind == "hash_splat_argument"
+        {
+            return Vec::new();
+        }
+        // Named / keyword arguments are tracked separately in `kwargs` and
+        // don't participate in positional indexing — skip them here so this
+        // vector stays aligned with `arg_uses`.
+        if kind == "keyword_argument" || kind == "named_argument" {
+            continue;
+        }
+        // PHP wraps each call argument in an `argument` node whose first
+        // named child is the actual expression.  Unwrap one level so the
+        // string-literal arm below sees the literal directly rather than
+        // the wrapper kind, otherwise PHP `f("https://…")` records
+        // `None` for arg 0 and downstream prefix-aware suppressions miss.
+        let target = if kind == "argument" {
+            child.named_child(0).unwrap_or(child)
+        } else {
+            child
+        };
+        let target_kind = target.kind();
+        let literal = match target_kind {
+            "string"
+            | "string_literal"
+            | "interpreted_string_literal"
+            | "raw_string_literal"
+            // PHP's double-quoted form (single-quoted maps to `string`).
+            // Only safe to lift when there is no `encapsed_string` /
+            // `embedded_expression` interpolation child — checked below.
+            | "encapsed_string" => {
+                let raw = text_of(target, code);
+                raw.and_then(|s| strip_literal_quotes(&s, target, code))
+            }
+            _ => None,
+        };
+        result.push(literal);
+    }
+    result
+}
+
+/// Strip surrounding quotes from a syntactic string literal, resolving the
+/// `string_content` child for Rust-style two-level string nodes.  Returns the
+/// raw inner text (no escape-sequence processing) — sufficient for whitelist
+/// matching against shell-metachar sets.
+pub(super) fn strip_literal_quotes(raw: &str, node: Node, code: &[u8]) -> Option<String> {
+    // Rust/tree-sitter-rust: `string_literal` wraps a `string_content` child.
+    // Prefer the content text so the caller doesn't have to deal with quote
+    // pairing for raw strings (`r"..."`, `r#"..."#`, etc.).
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "string_content" {
+            return text_of(child, code).map(|s| s.to_string());
+        }
+    }
+    if raw.len() >= 2 {
+        let bytes = raw.as_bytes();
+        let first = bytes[0];
+        let last = bytes[raw.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return Some(raw[1..raw.len() - 1].to_string());
+        }
+    }
+    None
+}
+
+/// For each argument of `call_node`, find the callee name if that argument
+/// is itself a call expression (e.g. `sanitize(x)` in `os.system(sanitize(x))`).
+/// Returns a `Vec<Option<String>>` parallel to `extract_arg_uses` output.
+pub(super) fn extract_arg_callees(call_node: Node, lang: &str, code: &[u8]) -> Vec<Option<String>> {
+    let Some(args_node) = call_node.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    let mut cursor = args_node.walk();
+    for child in args_node.named_children(&mut cursor) {
+        // Bail on spread/splat like extract_arg_uses does
+        let kind = child.kind();
+        if kind == "spread_element"
+            || kind == "dictionary_splat"
+            || kind == "list_splat"
+            || kind == "keyword_argument"
+            || kind == "splat_argument"
+            || kind == "hash_splat_argument"
+            || kind == "named_argument"
+        {
+            return Vec::new();
+        }
+        result.push(call_ident_of(child, lang, code));
+    }
+    result
+}
+
+/// Return `(defines, uses)` for the AST fragment `ast`.
+/// Returns (defines, uses, extra_defines) where extra_defines captures additional
+/// bindings from destructuring patterns beyond the primary define.
+pub(super) fn def_use(
+    ast: Node,
+    lang: &str,
+    code: &[u8],
+) -> (Option<String>, Vec<String>, Vec<String>) {
+    match lookup(lang, ast.kind()) {
+        // Declaration wrappers (let, var, short_var_declaration, etc.)
+        Kind::CallWrapper => {
+            let mut defs = None;
+            let mut extra_defs = Vec::new();
+            let mut uses = Vec::new();
+
+            // Try direct field names first (Rust `let_declaration`, Go `short_var_declaration`)
+            let def_node = ast
+                .child_by_field_name("pattern")
+                .or_else(|| ast.child_by_field_name("name"))
+                .or_else(|| ast.child_by_field_name("left"))
+                // Python `with_item`: value is `as_pattern` whose `alias` holds the target
+                .or_else(|| {
+                    ast.child_by_field_name("value")
+                        .and_then(|v| v.child_by_field_name("alias"))
+                });
+
+            let val_node = ast
+                .child_by_field_name("value")
+                .or_else(|| ast.child_by_field_name("right"));
+
+            if def_node.is_some() || val_node.is_some() {
+                if let Some(pat) = def_node {
+                    let mut idents = Vec::new();
+                    let mut paths = Vec::new();
+                    collect_idents_with_paths(pat, code, &mut idents, &mut paths);
+                    let first = paths.pop().or_else(|| idents.first().cloned());
+                    // Remaining idents are extra defines (for destructuring)
+                    for ident in &idents {
+                        if first.as_ref() != Some(ident) {
+                            extra_defs.push(ident.clone());
+                        }
+                    }
+                    defs = first;
+                }
+                if let Some(val) = val_node {
+                    let mut idents = Vec::new();
+                    let mut paths = Vec::new();
+                    collect_idents_with_paths(val, code, &mut idents, &mut paths);
+                    uses.extend(paths);
+                    uses.extend(idents);
+                }
+            } else {
+                // Try nested declarator pattern (JS/TS `lexical_declaration` → `variable_declarator`,
+                // Java `local_variable_declaration` → `variable_declarator`,
+                // C/C++ `declaration` → `init_declarator`,
+                // Python/Ruby `expression_statement` → `assignment`)
+                let mut cursor = ast.walk();
+                for child in ast.children(&mut cursor) {
+                    // Only use left/right fields for actual assignment nodes — binary
+                    // expressions also have left/right but are not definitions.
+                    let is_assign = matches!(lookup(lang, child.kind()), Kind::Assignment);
+                    let child_name = child
+                        .child_by_field_name("name")
+                        .or_else(|| child.child_by_field_name("declarator"))
+                        .or_else(|| {
+                            if is_assign {
+                                child.child_by_field_name("left")
+                            } else {
+                                None
+                            }
+                        });
+                    let child_value = child.child_by_field_name("value").or_else(|| {
+                        if is_assign {
+                            child.child_by_field_name("right")
+                        } else {
+                            None
+                        }
+                    });
+
+                    // Only treat this child as a declarator if it has BOTH a name
+                    // and a value (or at least a value). This prevents method_invocation
+                    // nodes (which have a `name` field) from being misinterpreted.
+                    if child_value.is_some() {
+                        if let Some(name_node) = child_name
+                            && defs.is_none()
+                        {
+                            let mut idents = Vec::new();
+                            let mut paths = Vec::new();
+                            collect_idents_with_paths(name_node, code, &mut idents, &mut paths);
+                            let first = paths.pop().or_else(|| idents.first().cloned());
+                            for ident in &idents {
+                                if first.as_ref() != Some(ident) {
+                                    extra_defs.push(ident.clone());
+                                }
+                            }
+                            defs = first;
+                        }
+                        if let Some(val_node) = child_value {
+                            let mut idents = Vec::new();
+                            let mut paths = Vec::new();
+                            collect_idents_with_paths(val_node, code, &mut idents, &mut paths);
+                            uses.extend(paths);
+                            uses.extend(idents);
+                        }
+                    }
+                }
+
+                // Fallback: if still nothing found, collect all idents as uses.
+                // This handles expression_statement wrappers.
+                if defs.is_none() && uses.is_empty() {
+                    let mut idents = Vec::new();
+                    let mut paths = Vec::new();
+                    collect_idents_with_paths(ast, code, &mut idents, &mut paths);
+                    uses.extend(paths);
+                    uses.extend(idents);
+                }
+            }
+            (defs, uses, extra_defs)
+        }
+
+        // Plain assignment `x = y`
+        Kind::Assignment => {
+            let mut defs = None;
+            let mut uses = Vec::new();
+            if let Some(lhs) = ast.child_by_field_name("left") {
+                let mut idents = Vec::new();
+                let mut paths = Vec::new();
+                collect_idents_with_paths(lhs, code, &mut idents, &mut paths);
+                // Prefer dotted path (member expression) over last ident
+                defs = paths.pop().or_else(|| idents.pop());
+            }
+            if let Some(rhs) = ast.child_by_field_name("right") {
+                let mut idents = Vec::new();
+                let mut paths = Vec::new();
+                collect_idents_with_paths(rhs, code, &mut idents, &mut paths);
+                uses.extend(paths);
+                uses.extend(idents);
+            }
+            (defs, uses, vec![])
+        }
+
+        // if‑let / while‑let — the `let_condition` binds a variable from
+        // the value expression.  E.g. `if let Ok(cmd) = env::var("CMD")`
+        // defines `cmd` and uses `env`, `var`, `CMD`.
+        Kind::If | Kind::While => {
+            let cond = ast.child_by_field_name("condition");
+            if let Some(c) = cond
+                && c.kind() == "let_condition"
+            {
+                let mut defs = None;
+                let mut uses = Vec::new();
+
+                if let Some(pat) = c.child_by_field_name("pattern") {
+                    let mut tmp = Vec::<String>::new();
+                    collect_idents(pat, code, &mut tmp);
+                    // The first plain identifier in the pattern is the binding.
+                    // Skip type identifiers (e.g. "Ok" in Ok(cmd)) — take the
+                    // last ident which is the inner binding name.
+                    defs = tmp.into_iter().last();
+                }
+                if let Some(val) = c.child_by_field_name("value") {
+                    collect_idents(val, code, &mut uses);
+                }
+                return (defs, uses, vec![]);
+            }
+
+            let mut idents = Vec::new();
+            let mut paths = Vec::new();
+            collect_idents_with_paths(ast, code, &mut idents, &mut paths);
+            let mut uses = paths;
+            uses.extend(idents);
+            (None, uses, vec![])
+        }
+
+        // everything else – no definition, but may read vars
+        _ => {
+            let mut idents = Vec::new();
+            let mut paths = Vec::new();
+            collect_idents_with_paths(ast, code, &mut idents, &mut paths);
+            let mut uses = paths;
+            uses.extend(idents);
+            (None, uses, vec![])
+        }
+    }
+}

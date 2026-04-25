@@ -1,0 +1,26 @@
+{
+  "description": "B-2 regression: phi merge where only one branch validates must NOT suppress the finding via validated_must promotion.",
+  "tags": [
+    "taint",
+    "phi",
+    "path-sensitivity",
+    "regression",
+    "cmd-injection"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.cmd only validated on one branch — phi merge must not suppress"
+    }
+  ]
+}

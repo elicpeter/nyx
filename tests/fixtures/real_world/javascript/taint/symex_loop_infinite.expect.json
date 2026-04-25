@@ -1,0 +1,26 @@
+{
+  "description": "While-true loop with eval inside. Tests that bounded exploration terminates sanely for effectively infinite loops.",
+  "tags": [
+    "taint",
+    "cmdi",
+    "symex",
+    "loop",
+    "infinite"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.cmd flows to eval inside infinite loop — sink reached during unrolled iteration"
+    }
+  ]
+}

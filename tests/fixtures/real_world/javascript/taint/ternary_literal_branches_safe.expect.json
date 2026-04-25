@@ -1,0 +1,15 @@
+{
+  "description": "Ternary with tainted condition and literal branches: only the condition is attacker-controlled, both branches are static HTML. Ternary CFG decomposition routes the condition into control flow (If node's condition_vars) and leaves both branch nodes with empty uses. The phi at the join merges two untainted Const values, so res.send receives no taint.",
+  "tags": ["taint", "xss", "express", "ternary", "control-flow"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [7, 13],
+      "evidence_contains": [],
+      "notes": "cond (useCompactBanner) is attacker-controlled but only selects between two static-literal branches; decomposed ternary CFG keeps cond on the If terminator and off branch uses."
+    }
+  ]
+}

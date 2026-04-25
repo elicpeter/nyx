@@ -1,0 +1,29 @@
+{
+  "description": "Same function uses both unsafe concatenation and safe parameterized query — only the concat should fire",
+  "tags": ["taint", "sqli", "mysql", "parameterized", "mixed"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [8, 8],
+      "evidence_contains": [],
+      "notes": "String concatenation into connection.query — unsafe, must fire"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [10, 10],
+      "notes": "Parameterized query with ? and bind array — safe, must NOT fire (regression guard)"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [1, 14],
+      "evidence_contains": [],
+      "notes": "noise: resource leak unrelated to SQL injection"
+    }
+  ]
+}

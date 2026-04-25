@@ -1,21 +1,13 @@
 {
-  "description": "env::var flows to Command::new \u2014 command injection. Safe version uses allowlist.",
-  "tags": [
-    "taint",
-    "cmdi"
-  ],
-  "modes": [
-    "full"
-  ],
+  "description": "env::var flows to Command::new — command injection. Safe version uses allowlist.",
+  "tags": ["taint", "cmdi"],
+  "modes": ["full"],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
       "must_match": true,
-      "line_range": [
-        3,
-        12
-      ],
+      "line_range": [3, 12],
       "evidence_contains": [],
       "notes": "env::var(\"USER_CMD\") flows through .arg(&cmd) to Command execution"
     },
@@ -23,10 +15,7 @@
       "rule_id": "rs.quality.unwrap",
       "severity": null,
       "must_match": true,
-      "line_range": [
-        3,
-        7
-      ],
+      "line_range": [3, 7],
       "evidence_contains": [],
       "notes": ".unwrap() on env::var Result"
     },
@@ -34,12 +23,24 @@
       "rule_id": "rs.quality.unwrap",
       "severity": null,
       "must_match": true,
-      "line_range": [
-        8,
-        12
-      ],
+      "line_range": [8, 12],
       "evidence_contains": [],
       "notes": ".unwrap() on Command output Result"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [17, 17],
+      "evidence_contains": [],
+      "notes": "TP: .unwrap() on Command output Result in run_safe_command"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_not_match": true,
+      "line_range": [17, 17],
+      "notes": "run_safe_command is guarded by `allowed.contains(...)` allowlist check — no taint finding at line 17, regardless of source function (regression guard for validation-guard recognition and cross-function isolation)"
     }
   ]
 }

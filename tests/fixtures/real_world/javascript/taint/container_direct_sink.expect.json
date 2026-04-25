@@ -1,0 +1,26 @@
+{
+  "description": "Command injection through container: tainted input pushed into array then joined and exec'd",
+  "tags": [
+    "taint",
+    "cmdi",
+    "express",
+    "array",
+    "container"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "container load at sink: commands.join produces tainted string passed to exec"
+    }
+  ]
+}

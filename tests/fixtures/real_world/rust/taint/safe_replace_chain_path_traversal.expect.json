@@ -1,0 +1,15 @@
+{
+  "description": "env::var source flows through an interprocedural `.replace(\"..\", \"\").replace(\"/\", \"_\")` chain before reaching fs::read_to_string — the pattern-based replace-chain sanitizer must clear FILE_IO taint.",
+  "tags": ["taint", "negative", "path-traversal", "sanitizer", "replace-chain"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": false,
+      "line_range": [12, 16],
+      "evidence_contains": [],
+      "notes": ".unwrap() quality findings are allowed; the taint path-traversal finding must be absent."
+    }
+  ]
+}

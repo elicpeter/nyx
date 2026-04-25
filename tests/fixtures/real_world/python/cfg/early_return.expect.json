@@ -31,6 +31,17 @@
       ],
       "evidence_contains": [],
       "notes": "File handle leaked on one branch of the conditional"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        15,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak \u2014 low-value duplicate of more specific findings"
     }
   ]
 }

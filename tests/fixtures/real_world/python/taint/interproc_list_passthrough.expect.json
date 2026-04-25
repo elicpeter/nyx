@@ -1,0 +1,28 @@
+{
+  "description": "CMDI through inter-procedural list passthrough: add_to_list appends tainted input and returns same list",
+  "tags": [
+    "taint",
+    "cmdi",
+    "flask",
+    "list",
+    "container",
+    "heap",
+    "interproc"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        10,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "inter-procedural container: add_to_list both stores value into items and returns same list identity"
+    }
+  ]
+}

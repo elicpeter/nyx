@@ -1,0 +1,15 @@
+{
+  "description": "SSRF via type-qualified receiver: HttpClient.newHttpClient() types client as HttpClient, so client.send resolves to HttpClient.send SSRF sink",
+  "tags": ["taint", "ssrf", "type-aware"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 10],
+      "evidence_contains": [],
+      "notes": "request.getParameter(\"url\") flows to client.send — SSRF detected via type-qualified receiver resolution (HttpClient.send)"
+    }
+  ]
+}

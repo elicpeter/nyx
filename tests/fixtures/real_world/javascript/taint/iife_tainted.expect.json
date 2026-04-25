@@ -1,0 +1,14 @@
+{
+  "description": "Immediately-invoked function expression consumes tainted argument; IIFE callee extraction must yield a per-body synthetic name so taint resolution finds the anonymous body",
+  "tags": ["taint", "closure", "iife", "code-exec"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_match": true,
+      "line_range": [6, 7],
+      "evidence_contains": [],
+      "notes": "(function(arg){eval(arg);})(q) — tainted q passes through IIFE param into eval"
+    }
+  ]
+}

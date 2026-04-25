@@ -9,6 +9,9 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
@@ -20,6 +23,28 @@
       ],
       "evidence_contains": [],
       "notes": "request.args.get('cmd') flows directly into subprocess.run with shell=True"
+    },
+    {
+      "rule_id": "py.cmdi.subprocess_shell",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        9,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "subprocess.run(cmd, shell=True) — AST pattern match for subprocess with shell=True"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_not_match": true,
+      "line_range": [
+        18,
+        18
+      ],
+      "evidence_contains": [],
+      "notes": "run_cmd_safe has `cmd not in allowed` allowlist guard at line 16-17 that validates cmd — scanner correctly suppresses taint flow to subprocess.run at line 18. Regression guard."
     }
   ]
 }

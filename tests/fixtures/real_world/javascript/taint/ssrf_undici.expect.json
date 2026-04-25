@@ -1,0 +1,15 @@
+{
+  "description": "SSRF: user-controlled URL from req.query flows to undici.request()",
+  "tags": ["taint", "ssrf", "undici"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [5, 10],
+      "evidence_contains": [],
+      "notes": "req.query.url flows to undici.request(url) without URL validation"
+    }
+  ]
+}

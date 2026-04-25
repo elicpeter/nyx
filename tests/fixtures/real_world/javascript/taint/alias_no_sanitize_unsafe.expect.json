@@ -1,0 +1,15 @@
+{
+  "description": "Regression guard: taint flows through alias without sanitization. alias = obj means alias.data carries obj.data taint to res.send.",
+  "tags": ["taint", "alias", "xss"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 8],
+      "evidence_contains": [],
+      "notes": "req.query.input flows through obj.data → alias.data → res.send — XSS without sanitization"
+    }
+  ]
+}

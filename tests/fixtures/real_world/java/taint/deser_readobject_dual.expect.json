@@ -1,0 +1,31 @@
+{
+  "description": "Deserialization + command injection: readObject (Source+Sink) flows to Runtime.exec",
+  "tags": ["taint", "deser", "cmdi", "multi-label"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [1, 8],
+      "evidence_contains": [],
+      "notes": "readObject has dual Source+Sink(DESERIALIZE) labels; Source taints obj, which flows to Runtime.exec"
+    },
+    {
+      "rule_id": "java.deser.readobject",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [5, 5],
+      "evidence_contains": [],
+      "notes": "AST pattern detects ois.readObject() — deserialization of untrusted data"
+    },
+    {
+      "rule_id": "java.cmdi.runtime_exec",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [6, 6],
+      "evidence_contains": [],
+      "notes": "AST pattern detects Runtime.getRuntime().exec() — command injection sink"
+    }
+  ]
+}

@@ -30,6 +30,17 @@
       ],
       "evidence_contains": [],
       "notes": "request.getParameter(\"class\") flows directly into Class.forName(className)"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        12,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "source at 7:9 (request.getParameter(\"class\")) flows through Class.forName -> newInstance -> instance to out.println on line 12; user-controlled class info reflected to response"
     }
   ]
 }

@@ -25,13 +25,22 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         7,
         14
       ],
+      "modes": ["full"],
       "evidence_contains": [],
-      "notes": "User data flows through base64 decode into pickle.loads - aspirational taint finding"
+      "notes": "User data flows through base64 decode into pickle.loads (full mode only; AST mode does not run taint analysis)"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [11, 11],
+      "evidence_contains": [],
+      "notes": "pickle.loads is a DESERIALIZE sink — structural detection of unguarded deserialization (full mode only)"
     }
   ]
 }

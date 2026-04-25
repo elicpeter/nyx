@@ -1,0 +1,6 @@
+{
+  "description": "Rust actix-web XSS: env::var flows to HttpResponse body (requires Cargo.toml framework detection)",
+  "tags": ["taint", "xss", "rust", "actix", "framework"],
+  "modes": ["full"],
+  "expected": []
+}

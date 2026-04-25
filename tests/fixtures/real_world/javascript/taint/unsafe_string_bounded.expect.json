@@ -1,0 +1,15 @@
+{
+  "description": "SQL: name is a user-controlled string concatenated with a prefix. NOT Int-typed, so dual gate does NOT suppress. Finding expected.",
+  "tags": ["taint", "sqli", "abstract-interp", "negative-test"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [7, 8],
+      "evidence_contains": [],
+      "notes": "Must NOT be suppressed: name is a string (not Int-typed), so dual gate (type + interval) does not fire."
+    }
+  ]
+}

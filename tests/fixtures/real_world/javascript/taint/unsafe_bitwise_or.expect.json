@@ -1,0 +1,11 @@
+{
+  "description": "flags | 0x01 does NOT produce a bounded result — OR can only set bits, not clear them. Taint finding should NOT be suppressed (negative test for abstract domain).",
+  "tags": ["taint", "sqli", "bitwise", "abstract-interp", "negative-test"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_match": true
+    }
+  ]
+}

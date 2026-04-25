@@ -40,6 +40,39 @@
       ],
       "evidence_contains": [],
       "notes": "strcpy on buf after free in use_after_free"
+    },
+    {
+      "rule_id": "c.memory.strcpy",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        5,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "strcpy(buf, \"hello\") in alloc_leak \u2014 AST pattern match on dangerous function."
+    },
+    {
+      "rule_id": "c.memory.strcpy",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        10,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "strcpy(buf, \"hello\") in alloc_free \u2014 AST pattern match on dangerous function."
+    },
+    {
+      "rule_id": "c.memory.strcpy",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        23,
+        26
+      ],
+      "evidence_contains": [],
+      "notes": "strcpy(buf, \"oops\") in use_after_free \u2014 AST pattern match on dangerous function."
     }
   ]
 }

@@ -1,0 +1,26 @@
+{
+  "description": "C-1 regression guard: pure param passthrough function must still propagate taint to caller.",
+  "tags": [
+    "taint",
+    "context-sensitivity",
+    "inline",
+    "regression",
+    "cmd-injection"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        10,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.cmd flows through identity() passthrough to exec"
+    }
+  ]
+}

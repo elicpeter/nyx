@@ -1,0 +1,25 @@
+{
+  "description": "Command injection: request.args.get flows into os.system via string concatenation",
+  "tags": [
+    "taint",
+    "cmdi",
+    "flask",
+    "os.system"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "request.args.get('host') flows into os.system via string concatenation"
+    }
+  ]
+}

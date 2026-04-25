@@ -23,14 +23,12 @@
     },
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         8,
         14
       ],
-      "evidence_contains": [],
-      "notes": "DOMPurify.sanitize strips HTML_ESCAPE cap so this should NOT fire; must_match=false means we expect absence"
+      "notes": "DOMPurify.sanitize strips HTML_ESCAPE cap so this must NOT fire (regression guard)"
     }
   ]
 }

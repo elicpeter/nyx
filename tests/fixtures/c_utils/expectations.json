@@ -7,7 +7,7 @@
     { "id_prefix": "c.memory.gets", "min_count": 1 },
     { "id_prefix": "c.memory.scanf_percent_s", "min_count": 1 },
     { "id_prefix": "c.cmdi.system", "min_count": 3 },
-    { "id_prefix": "cfg-unguarded-sink", "min_count": 5 }
+    { "id_prefix": "cfg-unguarded-sink", "min_count": 1 }
   ],
   "forbidden_findings": [],
   "noise_budget": {

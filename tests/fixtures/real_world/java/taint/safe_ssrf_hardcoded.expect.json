@@ -1,0 +1,6 @@
+{
+  "description": "SSRF negative: hardcoded URL to openConnection() — no taint source, no finding expected",
+  "tags": ["taint", "ssrf", "negative"],
+  "modes": ["full"],
+  "expected": []
+}

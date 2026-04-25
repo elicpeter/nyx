@@ -31,6 +31,116 @@
       ],
       "evidence_contains": [],
       "notes": "Safe version still fires because .replace is not a recognized SHELL_ESCAPE sanitizer"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        10,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on req parameter in /ping route handler"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        10,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on res parameter in /ping route handler"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        12,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on err parameter in exec callback of /ping"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        12,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on stdout parameter in exec callback of /ping"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        17,
+        17
+      ],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on req parameter in /safe-ping route handler"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        17,
+        17
+      ],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on res parameter in /safe-ping route handler"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        20,
+        20
+      ],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on err parameter in exec callback of /safe-ping"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        20,
+        20
+      ],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on stdout parameter in exec callback of /safe-ping"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        10,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 10 \u2014 taint active but no confirmed flow"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        17,
+        17
+      ],
+      "evidence_contains": [],
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 17 \u2014 taint active but no confirmed flow"
     }
   ]
 }

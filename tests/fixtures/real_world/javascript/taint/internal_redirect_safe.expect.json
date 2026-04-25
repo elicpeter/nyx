@@ -1,0 +1,13 @@
+{
+  "description": "Safe internal redirect — path prefix /projects/ locks to same origin",
+  "tags": ["taint", "ssrf", "express", "safe"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [4, 7],
+      "notes": "res.redirect with /projects/ prefix is an internal redirect — must NOT fire (regression guard)"
+    }
+  ]
+}

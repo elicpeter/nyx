@@ -24,13 +24,26 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         5,
         10
       ],
+      "modes": ["full"],
       "evidence_contains": [],
-      "notes": "request.getInputStream() flows into ObjectInputStream.readObject \u2014 taint may not track through constructor chain"
+      "notes": "request.getInputStream() flows through ObjectInputStream constructor into ois.readObject (full mode only)"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        11,
+        11
+      ],
+      "modes": ["full"],
+      "evidence_contains": [],
+      "notes": "Second flow: ois.readObject() source at 8:9 flows to out.println on line 11 (full mode only)"
     }
   ]
 }

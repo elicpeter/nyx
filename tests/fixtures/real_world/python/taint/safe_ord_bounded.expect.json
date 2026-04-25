@@ -1,0 +1,6 @@
+{
+  "description": "SQL: ord(ch) produces a proven-bounded integer (type-inferred Int + abstract interval). Dual gate (type + interval) suppresses SQL injection.",
+  "tags": ["taint", "sqli", "abstract-interp", "interval-domain", "type-inference", "suppression"],
+  "modes": ["full"],
+  "expected": []
+}

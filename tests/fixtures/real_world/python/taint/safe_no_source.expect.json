@@ -1,0 +1,23 @@
+{
+  "description": "subprocess.run fed by locally-constructed command list \u2014 no taint source involved.",
+  "tags": [
+    "taint",
+    "negative",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_not_match": true,
+      "line_range": [
+        6,
+        6
+      ],
+      "notes": "No taint source in fixture — cfg-unguarded-sink must NOT fire (regression guard)"
+    }
+  ]
+}

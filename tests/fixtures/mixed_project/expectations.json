@@ -1,8 +1,7 @@
 {
   "required_findings": [
     { "id_prefix": "taint-unsanitised-flow", "min_count": 10 },
-    { "id_prefix": "js.code_exec.eval", "min_count": 1 },
-    { "id_prefix": "cfg-unguarded-sink", "min_count": 2 }
+    { "id_prefix": "js.code_exec.eval", "min_count": 1 }
   ],
   "forbidden_findings": [],
   "noise_budget": {

@@ -1,0 +1,33 @@
+{
+  "description": "system/puts called with only hardcoded string literals — no taint source.",
+  "tags": [
+    "taint",
+    "negative",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "rb.cmdi.system_interp",
+      "severity": "HIGH",
+      "must_not_match": true,
+      "line_range": [
+        1,
+        1
+      ],
+      "notes": "Constant arg to system — rb.cmdi.system_interp must NOT fire (regression guard)"
+    },
+    {
+      "rule_id": "rb.cmdi.system_interp",
+      "severity": "HIGH",
+      "must_not_match": true,
+      "line_range": [
+        2,
+        2
+      ],
+      "notes": "Constant arg to system — rb.cmdi.system_interp must NOT fire (regression guard)"
+    }
+  ]
+}

@@ -88,7 +88,7 @@ fn scan_with_index_completes() {
 
     // Scan with index
     let pool = Indexer::init(&db_path).unwrap();
-    let diags = scan_with_index_parallel("test", Arc::clone(&pool), &cfg, false)
+    let diags = scan_with_index_parallel("test", Arc::clone(&pool), &cfg, false, &fixture)
         .expect("indexed scan should succeed");
 
     let elapsed = start.elapsed();

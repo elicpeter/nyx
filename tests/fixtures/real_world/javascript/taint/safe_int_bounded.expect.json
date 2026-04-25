@@ -1,0 +1,6 @@
+{
+  "description": "SQL: parseInt(req.query.page) is a full sanitizer (Cap::all), so taint is killed before reaching connection.query. No finding expected.",
+  "tags": ["taint", "sqli", "sanitizer"],
+  "modes": ["full"],
+  "expected": []
+}

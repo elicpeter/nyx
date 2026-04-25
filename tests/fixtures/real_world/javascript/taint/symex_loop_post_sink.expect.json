@@ -1,0 +1,25 @@
+{
+  "description": "Taint flows through a loop and reaches eval() after the loop. Tests that bounded unrolling lets symex escape the loop and reach the post-loop sink.",
+  "tags": [
+    "taint",
+    "cmdi",
+    "symex",
+    "loop"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.input flows through loop concat into eval — symex should reach post-loop sink via bounded unrolling"
+    }
+  ]
+}

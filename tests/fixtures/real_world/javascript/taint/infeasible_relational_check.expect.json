@@ -1,0 +1,15 @@
+{
+  "description": "Infeasible nested relational: a < b AND b < a is contradictory. Only the outer eval should produce a taint finding.",
+  "tags": ["taint", "constraint", "infeasible", "relational"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [5, 15],
+      "evidence_contains": [],
+      "notes": "cmd flows to outer eval — reachable path"
+    }
+  ]
+}

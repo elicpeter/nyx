@@ -1,8 +1,176 @@
 use super::*;
-use crate::cfg::FuncSummaries;
+use crate::cfg::FileCfg;
 use crate::interop::InteropEdge;
 use crate::labels::Cap;
 use crate::symbol::FuncKey;
+
+// ── SSA-specific taint tests ─────────────────────────────────────────────
+
+/// Helper: run SSA taint analysis on Rust source.
+/// Uses the first function body if one exists, otherwise top-level.
+fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
+    use crate::cfg::build_cfg;
+    use crate::state::symbol::SymbolInterner;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter::Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src, None).unwrap();
+
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let body = if file_cfg.bodies.len() > 1 {
+        &file_cfg.bodies[1]
+    } else {
+        file_cfg.first_body()
+    };
+    let cfg = &body.graph;
+    let entry = body.entry;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(cfg);
+    let ssa =
+        crate::ssa::lower_to_ssa(cfg, entry, None, true).expect("SSA lowering should succeed");
+
+    let transfer = ssa_transfer::SsaTaintTransfer {
+        lang: Lang::Rust,
+        namespace: "test.rs",
+        interner: &interner,
+        local_summaries: summaries,
+        global_summaries: None,
+        interop_edges: &[],
+        owner_body_id: crate::cfg::BodyId(0),
+        parent_body_id: None,
+        global_seed: None,
+        param_seed: None,
+        receiver_seed: None,
+        const_values: None,
+        type_facts: None,
+        ssa_summaries: None,
+        extra_labels: None,
+        base_aliases: None,
+        callee_bodies: None,
+        inline_cache: None,
+        context_depth: 0,
+        callback_bindings: None,
+        points_to: None,
+        dynamic_pts: None,
+        import_bindings: None,
+        promisify_aliases: None,
+        module_aliases: None,
+        static_map: None,
+        auto_seed_handler_params: false,
+        cross_file_bodies: None,
+    };
+    let events = ssa_transfer::run_ssa_taint(&ssa, cfg, &transfer);
+    let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, cfg);
+    findings.sort_by_key(|f| (f.sink.index(), f.source.index()));
+    findings.dedup_by_key(|f| (f.sink, f.source));
+    findings
+}
+
+#[test]
+fn ssa_linear_source_to_sink() {
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("DANGEROUS_ARG").unwrap();
+            Command::new("sh").arg(x).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert_eq!(
+        findings.len(),
+        1,
+        "SSA: linear source→sink should produce 1 finding"
+    );
+}
+
+#[test]
+fn ssa_linear_sanitized_no_finding() {
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let clean = shell_escape::unix::escape(&x);
+            Command::new("sh").arg(clean).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert!(
+        findings.is_empty(),
+        "SSA: matching sanitizer should eliminate finding"
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint() {
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let x = "safe_constant";
+            Command::new("sh").arg(x).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert!(
+        findings.is_empty(),
+        "SSA: reassignment to constant should kill taint"
+    );
+}
+
+#[test]
+fn ssa_taint_through_branch_merge() {
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let safe = html_escape::encode_safe(&x);
+            if x.len() > 5 {
+                Command::new("sh").arg(&x).status().unwrap();
+            } else {
+                Command::new("sh").arg(&safe).status().unwrap();
+            }
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert!(
+        !findings.is_empty(),
+        "SSA: taint through branch should produce at least 1 finding"
+    );
+}
+
+#[test]
+fn ssa_taint_through_loop() {
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let mut x = env::var("DANGEROUS").unwrap();
+            while x.len() < 100 {
+                x.push_str("a");
+            }
+            Command::new("sh").arg(x).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert_eq!(
+        findings.len(),
+        1,
+        "SSA: taint through loop should produce 1 finding"
+    );
+}
+
+#[test]
+fn ssa_multi_variable_independence() {
+    // Independent variables should not interfere
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = env::var("TAINTED").unwrap();
+            let y = "safe";
+            Command::new("sh").arg(y).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert!(
+        findings.is_empty(),
+        "SSA: untainted variable at sink should produce no finding"
+    );
+}
 
 #[test]
 fn env_to_arg_is_flagged() {
@@ -21,8 +189,9 @@ fn env_to_arg_is_flagged() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert_eq!(findings.len(), 1); // exactly one unsanitised Source→Sink
 }
@@ -50,8 +219,9 @@ fn taint_through_if_else() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Both branches have findings: the true branch uses unsanitized `x`,
     // the else branch uses `safe` which was sanitized with HTML_ESCAPE
@@ -79,8 +249,9 @@ fn taint_through_while_loop() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert_eq!(findings.len(), 1);
 }
 
@@ -105,8 +276,9 @@ fn taint_killed_by_matching_sanitizer() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert!(
         findings.is_empty(),
         "matching sanitizer should kill the taint"
@@ -134,8 +306,9 @@ fn wrong_sanitizer_preserves_taint() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -163,8 +336,9 @@ fn taint_breaks_out_of_loop() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert_eq!(findings.len(), 1);
 }
 
@@ -192,8 +366,9 @@ fn test_two_sources_one_sanitised() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -225,8 +400,9 @@ fn test_two_sources_wrong_sanitiser_both_flagged() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert_eq!(
         findings.len(),
         2,
@@ -253,8 +429,9 @@ fn test_should_not_panic_on_empty_function() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert!(findings.is_empty());
 }
 
@@ -271,7 +448,8 @@ fn cross_file_source_resolved_via_global_summaries() {
             Command::new("sh").arg(x).status().unwrap();
         }"#;
 
-    let (cfg, entry, local_summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local_summaries = &file_cfg.summaries;
 
     // Build global summaries as if file A exported get_dangerous
     let mut global = GlobalSummaries::new();
@@ -280,6 +458,7 @@ fn cross_file_source_resolved_via_global_summaries() {
         namespace: "file_a.rs".into(),
         name: "get_dangerous".into(),
         arity: Some(0),
+        ..Default::default()
     };
     global.insert(
         key,
@@ -292,20 +471,22 @@ fn cross_file_source_resolved_via_global_summaries() {
             source_caps: Cap::all().bits(),
             sanitizer_caps: 0,
             sink_caps: 0,
+            propagating_params: vec![],
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
+            ..Default::default()
         },
     );
 
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local_summaries,
+        &file_cfg,
+        local_summaries,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
     assert_eq!(findings.len(), 1, "cross-file source should be detected");
 }
@@ -323,7 +504,8 @@ fn cross_file_sanitizer_resolved_via_global_summaries() {
             Command::new("sh").arg(clean).status().unwrap();
         }"#;
 
-    let (cfg, entry, local_summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local_summaries = &file_cfg.summaries;
 
     let mut global = GlobalSummaries::new();
     let key = FuncKey {
@@ -331,6 +513,7 @@ fn cross_file_sanitizer_resolved_via_global_summaries() {
         namespace: "file_a.rs".into(),
         name: "my_sanitize".into(),
         arity: Some(1),
+        ..Default::default()
     };
     global.insert(
         key,
@@ -343,20 +526,22 @@ fn cross_file_sanitizer_resolved_via_global_summaries() {
             source_caps: 0,
             sanitizer_caps: Cap::all().bits(),
             sink_caps: 0,
-            propagates_taint: true,
+            propagating_params: vec![0],
+            propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
+            ..Default::default()
         },
     );
 
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local_summaries,
+        &file_cfg,
+        local_summaries,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
     assert!(
         findings.is_empty(),
@@ -368,8 +553,8 @@ fn cross_file_sanitizer_resolved_via_global_summaries() {
 //  Shared test helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Parse Rust source bytes → (cfg, entry, local_summaries)
-fn parse_rust(src: &[u8]) -> (Cfg, NodeIndex, FuncSummaries) {
+/// Parse Rust source bytes → FileCfg
+fn parse_rust(src: &[u8]) -> FileCfg {
     use crate::cfg::build_cfg;
     use tree_sitter::Language;
     let mut parser = tree_sitter::Parser::new();
@@ -383,8 +568,8 @@ fn parse_rust(src: &[u8]) -> (Cfg, NodeIndex, FuncSummaries) {
 /// Parse Rust source bytes, build CFG, and export cross-file summaries.
 fn extract_summaries_from_bytes(src: &[u8], path: &str) -> Vec<crate::summary::FuncSummary> {
     use crate::cfg::export_summaries;
-    let (_, _, local) = parse_rust(src);
-    export_summaries(&local, path, "rust")
+    let file_cfg = parse_rust(src);
+    export_summaries(&file_cfg.summaries, path, "rust")
 }
 
 #[test]
@@ -399,7 +584,8 @@ fn cross_file_sink_resolved_via_global_summaries() {
             dangerous_exec(x);
         }"#;
 
-    let (cfg, entry, local_summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local_summaries = &file_cfg.summaries;
 
     let mut global = GlobalSummaries::new();
     let key = FuncKey {
@@ -407,6 +593,7 @@ fn cross_file_sink_resolved_via_global_summaries() {
         namespace: "file_a.rs".into(),
         name: "dangerous_exec".into(),
         arity: Some(1),
+        ..Default::default()
     };
     global.insert(
         key,
@@ -419,22 +606,167 @@ fn cross_file_sink_resolved_via_global_summaries() {
             source_caps: 0,
             sanitizer_caps: 0,
             sink_caps: Cap::SHELL_ESCAPE.bits(),
+            propagating_params: vec![],
             propagates_taint: false,
             tainted_sink_params: vec![0],
             callees: vec!["Command::new".into()],
+            ..Default::default()
         },
     );
 
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local_summaries,
+        &file_cfg,
+        local_summaries,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
     assert_eq!(findings.len(), 1, "cross-file sink should be detected");
+}
+
+#[test]
+fn cross_file_sink_finding_carries_primary_location() {
+    // Primary sink-location attribution: when a callee summary carries a
+    // [`SinkSite`] with resolved coordinates, the emitted Finding must
+    // expose those coordinates via `primary_location`.  This guards the
+    // event→finding plumbing independent of any CFG/label changes.
+    use crate::summary::{FuncSummary, SinkSite};
+    use smallvec::smallvec;
+
+    let src = br#"
+        use std::env;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            dangerous_exec(x);
+        }"#;
+
+    let file_cfg = parse_rust(src);
+    let local_summaries = &file_cfg.summaries;
+
+    let mut global = GlobalSummaries::new();
+    let key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "file_a.rs".into(),
+        name: "dangerous_exec".into(),
+        arity: Some(1),
+        ..Default::default()
+    };
+    // Summary: param 0 (`cmd`) flows to a shell-exec sink at file_a.rs:42:5.
+    let sink_site = SinkSite {
+        file_rel: "file_a.rs".into(),
+        line: 42,
+        col: 5,
+        snippet: "Command::new(\"sh\").arg(cmd).status().unwrap();".into(),
+        cap: Cap::SHELL_ESCAPE,
+    };
+    global.insert(
+        key,
+        FuncSummary {
+            name: "dangerous_exec".into(),
+            file_path: "file_a.rs".into(),
+            lang: "rust".into(),
+            param_count: 1,
+            param_names: vec!["cmd".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: Cap::SHELL_ESCAPE.bits(),
+            propagating_params: vec![],
+            propagates_taint: false,
+            tainted_sink_params: vec![0],
+            param_to_sink: vec![(0, smallvec![sink_site.clone()])],
+            callees: vec!["Command::new".into()],
+            ..Default::default()
+        },
+    );
+
+    let findings = analyse_file(
+        &file_cfg,
+        local_summaries,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "cross-file sink should still be detected",
+    );
+    let finding = &findings[0];
+    // Note: `uses_summary == false` here because the source (env::var) is
+    // local — only the *sink* was summary-resolved.  That's the case the
+    // `primary_location` / `uses_summary` independence comment on
+    // [`super::Finding::primary_location`] documents.
+    let loc = finding
+        .primary_location
+        .as_ref()
+        .expect("summary-resolved sink with SinkSite must carry primary_location");
+    assert_eq!(loc.file_rel, "file_a.rs");
+    assert_eq!(loc.line, 42);
+    assert_eq!(loc.col, 5);
+}
+
+#[test]
+fn cross_file_sink_cap_only_site_leaves_primary_location_none() {
+    // Cap-only SinkSites (line == 0) must not surface as Finding.primary_location,
+    // otherwise the formatter would claim a (0, 0) position as authoritative.
+    use crate::summary::FuncSummary;
+
+    let src = br#"
+        use std::env;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            dangerous_exec(x);
+        }"#;
+
+    let file_cfg = parse_rust(src);
+    let local_summaries = &file_cfg.summaries;
+
+    let mut global = GlobalSummaries::new();
+    let key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "file_a.rs".into(),
+        name: "dangerous_exec".into(),
+        arity: Some(1),
+        ..Default::default()
+    };
+    global.insert(
+        key,
+        FuncSummary {
+            name: "dangerous_exec".into(),
+            file_path: "file_a.rs".into(),
+            lang: "rust".into(),
+            param_count: 1,
+            param_names: vec!["cmd".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: Cap::SHELL_ESCAPE.bits(),
+            propagating_params: vec![],
+            propagates_taint: false,
+            tainted_sink_params: vec![0],
+            // No param_to_sink: falls back to cap-only summary (no SinkSite).
+            callees: vec!["Command::new".into()],
+            ..Default::default()
+        },
+    );
+
+    let findings = analyse_file(
+        &file_cfg,
+        local_summaries,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert_eq!(findings.len(), 1, "cross-file sink should be detected");
+    assert!(
+        findings[0].primary_location.is_none(),
+        "cap-only summary must not produce a primary_location",
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -465,15 +797,16 @@ fn multi_file_source_to_sink_detected() {
     let summaries = extract_summaries_from_bytes(lib_src, "lib.rs");
     let global = merge_summaries(summaries, None);
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
 
     assert_eq!(
@@ -513,15 +846,16 @@ fn multi_file_sanitizer_neutralises_cross_file_source() {
     let summaries = extract_summaries_from_bytes(lib_src, "lib.rs");
     let global = merge_summaries(summaries, None);
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
 
     assert!(
@@ -559,15 +893,16 @@ fn multi_file_wrong_sanitizer_preserves_taint() {
     let summaries = extract_summaries_from_bytes(lib_src, "lib.rs");
     let global = merge_summaries(summaries, None);
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
 
     assert_eq!(
@@ -601,15 +936,16 @@ fn multi_file_sink_in_another_file() {
     let summaries = extract_summaries_from_bytes(lib_src, "lib.rs");
     let global = merge_summaries(summaries, None);
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
 
     assert_eq!(findings.len(), 1, "cross-file sink should be detected");
@@ -627,6 +963,7 @@ fn multi_file_passthrough_preserves_taint() {
         namespace: "lib.rs".into(),
         name: "identity".into(),
         arity: Some(1),
+        ..Default::default()
     };
     global.insert(
         key,
@@ -639,9 +976,11 @@ fn multi_file_passthrough_preserves_taint() {
             source_caps: 0,
             sanitizer_caps: 0,
             sink_caps: 0,
-            propagates_taint: true,
+            propagating_params: vec![0],
+            propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
+            ..Default::default()
         },
     );
 
@@ -654,15 +993,16 @@ fn multi_file_passthrough_preserves_taint() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
 
     assert_eq!(
@@ -703,15 +1043,16 @@ fn multi_file_chain_source_sanitize_sink_across_files() {
     let summaries = extract_summaries_from_bytes(lib_src, "lib.rs");
     let global = merge_summaries(summaries, None);
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
 
     assert!(
@@ -740,8 +1081,9 @@ fn sanitizer_strips_only_matching_bits() {
         }
     "#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = parse_rust(src);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert_eq!(
         findings.len(),
@@ -765,8 +1107,9 @@ fn multiple_sanitizers_strip_all_bits() {
         }
     "#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = parse_rust(src);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert!(
         findings.is_empty(),
@@ -785,8 +1128,9 @@ fn taint_through_variable_reassignment() {
         }
     "#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = parse_rust(src);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert_eq!(
         findings.len(),
@@ -806,8 +1150,9 @@ fn untainted_variable_at_sink_is_safe() {
         }
     "#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = parse_rust(src);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert!(
         findings.is_empty(),
@@ -839,6 +1184,7 @@ fn local_summary_takes_precedence_over_global() {
         namespace: "other.rs".into(),
         name: "my_func".into(),
         arity: Some(0),
+        ..Default::default()
     };
     global.insert(
         key,
@@ -851,21 +1197,24 @@ fn local_summary_takes_precedence_over_global() {
             source_caps: 0,
             sanitizer_caps: Cap::all().bits(),
             sink_caps: 0,
-            propagates_taint: true,
+            propagating_params: vec![0],
+            propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
+            ..Default::default()
         },
     );
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
 
     assert_eq!(
@@ -885,18 +1234,19 @@ fn empty_global_summaries_same_as_none() {
         }
     "#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let summaries = &file_cfg.summaries;
 
-    let findings_none = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let findings_none = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     let empty = GlobalSummaries::new();
     let findings_empty = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         Some(&empty),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
 
     assert_eq!(
@@ -918,8 +1268,9 @@ fn taint_not_introduced_by_non_source_function() {
         }
     "#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = parse_rust(src);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert!(
         findings.is_empty(),
@@ -939,6 +1290,7 @@ fn source_and_sink_on_same_function() {
         namespace: "lib.rs".into(),
         name: "source_and_sink".into(),
         arity: Some(1),
+        ..Default::default()
     };
     global.insert(
         key,
@@ -951,9 +1303,11 @@ fn source_and_sink_on_same_function() {
             source_caps: Cap::all().bits(),
             sanitizer_caps: 0,
             sink_caps: Cap::SHELL_ESCAPE.bits(),
+            propagating_params: vec![],
             propagates_taint: false,
             tainted_sink_params: vec![0],
             callees: vec![],
+            ..Default::default()
         },
     );
 
@@ -966,15 +1320,16 @@ fn source_and_sink_on_same_function() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
 
     assert_eq!(
@@ -995,6 +1350,7 @@ fn multiple_cross_file_sources_one_sanitised() {
         namespace: "lib.rs".into(),
         name: "get_secret".into(),
         arity: Some(0),
+        ..Default::default()
     };
     global.insert(
         key1,
@@ -1007,9 +1363,11 @@ fn multiple_cross_file_sources_one_sanitised() {
             source_caps: Cap::all().bits(),
             sanitizer_caps: 0,
             sink_caps: 0,
+            propagating_params: vec![],
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
+            ..Default::default()
         },
     );
     let key2 = FuncKey {
@@ -1017,6 +1375,7 @@ fn multiple_cross_file_sources_one_sanitised() {
         namespace: "lib.rs".into(),
         name: "get_other_secret".into(),
         arity: Some(0),
+        ..Default::default()
     };
     global.insert(
         key2,
@@ -1029,9 +1388,11 @@ fn multiple_cross_file_sources_one_sanitised() {
             source_caps: Cap::all().bits(),
             sanitizer_caps: 0,
             sink_caps: 0,
+            propagating_params: vec![],
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
+            ..Default::default()
         },
     );
 
@@ -1047,15 +1408,16 @@ fn multiple_cross_file_sources_one_sanitised() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
 
     assert_eq!(
@@ -1069,12 +1431,8 @@ fn multiple_cross_file_sources_one_sanitised() {
 //  Multi-language helpers and tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Parse source bytes for any supported language → (cfg, entry, local_summaries)
-fn parse_lang(
-    src: &[u8],
-    slug: &str,
-    ts_lang: tree_sitter::Language,
-) -> (Cfg, NodeIndex, FuncSummaries) {
+/// Parse source bytes for any supported language → FileCfg
+fn parse_lang(src: &[u8], slug: &str, ts_lang: tree_sitter::Language) -> FileCfg {
     use crate::cfg::build_cfg;
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
@@ -1099,15 +1457,16 @@ fn parse_lang(
 fn js_source_to_sink() {
     let src = b"function main() {\n  let x = document.location();\n  eval(x);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
         &[],
+        None,
     );
     assert_eq!(
         findings.len(),
@@ -1120,15 +1479,16 @@ fn js_source_to_sink() {
 fn ts_source_to_sink() {
     let src = b"function main() {\n  let x = document.location();\n  eval(x);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
-    let (cfg, entry, summaries) = parse_lang(src, "typescript", lang);
+    let file_cfg = parse_lang(src, "typescript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::TypeScript,
         "test.ts",
         &[],
+        None,
     );
     assert_eq!(
         findings.len(),
@@ -1141,8 +1501,17 @@ fn ts_source_to_sink() {
 fn python_source_to_sink() {
     let src = b"def main():\n    x = os.getenv(\"SECRET\")\n    os.system(x)\n";
     let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "python", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Python, "test.py", &[]);
+    let file_cfg = parse_lang(src, "python", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::Python,
+        "test.py",
+        &[],
+        None,
+    );
     assert_eq!(
         findings.len(),
         1,
@@ -1155,8 +1524,9 @@ fn go_source_to_sink() {
     let src =
         b"package main\n\nfunc main() {\n\tx := os.Getenv(\"SECRET\")\n\texec.Command(x)\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "go", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Go, "test.go", &[]);
+    let file_cfg = parse_lang(src, "go", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Go, "test.go", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -1168,8 +1538,17 @@ fn go_source_to_sink() {
 fn java_source_to_sink() {
     let src = b"class Main {\n  void main() {\n    String x = System.getenv(\"SECRET\");\n    Runtime.exec(x);\n  }\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "java", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Java, "test.java", &[]);
+    let file_cfg = parse_lang(src, "java", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::Java,
+        "test.java",
+        &[],
+        None,
+    );
     assert_eq!(
         findings.len(),
         1,
@@ -1181,8 +1560,9 @@ fn java_source_to_sink() {
 fn c_source_to_sink() {
     let src = b"void main() {\n  char* x = getenv(\"SECRET\");\n  system(x);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "c", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[]);
+    let file_cfg = parse_lang(src, "c", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::C, "test.c", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -1194,8 +1574,9 @@ fn c_source_to_sink() {
 fn cpp_source_to_sink() {
     let src = b"void main() {\n  char* x = getenv(\"SECRET\");\n  system(x);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "cpp", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Cpp, "test.cpp", &[]);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -1208,8 +1589,9 @@ fn php_source_to_sink() {
     let src =
         b"<?php\nfunction main() {\n  $x = file_get_contents(\"secret\");\n  system($x);\n}\n?>";
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
-    let (cfg, entry, summaries) = parse_lang(src, "php", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Php, "test.php", &[]);
+    let file_cfg = parse_lang(src, "php", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Php, "test.php", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -1218,11 +1600,58 @@ fn php_source_to_sink() {
 }
 
 #[test]
+fn php_echo_xss() {
+    // PHP `echo` is a language construct (echo_statement), not a function call.
+    // Tainted data flowing through echo should be detected as an XSS sink.
+    let src = b"<?php\n$name = $_GET['name'];\necho \"<h1>Hello \" . $name . \"</h1>\";\n";
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let file_cfg = parse_lang(src, "php", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Php, "test.php", &[], None);
+    assert_eq!(
+        findings.len(),
+        1,
+        "PHP echo with tainted var should produce 1 XSS finding"
+    );
+}
+
+#[test]
+fn php_echo_simple_var() {
+    // Simple `echo $var;` with a tainted variable.
+    let src = b"<?php\n$x = $_POST['data'];\necho $x;\n";
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let file_cfg = parse_lang(src, "php", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Php, "test.php", &[], None);
+    assert_eq!(
+        findings.len(),
+        1,
+        "PHP echo with simple tainted var should produce 1 finding"
+    );
+}
+
+#[test]
+fn php_echo_safe_literal() {
+    // `echo "hello";` with no tainted data should produce no finding.
+    let src = b"<?php\necho \"hello world\";\n";
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let file_cfg = parse_lang(src, "php", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Php, "test.php", &[], None);
+    assert_eq!(
+        findings.len(),
+        0,
+        "PHP echo with literal string should produce 0 findings"
+    );
+}
+
+#[test]
 fn ruby_source_to_sink() {
     let src = b"def main\n  x = gets()\n  system(x)\nend\n";
     let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "ruby", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Ruby, "test.rb", &[]);
+    let file_cfg = parse_lang(src, "ruby", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Ruby, "test.rb", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -1246,8 +1675,9 @@ fn extract_lang_summaries(
     path: &str,
 ) -> Vec<crate::summary::FuncSummary> {
     use crate::cfg::export_summaries;
-    let (_, _, local) = parse_lang(src, slug, ts_lang);
-    export_summaries(&local, path, slug)
+    let file_cfg = parse_lang(src, slug, ts_lang);
+    let local = &file_cfg.summaries;
+    export_summaries(local, path, slug)
 }
 
 // ── Scenario 1: Python source function → JavaScript sink via interop ─────
@@ -1264,17 +1694,18 @@ fn cross_lang_python_source_to_js_sink_via_interop() {
     // JavaScript file calls get_input() and passes to eval()
     let js_src = b"function main() {\n  let x = get_input();\n  eval(x);\n}\n";
     let js_lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(js_src, "javascript", js_lang);
+    let file_cfg = parse_lang(js_src, "javascript", js_lang);
+    let local = &file_cfg.summaries;
 
     // Without interop: no cross-lang resolution
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::JavaScript,
         "main.js",
         &[],
+        None,
     );
     assert!(findings.is_empty(), "No cross-lang without interop edge");
 
@@ -1292,18 +1723,17 @@ fn cross_lang_python_source_to_js_sink_via_interop() {
             namespace: "lib.py".into(),
             name: "get_input".into(),
             arity: Some(0),
+            ..Default::default()
         },
-        arg_map: vec![],
-        ret_taints: true,
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::JavaScript,
         "main.js",
         &edges,
+        None,
     );
     assert_eq!(
         findings.len(),
@@ -1326,17 +1756,18 @@ fn cross_lang_go_source_to_python_sink_via_interop() {
 
     let py_src = b"def main():\n    x = fetch_env()\n    os.system(x)\n";
     let py_lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(py_src, "python", py_lang);
+    let file_cfg = parse_lang(py_src, "python", py_lang);
+    let local = &file_cfg.summaries;
 
     // Without interop: no findings
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Python,
         "main.py",
         &[],
+        None,
     );
     assert!(findings.is_empty(), "No cross-lang without interop");
 
@@ -1354,18 +1785,17 @@ fn cross_lang_go_source_to_python_sink_via_interop() {
             namespace: "lib.go".into(),
             name: "fetch_env".into(),
             arity: Some(0),
+            ..Default::default()
         },
-        arg_map: vec![],
-        ret_taints: true,
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Python,
         "main.py",
         &edges,
+        None,
     );
     assert_eq!(findings.len(), 1, "Go source → Python sink via interop");
 }
@@ -1388,7 +1818,8 @@ fn cross_lang_rust_sanitizer_in_js_via_interop() {
     // JS: source → Rust sanitizer → shell sink
     let js_src = b"function main() {\n  let x = document.location();\n  let y = clean_shell(x);\n  eval(y);\n}\n";
     let js_lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(js_src, "javascript", js_lang);
+    let file_cfg = parse_lang(js_src, "javascript", js_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![InteropEdge {
         from: CallSiteKey {
@@ -1403,22 +1834,24 @@ fn cross_lang_rust_sanitizer_in_js_via_interop() {
             namespace: "lib.rs".into(),
             name: "clean_shell".into(),
             arity: Some(1),
+            ..Default::default()
         },
-        arg_map: vec![],
-        ret_taints: true,
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::JavaScript,
         "main.js",
         &edges,
+        None,
     );
+    // eval uses Cap::all(), so a SHELL_ESCAPE sanitizer alone does NOT
+    // neutralise taint — shell-escape is semantically wrong for code injection.
+    // The finding should still be reported.
     assert!(
-        findings.is_empty(),
-        "Rust SHELL_ESCAPE sanitizer should neutralise taint via interop"
+        !findings.is_empty(),
+        "SHELL_ESCAPE sanitizer should NOT neutralise eval (code injection) taint"
     );
 }
 
@@ -1435,7 +1868,8 @@ fn cross_lang_c_sink_called_from_java_via_interop() {
 
     let java_src = b"class Main {\n  void main() {\n    String x = System.getenv(\"INPUT\");\n    run_cmd(x);\n  }\n}\n";
     let java_lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(java_src, "java", java_lang);
+    let file_cfg = parse_lang(java_src, "java", java_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![InteropEdge {
         from: CallSiteKey {
@@ -1449,19 +1883,18 @@ fn cross_lang_c_sink_called_from_java_via_interop() {
             lang: Lang::C,
             namespace: "native.c".into(),
             name: "run_cmd".into(),
-            arity: Some(0), // C param extraction yields 0 (pre-existing limitation)
+            arity: Some(1),
+            ..Default::default()
         },
-        arg_map: vec![],
-        ret_taints: false,
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Java,
         "Main.java",
         &edges,
+        None,
     );
     assert_eq!(findings.len(), 1, "Java source → C sink via interop");
 }
@@ -1497,7 +1930,8 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
     // Go caller: source → sanitizer → sink (all cross-language)
     let go_src = b"package main\n\nfunc main() {\n\tx := get_secret()\n\ty := make_safe(x)\n\trun_dangerous(y)\n}\n";
     let go_lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(go_src, "go", go_lang);
+    let file_cfg = parse_lang(go_src, "go", go_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![
         InteropEdge {
@@ -1513,9 +1947,8 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 namespace: "source.py".into(),
                 name: "get_secret".into(),
                 arity: Some(0),
+                ..Default::default()
             },
-            arg_map: vec![],
-            ret_taints: true,
         },
         InteropEdge {
             from: CallSiteKey {
@@ -1530,9 +1963,8 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 namespace: "lib.rs".into(),
                 name: "make_safe".into(),
                 arity: Some(1),
+                ..Default::default()
             },
-            arg_map: vec![],
-            ret_taints: true,
         },
         InteropEdge {
             from: CallSiteKey {
@@ -1546,20 +1978,19 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 lang: Lang::C,
                 namespace: "native.c".into(),
                 name: "run_dangerous".into(),
-                arity: Some(0), // C param extraction yields 0 (pre-existing limitation)
+                arity: Some(1),
+                ..Default::default()
             },
-            arg_map: vec![],
-            ret_taints: false,
         },
     ];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Go,
         "main.go",
         &edges,
+        None,
     );
     assert!(
         findings.is_empty(),
@@ -1588,7 +2019,8 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
     // Go caller: source → sink directly (no sanitizer)
     let go_src = b"package main\n\nfunc main() {\n\tx := get_secret()\n\trun_dangerous(x)\n}\n";
     let go_lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(go_src, "go", go_lang);
+    let file_cfg = parse_lang(go_src, "go", go_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![
         InteropEdge {
@@ -1604,9 +2036,8 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
                 namespace: "source.py".into(),
                 name: "get_secret".into(),
                 arity: Some(0),
+                ..Default::default()
             },
-            arg_map: vec![],
-            ret_taints: true,
         },
         InteropEdge {
             from: CallSiteKey {
@@ -1620,20 +2051,19 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
                 lang: Lang::C,
                 namespace: "native.c".into(),
                 name: "run_dangerous".into(),
-                arity: Some(0), // C param extraction yields 0 (pre-existing limitation)
+                arity: Some(1),
+                ..Default::default()
             },
-            arg_map: vec![],
-            ret_taints: false,
         },
     ];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Go,
         "main.go",
         &edges,
+        None,
     );
     assert_eq!(
         findings.len(),
@@ -1662,9 +2092,11 @@ fn cross_lang_name_collision_stays_separate() {
         source_caps: 0,
         sanitizer_caps: 0,
         sink_caps: 0,
-        propagates_taint: true,
+        propagating_params: vec![0],
+        propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
+        ..Default::default()
     };
 
     let all_sums: Vec<_> = py_sums
@@ -1699,6 +2131,7 @@ fn cross_lang_ruby_passthrough_in_js_via_interop() {
         namespace: "helper.rb".into(),
         name: "transform".into(),
         arity: Some(1),
+        ..Default::default()
     };
     global.insert(
         key.clone(),
@@ -1711,15 +2144,18 @@ fn cross_lang_ruby_passthrough_in_js_via_interop() {
             source_caps: 0,
             sanitizer_caps: 0,
             sink_caps: 0,
-            propagates_taint: true,
+            propagating_params: vec![0],
+            propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
+            ..Default::default()
         },
     );
 
     let js_src = b"function main() {\n  let x = document.location();\n  let y = transform(x);\n  eval(y);\n}\n";
     let js_lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(js_src, "javascript", js_lang);
+    let file_cfg = parse_lang(js_src, "javascript", js_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![InteropEdge {
         from: CallSiteKey {
@@ -1730,17 +2166,15 @@ fn cross_lang_ruby_passthrough_in_js_via_interop() {
             ordinal: 0,
         },
         to: key,
-        arg_map: vec![],
-        ret_taints: true,
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::JavaScript,
         "main.js",
         &edges,
+        None,
     );
     assert_eq!(
         findings.len(),
@@ -1764,16 +2198,19 @@ fn cross_lang_php_source_to_go_sink_via_interop() {
         source_caps: Cap::all().bits(),
         sanitizer_caps: 0,
         sink_caps: 0,
+        propagating_params: vec![],
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec!["file_get_contents".into()],
+        ..Default::default()
     };
 
     let global = merge_summaries(vec![php_summary], None);
 
     let go_src = b"package main\n\nfunc main() {\n\tx := read_input()\n\texec.Command(x)\n}\n";
     let go_lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(go_src, "go", go_lang);
+    let file_cfg = parse_lang(go_src, "go", go_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![InteropEdge {
         from: CallSiteKey {
@@ -1788,18 +2225,17 @@ fn cross_lang_php_source_to_go_sink_via_interop() {
             namespace: "input.php".into(),
             name: "read_input".into(),
             arity: Some(0),
+            ..Default::default()
         },
-        arg_map: vec![],
-        ret_taints: true,
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Go,
         "main.go",
         &edges,
+        None,
     );
     assert_eq!(findings.len(), 1, "PHP source → Go sink via interop");
 }
@@ -1816,6 +2252,7 @@ fn cross_lang_wrong_sanitizer_still_flags_via_interop() {
         namespace: "sanitizers.py".into(),
         name: "html_clean".into(),
         arity: Some(1),
+        ..Default::default()
     };
     global.insert(
         key.clone(),
@@ -1828,16 +2265,19 @@ fn cross_lang_wrong_sanitizer_still_flags_via_interop() {
             source_caps: 0,
             sanitizer_caps: Cap::HTML_ESCAPE.bits(),
             sink_caps: 0,
-            propagates_taint: true,
+            propagating_params: vec![0],
+            propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
+            ..Default::default()
         },
     );
 
     // JS: source → Python HTML sanitizer → shell sink
     let js_src = b"function main() {\n  let x = document.location();\n  let y = html_clean(x);\n  eval(y);\n}\n";
     let js_lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(js_src, "javascript", js_lang);
+    let file_cfg = parse_lang(js_src, "javascript", js_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![InteropEdge {
         from: CallSiteKey {
@@ -1848,17 +2288,15 @@ fn cross_lang_wrong_sanitizer_still_flags_via_interop() {
             ordinal: 0,
         },
         to: key,
-        arg_map: vec![],
-        ret_taints: true,
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::JavaScript,
         "main.js",
         &edges,
+        None,
     );
     assert_eq!(
         findings.len(),
@@ -1881,9 +2319,11 @@ fn cross_lang_summary_preserves_lang_metadata() {
         source_caps: Cap::all().bits(),
         sanitizer_caps: 0,
         sink_caps: 0,
+        propagating_params: vec![],
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
+        ..Default::default()
     };
 
     let js_summary = crate::summary::FuncSummary {
@@ -1895,9 +2335,11 @@ fn cross_lang_summary_preserves_lang_metadata() {
         source_caps: 0,
         sanitizer_caps: 0,
         sink_caps: Cap::SHELL_ESCAPE.bits(),
-        propagates_taint: true,
+        propagating_params: vec![0],
+        propagates_taint: false,
         tainted_sink_params: vec![0],
         callees: vec![],
+        ..Default::default()
     };
 
     let global = merge_summaries(vec![py_summary, js_summary], None);
@@ -1914,8 +2356,8 @@ fn cross_lang_summary_preserves_lang_metadata() {
     );
     assert!(js_matches[0].1.sink_caps != 0, "JS sink caps preserved");
     assert!(
-        js_matches[0].1.propagates_taint,
-        "JS propagates_taint preserved"
+        js_matches[0].1.propagates_any(),
+        "JS propagates_any preserved"
     );
 }
 
@@ -1941,7 +2383,8 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
     // Go caller: dangerous_query() → run_query()
     let go_src = b"package main\n\nfunc main() {\n\tq := dangerous_query()\n\trun_query(q)\n}\n";
     let go_lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(go_src, "go", go_lang);
+    let file_cfg = parse_lang(go_src, "go", go_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![
         InteropEdge {
@@ -1957,9 +2400,8 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
                 namespace: "db.py".into(),
                 name: "dangerous_query".into(),
                 arity: Some(0),
+                ..Default::default()
             },
-            arg_map: vec![],
-            ret_taints: true,
         },
         InteropEdge {
             from: CallSiteKey {
@@ -1974,19 +2416,18 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
                 namespace: "db.js".into(),
                 name: "run_query".into(),
                 arity: Some(1),
+                ..Default::default()
             },
-            arg_map: vec![],
-            ret_taints: false,
         },
     ];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Go,
         "main.go",
         &edges,
+        None,
     );
     assert_eq!(
         findings.len(),
@@ -2009,6 +2450,7 @@ fn ambiguous_resolution_returns_none() {
             namespace: (*ns).to_string(),
             name: "helper".into(),
             arity: Some(0),
+            ..Default::default()
         };
         global.insert(
             key,
@@ -2021,9 +2463,11 @@ fn ambiguous_resolution_returns_none() {
                 source_caps: Cap::all().bits(),
                 sanitizer_caps: 0,
                 sink_caps: 0,
+                propagating_params: vec![],
                 propagates_taint: false,
                 tainted_sink_params: vec![],
                 callees: vec![],
+                ..Default::default()
             },
         );
     }
@@ -2037,8 +2481,17 @@ fn ambiguous_resolution_returns_none() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "c.rs", &[]);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        local,
+        Some(&global),
+        Lang::Rust,
+        "c.rs",
+        &[],
+        None,
+    );
 
     // Ambiguous resolution returns None → no source → no finding
     assert!(
@@ -2059,6 +2512,7 @@ fn exact_namespace_match_wins() {
         namespace: "test.rs".into(),
         name: "helper".into(),
         arity: Some(0),
+        ..Default::default()
     };
     global.insert(
         key_local,
@@ -2071,9 +2525,11 @@ fn exact_namespace_match_wins() {
             source_caps: Cap::all().bits(),
             sanitizer_caps: 0,
             sink_caps: 0,
+            propagating_params: vec![],
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
+            ..Default::default()
         },
     );
     // other.rs version: no caps
@@ -2082,6 +2538,7 @@ fn exact_namespace_match_wins() {
         namespace: "other.rs".into(),
         name: "helper".into(),
         arity: Some(0),
+        ..Default::default()
     };
     global.insert(
         key_other,
@@ -2094,9 +2551,11 @@ fn exact_namespace_match_wins() {
             source_caps: 0,
             sanitizer_caps: 0,
             sink_caps: 0,
+            propagating_params: vec![],
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
+            ..Default::default()
         },
     );
 
@@ -2108,16 +2567,17 @@ fn exact_namespace_match_wins() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     // caller_namespace = "test.rs" matches the source version
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
         &[],
+        None,
     );
 
     assert_eq!(
@@ -2138,6 +2598,7 @@ fn interop_edge_wrong_caller_lang_no_match() {
         namespace: "lib.py".into(),
         name: "get_data".into(),
         arity: Some(0),
+        ..Default::default()
     };
     global.insert(
         key.clone(),
@@ -2150,9 +2611,11 @@ fn interop_edge_wrong_caller_lang_no_match() {
             source_caps: Cap::all().bits(),
             sanitizer_caps: 0,
             sink_caps: 0,
+            propagating_params: vec![],
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
+            ..Default::default()
         },
     );
 
@@ -2166,21 +2629,20 @@ fn interop_edge_wrong_caller_lang_no_match() {
             ordinal: 0,
         },
         to: key,
-        arg_map: vec![],
-        ret_taints: true,
     }];
 
     let js_src = b"function main() {\n  let x = get_data();\n  eval(x);\n}\n";
     let js_lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(js_src, "javascript", js_lang);
+    let file_cfg = parse_lang(js_src, "javascript", js_lang);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::JavaScript,
         "main.js",
         &edges,
+        None,
     );
 
     assert!(
@@ -2209,8 +2671,9 @@ fn return_call_recognized_as_source() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (_, _, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let exported = export_summaries(&summaries, "test.rs", "rust");
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let exported = export_summaries(summaries, "test.rs", "rust");
 
     let foo = exported
         .iter()
@@ -2251,22 +2714,13 @@ fn validate_and_early_return() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
-    // Taint still flows (validate doesn't kill taint), but the finding
-    // should be annotated as path_validated because the false path
-    // (validation passed) has a ValidationCall predicate with polarity=true.
-    assert_eq!(findings.len(), 1, "should still detect the taint flow");
-    assert!(
-        findings[0].path_validated,
-        "finding should be marked as path_validated (early-return guard detected)"
-    );
-    assert_eq!(
-        findings[0].guard_kind,
-        Some(PredicateKind::ValidationCall),
-        "guard_kind should be ValidationCall"
-    );
+    // Validated findings are now suppressed — validate() guard means the
+    // sink is on the safe path, so no finding should be emitted.
+    assert_eq!(findings.len(), 0, "validated finding should be suppressed");
 }
 
 #[test]
@@ -2293,19 +2747,13 @@ fn validate_in_if_else_path_validated() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
-    assert_eq!(findings.len(), 1, "should detect the taint flow");
-    assert!(
-        findings[0].path_validated,
-        "finding should be path_validated (sink in validated branch)"
-    );
-    assert_eq!(
-        findings[0].guard_kind,
-        Some(PredicateKind::ValidationCall),
-        "guard_kind should be ValidationCall"
-    );
+    // Validated findings are now suppressed — sink is in the validated
+    // branch, so no finding should be emitted.
+    assert_eq!(findings.len(), 0, "validated finding should be suppressed");
 }
 
 #[test]
@@ -2329,8 +2777,9 @@ fn sink_on_failed_validation_branch() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert_eq!(findings.len(), 1, "should detect taint flow to sink");
     assert!(
@@ -2364,8 +2813,9 @@ fn contradictory_null_check_pruned() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // The inner branch is infeasible, and the arg "dangerous" is a string
     // literal (not tainted), so there should be no findings.
@@ -2402,8 +2852,9 @@ fn sanitize_one_branch_no_regression() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Both branches produce findings: the true branch uses unsanitized `x`,
     // the else branch uses `safe` (HTML_ESCAPE sanitizer vs SHELL_ESCAPE sink).
@@ -2453,8 +2904,9 @@ fn path_state_budget_graceful() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Should still detect the flow — truncation shouldn't cause false negatives.
     assert_eq!(
@@ -2487,8 +2939,9 @@ fn unknown_predicate_not_pruned() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Comparison is not in the whitelist — the path should NOT be pruned.
     assert_eq!(
@@ -2499,12 +2952,24 @@ fn unknown_predicate_not_pruned() {
 }
 
 #[test]
-fn multi_var_predicate_not_pruned() {
+fn duplicate_null_guard_prunes_unreachable_sink() {
     use crate::cfg::build_cfg;
     use tree_sitter::Language;
 
-    // Multi-variable conditions should never be pruned for contradiction,
-    // even if the kind is in the whitelist.
+    // After `if y.is_none() { return; }`, the false arm proves
+    // `y.is_none() == false` on the only surviving path.  A second
+    // `if y.is_none() { sink }` then adds `y.is_none() == true` on the
+    // body's True arm — a per-symbol PredicateSummary contradiction
+    // (known_true & known_false on bit NullCheck).  The body is
+    // structurally unreachable; the sink must not fire.
+    //
+    // Regression guard: this expected behaviour only emerges once the
+    // OR-chain / direct-return rejection arm correctly terminates its
+    // SSA block (see
+    // `src/ssa/lower.rs::tests::or_chain_rejection_block_terminates_with_return`).
+    // Pre-fix the rejection arm Goto'd into the merged tail and its
+    // contradicting predicate joined with the false-arm to empty,
+    // letting flow through.  Pruning here is the precise outcome.
     let src = br#"
         use std::env; use std::process::Command;
         fn main() {
@@ -2522,17 +2987,2600 @@ fn multi_var_predicate_not_pruned() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
-    // Note: y.is_none() condition references `y` and `is_none` — two idents.
-    // Wait, `is_none` is a method — collect_idents finds `y` and `is_none` as
-    // separate identifiers.  That makes it multi-var, so contradiction should
-    // NOT fire.  However, the actual behavior depends on how many idents
-    // collect_idents extracts from `y.is_none()`.  If it returns ["y", "is_none"],
-    // then the predicate has 2 vars → multi-var → not pruned → finding exists.
+    assert!(
+        findings.is_empty(),
+        "duplicate null-guard with intervening early-return must prune \
+         the second if's body as unreachable; got findings = {:?}",
+        findings
+    );
+}
+
+#[test]
+fn c_curl_handle_ssrf() {
+    let src = b"#include <stdlib.h>\n#include <curl/curl.h>\n\
+        void fetch() {\n  char *url = getenv(\"TARGET\");\n  \
+        CURL *curl = curl_easy_init();\n  \
+        curl_easy_setopt(curl, CURLOPT_URL, url);\n  \
+        curl_easy_perform(curl);\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    let file_cfg = parse_lang(src, "c", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::C, "test.c", &[], None);
     assert!(
         !findings.is_empty(),
-        "multi-var predicate should not be pruned; flow should be detected"
+        "C: getenv -> curl_easy_setopt -> curl_easy_perform should produce SSRF finding"
     );
+}
+
+#[test]
+fn c_curl_handle_no_taint() {
+    let src = b"#include <curl/curl.h>\n\
+        void fetch() {\n  CURL *curl = curl_easy_init();\n  \
+        curl_easy_setopt(curl, CURLOPT_URL, \"https://example.com\");\n  \
+        curl_easy_perform(curl);\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    let file_cfg = parse_lang(src, "c", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::C, "test.c", &[], None);
+    assert!(
+        findings.is_empty(),
+        "C: hardcoded URL in curl_easy_setopt should not produce finding"
+    );
+}
+
+// ── Per-argument propagation tests ───────────────────────────────────────
+
+#[test]
+fn per_arg_propagation_tainted_param_propagates() {
+    use crate::summary::FuncSummary;
+
+    // transform(a, b) only propagates param 0. Tainted value at param 0 → finding.
+    let mut global = GlobalSummaries::new();
+    global.insert(
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "lib.rs".into(),
+            name: "transform".into(),
+            arity: Some(2),
+            ..Default::default()
+        },
+        FuncSummary {
+            name: "transform".into(),
+            file_path: "lib.rs".into(),
+            lang: "rust".into(),
+            param_count: 2,
+            param_names: vec!["a".into(), "b".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![0],
+            propagates_taint: false,
+            tainted_sink_params: vec![],
+            callees: vec![],
+            ..Default::default()
+        },
+    );
+
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let tainted = env::var("X").unwrap();
+            let safe = String::from("ok");
+            let y = transform(&tainted, &safe);
+            Command::new("sh").arg(y).status().unwrap();
+        }
+    "#;
+
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "tainted arg at propagating position should produce finding"
+    );
+}
+
+#[test]
+fn per_arg_propagation_safe_at_propagating_position() {
+    use crate::summary::FuncSummary;
+
+    // transform(a, b) only propagates param 0. Tainted value at param 1 (non-propagating) → no finding.
+    let mut global = GlobalSummaries::new();
+    global.insert(
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "lib.rs".into(),
+            name: "transform".into(),
+            arity: Some(2),
+            ..Default::default()
+        },
+        FuncSummary {
+            name: "transform".into(),
+            file_path: "lib.rs".into(),
+            lang: "rust".into(),
+            param_count: 2,
+            param_names: vec!["a".into(), "b".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![0],
+            propagates_taint: false,
+            tainted_sink_params: vec![],
+            callees: vec![],
+            ..Default::default()
+        },
+    );
+
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let safe = String::from("ok");
+            let tainted = env::var("X").unwrap();
+            let y = transform(&safe, &tainted);
+            Command::new("sh").arg(y).status().unwrap();
+        }
+    "#;
+
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert_eq!(
+        findings.len(),
+        0,
+        "tainted arg at non-propagating position should not produce finding"
+    );
+}
+
+#[test]
+fn per_arg_propagation_legacy_backward_compat() {
+    use crate::summary::FuncSummary;
+
+    // legacy_pass has propagates_taint=true but empty propagating_params (legacy).
+    // Should fall back to all-uses propagation.
+    let mut global = GlobalSummaries::new();
+    global.insert(
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "lib.rs".into(),
+            name: "legacy_pass".into(),
+            arity: Some(2),
+            ..Default::default()
+        },
+        FuncSummary {
+            name: "legacy_pass".into(),
+            file_path: "lib.rs".into(),
+            lang: "rust".into(),
+            param_count: 2,
+            param_names: vec!["a".into(), "b".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![],
+            propagates_taint: true,
+            tainted_sink_params: vec![],
+            callees: vec![],
+            ..Default::default()
+        },
+    );
+
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let safe = String::from("ok");
+            let tainted = env::var("X").unwrap();
+            let y = legacy_pass(&safe, &tainted);
+            Command::new("sh").arg(y).status().unwrap();
+        }
+    "#;
+
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "legacy propagates_taint=true with empty propagating_params should propagate all args"
+    );
+}
+
+#[test]
+fn per_arg_propagation_both_params_propagate() {
+    use crate::summary::FuncSummary;
+
+    // concat(a, b) propagates both params 0 and 1. Tainted at param 1 → finding.
+    let mut global = GlobalSummaries::new();
+    global.insert(
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "lib.rs".into(),
+            name: "concat".into(),
+            arity: Some(2),
+            ..Default::default()
+        },
+        FuncSummary {
+            name: "concat".into(),
+            file_path: "lib.rs".into(),
+            lang: "rust".into(),
+            param_count: 2,
+            param_names: vec!["a".into(), "b".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![0, 1],
+            propagates_taint: false,
+            tainted_sink_params: vec![],
+            callees: vec![],
+            ..Default::default()
+        },
+    );
+
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let safe = String::from("ok");
+            let tainted = env::var("X").unwrap();
+            let y = concat(&safe, &tainted);
+            Command::new("sh").arg(y).status().unwrap();
+        }
+    "#;
+
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "both params propagate — tainted arg at position 1 should produce finding"
+    );
+}
+
+#[test]
+fn per_arg_propagation_literal_first_arg() {
+    use crate::summary::FuncSummary;
+
+    // transform("literal", tainted) with only param 1 propagating → finding.
+    // The literal arg at position 0 has no identifiers, but positional mapping is still correct.
+    let mut global = GlobalSummaries::new();
+    global.insert(
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "lib.rs".into(),
+            name: "transform".into(),
+            arity: Some(2),
+            ..Default::default()
+        },
+        FuncSummary {
+            name: "transform".into(),
+            file_path: "lib.rs".into(),
+            lang: "rust".into(),
+            param_count: 2,
+            param_names: vec!["a".into(), "b".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![1],
+            propagates_taint: false,
+            tainted_sink_params: vec![],
+            callees: vec![],
+            ..Default::default()
+        },
+    );
+
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let tainted = env::var("X").unwrap();
+            let y = transform("prefix", &tainted);
+            Command::new("sh").arg(y).status().unwrap();
+        }
+    "#;
+
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "literal first arg should not shift positional mapping — tainted at param 1 propagates"
+    );
+}
+
+#[test]
+fn per_arg_propagation_nested_expr_arg() {
+    use crate::summary::FuncSummary;
+
+    // transform(inner(x), tainted) with only param 1 propagating → finding.
+    // Nested call in arg 0 doesn't affect arg 1 position.
+    let mut global = GlobalSummaries::new();
+    global.insert(
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "lib.rs".into(),
+            name: "transform".into(),
+            arity: Some(2),
+            ..Default::default()
+        },
+        FuncSummary {
+            name: "transform".into(),
+            file_path: "lib.rs".into(),
+            lang: "rust".into(),
+            param_count: 2,
+            param_names: vec!["a".into(), "b".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![1],
+            propagates_taint: false,
+            tainted_sink_params: vec![],
+            callees: vec![],
+            ..Default::default()
+        },
+    );
+
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = String::from("safe");
+            let tainted = env::var("X").unwrap();
+            let y = transform(inner(&x), &tainted);
+            Command::new("sh").arg(y).status().unwrap();
+        }
+    "#;
+
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "nested call in arg 0 should not affect arg 1 positional mapping"
+    );
+}
+
+#[test]
+fn js_cross_function_global_taint() {
+    let src = b"let x = \"safe\";\nfunction leak() { x = document.location(); }\nfunction use_it() { eval(x); }\nleak();\nuse_it();\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "cross-function global taint (leak -> use_it) should be detected"
+    );
+}
+
+#[test]
+fn js_two_level_converges_no_mutation() {
+    let src = b"let x = document.location();\nfunction f() { eval(x); }\nf();\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "top-level source to function sink should be detected"
+    );
+}
+
+// ── Catch-parameter provenance tests ──────────────────────────────────────
+
+#[test]
+fn catch_param_to_sink_has_caught_exception_source_kind() {
+    // Catch param flows to a sink — the finding source_kind must be
+    // CaughtException, not Unknown.
+    let src = b"
+        const { exec } = require('child_process');
+        try {
+            doSomething();
+        } catch (err) {
+            exec(err.command);
+        }
+    ";
+
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+
+    assert!(
+        !findings.is_empty(),
+        "catch param to sink should produce a finding"
+    );
+    for f in &findings {
+        assert_eq!(
+            f.source_kind,
+            crate::labels::SourceKind::CaughtException,
+            "catch-param origin should have CaughtException source kind, not {:?}",
+            f.source_kind
+        );
+    }
+}
+
+#[test]
+fn catch_param_source_node_has_callee() {
+    // The source CFG node for a catch-param finding must have a non-None callee
+    // so the report renders a meaningful descriptor instead of "(unknown)".
+    let src = b"
+        try {
+            riskyOperation();
+        } catch (e) {
+            fetch(e.message);
+        }
+    ";
+
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let the_cfg = &file_cfg.first_body().graph;
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+
+    assert!(
+        !findings.is_empty(),
+        "catch param to fetch should produce a finding"
+    );
+    for f in &findings {
+        let source_info = &the_cfg[f.source];
+        assert!(
+            source_info.call.callee.is_some(),
+            "catch-param source node must have a callee for reporting, got None"
+        );
+        let callee = source_info.call.callee.as_deref().unwrap();
+        assert!(
+            callee.contains("catch"),
+            "catch-param callee should contain 'catch', got {:?}",
+            callee
+        );
+    }
+}
+
+#[test]
+fn taint_origin_preserved_through_assignment() {
+    // Source origin should be preserved when taint flows through variable
+    // assignments, not replaced or lost.
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("CMD").unwrap();
+            let y = x;
+            let z = y;
+            Command::new("sh").arg(z).status().unwrap();
+        }"#;
+
+    let file_cfg = parse_rust(src);
+    let the_cfg = &file_cfg.first_body().graph;
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
+
+    assert_eq!(findings.len(), 1);
+    let f = &findings[0];
+    // The source should point to the env::var call, not the intermediate assignments
+    let source_info = &the_cfg[f.source];
+    assert!(
+        source_info.call.callee.is_some(),
+        "source node should have callee after propagation through assignments"
+    );
+    let callee = source_info.call.callee.as_deref().unwrap();
+    assert!(
+        callee.contains("env") || callee.contains("var"),
+        "source callee should reference env::var, got {:?}",
+        callee
+    );
+}
+
+#[test]
+fn taint_origin_preserved_through_branch_merge() {
+    // When taint flows through both branches of an if-else and merges,
+    // the origin should still point to the original source.
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("CMD").unwrap();
+            let y;
+            if true {
+                y = x;
+            } else {
+                y = x;
+            }
+            Command::new("sh").arg(y).status().unwrap();
+        }"#;
+
+    let file_cfg = parse_rust(src);
+    let the_cfg = &file_cfg.first_body().graph;
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
+
+    assert!(!findings.is_empty());
+    for f in &findings {
+        let source_info = &the_cfg[f.source];
+        assert!(
+            source_info.call.callee.is_some(),
+            "source callee must not be None after branch merge"
+        );
+    }
+}
+
+// ── SSA / Legacy Output-Equivalence Tests ─────────────────────────────────
+
+/// Run both legacy and SSA taint analysis on the same Rust source and assert
+/// that they produce the same findings (by source/sink/source_kind triple).
+/// Assert that `analyse_file` (high-level) matches direct SSA pipeline invocation.
+fn assert_ssa_integration(src: &[u8]) {
+    use crate::cfg::build_cfg;
+    use crate::state::symbol::SymbolInterner;
+    use std::collections::HashSet;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter::Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src, None).unwrap();
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+
+    // High-level path (per-body analysis)
+    let high_level = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
+
+    // Direct SSA path — use the first function body (fn main), not top-level
+    let body = if file_cfg.bodies.len() > 1 {
+        &file_cfg.bodies[1]
+    } else {
+        file_cfg.first_body()
+    };
+    let the_cfg = &body.graph;
+    let entry = body.entry;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let ssa =
+        crate::ssa::lower_to_ssa(the_cfg, entry, None, true).expect("SSA lowering should succeed");
+    let ssa_xfer = ssa_transfer::SsaTaintTransfer {
+        lang: Lang::Rust,
+        namespace: "test.rs",
+        interner: &interner,
+        local_summaries: summaries,
+        global_summaries: None,
+        interop_edges: &[],
+        owner_body_id: crate::cfg::BodyId(0),
+        parent_body_id: None,
+        global_seed: None,
+        param_seed: None,
+        receiver_seed: None,
+        const_values: None,
+        type_facts: None,
+        ssa_summaries: None,
+        extra_labels: None,
+        base_aliases: None,
+        callee_bodies: None,
+        inline_cache: None,
+        context_depth: 0,
+        callback_bindings: None,
+        points_to: None,
+        dynamic_pts: None,
+        import_bindings: None,
+        promisify_aliases: None,
+        module_aliases: None,
+        static_map: None,
+        auto_seed_handler_params: false,
+        cross_file_bodies: None,
+    };
+    let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
+    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
+    ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
+    ssa_findings.dedup_by_key(|f| (f.sink, f.source));
+
+    // Compare by (source, sink)
+    let high_set: HashSet<_> = high_level
+        .iter()
+        .map(|f| (f.source.index(), f.sink.index()))
+        .collect();
+    let ssa_set: HashSet<_> = ssa_findings
+        .iter()
+        .map(|f| (f.source.index(), f.sink.index()))
+        .collect();
+
+    assert_eq!(
+        high_set, ssa_set,
+        "analyse_file vs direct SSA mismatch.\nHigh-level: {high_set:?}\nDirect SSA: {ssa_set:?}"
+    );
+}
+
+#[test]
+fn equiv_env_to_arg() {
+    assert_ssa_integration(
+        br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("DANGEROUS_ARG").unwrap();
+            Command::new("sh").arg(x).status().unwrap();
+        }"#,
+    );
+}
+
+#[test]
+fn equiv_taint_through_if_else() {
+    assert_ssa_integration(
+        br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let safe = html_escape::encode_safe(&x);
+            if x.len() > 5 {
+                Command::new("sh").arg(&x).status().unwrap();
+            } else {
+                Command::new("sh").arg(&safe).status().unwrap();
+            }
+        }"#,
+    );
+}
+
+#[test]
+fn equiv_taint_through_while_loop() {
+    assert_ssa_integration(
+        br#"
+        use std::{env, process::Command};
+        fn main() {
+            let mut x = env::var("DANGEROUS").unwrap();
+            while x.len() < 100 {
+                x.push_str("a");
+            }
+            Command::new("sh").arg(x).status().unwrap();
+        }"#,
+    );
+}
+
+#[test]
+fn equiv_killed_by_matching_sanitizer() {
+    assert_ssa_integration(
+        br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let clean = shell_escape::unix::escape(&x);
+            Command::new("sh").arg(clean).status().unwrap();
+        }"#,
+    );
+}
+
+#[test]
+fn equiv_wrong_sanitizer_preserves_taint() {
+    assert_ssa_integration(
+        br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let escaped = html_escape::encode_safe(&x);
+            Command::new("sh").arg(escaped).status().unwrap();
+        }"#,
+    );
+}
+
+#[test]
+fn integ_php_echo_simple_var() {
+    use crate::state::symbol::SymbolInterner;
+    let src = b"<?php\n$x = $_POST['data'];\necho $x;\n";
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let file_cfg = parse_lang(src, "php", lang);
+    let the_cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
+
+    let high_level = analyse_file(&file_cfg, summaries, None, Lang::Php, "test.php", &[], None);
+
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let ssa = crate::ssa::lower_to_ssa(the_cfg, entry, None, true).expect("SSA lowering");
+    let ssa_xfer = ssa_transfer::SsaTaintTransfer {
+        lang: Lang::Php,
+        namespace: "test.php",
+        interner: &interner,
+        local_summaries: summaries,
+        global_summaries: None,
+        interop_edges: &[],
+        owner_body_id: crate::cfg::BodyId(0),
+        parent_body_id: None,
+        global_seed: None,
+        param_seed: None,
+        receiver_seed: None,
+        const_values: None,
+        type_facts: None,
+        ssa_summaries: None,
+        extra_labels: None,
+        base_aliases: None,
+        callee_bodies: None,
+        inline_cache: None,
+        context_depth: 0,
+        callback_bindings: None,
+        points_to: None,
+        dynamic_pts: None,
+        import_bindings: None,
+        promisify_aliases: None,
+        module_aliases: None,
+        static_map: None,
+        auto_seed_handler_params: false,
+        cross_file_bodies: None,
+    };
+    let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
+    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
+    ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
+    ssa_findings.dedup_by_key(|f| (f.sink, f.source));
+
+    let high_set: std::collections::HashSet<_> = high_level
+        .iter()
+        .map(|f| (f.source.index(), f.sink.index()))
+        .collect();
+    let ssa_set: std::collections::HashSet<_> = ssa_findings
+        .iter()
+        .map(|f| (f.source.index(), f.sink.index()))
+        .collect();
+    assert_eq!(
+        high_set, ssa_set,
+        "PHP echo analyse_file vs direct SSA mismatch"
+    );
+}
+
+#[test]
+fn integ_c_curl_handle_ssrf() {
+    use crate::state::symbol::SymbolInterner;
+    let src = b"#include <stdlib.h>\n#include <curl/curl.h>\n\
+        void fetch() {\n  char *url = getenv(\"TARGET\");\n  \
+        CURL *curl = curl_easy_init();\n  \
+        curl_easy_setopt(curl, CURLOPT_URL, url);\n  \
+        curl_easy_perform(curl);\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    let file_cfg = parse_lang(src, "c", lang);
+    let the_cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
+
+    let high_level = analyse_file(&file_cfg, summaries, None, Lang::C, "test.c", &[], None);
+
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let ssa = crate::ssa::lower_to_ssa(the_cfg, entry, None, true).expect("SSA lowering");
+    let ssa_xfer = ssa_transfer::SsaTaintTransfer {
+        lang: Lang::C,
+        namespace: "test.c",
+        interner: &interner,
+        local_summaries: summaries,
+        global_summaries: None,
+        interop_edges: &[],
+        owner_body_id: crate::cfg::BodyId(0),
+        parent_body_id: None,
+        global_seed: None,
+        param_seed: None,
+        receiver_seed: None,
+        const_values: None,
+        type_facts: None,
+        ssa_summaries: None,
+        extra_labels: None,
+        base_aliases: None,
+        callee_bodies: None,
+        inline_cache: None,
+        context_depth: 0,
+        callback_bindings: None,
+        points_to: None,
+        dynamic_pts: None,
+        import_bindings: None,
+        promisify_aliases: None,
+        module_aliases: None,
+        static_map: None,
+        auto_seed_handler_params: false,
+        cross_file_bodies: None,
+    };
+    let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
+    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
+    ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
+    ssa_findings.dedup_by_key(|f| (f.sink, f.source));
+
+    let high_set: std::collections::HashSet<_> = high_level
+        .iter()
+        .map(|f| (f.source.index(), f.sink.index()))
+        .collect();
+    let ssa_set: std::collections::HashSet<_> = ssa_findings
+        .iter()
+        .map(|f| (f.source.index(), f.sink.index()))
+        .collect();
+    assert_eq!(
+        high_set, ssa_set,
+        "curl analyse_file vs direct SSA mismatch"
+    );
+}
+
+#[test]
+fn equiv_validate_and_early_return() {
+    assert_ssa_integration(
+        br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if !validate(&x) { return; }
+            Command::new("sh").arg(x).status().unwrap();
+        }"#,
+    );
+}
+
+// ── JS/TS SSA Two-Level Solve Tests ─────────────────────────────────────
+
+#[test]
+fn ssa_js_two_level_global_to_function() {
+    // Top-level source → function sink via global seed
+    let src = b"let x = document.location();\nfunction f() { eval(x); }\nf();\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+
+    // SSA is now the default path for JS/TS
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "SSA JS two-level: top-level source should flow to function sink"
+    );
+}
+
+#[test]
+fn ssa_js_two_level_function_isolation() {
+    // Variable x in func_a should not leak to func_b
+    let src =
+        b"function a() { let x = document.location(); }\nfunction b() { eval(x); }\na();\nb();\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+
+    // SSA is now the default path for JS/TS
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    // x is local to a(), so it shouldn't flow to b()'s eval
+    // Note: this depends on x being properly scoped; if the CFG treats x as global, it may still flow.
+    // The test verifies that the SSA path doesn't crash and produces reasonable results.
+    let _ = findings; // Assert no panic
+}
+
+#[test]
+fn ssa_js_two_level_convergence() {
+    // Function writes back to global, 2nd round picks it up
+    let src = b"let x = 'safe';\nfunction leak() { x = document.location(); }\nfunction use_it() { eval(x); }\nleak();\nuse_it();\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+
+    // SSA is now the default path for JS/TS
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "SSA JS two-level: function mutation of global should converge and detect taint"
+    );
+}
+
+/// Verify SSA JS two-level correctly detects taint through chained method calls
+/// (e.g. fetch(url).then(fn).then(fn) in Express callbacks).
+#[test]
+fn ssa_js_chained_call_taint() {
+    let src = b"var express = require('express');\nvar app = express();\n\napp.get('/proxy', function(req, res) {\n    var url = req.query.url;\n    fetch(url).then(function(response) {\n        return response.text();\n    }).then(function(body) {\n        res.send(body);\n    });\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "SSA should detect taint through fetch(url).then().then() chain"
+    );
+}
+
+// ── Field access taint tracking tests ────────────────────────────────────
+
+#[test]
+fn ssa_field_write_to_sink() {
+    // obj.data = source; sink(obj.data) → finding
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = {};\n    obj.data = req.query.input;\n    res.send(obj.data);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "SSA: field write from source should propagate taint to field read at sink"
+    );
+}
+
+#[test]
+fn ssa_field_overwrite_kills_taint() {
+    // obj.data = source; obj.data = "safe"; sink(obj.data) → no finding
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = {};\n    obj.data = req.query.input;\n    obj.data = \"safe\";\n    res.send(obj.data);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "SSA: constant overwrite of field should kill taint"
+    );
+}
+
+#[test]
+fn ssa_field_different_bases_no_alias() {
+    // a.tainted = source; sink(b.safe) → no finding (different base objects, different fields)
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var a = {};\n    var b = {};\n    a.tainted = req.query.input;\n    res.send(b.safe);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "SSA: different base objects should not alias — a.tainted taint must not reach b.safe"
+    );
+}
+
+#[test]
+fn ssa_python_attribute_taint() {
+    // config.cmd = os.getenv("CMD"); os.system(config.cmd) → finding
+    let src = b"import os\n\nclass Config:\n    pass\n\nconfig = Config()\nconfig.cmd = os.getenv(\"CMD\")\nos.system(config.cmd)\n";
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_lang(src, "python", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::Python,
+        "test.py",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "SSA: Python attribute write from source should propagate taint to attribute read at sink"
+    );
+}
+
+// ── Field-aware taint suppression tests ──────────────────────────────────
+
+#[test]
+fn ssa_field_safe_overwrite_no_fp() {
+    // obj = tainted source; obj.safe = "constant"; sink(obj.safe) → NO finding
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = req.query;\n    obj.safe = \"constant\";\n    res.send(obj.safe);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "field-aware suppression: reading safe field of tainted base should not produce a finding, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_field_tainted_field_still_fires() {
+    // obj.data = source; sink(obj.data) → finding (dotted path IS tainted, no suppression)
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = {};\n    obj.data = req.query.input;\n    res.send(obj.data);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "field-aware suppression: tainted dotted-path field read should still produce a finding"
+    );
+}
+
+#[test]
+fn ssa_field_base_sink_no_suppression() {
+    // obj.data = source; sink(obj) → finding (no dotted path at sink, no suppression)
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = {};\n    obj.data = req.query.input;\n    res.send(obj);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "field-aware suppression: tainted base passed directly to sink should still fire"
+    );
+}
+
+// ── SSA Function Summary tests ───────────────────────────────────────────
+
+#[test]
+fn ssa_summary_identity_propagation() {
+    // Function that returns its param unchanged → Identity transform
+    use crate::state::symbol::SymbolInterner;
+    use crate::summary::ssa_summary::TaintTransform;
+
+    let src = br#"
+        fn passthrough(x: String) -> String {
+            x
+        }"#;
+    let file_cfg = parse_lang(
+        src,
+        "rust",
+        tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
+    );
+    let the_cfg = &file_cfg.first_body().graph;
+    let _entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let func_entries = super::find_function_entries(the_cfg);
+    assert!(
+        !func_entries.is_empty(),
+        "should find at least one function entry"
+    );
+
+    for (func_name, func_entry) in &func_entries {
+        let func_ssa = crate::ssa::lower_to_ssa(the_cfg, *func_entry, Some(func_name), false);
+        if let Ok(ssa) = func_ssa {
+            let param_count = ssa
+                .blocks
+                .iter()
+                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+                .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+                .count();
+            if param_count == 0 {
+                continue;
+            }
+
+            let summary = ssa_transfer::extract_ssa_func_summary(
+                &ssa,
+                the_cfg,
+                summaries,
+                None,
+                Lang::Rust,
+                "test.rs",
+                &interner,
+                param_count,
+                None,
+                None,
+                None,
+            );
+            assert!(
+                !summary.param_to_return.is_empty(),
+                "passthrough function should have param_to_return entries"
+            );
+            // Check the transform is Identity (all caps survive)
+            for (_, transform) in &summary.param_to_return {
+                assert!(
+                    matches!(transform, TaintTransform::Identity),
+                    "passthrough should produce Identity transform, got {:?}",
+                    transform
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ssa_summary_sanitizer_strips_bits() {
+    // Function with internal sanitizer → StripBits transform
+    use crate::state::symbol::SymbolInterner;
+    use crate::summary::ssa_summary::TaintTransform;
+
+    let src = br#"
+        fn sanitize_input(x: String) -> String {
+            html_escape::encode_safe(&x)
+        }"#;
+    let file_cfg = parse_lang(
+        src,
+        "rust",
+        tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
+    );
+    let the_cfg = &file_cfg.first_body().graph;
+    let _entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let func_entries = super::find_function_entries(the_cfg);
+
+    for (func_name, func_entry) in &func_entries {
+        let func_ssa = crate::ssa::lower_to_ssa(the_cfg, *func_entry, Some(func_name), false);
+        if let Ok(ssa) = func_ssa {
+            let param_count = ssa
+                .blocks
+                .iter()
+                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+                .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+                .count();
+            if param_count == 0 {
+                continue;
+            }
+
+            let summary = ssa_transfer::extract_ssa_func_summary(
+                &ssa,
+                the_cfg,
+                summaries,
+                None,
+                Lang::Rust,
+                "test.rs",
+                &interner,
+                param_count,
+                None,
+                None,
+                None,
+            );
+            // Sanitizer should strip some bits
+            for (_, transform) in &summary.param_to_return {
+                assert!(
+                    matches!(transform, TaintTransform::StripBits(_)),
+                    "sanitizer wrapper should produce StripBits transform, got {:?}",
+                    transform
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ssa_summary_source_adds_bits() {
+    // Function that reads env → source_caps should be non-empty
+    use crate::state::symbol::SymbolInterner;
+
+    let src = br#"
+        use std::env;
+        fn read_config() -> String {
+            env::var("CONFIG").unwrap()
+        }"#;
+    let file_cfg = parse_lang(
+        src,
+        "rust",
+        tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
+    );
+    let the_cfg = &file_cfg.first_body().graph;
+    let _entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let func_entries = super::find_function_entries(the_cfg);
+
+    for (func_name, func_entry) in &func_entries {
+        let func_ssa = crate::ssa::lower_to_ssa(the_cfg, *func_entry, Some(func_name), false);
+        if let Ok(ssa) = func_ssa {
+            let param_count = ssa
+                .blocks
+                .iter()
+                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+                .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+                .count();
+
+            let summary = ssa_transfer::extract_ssa_func_summary(
+                &ssa,
+                the_cfg,
+                summaries,
+                None,
+                Lang::Rust,
+                "test.rs",
+                &interner,
+                param_count,
+                None,
+                None,
+                None,
+            );
+            assert!(
+                !summary.source_caps.is_empty(),
+                "env-reading function should have non-empty source_caps, got {:?}",
+                summary.source_caps
+            );
+        }
+    }
+}
+
+#[test]
+fn ssa_summary_param_to_sink() {
+    // Function that passes param to a dangerous call → param_to_sink
+    use crate::state::symbol::SymbolInterner;
+
+    let src = br#"
+        use std::process::Command;
+        fn run_cmd(cmd: String) {
+            Command::new("sh").arg(cmd).status().unwrap();
+        }"#;
+    let file_cfg = parse_lang(
+        src,
+        "rust",
+        tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
+    );
+    let the_cfg = &file_cfg.first_body().graph;
+    let _entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let func_entries = super::find_function_entries(the_cfg);
+
+    for (func_name, func_entry) in &func_entries {
+        let func_ssa = crate::ssa::lower_to_ssa(the_cfg, *func_entry, Some(func_name), false);
+        if let Ok(ssa) = func_ssa {
+            let param_count = ssa
+                .blocks
+                .iter()
+                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+                .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+                .count();
+            if param_count == 0 {
+                continue;
+            }
+
+            let summary = ssa_transfer::extract_ssa_func_summary(
+                &ssa,
+                the_cfg,
+                summaries,
+                None,
+                Lang::Rust,
+                "test.rs",
+                &interner,
+                param_count,
+                None,
+                None,
+                None,
+            );
+            assert!(
+                !summary.param_to_sink.is_empty(),
+                "function passing param to Command sink should have param_to_sink entries"
+            );
+        }
+    }
+}
+
+#[test]
+fn ssa_cross_function_taint_with_sanitizer_wrapper() {
+    // Cross-function: caller passes tainted data through sanitizer wrapper
+    // The SSA summary should capture the sanitizer's StripBits, reducing taint at call site
+    let src = b"var express = require('express');\nvar app = express();\n\nfunction cleanHtml(input) {\n    return DOMPurify.sanitize(input);\n}\n\napp.get('/safe', function(req, res) {\n    var name = req.query.name;\n    var safe = cleanHtml(name);\n    res.send(safe);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let the_cfg = &file_cfg.first_body().graph;
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+
+    // With SSA summary, cleanHtml should be recognized as stripping HTML_ESCAPE bits,
+    // so res.send(safe) should not fire for XSS (HTML_ESCAPE stripped).
+    // The finding may still exist for other cap bits, but the XSS-specific ones should be gone.
+    // This test validates that the SSA summary integration is working.
+    // Note: whether this fully suppresses depends on the specific cap bit overlap.
+    // At minimum, the summary extraction should produce a non-trivial result.
+    drop(findings);
+
+    // Verify that summary extraction works for this code
+    use crate::state::symbol::SymbolInterner;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let ssa_summaries = super::extract_intra_file_ssa_summaries(
+        the_cfg,
+        &interner,
+        Lang::JavaScript,
+        "test.js",
+        summaries,
+        None,
+    );
+    // cleanHtml should have an SSA summary
+    let clean_summary = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "cleanHtml")
+        .map(|(_, v)| v)
+        .unwrap_or_else(|| {
+            panic!(
+                "cleanHtml should have an SSA summary, got keys: {:?}",
+                ssa_summaries.keys().map(|k| &k.name).collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        !clean_summary.param_to_return.is_empty(),
+        "cleanHtml should propagate param to return"
+    );
+}
+
+// ── Inter-procedural container store tests ────────────────────────────────
+
+#[test]
+fn ssa_interproc_container_store_summary() {
+    // Verify that extract_container_flow_summary produces correct indices
+    // for storeInto(value, arr) { arr.push(value); } after param reordering.
+    use crate::state::symbol::SymbolInterner;
+
+    let src = b"var express = require('express');\nvar app = express();\n\nfunction storeInto(value, arr) {\n    arr.push(value);\n}\n\napp.get('/store', function(req, res) {\n    var items = [];\n    storeInto(req.query.input, items);\n    res.send(items.join(''));\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let the_cfg = &file_cfg.first_body().graph;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+
+    // Extract SSA summaries (uses lower_to_ssa_with_params)
+    let ssa_summaries = super::extract_intra_file_ssa_summaries(
+        the_cfg,
+        &interner,
+        Lang::JavaScript,
+        "test.js",
+        summaries,
+        None,
+    );
+
+    let store_summary = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "storeInto")
+        .map(|(_, v)| v)
+        .expect("storeInto should have an SSA summary");
+    assert!(
+        !store_summary.param_to_container_store.is_empty(),
+        "storeInto should have param_to_container_store (value stored into arr)"
+    );
+    // With correct param ordering: value=0, arr=1
+    assert_eq!(
+        store_summary.param_to_container_store,
+        vec![(0, 1)],
+        "param_to_container_store should map value(0) → arr(1)"
+    );
+
+    // Verify the full analysis produces a finding
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "inter-procedural container store should produce a finding"
+    );
+}
+
+// ── Loop Induction Variable Optimization ─────────────────────────────────
+
+#[test]
+fn ssa_induction_var_no_taint() {
+    // Counter in loop with tainted source elsewhere: counter should not gain taint.
+    // The loop counter `i` is a simple induction variable (i = i + 1).
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let data = env::var("INPUT").unwrap();
+            let mut i = 0;
+            while i < 10 {
+                i = i + 1;
+            }
+            Command::new("sh").arg(data).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    // Should still find the data→sink flow but `i` should not gain taint
+    assert_eq!(
+        findings.len(),
+        1,
+        "induction var optimization: tainted source should still produce 1 finding"
+    );
+}
+
+#[test]
+fn ssa_loop_tainted_var_not_induction() {
+    // `x` is tainted and transformed in a loop — NOT an induction variable
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let mut x = env::var("DANGEROUS").unwrap();
+            while x.len() < 100 {
+                x.push_str("a");
+            }
+            Command::new("sh").arg(x).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert_eq!(
+        findings.len(),
+        1,
+        "tainted var in loop (not induction) should still propagate"
+    );
+}
+
+#[test]
+fn ssa_taint_through_loop_still_works() {
+    // Existing test ported: taint through a loop body should work
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            for _i in 0..10 {
+                let _unused = 1;
+            }
+            Command::new("sh").arg(x).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert_eq!(
+        findings.len(),
+        1,
+        "taint through loop should still produce 1 finding"
+    );
+}
+
+// ── Enhanced Condition Predicate Classification ──────────────────────────
+
+#[test]
+fn ssa_validation_targets_specific_var() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // `validate(x, config)` should only validate `x`, not `config`
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            let config = env::var("CONFIG").unwrap();
+            if validate(x, config) {
+                Command::new("sh").arg(config).status().unwrap();
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
+
+    // config flows to a sink; only x was validated, so config should NOT be validated
+    assert!(!findings.is_empty(), "should detect taint flow for config");
+    // The finding for config should NOT be path_validated since validate() targets x, not config
+    let config_finding = findings.iter().find(|f| !f.path_validated);
+    assert!(
+        config_finding.is_some(),
+        "config should NOT be marked as path_validated (only x is validated)"
+    );
+}
+
+#[test]
+fn ssa_method_validation_target() {
+    use crate::taint::path_state::classify_condition_with_target;
+    // Method call: `x.isValid()` should target `x`
+    let (kind, target) = classify_condition_with_target("x.isValid()");
+    assert_eq!(kind, PredicateKind::ValidationCall);
+    assert_eq!(target.as_deref(), Some("x"));
+}
+
+// ── Path Sensitivity via Phi Structure ───────────────────────────────────
+
+#[test]
+fn ssa_phi_path_sensitive_both_branches_validated() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Variable validated on both branches → phi result should be fully validated
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if validate(&x) {
+                Command::new("sh").arg(&x).status().unwrap();
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
+
+    // Validated findings are now suppressed — sink is in the validated
+    // branch, so no finding should be emitted.
+    assert_eq!(findings.len(), 0, "validated finding should be suppressed");
+}
+
+#[test]
+fn ssa_phi_path_sensitive_one_branch_not_validated() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Sink is in the unvalidated branch → should NOT be path_validated
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if !validate(&x) {
+                Command::new("sh").arg(&x).status().unwrap();
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
+
+    assert_eq!(findings.len(), 1, "should detect taint flow");
+    assert!(
+        !findings[0].path_validated,
+        "finding should NOT be path_validated (sink in failed-validation branch)"
+    );
+}
+
+// ── Cross-language reassignment kill verification ───────────────────────
+
+#[test]
+fn ssa_reassignment_kills_taint_js() {
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/r', function(req, res) {\n    var name = req.query.input;\n    name = \"Guest\";\n    eval(name);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "JS: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_ts() {
+    let src =
+        b"function main() {\n  let x = document.location();\n  x = \"safe\";\n  eval(x);\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
+    let file_cfg = parse_lang(src, "typescript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::TypeScript,
+        "test.ts",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "TS: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_python() {
+    let src = b"import os\ndef main():\n    cmd = os.getenv(\"CMD\")\n    cmd = \"safe\"\n    os.system(cmd)\n";
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_lang(src, "python", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::Python,
+        "test.py",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "Python: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_go() {
+    let src = b"package main\n\nimport \"os\"\nimport \"os/exec\"\n\nfunc main() {\n\tcmd := os.Getenv(\"CMD\")\n\tcmd = \"safe\"\n\texec.Command(cmd)\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
+    let file_cfg = parse_lang(src, "go", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Go, "test.go", &[], None);
+    assert!(
+        findings.is_empty(),
+        "Go: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_java() {
+    let src = b"class Main {\n  void main() {\n    String cmd = System.getenv(\"CMD\");\n    cmd = \"safe\";\n    Runtime.exec(cmd);\n  }\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
+    let file_cfg = parse_lang(src, "java", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::Java,
+        "test.java",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "Java: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_php() {
+    let src = b"<?php\n$cmd = $_GET['cmd'];\n$cmd = \"safe\";\neval($cmd);\n";
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let file_cfg = parse_lang(src, "php", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Php, "test.php", &[], None);
+    assert!(
+        findings.is_empty(),
+        "PHP: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_ruby() {
+    let src = b"def main\n  cmd = gets()\n  cmd = \"safe\"\n  system(cmd)\nend\n";
+    let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
+    let file_cfg = parse_lang(src, "ruby", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Ruby, "test.rb", &[], None);
+    assert!(
+        findings.is_empty(),
+        "Ruby: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_c() {
+    let src = b"#include <stdlib.h>\nvoid main() {\n  char* cmd = getenv(\"CMD\");\n  cmd = \"safe\";\n  system(cmd);\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    let file_cfg = parse_lang(src, "c", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::C, "test.c", &[], None);
+    assert!(
+        findings.is_empty(),
+        "C: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_cpp() {
+    let src = b"#include <cstdlib>\nvoid main() {\n  char* cmd = std::getenv(\"CMD\");\n  cmd = \"safe\";\n  system(cmd);\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        findings.is_empty(),
+        "C++: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+// ── Compound assignment preserves taint ─────────────────────────────────
+
+#[test]
+fn ssa_compound_preserves_taint_js() {
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/r', function(req, res) {\n    var name = req.query.input;\n    name = name + \" suffix\";\n    eval(name);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "JS: compound assignment should preserve taint"
+    );
+}
+
+#[test]
+fn ssa_compound_preserves_taint_python() {
+    let src = b"import os\ndef main():\n    cmd = os.getenv(\"CMD\")\n    cmd = cmd + \" safe\"\n    os.system(cmd)\n";
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_lang(src, "python", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::Python,
+        "test.py",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "Python: compound assignment should preserve taint"
+    );
+}
+
+#[test]
+fn ssa_compound_preserves_taint_go() {
+    let src = b"package main\n\nimport \"os\"\nimport \"os/exec\"\n\nfunc main() {\n\tcmd := os.Getenv(\"CMD\")\n\tcmd = cmd + \" suffix\"\n\texec.Command(cmd)\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
+    let file_cfg = parse_lang(src, "go", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Go, "test.go", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "Go: compound assignment should preserve taint"
+    );
+}
+
+#[test]
+fn ssa_compound_preserves_taint_java() {
+    let src = b"class Main {\n  void main() {\n    String cmd = System.getenv(\"CMD\");\n    cmd = cmd + \" safe\";\n    Runtime.exec(cmd);\n  }\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
+    let file_cfg = parse_lang(src, "java", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::Java,
+        "test.java",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "Java: compound assignment should preserve taint"
+    );
+}
+
+// ── PHI merge preserves taint on non-reassigned path ────────────────────
+
+#[test]
+fn ssa_phi_preserves_taint_on_non_reassigned_path_js() {
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/r', function(req, res) {\n    var name = req.query.input;\n    if (name.length > 10) {\n        name = \"fallback\";\n    }\n    eval(name);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "JS: PHI merge should preserve taint from non-reassigned path"
+    );
+}
+
+#[test]
+fn ssa_phi_preserves_taint_on_non_reassigned_path_rust() {
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let mut x = env::var("DANGEROUS").unwrap();
+            if x.len() > 5 {
+                x = "safe".to_string();
+            }
+            Command::new("sh").arg(&x).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert!(
+        !findings.is_empty(),
+        "Rust: PHI merge should preserve taint from non-reassigned path"
+    );
+}
+
+/// Smoke test: linear SSRF prefix suppression (no phi, no branches).
+///
+/// The prefix must be in a named variable so the CFG captures it as a
+/// separate SSA Const value. Inline string literals in binary expressions
+/// are not currently tracked as SSA operands.
+#[test]
+fn abstract_ssrf_prefix_linear_suppression() {
+    let src = b"var userId = document.location();\nvar prefix = 'https://api.example.com/users/';\nvar url = prefix + userId;\nfetch(url);\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "Linear SSRF prefix: 'https://api.example.com/users/' + userId should be \
+         suppressed by abstract string domain. Got {} findings.",
+        findings.len()
+    );
+}
+
+/// Regression test for abstract phi replay in collect_block_events.
+///
+/// Two predecessor blocks produce string concat values with different safe
+/// prefixes ("https://api.example.com/users/" and "https://api.example.com/admins/").
+/// A phi merges them. The LCP of the prefixes is "https://api.example.com/" which
+/// still has scheme://host/ — so SSRF suppression should fire.
+///
+/// Before the phi replay fix, collect_block_events did NOT replay abstract phis,
+/// leaving the phi result's abstract value as Top (stale). The SSRF suppression
+/// would fail because there was no known prefix.
+///
+/// Note: prefix must be in a named variable so the CFG captures it as an SSA Const.
+#[test]
+fn abstract_phi_replay_ssrf_suppression() {
+    let src = b"var userId = document.location();\nvar prefix1 = 'https://api.example.com/users/';\nvar prefix2 = 'https://api.example.com/admins/';\nvar url;\nif (userId.length > 5) {\n  url = prefix1 + userId;\n} else {\n  url = prefix2 + userId;\n}\nfetch(url);\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "Abstract phi replay: both branches produce safe SSRF prefixes, \
+         phi merge should preserve the common prefix 'https://api.example.com/' \
+         and suppress the SSRF finding. Got {} findings.",
+        findings.len()
+    );
+}
+
+#[test]
+fn ruby_type_check_guard_suppresses_taint() {
+    // Ruby `unless user_id.is_a?(Integer)` guard should validate user_id
+    // so that the subsequent SQL sink does not produce a finding.
+    let src = b"def run_query(params)\n  user_id = params[:id]\n  unless user_id.is_a?(Integer)\n    return \"bad input\"\n  end\n  connection.execute(\"SELECT * FROM users WHERE id = \" + user_id.to_s)\nend\n";
+    let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
+    let file_cfg = parse_lang(src, "ruby", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Ruby, "test.rb", &[], None);
+    assert!(
+        findings.is_empty(),
+        "Ruby: is_a?(Integer) type guard should suppress taint finding, got {} findings",
+        findings.len()
+    );
+}
+
+// ── Rust struct expression taint propagation ────────────────────────────
+
+#[test]
+fn rust_struct_literal_with_source_produces_source_caps() {
+    let src = br#"
+        use std::env;
+        struct Cfg { val: String }
+        fn make_cfg() -> Cfg {
+            Cfg { val: env::var("X").unwrap() }
+        }
+    "#;
+    let summaries = extract_summaries_from_bytes(src, "test.rs");
+    let make = summaries
+        .iter()
+        .find(|s| s.name == "make_cfg")
+        .expect("make_cfg should have a summary");
+    assert!(
+        make.source_caps != 0,
+        "make_cfg should have source_caps from env::var inside struct literal, got 0"
+    );
+}
+
+#[test]
+fn rust_struct_constructor_source_flows_through_format_to_sink() {
+    let src = br#"
+        use std::env;
+        use std::process::Command;
+        use std::fs;
+
+        struct AppConfig {
+            db_url: String,
+            upload_dir: String,
+        }
+
+        fn load_config() -> AppConfig {
+            AppConfig {
+                db_url: env::var("DATABASE_URL").unwrap(),
+                upload_dir: env::var("UPLOAD_DIR").unwrap(),
+            }
+        }
+
+        fn handle_export() {
+            let config = load_config();
+            let dump_cmd = format!("pg_dump {}", config.db_url);
+            Command::new("sh").arg("-c").arg(&dump_cmd).output().unwrap();
+            let dump_path = format!("{}/export.sql", config.upload_dir);
+            fs::write(&dump_path, "data").unwrap();
+        }
+    "#;
+    let file_cfg = parse_rust(src);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert!(
+        findings.len() >= 2,
+        "Expected >= 2 taint findings (Command::new + fs::write), got {}",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_format_macro_propagates_taint() {
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            let cmd = format!("echo {}", x);
+            Command::new("sh").arg("-c").arg(&cmd).output().unwrap();
+        }
+    "#;
+    let findings = ssa_analyse_rust(src);
+    assert_eq!(
+        findings.len(),
+        1,
+        "format! should propagate taint from env::var to Command::new sink"
+    );
+}
+
+// ── B-2 regression: phi validated_must must use must-analysis, not may ───
+
+#[test]
+fn phi_validated_must_requires_all_paths() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Path A validates x, path B does NOT validate x.
+    // The phi for x after the merge must NOT get validated_must — only
+    // validated_may (since at least one path validated). The sink after
+    // the merge must still fire because the must-analysis says "not
+    // definitely validated on all paths".
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if some_condition() {
+                validate(&x);
+            }
+            Command::new("sh").arg(&x).status().unwrap();
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
+
+    // x is validated on only one branch, so the phi merge must NOT promote
+    // to validated_must. The sink should still fire.
+    assert!(
+        !findings.is_empty(),
+        "B-2 regression: phi must NOT promote to validated_must when only \
+         one branch validates — sink should still fire"
+    );
+}
+
+// ── C-1 regression: inline return taint precision ───────────────────────
+
+#[test]
+fn inline_return_constant_with_internal_source_produces_no_finding() {
+    use tree_sitter::Language;
+
+    // Callee has an internal source (document.location) but returns a constant.
+    // The caller feeds tainted input as an argument. Since the return value is
+    // a constant (never tainted), the caller's call result should be untainted.
+    let src = b"var child_process = require('child_process');\n\
+        var express = require('express');\n\
+        var app = express();\n\
+        \n\
+        function transform(input) {\n\
+            var internal = document.location();\n\
+            return 'constant_value';\n\
+        }\n\
+        \n\
+        app.get('/safe', function(req, res) {\n\
+            var result = transform(req.query.data);\n\
+            child_process.exec(result);\n\
+        });\n";
+
+    let lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+
+    // transform() returns a constant — no taint should leak to caller
+    assert_eq!(
+        findings.len(),
+        0,
+        "C-1: transform() returns constant — internal source must not leak, got {} findings: {:?}",
+        findings.len(),
+        findings
+            .iter()
+            .map(|f| format!("{}→{}", f.source.index(), f.sink.index()))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn inline_return_taint_prefers_explicit_return_value() {
+    use tree_sitter::Language;
+
+    // When a callee has an explicit Return(Some(rv)) and rv IS tainted,
+    // extract_inline_return_taint should collect ONLY that value's taint,
+    // not all live tainted variables.
+    let src = b"var child_process = require('child_process');\n\
+        var express = require('express');\n\
+        var app = express();\n\
+        \n\
+        function passthrough(cmd) {\n\
+            return cmd;\n\
+        }\n\
+        \n\
+        app.get('/a', function(req, res) {\n\
+            var w = passthrough(req.query.cmd);\n\
+            child_process.exec(w);\n\
+        });\n";
+
+    let lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+
+    // passthrough(tainted) returns tainted → exactly 1 finding
+    assert_eq!(
+        findings.len(),
+        1,
+        "C-1 regression: passthrough(tainted) should produce exactly 1 finding, got {}",
+        findings.len()
+    );
+}
+
+#[test]
+fn inline_return_taint_internal_source_does_not_widen_caps() {
+    use tree_sitter::Language;
+
+    // Callee has an internal source (document.location) alongside a tainted
+    // param. The explicit return value is the param. Without the C-1 fix,
+    // extract_inline_return_taint would union ALL live tainted values' caps
+    // — the internal source's derived-caps would override the param-caps
+    // (derived takes priority in the extraction logic). With the fix, only
+    // the return value's taint is collected, so param taint is returned
+    // correctly.
+    //
+    // Both old and new produce a finding, but the fix ensures the return
+    // taint comes from the param flow, not from the internal source.
+    let src = b"var child_process = require('child_process');\n\
+        var express = require('express');\n\
+        var app = express();\n\
+        \n\
+        function withSideEffect(cmd) {\n\
+            var leaked = document.location();\n\
+            return cmd;\n\
+        }\n\
+        \n\
+        app.get('/a', function(req, res) {\n\
+            var r = withSideEffect(req.query.cmd);\n\
+            child_process.exec(r);\n\
+        });\n";
+
+    let lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+
+    // The callee returns cmd (tainted param) — 1 finding expected.
+    // The internal document.location() should NOT widen the return taint.
+    assert_eq!(
+        findings.len(),
+        1,
+        "C-1 regression: withSideEffect should produce exactly 1 finding (param flow), got {}",
+        findings.len()
+    );
+}
+
+/// Regression guard for the FuncKey-based re-keying of local SSA summaries
+/// and cached callee bodies.
+///
+/// Two class methods share the leaf name `process` in the same file.  If the
+/// summary map were keyed by bare name (or raw file-path namespace), the
+/// second lowering would overwrite the first — both methods would end up
+/// pointing at whichever summary was extracted last.
+///
+/// With canonical `FuncKey` identity (`container` discriminates them) both
+/// methods must appear as distinct entries with matching containers.
+#[test]
+fn same_name_methods_distinct_func_keys() {
+    let src = br#"
+class Sanitizer {
+    process(x) {
+        return escape(x);
+    }
+}
+
+class Worker {
+    process(x) {
+        eval(x);
+    }
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+
+    let (summaries, bodies) = super::extract_ssa_artifacts_from_file_cfg(
+        &file_cfg,
+        Lang::JavaScript,
+        "test.js",
+        &file_cfg.summaries,
+        None,
+        None,
+    );
+
+    // Collect containers of every key named "process".
+    let mut containers: Vec<String> = summaries
+        .keys()
+        .filter(|k| k.name == "process")
+        .map(|k| k.container.clone())
+        .collect();
+    containers.sort();
+
+    assert_eq!(
+        containers,
+        vec!["Sanitizer".to_string(), "Worker".to_string()],
+        "FuncKey-based keying must produce one `process` summary per container; \
+         got {containers:?} from {:?}",
+        summaries.keys().collect::<Vec<_>>(),
+    );
+
+    // Same invariant on the cached-bodies map — inline analysis depends on
+    // being able to fetch the correct body by full FuncKey.
+    let mut body_containers: Vec<String> = bodies
+        .iter()
+        .filter(|(k, _)| k.name == "process")
+        .map(|(k, _)| k.container.clone())
+        .collect();
+    body_containers.sort();
+    assert_eq!(
+        body_containers,
+        vec!["Sanitizer".to_string(), "Worker".to_string()],
+        "callee-body cache must keep both same-name methods distinct; got {body_containers:?}",
+    );
+
+    // Cross-map agreement: every summary key must also be a body key.
+    // (Pass 2 looks up bodies and summaries with the same key.)
+    for key in summaries.keys() {
+        assert!(
+            bodies.iter().any(|(bk, _)| bk == key),
+            "summary key {key:?} missing from callee-body map"
+        );
+    }
+}
+
+/// Same-name *free function* overloads (not methods): two `helper` functions
+/// with identical names and arities at the same scope collide on
+/// `(name, arity)` but are disambiguated by `FuncKey.disambig` (body start
+/// byte).  Regression guard that neither overwrites the other in the SSA
+/// summary / callee-body maps.
+#[test]
+fn same_name_same_arity_functions_distinct_func_keys() {
+    // Two top-level `helper(x)` declarations in one file.  JS allows the
+    // later one to shadow the first at runtime, but our static summary
+    // extraction must retain *both* so cross-file callers of either body
+    // span still find their intended definition.
+    let src = br#"
+function helper(x) {
+    return escape(x);
+}
+
+function helper(x) {
+    eval(x);
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+
+    let (summaries, bodies) = super::extract_ssa_artifacts_from_file_cfg(
+        &file_cfg,
+        Lang::JavaScript,
+        "test.js",
+        &file_cfg.summaries,
+        None,
+        None,
+    );
+
+    let helper_keys: Vec<_> = summaries.keys().filter(|k| k.name == "helper").collect();
+    assert_eq!(
+        helper_keys.len(),
+        2,
+        "two same-name same-arity definitions must produce two distinct summary entries; \
+         got {} keys: {:?}",
+        helper_keys.len(),
+        helper_keys,
+    );
+
+    // Disambiguator must actually differ (body start bytes).
+    let disambigs: std::collections::HashSet<_> = helper_keys.iter().map(|k| k.disambig).collect();
+    assert_eq!(
+        disambigs.len(),
+        2,
+        "FuncKey.disambig should differ for colliding same-name same-arity defs",
+    );
+
+    // And the body cache agrees.
+    let body_count = bodies.iter().filter(|(k, _)| k.name == "helper").count();
+    assert_eq!(body_count, 2, "callee-body cache must also keep both defs");
+}
+
+// ── alternative-path dedup and linking ─────────────────────────────────
+
+/// Build a bare Finding suitable for feeding into `link_alternative_paths`.
+/// Only the fields consulted by that pass are populated; the rest use the
+/// cheapest default so the test stays focused on the dedup contract.
+fn make_finding_for_link_test(
+    body_id: u32,
+    source_idx: usize,
+    sink_idx: usize,
+    path_hash: u64,
+    path_validated: bool,
+) -> Finding {
+    Finding {
+        body_id: crate::cfg::BodyId(body_id),
+        sink: petgraph::graph::NodeIndex::new(sink_idx),
+        source: petgraph::graph::NodeIndex::new(source_idx),
+        path: Vec::new(),
+        source_kind: crate::labels::SourceKind::EnvironmentConfig,
+        path_validated,
+        guard_kind: None,
+        hop_count: 0,
+        cap_specificity: 0,
+        uses_summary: false,
+        flow_steps: Vec::new(),
+        symbolic: None,
+        source_span: None,
+        primary_location: None,
+        engine_notes: smallvec::SmallVec::new(),
+        path_hash,
+        finding_id: String::new(),
+        alternative_finding_ids: smallvec::SmallVec::new(),
+    }
+}
+
+/// `make_finding_id` must produce stable, distinct IDs for findings
+/// that differ on any dedup-key axis, and carry the `v`/`u`
+/// validation-status suffix so a human can tell siblings apart.
+#[test]
+fn finding_id_encodes_validation_and_path_hash() {
+    let v = make_finding_for_link_test(1, 3, 7, 0xabcd_1234_0000_0001, true);
+    let mut v = v;
+    v.finding_id = super::make_finding_id(&v);
+    assert!(
+        v.finding_id.ends_with("-v"),
+        "validated ID must end -v: {}",
+        v.finding_id
+    );
+    assert!(
+        v.finding_id.contains("abcd12340000"),
+        "hash component missing: {}",
+        v.finding_id
+    );
+
+    let mut u = make_finding_for_link_test(1, 3, 7, 0xabcd_1234_0000_0001, false);
+    u.finding_id = super::make_finding_id(&u);
+    assert!(
+        u.finding_id.ends_with("-u"),
+        "unvalidated ID must end -u: {}",
+        u.finding_id
+    );
+    assert_ne!(
+        v.finding_id, u.finding_id,
+        "validation status must disambiguate IDs"
+    );
+
+    // Differing path_hash produces a different ID even with the same
+    // (body, source, sink, validated) — the whole point of the path
+    // component in the dedup key.
+    let mut u2 = make_finding_for_link_test(1, 3, 7, 0xdead_beef_0000_0002, false);
+    u2.finding_id = super::make_finding_id(&u2);
+    assert_ne!(
+        u.finding_id, u2.finding_id,
+        "path_hash must disambiguate IDs"
+    );
+}
+
+/// `link_alternative_paths` must cross-link findings that share
+/// `(body_id, sink, source)` — so a validated flow and an unvalidated
+/// flow on the same source/sink pair each list the other's ID.
+#[test]
+fn link_alternative_paths_cross_references_same_body_sink_source() {
+    let mut findings = vec![
+        make_finding_for_link_test(1, 3, 7, 0x1111, true),
+        make_finding_for_link_test(1, 3, 7, 0x2222, false),
+    ];
+    for f in &mut findings {
+        f.finding_id = super::make_finding_id(f);
+    }
+
+    let v_id = findings[0].finding_id.clone();
+    let u_id = findings[1].finding_id.clone();
+    super::link_alternative_paths(&mut findings);
+
+    assert_eq!(
+        findings[0].alternative_finding_ids.as_slice(),
+        std::slice::from_ref(&u_id),
+        "validated finding must reference the unvalidated sibling",
+    );
+    assert_eq!(
+        findings[1].alternative_finding_ids.as_slice(),
+        std::slice::from_ref(&v_id),
+        "unvalidated finding must reference the validated sibling",
+    );
+}
+
+/// Findings that differ on `(body_id, sink, source)` are independent
+/// vulnerabilities — they must **not** end up cross-linked as
+/// alternatives, otherwise the "alternative path" framing becomes
+/// noise.
+#[test]
+fn link_alternative_paths_does_not_link_distinct_sink_source() {
+    let mut findings = vec![
+        make_finding_for_link_test(1, 3, 7, 0x1111, false),
+        // Different sink — independent finding, not an alternative.
+        make_finding_for_link_test(1, 3, 8, 0x1111, false),
+        // Different source — also independent.
+        make_finding_for_link_test(1, 4, 7, 0x1111, false),
+        // Different body — also independent.
+        make_finding_for_link_test(2, 3, 7, 0x1111, false),
+    ];
+    for f in &mut findings {
+        f.finding_id = super::make_finding_id(f);
+    }
+    super::link_alternative_paths(&mut findings);
+    for (i, f) in findings.iter().enumerate() {
+        assert!(
+            f.alternative_finding_ids.is_empty(),
+            "finding {i} should have no alternatives; got {:?}",
+            f.alternative_finding_ids,
+        );
+    }
+}
+
+/// When the same `(body, sink, source)` has three sibling findings
+/// (e.g. validated, unvalidated-path-A, unvalidated-path-B), each
+/// finding must list the other two — the group is symmetric and
+/// complete rather than a chain.
+#[test]
+fn link_alternative_paths_three_way_group() {
+    let mut findings = vec![
+        make_finding_for_link_test(1, 3, 7, 0x1111, true),
+        make_finding_for_link_test(1, 3, 7, 0x2222, false),
+        make_finding_for_link_test(1, 3, 7, 0x3333, false),
+    ];
+    for f in &mut findings {
+        f.finding_id = super::make_finding_id(f);
+    }
+    let ids: Vec<String> = findings.iter().map(|f| f.finding_id.clone()).collect();
+    super::link_alternative_paths(&mut findings);
+    for (i, f) in findings.iter().enumerate() {
+        let expected: std::collections::HashSet<&String> = ids
+            .iter()
+            .enumerate()
+            .filter_map(|(j, id)| if i == j { None } else { Some(id) })
+            .collect();
+        let got: std::collections::HashSet<&String> = f.alternative_finding_ids.iter().collect();
+        assert_eq!(
+            got, expected,
+            "finding {i} must list every other sibling ID",
+        );
+    }
 }

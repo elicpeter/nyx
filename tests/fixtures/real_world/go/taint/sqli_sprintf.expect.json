@@ -7,17 +7,20 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
+      "severity": "HIGH",
       "must_match": true,
       "line_range": [
-        10,
-        16
+        14,
+        14
       ],
       "evidence_contains": [],
-      "notes": "r.URL.Query().Get(\"id\") flows through fmt.Sprintf into db.Query in getUserUnsafe"
+      "notes": "TP: r.URL.Query().Get(\"id\") (source line 12) flows through fmt.Sprintf query into db.Query — SQL injection at the precise sink"
     },
     {
       "rule_id": "taint-unsanitised-flow",
@@ -28,7 +31,18 @@
         27
       ],
       "evidence_contains": [],
-      "notes": "getUserSafe uses parameterized query \u2014 should NOT produce a taint finding"
+      "notes": "getUserSafe uses parameterized query — should NOT produce a taint finding"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_not_match": true,
+      "line_range": [
+        25,
+        25
+      ],
+      "evidence_contains": [],
+      "notes": "getUserSafe at line 25 uses parameterized query ($1) — scanner correctly identifies safe binding, no taint finding. Regression guard."
     }
   ]
 }

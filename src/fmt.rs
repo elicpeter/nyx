@@ -2,6 +2,7 @@
 //!
 //! Produces professional, security-tool-grade aligned output with a clear
 //! severity hierarchy, normalised taint flow rendering, and stable wrapping.
+#![allow(clippy::collapsible_if)]
 
 use crate::commands::scan::{Diag, SuppressionStats};
 use crate::patterns::Severity;
@@ -112,7 +113,11 @@ pub fn normalize_snippet(s: &str) -> String {
     let cleaned = collapse_chain_spacing(&collapsed);
     let trimmed = cleaned.trim();
     if trimmed.len() > 120 {
-        format!("{}…", &trimmed[..120])
+        let trunc = match trimmed.char_indices().nth(120) {
+            Some((i, _)) => &trimmed[..i],
+            None => trimmed,
+        };
+        format!("{trunc}…")
     } else {
         trimmed.to_string()
     }
@@ -161,6 +166,71 @@ pub fn shorten_callee(s: &str) -> String {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Welcome screen
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Render the branded welcome screen shown when `nyx` is invoked with no arguments.
+pub fn render_welcome() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let mut out = String::new();
+
+    out.push('\n');
+
+    for line in LOGO {
+        out.push_str(&format!("  {}\n", style(line).color256(141).bold()));
+    }
+
+    out.push_str(&format!(
+        "\n{}  {}\n",
+        style(format!("v{version}")).dim(),
+        style("static analysis engine").dim(),
+    ));
+    out.push_str(&format!(
+        "{}\n",
+        style("────────────────────────────────────────").dim()
+    ));
+    out.push('\n');
+
+    out.push_str(&format!("{}\n\n", style("Getting started").bold()));
+    for &(cmd, desc) in &[
+        ("nyx scan", "Scan the current directory"),
+        ("nyx serve", "Start the web dashboard"),
+        ("nyx config show", "Show current configuration"),
+    ] {
+        out.push_str(&format!(
+            "  {}  {}\n",
+            style(format!("{cmd:<18}")).green(),
+            style(desc).dim(),
+        ));
+    }
+    out.push('\n');
+
+    out.push_str(&format!("{}\n\n", style("More help").bold()));
+    for &(cmd, desc) in &[
+        ("nyx --help", "All commands"),
+        ("nyx <command> --help", "Help for a specific command"),
+    ] {
+        out.push_str(&format!(
+            "  {}  {}\n",
+            style(format!("{cmd:<22}")).white(),
+            style(desc).dim(),
+        ));
+    }
+    out.push('\n');
+
+    out
+}
+
+const LOGO: &[&str] = &[
+    r"███╗   ██╗██╗   ██╗██╗  ██╗",
+    r"████╗  ██║╚██╗ ██╔╝╚██╗██╔╝",
+    r"██╔██╗ ██║ ╚████╔╝  ╚███╔╝",
+    r"██║╚██╗██║  ╚██╔╝   ██╔██╗",
+    r"██║ ╚████║   ██║   ██╔╝ ██╗",
+    r"╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝",
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Internal rendering
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -188,12 +258,57 @@ fn render_diag(d: &Diag, width: usize) -> String {
         (None, Some(c)) => format!("  {}", style(format!("(Confidence: {c})")).dim()),
         (None, None) => String::new(),
     };
+    // Engine provenance notes: show count + worst direction so a user
+    // scanning the console can see "this finding is from capped analysis"
+    // at a glance.  Direction tags ("under-report", "over-report", "bail")
+    // are stable strings from `LossDirection::tag()` — kept in sync with
+    // the SARIF `result.properties.engine_notes[].kind` serialization so
+    // downstream tooling can cross-reference console and SARIF output.
+    // Informational-only notes (e.g. InlineCacheReused) are not surfaced
+    // here because they carry no credibility signal.
+    let engine_notes_suffix = d
+        .evidence
+        .as_ref()
+        .filter(|e| !e.engine_notes.is_empty())
+        .and_then(|e| {
+            let direction = crate::engine_notes::worst_direction(&e.engine_notes)?;
+            let count = e.engine_notes.len();
+            Some(format!(
+                "  {}",
+                style(format!(
+                    "[capped: {count} note{} — {}]",
+                    if count == 1 { "" } else { "s" },
+                    direction.tag(),
+                ))
+                .yellow()
+            ))
+        })
+        .unwrap_or_default();
+    // Alternative-path annotation.  When dedup preserves sibling
+    // findings for the same `(body, sink, source)` that differ on
+    // validation status or traversed variables, mark the primary
+    // finding with a suffix naming the sibling count.
+    let alt_count = d.alternative_finding_ids.len();
+    let alt_suffix = if alt_count > 0 {
+        format!(
+            "  {}",
+            style(format!(
+                "(+{alt_count} alternative path{})",
+                if alt_count == 1 { "" } else { "s" }
+            ))
+            .yellow()
+        )
+    } else {
+        String::new()
+    };
     out.push_str(&format!(
-        "  {}  {} {}{}\n",
+        "  {}  {} {}{}{}{}\n",
         style(&loc).dim(),
         sev,
         style(&d.id).dim(),
         meta_suffix,
+        engine_notes_suffix,
+        alt_suffix,
     ));
 
     // ── Rollup body ─────────────────────────────────────────────────────
@@ -263,7 +378,76 @@ fn render_diag(d: &Diag, width: usize) -> String {
         ));
     }
 
+    // ── State evidence (resource lifecycle / auth) ────────────────────
+    if let Some(ev) = d.evidence.as_ref().and_then(|e| e.state.as_ref()) {
+        if d.labels.is_empty() && d.guard_kind.is_none() {
+            out.push('\n');
+        }
+        let arrow = format!("[{} \u{2192} {}]", ev.from_state, ev.to_state);
+        let subject_part = ev
+            .subject
+            .as_ref()
+            .map(|s| format!("  subject: {s}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "{indent_str}{} {} {}{}\n",
+            style("State:").dim(),
+            style(&ev.machine).dim(),
+            style(&arrow).cyan(),
+            style(&subject_part).dim(),
+        ));
+
+        // For leak rules, show acquisition location from evidence.sink
+        if d.id == "state-resource-leak" || d.id == "state-resource-leak-possible" {
+            if let Some(sink) = d.evidence.as_ref().and_then(|e| e.sink.as_ref()) {
+                out.push_str(&format!(
+                    "{indent_str}{} {}:{}:{}\n",
+                    style("Acquired:").dim(),
+                    style(&sink.path).dim(),
+                    style(sink.line).dim(),
+                    style(sink.col).dim(),
+                ));
+            }
+        }
+    }
+
+    // ── Remediation hint (state rules only) ─────────────────────────
+    if let Some(hint) = state_remediation_hint(&d.id) {
+        let wrapped = wrap_text(hint, width, BODY_INDENT + 6);
+        out.push_str(&format!(
+            "{indent_str}{} {}\n",
+            style("Hint:").dim(),
+            style(&wrapped).dim(),
+        ));
+    }
+
     out
+}
+
+/// Return a remediation hint for state analysis rule IDs.
+fn state_remediation_hint(rule_id: &str) -> Option<&'static str> {
+    match rule_id {
+        "state-use-after-close" => Some(
+            "Ensure the resource is not accessed after calling close/free. \
+             Consider restructuring to use the resource before releasing it.",
+        ),
+        "state-double-close" => {
+            Some("Remove the duplicate close call, or guard with a null/closed check.")
+        }
+        "state-resource-leak" => Some(
+            "Add a close/free call before the function exits, or use a \
+             language-specific cleanup pattern (defer, with, try-with-resources, RAII).",
+        ),
+        "state-resource-leak-possible" => Some(
+            "Ensure the resource is closed on all code paths, including \
+             error/early-return paths.",
+        ),
+        "state-unauthed-access" => Some(
+            "Add an authentication check before this operation, or move it \
+             behind an auth middleware/guard.",
+        ),
+        _ => None,
+    }
 }
 
 /// Colored severity tag with icon. The tag is the visual anchor of each finding.
@@ -574,6 +758,8 @@ mod tests {
                 suppressed: false,
                 suppression: None,
                 rollup: None,
+                finding_id: String::new(),
+                alternative_finding_ids: Vec::new(),
             },
             Diag {
                 path: "src/b.rs".into(),
@@ -593,6 +779,8 @@ mod tests {
                 suppressed: false,
                 suppression: None,
                 rollup: None,
+                finding_id: String::new(),
+                alternative_finding_ids: Vec::new(),
             },
         ];
         let output = render_console(&diags, "test-project", None);
@@ -626,6 +814,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         }];
         let output = render_console(&diags, "proj", None);
         let stripped = strip_ansi(&output);
@@ -659,6 +849,8 @@ mod tests {
                 suppressed: false,
                 suppression: None,
                 rollup: None,
+                finding_id: String::new(),
+                alternative_finding_ids: Vec::new(),
             },
             Diag {
                 path: "src/a.rs".into(),
@@ -678,6 +870,8 @@ mod tests {
                 suppressed: false,
                 suppression: None,
                 rollup: None,
+                finding_id: String::new(),
+                alternative_finding_ids: Vec::new(),
             },
         ];
         let output = render_console(&diags, "proj", None);
@@ -709,6 +903,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
@@ -737,6 +933,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
@@ -769,6 +967,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
@@ -786,6 +986,30 @@ mod tests {
         assert_eq!(capitalize_first(""), "");
         assert_eq!(capitalize_first("A"), "A");
         assert_eq!(capitalize_first("unsanitised"), "Unsanitised");
+    }
+
+    // ── render_welcome ────────────────────────────────────────────────────
+
+    #[test]
+    fn welcome_screen_content() {
+        let output = render_welcome();
+        let stripped = strip_ansi(&output);
+        assert!(stripped.contains("nyx"), "should contain logo text");
+        assert!(
+            stripped.contains(env!("CARGO_PKG_VERSION")),
+            "should contain version"
+        );
+        assert!(stripped.contains("nyx scan"), "should mention scan command");
+        assert!(
+            stripped.contains("nyx serve"),
+            "should mention serve command"
+        );
+        assert!(stripped.contains("nyx --help"), "should mention help");
+        let line_count = stripped.lines().count();
+        assert!(
+            line_count <= 25,
+            "should be compact, got {line_count} lines"
+        );
     }
 
     // ── taint flow rendering (integration-style) ─────────────────────────
@@ -836,6 +1060,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let output = render_diag(&d, 120);
         let stripped = strip_ansi(&output);
@@ -880,6 +1106,8 @@ mod tests {
                 suppressed: false,
                 suppression: None,
                 rollup: None,
+                finding_id: String::new(),
+                alternative_finding_ids: Vec::new(),
             };
             let output = render_diag(&d, 100);
             let stripped = strip_ansi(&output);
@@ -910,6 +1138,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let output = render_diag(&d, 100);
         let stripped = strip_ansi(&output);
@@ -944,6 +1174,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let output = render_diag(&d, 100);
         let stripped = strip_ansi(&output);
@@ -974,11 +1206,183 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
             !json.contains("confidence"),
             "confidence should be omitted when None: {json}"
+        );
+    }
+
+    // ── state evidence rendering ─────────────────────────────────────
+
+    fn make_state_diag(
+        rule_id: &str,
+        machine: &str,
+        subject: Option<&str>,
+        from: &str,
+        to: &str,
+    ) -> Diag {
+        use crate::evidence::{Evidence, StateEvidence};
+        Diag {
+            path: "src/main.c".into(),
+            line: 12,
+            col: 5,
+            severity: Severity::High,
+            id: rule_id.into(),
+            category: crate::patterns::FindingCategory::Security,
+            path_validated: false,
+            guard_kind: None,
+            message: Some(format!("variable `f` {to} after {from}")),
+            labels: vec![],
+            confidence: Some(crate::evidence::Confidence::High),
+            evidence: Some(Evidence {
+                state: Some(StateEvidence {
+                    machine: machine.into(),
+                    subject: subject.map(|s| s.into()),
+                    from_state: from.into(),
+                    to_state: to.into(),
+                }),
+                ..Default::default()
+            }),
+            rank_score: Some(47.0),
+            rank_reason: None,
+            suppressed: false,
+            suppression: None,
+            rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn render_state_evidence_use_after_close() {
+        let d = make_state_diag(
+            "state-use-after-close",
+            "resource",
+            Some("f"),
+            "closed",
+            "used",
+        );
+        let output = render_diag(&d, 120);
+        let stripped = strip_ansi(&output);
+        assert!(stripped.contains("State:"), "should contain State label");
+        assert!(stripped.contains("resource"), "should contain machine name");
+        assert!(
+            stripped.contains("[closed \u{2192} used]"),
+            "should contain transition: {stripped}"
+        );
+        assert!(
+            stripped.contains("subject: f"),
+            "should contain subject: {stripped}"
+        );
+    }
+
+    #[test]
+    fn render_state_evidence_leak_with_location() {
+        use crate::evidence::{Evidence, SpanEvidence, StateEvidence};
+        let d = Diag {
+            evidence: Some(Evidence {
+                state: Some(StateEvidence {
+                    machine: "resource".into(),
+                    subject: Some("f".into()),
+                    from_state: "open".into(),
+                    to_state: "leaked".into(),
+                }),
+                sink: Some(SpanEvidence {
+                    path: "src/main.c".into(),
+                    line: 5,
+                    col: 10,
+                    kind: "sink".into(),
+                    snippet: None,
+                }),
+                ..Default::default()
+            }),
+            ..make_state_diag(
+                "state-resource-leak",
+                "resource",
+                Some("f"),
+                "open",
+                "leaked",
+            )
+        };
+        let output = render_diag(&d, 120);
+        let stripped = strip_ansi(&output);
+        assert!(
+            stripped.contains("Acquired:"),
+            "should contain Acquired label: {stripped}"
+        );
+        assert!(
+            stripped.contains("src/main.c"),
+            "should contain file path: {stripped}"
+        );
+    }
+
+    #[test]
+    fn render_state_evidence_no_subject() {
+        let d = make_state_diag("state-resource-leak", "resource", None, "open", "leaked");
+        let output = render_diag(&d, 120);
+        let stripped = strip_ansi(&output);
+        assert!(
+            !stripped.contains("subject:"),
+            "should not contain subject: {stripped}"
+        );
+    }
+
+    #[test]
+    fn render_state_evidence_auth() {
+        let d = make_state_diag("state-unauthed-access", "auth", None, "unauthed", "access");
+        let output = render_diag(&d, 120);
+        let stripped = strip_ansi(&output);
+        assert!(stripped.contains("auth"), "should contain auth: {stripped}");
+        assert!(
+            stripped.contains("[unauthed \u{2192} access]"),
+            "should contain transition: {stripped}"
+        );
+    }
+
+    #[test]
+    fn remediation_hint_present_for_state_rules() {
+        for id in &[
+            "state-use-after-close",
+            "state-double-close",
+            "state-resource-leak",
+            "state-resource-leak-possible",
+            "state-unauthed-access",
+        ] {
+            assert!(
+                state_remediation_hint(id).is_some(),
+                "should have hint for {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn remediation_hint_absent_for_non_state() {
+        assert!(state_remediation_hint("taint-unsanitised-flow").is_none());
+        assert!(state_remediation_hint("cfg-unguarded-sink").is_none());
+    }
+
+    #[test]
+    fn render_diag_shows_hint() {
+        let d = make_state_diag(
+            "state-resource-leak",
+            "resource",
+            Some("f"),
+            "open",
+            "leaked",
+        );
+        let output = render_diag(&d, 120);
+        let stripped = strip_ansi(&output);
+        assert!(
+            stripped.contains("Hint:"),
+            "should contain Hint label: {stripped}"
+        );
+        assert!(
+            stripped.contains("close/free"),
+            "should contain remediation text: {stripped}"
         );
     }
 }

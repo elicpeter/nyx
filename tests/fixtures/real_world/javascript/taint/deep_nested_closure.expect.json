@@ -1,0 +1,14 @@
+{
+  "description": "Three-level nested callbacks (setTimeout/setImmediate/process.nextTick); innermost sinks a capture from the outermost scope",
+  "tags": ["taint", "closure", "nested", "code-exec"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_match": true,
+      "line_range": [6, 10],
+      "evidence_contains": [],
+      "notes": "tainted q from outermost scope flows through three levels of nested closures into eval"
+    }
+  ]
+}

@@ -11,11 +11,13 @@ env:
   BIN_NAME: nyx
 
 jobs:
-  build-and-upload:
+  build:
     strategy:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
@@ -27,7 +29,7 @@ jobs:
 
     steps:
       - name: Check out sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -36,17 +38,25 @@ jobs:
           target: ${{ matrix.target }}
           cache: true
 
+      - name: Install cross-compilation tools (ARM Linux)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
       - name: Install target
         run: rustup target add ${{ matrix.target }}
 
       - name: Build
         run: cargo build --release --bin ${{ env.BIN_NAME }} --target ${{ matrix.target }}
 
-      - name: Install cargo-about
-        run: cargo install cargo-about --locked
-
-      - name: Generate license bundle
-        run: cargo about generate about.hbs -o THIRDPARTY-LICENSES.html
+      # THIRDPARTY-LICENSES.html is committed at the repo root and kept in
+      # sync with the dependency graph by the `third-party-licenses` CI
+      # job. Release builds ship the committed copy directly — no
+      # regeneration (and no per-runner cargo-about install) on the
+      # release hot path.
 
       - name: Package (Linux & macOS)
         if: runner.os != 'Windows'
@@ -81,9 +91,157 @@ jobs:
 
           Add-Content -Path $env:GITHUB_ENV -Value "ASSET=$Archive"
 
-      - name: Upload to the release
-        uses: softprops/action-gh-release@v2
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
         with:
-          files: dist/${{ env.ASSET }}
+          name: release-${{ matrix.target }}
+          path: dist/${{ env.ASSET }}
+          if-no-files-found: error
+          retention-days: 1
+
+  reproducibility:
+    # Supply-chain smoke test: build the release binary twice with pinned
+    # SOURCE_DATE_EPOCH and path remapping, then diff the SHA256 hashes.
+    # Gates `publish` so non-reproducible builds cannot ship. Scoped to
+    # x86_64-linux — the most tractable target for byte-for-byte
+    # determinism; failures on other targets would be investigated
+    # separately.
+    name: reproducibility-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-gnu
+          cache: true
+
+      - name: Build twice and diff hashes
+        shell: bash
+        env:
+          RUSTFLAGS: "--remap-path-prefix=${{ github.workspace }}=/build"
+        run: |
+          set -euo pipefail
+          TARGET=x86_64-unknown-linux-gnu
+          BIN=${{ env.BIN_NAME }}
+          BIN_PATH="target/$TARGET/release/$BIN"
+
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
+          export SOURCE_DATE_EPOCH
+          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
+
+          cargo build --release --bin "$BIN" --target "$TARGET"
+          HASH1=$(sha256sum "$BIN_PATH" | awk '{print $1}')
+          echo "first build:  $HASH1"
+
+          cargo clean --release --target "$TARGET"
+          cargo build --release --bin "$BIN" --target "$TARGET"
+          HASH2=$(sha256sum "$BIN_PATH" | awk '{print $1}')
+          echo "second build: $HASH2"
+
+          if [ "$HASH1" != "$HASH2" ]; then
+            echo "::error::Reproducibility check failed: builds are not bit-identical"
+            echo "  first:  $HASH1"
+            echo "  second: $HASH2"
+            exit 1
+          fi
+          echo "::notice::Reproducible build verified (sha256=$HASH1)"
+
+  publish:
+    # Collect all matrix build outputs, generate a single SHA256SUMS file,
+    # then push everything to the GitHub release in one shot. Doing this
+    # centrally (rather than per-matrix job) is the only way to produce a
+    # checksum file that covers every published artifact.
+    name: publish-release
+    runs-on: ubuntu-latest
+    needs: [build, reproducibility]
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+
+      # Generate the SBOM from the source tree BEFORE downloading
+      # artifacts. Syft scans `path: .` recursively; if release-artifacts/
+      # exists at scan time, it would walk into the zipped binaries and
+      # produce a polluted manifest.
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: nyx-${{ github.event.release.tag_name }}.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-artifacts
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd release-artifacts
+          ls -lh
+          sha256sum *.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Import GPG signing key
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          set -euo pipefail
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --list-secret-keys --keyid-format=long
+
+      - name: Sign SHA256SUMS
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          set -euo pipefail
+          cd release-artifacts
+          if [ -n "${GPG_PASSPHRASE:-}" ]; then
+            printf '%s' "$GPG_PASSPHRASE" \
+              | gpg --batch --yes --pinentry-mode loopback \
+                    --passphrase-fd 0 --armor --detach-sign SHA256SUMS
+          else
+            gpg --batch --yes --armor --detach-sign SHA256SUMS
+          fi
+          ls -l SHA256SUMS.asc
+
+      - name: Warn if GPG signing was skipped
+        if: env.GPG_PRIVATE_KEY == ''
+        run: |
+          echo "::warning::GPG_PRIVATE_KEY secret not configured; SHA256SUMS will ship unsigned. Add GPG_PRIVATE_KEY (ASCII-armored) and optional GPG_PASSPHRASE to repository secrets to enable signed checksums."
+
+      # SLSA v1 build provenance: signed attestation that these exact
+      # bytes were produced by this workflow run from this commit.
+      # Attestations are stored in the GitHub attestations API and can
+      # be verified with `gh attestation verify <file> --repo <repo>`.
+      - name: Generate SLSA build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            release-artifacts/*.zip
+            release-artifacts/SHA256SUMS
+            nyx-${{ github.event.release.tag_name }}.cdx.json
+
+      - name: Upload to the release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            release-artifacts/*.zip
+            release-artifacts/SHA256SUMS
+            release-artifacts/SHA256SUMS.asc
+            nyx-${{ github.event.release.tag_name }}.cdx.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

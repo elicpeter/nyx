@@ -1,0 +1,15 @@
+{
+  "description": "SSRF unsafe: URL prefix is only 'https://' — the attacker controls the host. Scheme-only prefix is NOT safe.",
+  "tags": ["taint", "ssrf", "abstract-interp", "string-domain"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [6, 7],
+      "evidence_contains": [],
+      "notes": "TP: prefix 'https://' does not lock host — SSRF finding must be emitted"
+    }
+  ]
+}

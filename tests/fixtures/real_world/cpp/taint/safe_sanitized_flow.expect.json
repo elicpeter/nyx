@@ -1,0 +1,13 @@
+{
+  "description": "getenv source flows through sanitize_data (HTML_ESCAPE sanitizer) before reaching strcpy sink \u2014 taint should be cleared.",
+  "tags": [
+    "taint",
+    "negative",
+    "buffer",
+    "sanitizer"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": []
+}

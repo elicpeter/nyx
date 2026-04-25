@@ -14,19 +14,25 @@ fn parse_and_analyse<A: CfgAnalysis>(
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src, None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
     let lang = Lang::from_slug(lang_str).unwrap();
     let ctx = AnalysisContext {
-        cfg: &cfg,
+        cfg,
         entry,
         lang,
         file_path: "test.rs",
         source_bytes: src,
-        func_summaries: &summaries,
+        func_summaries: summaries,
         global_summaries: None,
         taint_findings: &[],
         analysis_rules: None,
         taint_active: true,
+        body_const_facts: None,
+        type_facts: None,
+        auth_decorators: &[],
     };
     analysis.run(&ctx)
 }
@@ -36,19 +42,25 @@ fn parse_and_run_all(src: &[u8], lang_str: &str, ts_lang: Language) -> Vec<CfgFi
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src, None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
     let lang = Lang::from_slug(lang_str).unwrap();
     let ctx = AnalysisContext {
-        cfg: &cfg,
+        cfg,
         entry,
         lang,
         file_path: "test.rs",
         source_bytes: src,
-        func_summaries: &summaries,
+        func_summaries: summaries,
         global_summaries: None,
         taint_findings: &[],
         analysis_rules: None,
         taint_active: true,
+        body_const_facts: None,
+        type_facts: None,
+        auth_decorators: &[],
     };
     run_all(&ctx)
 }
@@ -63,19 +75,25 @@ fn parse_and_run_all_with_taint(
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src, None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
     let lang = Lang::from_slug(lang_str).unwrap();
     let ctx = AnalysisContext {
-        cfg: &cfg,
+        cfg,
         entry,
         lang,
         file_path: "test.rs",
         source_bytes: src,
-        func_summaries: &summaries,
+        func_summaries: summaries,
         global_summaries: None,
         taint_findings,
         analysis_rules: None,
         taint_active: true,
+        body_const_facts: None,
+        type_facts: None,
+        auth_decorators: &[],
     };
     run_all(&ctx)
 }
@@ -150,14 +168,113 @@ fn unreachable_detects_orphaned_nodes() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
     // All nodes in linear code should be reachable
-    let reachable = dominators::reachable_set(&cfg, entry);
+    let reachable = dominators::reachable_set(cfg, entry);
     assert_eq!(
         reachable.len(),
         cfg.node_count(),
         "All nodes should be reachable in linear code — no unreachable findings expected"
+    );
+}
+
+/// Like `parse_and_analyse` but also plumbs per-body SSA + const-prop facts
+/// into the analysis context.  Used by tests that exercise the SSA-backed
+/// branch of `is_all_args_constant`.
+fn parse_and_analyse_with_ssa<A: CfgAnalysis>(
+    analysis: &A,
+    src: &[u8],
+    lang_str: &str,
+    ts_lang: Language,
+) -> Vec<CfgFinding> {
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).unwrap();
+    let tree = parser.parse(src, None).unwrap();
+    let file_cfg = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let body = file_cfg.first_body();
+    let lang = Lang::from_slug(lang_str).unwrap();
+    let facts = build_body_const_facts(body, lang);
+    let ctx = AnalysisContext {
+        cfg: &body.graph,
+        entry: body.entry,
+        lang,
+        file_path: "test.rs",
+        source_bytes: src,
+        func_summaries: &file_cfg.summaries,
+        global_summaries: None,
+        taint_findings: &[],
+        analysis_rules: None,
+        taint_active: true,
+        body_const_facts: facts.as_ref(),
+        type_facts: facts.as_ref().map(|f| &f.type_facts),
+        auth_decorators: &[],
+    };
+    analysis.run(&ctx)
+}
+
+#[test]
+fn ssa_const_prop_suppresses_sink_on_unused_source() {
+    // rs-safe-003 regression: a tainted source binds a variable that is
+    // never used; the sink's arg is a constant reassigned through a local
+    // `let`.  SSA const-prop resolves `cmd` to a string literal, so the
+    // structural finding must be suppressed.
+    let src = br#"
+        use std::env;
+        use std::process::Command;
+        fn main() {
+            let _input = env::var("USER_CMD").unwrap();
+            let cmd = "echo safe";
+            Command::new("sh").arg("-c").arg(cmd).status().unwrap();
+        }"#;
+
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "rust",
+        Language::from(tree_sitter_rust::LANGUAGE),
+    );
+
+    let guard_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        guard_findings.is_empty(),
+        "SSA const-prop should suppress sink with only constant args, got {guard_findings:?}"
+    );
+}
+
+#[test]
+fn ssa_const_prop_preserves_sink_on_dynamic_source_arg() {
+    // Positive case: even with SSA facts available, a sink whose argument
+    // flows from a source must still raise the structural finding.
+    let src = br#"
+        use std::env;
+        use std::process::Command;
+        fn main() {
+            let shell = "sh";
+            let flag = "-c";
+            let user_cmd = env::var("USER_CMD").unwrap();
+            Command::new(shell).arg(flag).arg(&user_cmd).status().unwrap();
+        }"#;
+
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "rust",
+        Language::from(tree_sitter_rust::LANGUAGE),
+    );
+
+    let guard_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !guard_findings.is_empty(),
+        "Structural finding must still fire when a sink arg is source-derived"
     );
 }
 
@@ -475,9 +592,11 @@ fn reachable_set_contains_all_connected_nodes() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
-    let reachable = dominators::reachable_set(&cfg, entry);
+    let reachable = dominators::reachable_set(cfg, entry);
 
     // All nodes in a simple straight-line function should be reachable
     assert_eq!(
@@ -499,9 +618,10 @@ fn find_exit_node_exists() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, _, _) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
 
-    let exit = dominators::find_exit_node(&cfg);
+    let exit = dominators::find_exit_node(cfg);
     assert!(exit.is_some(), "Should find an exit node");
 }
 
@@ -518,10 +638,12 @@ fn shortest_distance_basic() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
-    let exit = dominators::find_exit_node(&cfg).unwrap();
-    let dist = dominators::shortest_distance(&cfg, entry, exit);
+    let exit = dominators::find_exit_node(cfg).unwrap();
+    let dist = dominators::shortest_distance(cfg, entry, exit);
     assert!(dist.is_some(), "Should find a path from entry to exit");
     assert!(dist.unwrap() > 0, "Distance should be positive");
 }
@@ -662,27 +784,42 @@ fn taint_and_unguarded_sink_deduped() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg_graph, entry, _summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let cfg_graph = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
     let _lang = Lang::from_slug("rust").unwrap();
 
     // Find a sink node to create a synthetic taint finding
     let sink_node = cfg_graph
         .node_indices()
         .find(|&idx| {
-            matches!(
-                cfg_graph[idx].label,
-                Some(crate::labels::DataLabel::Sink(_))
-            )
+            cfg_graph[idx]
+                .taint
+                .labels
+                .iter()
+                .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
         })
         .expect("test code should have a sink node");
 
     let fake_taint = vec![taint::Finding {
+        body_id: crate::cfg::BodyId(0),
         sink: sink_node,
         source: entry,
         path: vec![entry, sink_node],
         source_kind: crate::labels::SourceKind::UserInput,
         path_validated: false,
         guard_kind: None,
+        hop_count: 0,
+        cap_specificity: 1,
+        uses_summary: false,
+        flow_steps: vec![],
+        symbolic: None,
+        source_span: None,
+        primary_location: None,
+        engine_notes: smallvec::SmallVec::new(),
+        path_hash: 0,
+        finding_id: String::new(),
+        alternative_finding_ids: smallvec::SmallVec::new(),
     }];
 
     let findings = parse_and_run_all_with_taint(
@@ -825,28 +962,26 @@ fn js_throw_terminates_block() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "javascript", "test.js", None);
+    let file_cfg = build_cfg(&tree, src, "javascript", "test.js", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
-    // Verify throw creates a Return-kind node
+    // Verify throw creates a Throw-kind node
     let throw_nodes: Vec<_> = cfg
         .node_indices()
-        .filter(|&idx| {
-            cfg[idx].kind == crate::cfg::StmtKind::Return
-                && cfg[idx].span.0 > 0
-                && src[cfg[idx].span.0..].starts_with(b"throw")
-        })
+        .filter(|&idx| cfg[idx].kind == crate::cfg::StmtKind::Throw)
         .collect();
 
     assert!(
         !throw_nodes.is_empty(),
-        "throw statement should create a Return-kind node"
+        "throw statement should create a Throw-kind node"
     );
 
     // eval after throw should be unreachable
-    let reachable = crate::cfg_analysis::dominators::reachable_set(&cfg, entry);
+    let reachable = crate::cfg_analysis::dominators::reachable_set(cfg, entry);
     let eval_nodes: Vec<_> = cfg
         .node_indices()
-        .filter(|&idx| cfg[idx].callee.as_deref().is_some_and(|c| c == "eval"))
+        .filter(|&idx| cfg[idx].call.callee.as_deref().is_some_and(|c| c == "eval"))
         .collect();
 
     // eval might not even be in the CFG, or if it is, it should be unreachable
@@ -872,19 +1007,22 @@ fn configured_terminator_stops_flow() {
         extra_labels: vec![],
         terminators: vec!["process.exit".into()],
         event_handlers: vec![],
+        frameworks: vec![],
     };
 
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "javascript", "test.js", Some(&rules));
+    let file_cfg = build_cfg(&tree, src, "javascript", "test.js", Some(&rules));
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
-    let reachable = crate::cfg_analysis::dominators::reachable_set(&cfg, entry);
+    let reachable = crate::cfg_analysis::dominators::reachable_set(cfg, entry);
 
     // eval should be unreachable since process.exit is a terminator
     let eval_nodes: Vec<_> = cfg
         .node_indices()
-        .filter(|&idx| cfg[idx].callee.as_deref().is_some_and(|c| c == "eval"))
+        .filter(|&idx| cfg[idx].call.callee.as_deref().is_some_and(|c| c == "eval"))
         .collect();
 
     if !eval_nodes.is_empty() {
@@ -911,11 +1049,16 @@ fn location_href_assignment_is_sink() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, _entry, _summaries) = build_cfg(&tree, src, "javascript", "test.js", None);
+    let file_cfg = build_cfg(&tree, src, "javascript", "test.js", None);
+    let cfg = &file_cfg.first_body().graph;
 
-    let has_sink = cfg
-        .node_indices()
-        .any(|idx| matches!(cfg[idx].label, Some(crate::labels::DataLabel::Sink(_))));
+    let has_sink = cfg.node_indices().any(|idx| {
+        cfg[idx]
+            .taint
+            .labels
+            .iter()
+            .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
+    });
     assert!(has_sink, "location.href = url should produce a Sink node");
 }
 
@@ -931,11 +1074,16 @@ fn a_href_assignment_is_not_sink() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, _entry, _summaries) = build_cfg(&tree, src, "javascript", "test.js", None);
+    let file_cfg = build_cfg(&tree, src, "javascript", "test.js", None);
+    let cfg = &file_cfg.first_body().graph;
 
-    let has_sink = cfg
-        .node_indices()
-        .any(|idx| matches!(cfg[idx].label, Some(crate::labels::DataLabel::Sink(_))));
+    let has_sink = cfg.node_indices().any(|idx| {
+        cfg[idx]
+            .taint
+            .labels
+            .iter()
+            .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
+    });
     assert!(
         !has_sink,
         "el.href = '/about' should NOT produce a Sink node"
@@ -963,27 +1111,35 @@ fn config_sanitizer_suppresses_unguarded_sink() {
         extra_labels: vec![crate::labels::RuntimeLabelRule {
             matchers: vec!["escapeHtml".into()],
             label: crate::labels::DataLabel::Sanitizer(crate::labels::Cap::HTML_ESCAPE),
+            case_sensitive: false,
         }],
         terminators: vec![],
         event_handlers: vec![],
+        frameworks: vec![],
     };
 
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs", Some(&rules));
+    let file_cfg = build_cfg(&tree, src, lang_str, "test.rs", Some(&rules));
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
     let lang = Lang::from_slug(lang_str).unwrap();
     let ctx = AnalysisContext {
-        cfg: &cfg,
+        cfg,
         entry,
         lang,
         file_path: "test.rs",
         source_bytes: src,
-        func_summaries: &summaries,
+        func_summaries: summaries,
         global_summaries: None,
         taint_findings: &[],
         analysis_rules: Some(&rules),
         taint_active: true,
+        body_const_facts: None,
+        type_facts: None,
+        auth_decorators: &[],
     };
     let findings = run_all(&ctx);
 
@@ -1318,9 +1474,11 @@ void process() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "c", "test.c", None);
+    let file_cfg = build_cfg(&tree, src, "c", "test.c", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
-    let reachable = dominators::reachable_set(&cfg, entry);
+    let reachable = dominators::reachable_set(cfg, entry);
 
     // All nodes should be reachable — the preproc recovery should prevent
     // the dangling-else from orphaning downstream code.
@@ -1351,9 +1509,11 @@ void process() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "c", "test.c", None);
+    let file_cfg = build_cfg(&tree, src, "c", "test.c", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
-    let reachable = dominators::reachable_set(&cfg, entry);
+    let reachable = dominators::reachable_set(cfg, entry);
 
     // All nodes should be reachable — break exits the loop and post-loop
     // code (free(x)) should be connected.
@@ -1439,19 +1599,25 @@ fn cfg_only_no_taint_produces_low_severity() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
     let lang = Lang::from_slug("rust").unwrap();
     let ctx = AnalysisContext {
-        cfg: &cfg,
+        cfg,
         entry,
         lang,
         file_path: "test.rs",
         source_bytes: src,
-        func_summaries: &summaries,
+        func_summaries: summaries,
         global_summaries: None,
         taint_findings: &[],
         analysis_rules: None,
         taint_active: false, // cfg-only mode
+        body_const_facts: None,
+        type_facts: None,
+        auth_decorators: &[],
     };
     let findings = guards::UnguardedSink.run(&ctx);
 
@@ -1554,5 +1720,355 @@ def setup():
         leak_findings.is_empty(),
         "signal.connect should not be treated as db acquire; got {:?}",
         leak_findings
+    );
+}
+
+// ─── Literal-argument taint sink suppression tests ─────────────────
+
+#[test]
+fn python_literal_os_system_no_finding() {
+    // os.system("ls -la") with string literal arg should produce no finding
+    let src = br#"
+import os
+
+def run():
+    os.system("ls -la")
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "os.system with string literal arg should not be flagged; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn go_literal_exec_command_no_finding() {
+    // exec.Command("echo", "hello") with multiple string literal args should produce no finding
+    let src = br#"
+package main
+
+import "os/exec"
+
+func run() {
+    exec.Command("echo", "hello")
+}
+"#;
+
+    let findings = parse_and_run_all(src, "go", Language::from(tree_sitter_go::LANGUAGE));
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "exec.Command with string literal args should not be flagged; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn python_literal_subprocess_list_no_finding() {
+    // subprocess.run(["ls", "-la"]) with array of string literals should produce no finding
+    let src = br#"
+import subprocess
+
+def run():
+    subprocess.run(["ls", "-la"])
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "subprocess.run with list of string literals should not be flagged; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn python_literal_subprocess_multiple_list_items_no_finding() {
+    // subprocess.run(["ls", "-la", "-h"]) with list of multiple literals should produce no finding
+    let src = br#"
+import subprocess
+
+def run():
+    subprocess.run(["ls", "-la", "-h"])
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "subprocess.run with list of multiple literals should not be flagged; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn js_template_literal_no_interpolation_no_finding() {
+    // exec(`ls -la`) with static template string should produce no finding
+    let src = br#"
+const { exec } = require('child_process');
+
+function run() {
+    exec(`ls -la`);
+}
+"#;
+
+    let findings = parse_and_run_all(
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "exec with static template string should not be flagged; got {:?}",
+        unguarded
+    );
+}
+
+// ─── Adversarial tests: must still report findings ─────────────────
+
+#[test]
+fn python_tainted_var_os_system_produces_finding() {
+    // os.system(user_input) with tainted variable must report
+    let src = br#"
+import os
+import sys
+
+def run():
+    user_input = sys.argv[1]
+    os.system(user_input)
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink" && f.severity == crate::patterns::Severity::High
+        })
+        .collect();
+    assert!(
+        !sink_findings.is_empty(),
+        "os.system with tainted variable should produce a HIGH finding"
+    );
+}
+
+#[test]
+fn python_one_hop_constant_still_suppressed() {
+    // cmd = "ls"; os.system(cmd) — `all_args_literal` is false (identifier arg),
+    // but should still be suppressed via existing one-hop constant trace in cfg_analysis.
+    let src = br#"
+import os
+
+def run():
+    cmd = "ls"
+    os.system(cmd)
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "One-hop constant binding should suppress cfg-unguarded-sink via existing trace; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn js_template_literal_with_interpolation_produces_finding() {
+    // exec(`ls ${dir}`) with interpolation must report
+    let src = br#"
+const { exec } = require('child_process');
+
+function run() {
+    const dir = process.env.DIR;
+    exec(`ls ${dir}`);
+}
+"#;
+
+    let findings = parse_and_run_all(
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink" && f.severity == crate::patterns::Severity::High
+        })
+        .collect();
+    assert!(
+        !sink_findings.is_empty(),
+        "exec with interpolated template string should produce a HIGH finding"
+    );
+}
+
+#[test]
+fn python_array_with_tainted_element_produces_finding() {
+    // subprocess.run([user_input, "-la"], shell=True) with one tainted element must report
+    let src = br#"
+import subprocess
+import sys
+
+def run():
+    user_input = sys.argv[1]
+    subprocess.run([user_input, "-la"], shell=True)
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink" && f.severity == crate::patterns::Severity::High
+        })
+        .collect();
+    assert!(
+        !sink_findings.is_empty(),
+        "subprocess.run with tainted array element should produce a HIGH finding"
+    );
+}
+
+#[test]
+fn python_constant_receiver_tainted_arg_produces_finding() {
+    // safe_obj.system(user_input) — constant receiver is irrelevant, tainted arg must report
+    let src = br#"
+import os
+import sys
+
+def run():
+    user_input = sys.argv[1]
+    os.system(user_input)
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink" && f.severity == crate::patterns::Severity::High
+        })
+        .collect();
+    assert!(
+        !sink_findings.is_empty(),
+        "Tainted argument to sink must produce a HIGH finding regardless of receiver"
+    );
+}
+
+#[test]
+fn php_encapsed_string_with_interpolation_produces_finding() {
+    // system("ls $dir") with PHP interpolation must report
+    let src = br#"<?php
+function run() {
+    $dir = $_GET['dir'];
+    system("ls $dir");
+}
+"#;
+
+    let findings = parse_and_run_all(src, "php", Language::from(tree_sitter_php::LANGUAGE_PHP));
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink" && f.severity == crate::patterns::Severity::High
+        })
+        .collect();
+    assert!(
+        !sink_findings.is_empty(),
+        "PHP system() with interpolated string should produce a HIGH finding"
+    );
+}
+
+// ── Type-fact sink suppression (rs-safe-011 regression) ────────────────
+
+#[test]
+fn type_facts_suppress_int_typed_shell_arg() {
+    // rs-safe-011 fixture: a u16-typed port (parsed from env) flows into
+    // Command::new("listener").arg(port.to_string()).  The taint engine
+    // already suppresses the flow via type-aware analysis; the structural
+    // cfg-unguarded-sink must also honour the type fact and stay silent.
+    let src = br#"
+        use std::env;
+        use std::process::Command;
+        fn main() {
+            let raw = env::var("PORT").unwrap();
+            let port: u16 = raw.parse().expect("invalid port");
+            Command::new("listener").arg(port.to_string()).status().unwrap();
+        }"#;
+
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "rust",
+        Language::from(tree_sitter_rust::LANGUAGE),
+    );
+
+    let guard_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        guard_findings.is_empty(),
+        "Int-typed sink argument should suppress cfg-unguarded-sink, got: {:?}",
+        guard_findings
+    );
+}
+
+#[test]
+fn type_facts_preserve_untyped_string_shell_arg() {
+    // Companion negative test: env::var() flows directly into a Command arg
+    // with no int typing.  The sink argument is a String of unknown content,
+    // so the structural finding must still fire.  Guards against the
+    // suppression helper over-reaching into cases without an Int fact.
+    let src = br#"
+        use std::env;
+        use std::process::Command;
+        fn main() {
+            let cmd = env::var("USER_CMD").unwrap();
+            Command::new("sh").arg("-c").arg(cmd).status().unwrap();
+        }"#;
+
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "rust",
+        Language::from(tree_sitter_rust::LANGUAGE),
+    );
+
+    let guard_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !guard_findings.is_empty(),
+        "Untyped String shell argument must still produce cfg-unguarded-sink"
     );
 }

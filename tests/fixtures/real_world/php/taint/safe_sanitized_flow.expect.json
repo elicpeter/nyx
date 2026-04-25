@@ -1,0 +1,24 @@
+{
+  "description": "$_GET source flows through escapeshellarg (SHELL_ESCAPE sanitizer) before reaching system sink \u2014 taint should be cleared.",
+  "tags": [
+    "taint",
+    "negative",
+    "cmdi",
+    "sanitizer"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": "HIGH",
+      "must_not_match": true,
+      "line_range": [
+        5,
+        5
+      ],
+      "notes": "escapeshellarg sanitizes input — php.cmdi.system must NOT fire (regression guard, Layer B suppression)"
+    }
+  ]
+}

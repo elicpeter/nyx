@@ -26,13 +26,14 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         3,
         10
       ],
+      "modes": ["full"],
       "evidence_contains": [],
-      "notes": "User data flows through Base64 decode into Marshal.load - aspirational taint finding"
+      "notes": "User data flows through Base64 decode into Marshal.load (full mode only; AST mode does not run taint analysis)"
     }
   ]
 }

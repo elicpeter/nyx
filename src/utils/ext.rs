@@ -10,6 +10,7 @@ pub fn lowercase_ext(path: &std::path::Path) -> Option<&'static str> {
         "ts" | "TSX" | "tsx" => Some("ts"),
         "js" => Some("js"),
         "rb" | "RB" => Some("rb"),
+        "ejs" | "EJS" => Some("ejs"),
         _ => None,
     })
 }
@@ -32,4 +33,78 @@ fn lowercase_ext_recognises_known_extensions() {
             "case: {file}"
         );
     }
+}
+
+#[test]
+fn lowercase_ext_all_supported_extensions() {
+    use std::path::Path;
+    let cases: &[(&str, &str)] = &[
+        ("main.rs", "rs"),
+        ("main.RS", "rs"),
+        ("util.c", "c"),
+        ("util.cpp", "cpp"),
+        ("util.c++", "cpp"),
+        ("App.java", "java"),
+        ("server.go", "go"),
+        ("index.php", "php"),
+        ("script.py", "py"),
+        ("script.PY", "py"),
+        ("app.ts", "ts"),
+        ("app.tsx", "ts"),
+        ("app.TSX", "ts"),
+        ("bundle.js", "js"),
+        ("app.rb", "rb"),
+        ("app.RB", "rb"),
+    ];
+    for (file, expected) in cases {
+        assert_eq!(
+            lowercase_ext(Path::new(file)),
+            Some(*expected),
+            "file: {file}"
+        );
+    }
+}
+
+#[test]
+fn lowercase_ext_unsupported_extensions_return_none() {
+    use std::path::Path;
+    let unsupported = [
+        "style.css",
+        "index.html",
+        "data.json",
+        "README.md",
+        "lock.lock",
+        "image.png",
+    ];
+    for file in unsupported {
+        assert_eq!(lowercase_ext(Path::new(file)), None, "file: {file}");
+    }
+}
+
+#[test]
+fn lowercase_ext_path_without_extension_returns_none() {
+    use std::path::Path;
+    assert_eq!(lowercase_ext(Path::new("Makefile")), None);
+    assert_eq!(lowercase_ext(Path::new("README")), None);
+    assert_eq!(lowercase_ext(Path::new("")), None);
+}
+
+#[test]
+fn lowercase_ext_uses_final_extension_only() {
+    use std::path::Path;
+    // A file named "archive.tar.gz" has extension "gz", not "tar"
+    assert_eq!(lowercase_ext(Path::new("archive.tar.gz")), None);
+    // "backup.rs.bak" has extension "bak"
+    assert_eq!(lowercase_ext(Path::new("backup.rs.bak")), None);
+}
+
+#[test]
+fn lowercase_ext_works_with_directory_prefixes() {
+    use std::path::Path;
+    assert_eq!(lowercase_ext(Path::new("src/main.rs")), Some("rs"));
+    assert_eq!(
+        lowercase_ext(Path::new("/absolute/path/to/app.py")),
+        Some("py")
+    );
+    assert_eq!(lowercase_ext(Path::new("a/b/c/d.js")), Some("js"));
 }

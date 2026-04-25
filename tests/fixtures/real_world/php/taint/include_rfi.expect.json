@@ -9,6 +9,9 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
@@ -20,6 +23,17 @@
       ],
       "evidence_contains": [],
       "notes": "$_GET['page'] flows directly into include() without whitelist check"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_not_match": true,
+      "line_range": [
+        9,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "The safe include at line 9 is protected by the in_array allowlist at line 8 — scanner correctly recognises the validator and suppresses the flow. Regression guard."
     }
   ]
 }
