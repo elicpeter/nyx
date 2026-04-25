@@ -426,7 +426,22 @@ fn related_subject_base(subject: &ValueRef) -> Option<String> {
 }
 
 fn is_relevant_target_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
-    is_id_like(subject) && !is_actor_context_subject(subject, unit)
+    is_id_like(subject)
+        && !is_actor_context_subject(subject, unit)
+        && !is_const_bound_subject(subject, unit)
+}
+
+/// True iff `subject` is a plain identifier whose declaration binds
+/// it to a literal constant (`id := "id"`, `let userId = 1`, etc.).
+/// Such bindings cannot be user-controlled and so must not be
+/// classified as scoped-identifier subjects.  Only matches plain
+/// `Identifier`-kind subjects (no base/field) — member chains like
+/// `req.params.id` still pass through to the regular checks.
+fn is_const_bound_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
+    if subject.base.is_some() || subject.field.is_some() {
+        return false;
+    }
+    unit.const_bound_vars.contains(&subject.name)
 }
 
 fn is_actor_context_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
@@ -621,6 +636,7 @@ mod tests {
             self_actor_vars: HashSet::new(),
             self_actor_id_vars: HashSet::new(),
             authorized_sql_vars: HashSet::new(),
+            const_bound_vars: HashSet::new(),
         }
     }
 
@@ -715,5 +731,29 @@ mod tests {
 
         // Foreign-user fields still flag.
         assert!(!is_actor_context_subject(&member("target", "email"), &unit));
+    }
+
+    /// Real-repo regression (gin/context_test.go): `id := "id";
+    /// c.AddParam(id, value)` previously fired the rule because `id`
+    /// matched is_id_like but had no actor-context exemption.  After
+    /// the const-binding tracker, `id` (a plain Local with no base /
+    /// field) bound to a literal is excluded from relevant subjects.
+    #[test]
+    fn const_bound_plain_subjects_are_not_relevant() {
+        let mut unit = empty_unit();
+        unit.const_bound_vars.insert("id".into());
+
+        // `id` matches is_id_like (name=="id") but is constant-bound.
+        assert!(!is_relevant_target_subject(&plain("id"), &unit));
+
+        // Plain `id` NOT in the const-bound set still flags as
+        // relevant — regression guard for the user-controlled case.
+        let unit2 = empty_unit();
+        assert!(is_relevant_target_subject(&plain("id"), &unit2));
+
+        // Member access `req.id` is unaffected by const-bound check
+        // (different ValueRef shape).
+        unit.const_bound_vars.insert("req".into());
+        assert!(is_relevant_target_subject(&member("req", "id"), &unit));
     }
 }

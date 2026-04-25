@@ -9,28 +9,33 @@ The classifications here are grounded in three concrete signals:
 1. **Rule depth**: how many distinct source / sanitizer / sink matchers exist
    for the language in `src/labels/<lang>.rs`, and how many vulnerability
    classes (Cap bits) those matchers cover.
-2. **Benchmark results**: rule-level precision / recall / F1 on the 305-case
-   corpus (267 synthetic + 14 real-CVE pairs + 10 auth fixtures) in
+2. **Benchmark results**: rule-level precision / recall / F1 on the 368-case
+   corpus in
    [`tests/benchmark/RESULTS.md`](https://github.com/elicpeter/nyx/blob/master/tests/benchmark/RESULTS.md),
-   last measured 2026-04-23 with scanner version 0.5.0.
+   last measured 2026-04-25 with scanner version 0.5.0.
 3. **Known weak spots**: FPs and FNs the maintainers have deliberately left
-   in the benchmark rather than suppressed, documented release-by-release in
+   in the benchmark rather than suppressed, plus structural engine
+   limitations the corpus does not stress, documented release-by-release in
    [`RESULTS.md`](https://github.com/elicpeter/nyx/blob/master/tests/benchmark/RESULTS.md).
 
-All parser integrations use tree-sitter and are stable; parsing is not a
-differentiator between tiers. The differentiators are rule depth, cross-file
-confidence, and modeled idioms.
+As of 2026-04-25 the synthetic corpus has effectively saturated: nine of ten
+languages report rule-level F1 = 100.0% and Ruby reports 96.3% (one FN on an
+interprocedural SQLi case). Aggregate rule-level P=1.000, R=0.995, F1=0.997.
+That means F1 alone no longer differentiates tiers — the differentiators are
+**rule depth**, **gated-sink coverage**, and **structural idioms the corpus
+does not fully stress** (pointer aliasing in C/C++, dynamic dispatch,
+framework-specific context). All parser integrations use tree-sitter and are
+stable; parsing is not a differentiator.
 
 ---
 
 ## Tier Summary
 
-| Tier | Languages | What to expect |
-|------|-----------|----------------|
-| **Stable** | Python, JavaScript, TypeScript | Deep rule sets, gated sinks (argument-role-aware), framework detection, extensive fixtures, and the bulk of advanced-analysis (SSA, context-sensitivity, symbolic execution) coverage. Safe to depend on in CI gates. |
-| **Beta** | Go, Java, Ruby, PHP | Solid mid-depth rule sets with known narrower class coverage. No gated sinks yet. Cross-file flows work; some idioms (variable-typed method receivers, framework context, string interpolation) are incomplete. Usable in CI, but review FP/FN lists before tightening gates. |
-| **Preview** | C, C++ | Pattern-only coverage. Pointer aliasing, function pointers, array-element taint, and STL container flows are not modeled. Suitable for finding obvious unsafe API uses; do not use as a sole SAST gate. Pair with clang-tidy / Clang Static Analyzer / Infer. |
-| **Experimental** | Rust | Full source coverage relative to the framework ecosystem, but several FPs persist on adversarial safe cases pending engine work (match-arm guards, structural sinks with type facts). Appropriate for spot-checks and contribution but not yet recommended as a sole SAST dependency. |
+| Tier | Languages | F1 | What to expect |
+|------|-----------|----|----------------|
+| **Stable** | Python, JavaScript, TypeScript | 100% | Deep rule sets, gated sinks (argument-role-aware), framework detection, extensive fixtures, and the bulk of advanced-analysis (SSA two-level solve, context-sensitivity, symbolic execution, abstract interpretation) coverage. Safe to depend on in CI gates. |
+| **Beta** | Go, Java, PHP, Ruby, Rust | 96.3% – 100% | Solid mid-depth rule sets with narrower cap coverage and **no gated sinks**. Cross-file flows work; some idioms (variable-typed method receivers, framework context, string interpolation, match-arm guards) are partially modeled. Usable in CI; review FP/FN lists before tightening gates. |
+| **Preview** | C, C++ | 100% on synthetic corpus | The engine **structurally cannot model** pointer aliasing, function pointer / callback dispatch, array-element taint, or (C++) STL container flows. Rule-level scores against a corpus of obvious unsafe-API uses look perfect; that is not the same as a clean audit. Pair with clang-tidy, Clang Static Analyzer, or Infer. |
 
 ---
 
@@ -38,7 +43,7 @@ confidence, and modeled idioms.
 
 ### Stable tier
 
-#### Python: 100% P / 100% R / 100% F1 *(29-case corpus)*
+#### Python: 100% P / 100% R / 100% F1 *(42-case corpus)*
 
 - **Rule depth**: 5 source families, 7 sanitizer families, 21 sink matchers
   spanning HTML, URL, Shell, SQL, Code, SSRF, File I/O, and Deserialization.
@@ -47,52 +52,55 @@ confidence, and modeled idioms.
 - **Advanced analysis**: gated sinks (`Popen`, `subprocess.run/call` with
   activation-arg awareness), most SSA-equivalence and symbolic-execution
   fixtures target Python.
-- **Fixtures**: 125 under `tests/fixtures/` plus 30 benchmark cases.
+- **Fixtures**: 125 under `tests/fixtures/` plus 42 benchmark cases.
 - **Blind spots**: f-string interpolation is not explicitly modeled as a
   distinct taint-producing construct; string-formatting flows are caught by
   the general concatenation path.
 
-#### JavaScript: 93.8% P / 100% R / 96.8% F1 *(27-case corpus)*
+#### JavaScript: 100% P / 100% R / 100% F1 *(37-case corpus)*
 
 - **Rule depth**: 3 source families, 10 sanitizer families, 24 sink matchers
   spanning HTML, URL, JSON, Shell, SQL, Code, SSRF, and File I/O.
 - **Advanced analysis**: gated sinks (`setAttribute`, `parseFromString`),
-  two-level SSA solve for top-level + per-function scopes (`analyse_ssa_js_two_level`),
-  prefix-locked SSRF suppression via StringFact.
+  two-level SSA solve for top-level + per-function scopes
+  (`analyse_ssa_js_two_level`), prefix-locked SSRF suppression via
+  StringFact, abstract-interpretation interval tracking.
 - **Framework context**: Express, Koa, Fastify (via in-file import scan when
   `package.json` is absent).
-- **Fixtures**: 238 under `tests/fixtures/`; the largest corpus of any
+- **Fixtures**: 238 under `tests/fixtures/`; the largest fixture set of any
   language.
 - **Blind spots**: template literals are lowered through concatenation rather
   than modeled as a first-class taint operator; dynamic property access
   (`obj[user]`) is conservatively treated.
 
-#### TypeScript: 100% P / 100% R / 100% F1 *(35-case corpus, most recent measurement)*
+#### TypeScript: 100% P / 100% R / 100% F1 *(42-case corpus)*
 
 - **Rule depth**: Shares the JS ruleset (3 sources, 10 sanitizers, 24 sinks)
   plus TS-specific grammar handling.
-- **Advanced analysis**: TSX and JSX grammars wired as of 2026-04-20;
+- **Advanced analysis**: TSX and JSX grammars wired;
   discriminated-union narrowing, generic erasure, decorator flow, and
   interface dispatch are all validated against adversarial type-system
   stressors.
 - **Framework context**: Fastify detection via `detect_in_file_frameworks`
   (import-driven, no `package.json` required).
-- **Fixtures**: 39 test fixtures plus 35 benchmark cases.
-- **Blind spots**: 0 known open weak spots as of 2026-04-20. `as any` casts
-  and `any`-typed flows are handled conservatively (treated as tainted).
+- **Fixtures**: 39 test fixtures plus 42 benchmark cases.
+- **Blind spots**: `as any` casts and `any`-typed flows are handled
+  conservatively (treated as tainted).
 
 ### Beta tier
 
-#### Go: 94.1% P / 100% R / 97.0% F1 *(28-case corpus)*
+#### Go: 100% P / 100% R / 100% F1 *(36-case corpus)*
 
 - **Rule depth**: 4 source families, 4 sanitizer families, 9 sink matchers
   covering HTML, URL, Shell, SQL, SSRF, Crypto, and File I/O.
 - **Framework context**: Gin, Echo source matchers.
-- **Known gaps**: no gated sinks, no deserialization class, allowlist
-  early-return patterns in path-pruning benchmark cases still produce FPs
-  (`go-pathprune-safe-001`). `fmt.Sprintf` is deliberately not a sink.
+- **Known gaps**: no gated sinks, no deserialization class. `fmt.Sprintf` is
+  deliberately not a sink. Rule-level F1 is 100% on the synthetic corpus,
+  but cap coverage is narrower than the Stable tier and argument-role-aware
+  sink modeling is not yet implemented for Go — production CI gates may
+  surface FPs the corpus does not exercise.
 
-#### Java: 92.9% P / 100% R / 96.3% F1 *(23-case corpus)*
+#### Java: 100% P / 100% R / 100% F1 *(33-case corpus)*
 
 - **Rule depth**: 3 source families, 8 sanitizer families, 10 sink matchers
   covering HTML, URL, Shell, SQL, Code, SSRF, and Deserialization.
@@ -101,10 +109,19 @@ confidence, and modeled idioms.
 - **Known gaps**: no gated sinks. Variable-receiver method calls
   (`client.send(...)` vs `HttpClient.send(...)`) rely on type-qualified
   resolution from receiver-type inference; flows where the receiver type
-  cannot be inferred are missed (`java-ssrf-002` historically persisted as
-  FN; closed via type facts but fragile on unusual builder chains).
+  cannot be inferred are conservatively over-tainted on unusual builder
+  chains.
 
-#### Ruby: 100% P / 92.3% R / 96.0% F1 *(24-case corpus)*
+#### PHP: 100% P / 100% R / 100% F1 *(33-case corpus)*
+
+- **Rule depth**: 3 source families (`$_GET`, `$_POST`, `$_REQUEST`
+  superglobals), 7 sanitizer families, 10 sink matchers covering HTML, URL,
+  Shell, SQL, Code, SSRF, File I/O, and Deserialization.
+- **Known gaps**: no gated sinks. Limited framework context (Laravel raw
+  methods only). `echo` language-construct detection is wired but its
+  inner-argument propagation is narrower than function-call sinks.
+
+#### Ruby: 100% P / 92.9% R / 96.3% F1 *(30-case corpus, 1 FN)*
 
 - **Rule depth**: 3 source families, 7 sanitizer families, 15 sink matchers
   covering HTML, Shell, SQL, Code, SSRF, File I/O, and Deserialization.
@@ -112,28 +129,49 @@ confidence, and modeled idioms.
 - **Known gaps**: string interpolation inside shell and SQL strings is
   recognized structurally but not modeled as a distinct operator.
   `begin/rescue/ensure` exception-edge wiring is documented as deferred
-  (structurally incompatible with `build_try()`). One FN persists on an
-  interprocedural taint propagation case due to rule-ID mismatch, not a
-  missed flow (`rb-interproc-001`).
+  (structurally incompatible with `build_try()`). The single open FN is
+  `rb-interproc-001` — interprocedural SQL flow that fires
+  `cfg-unguarded-sink` instead of the expected taint rule (rule-ID
+  mismatch, not a missed flow).
 
-#### PHP: 86.7% P / 100% R / 92.9% F1 *(24-case corpus)*
+#### Rust: 100% P / 100% R / 100% F1 *(59-case adversarial corpus)*
 
-- **Rule depth**: 3 source families (`$_GET`, `$_POST`, `$_REQUEST`
-  superglobals), 7 sanitizer families, 10 sink matchers covering HTML, URL,
-  Shell, SQL, Code, SSRF, File I/O, and Deserialization.
-- **Known gaps**: no gated sinks. Limited framework context (Laravel raw
-  methods only). Interprocedural sanitizer-wrapping case
-  (`php-interproc-safe-001`) persists as FP. `echo` language-construct
-  detection is wired but its inner-argument propagation is narrower than
-  function-call sinks.
+Rust holds the largest per-language adversarial corpus and was promoted
+from Experimental to Beta in the 2026-04-25 measurement after the PathFact
+landings closed every previously-open `rs-safe-*` regression.
+
+- **Rule depth**: 6 source families, **2** sanitizer families (prefix and
+  type-coercion), 11 sink matchers covering HTML, Shell, SQL, SSRF,
+  Deserialization, and File I/O. Extensive framework source coverage
+  (Axum, Actix, Rocket); the most of any language on the source side. The
+  narrow sanitizer count is the primary reason Rust is not in the Stable
+  tier — engine-side path/typed sanitizer recognition (PathFact) compensates,
+  but the ruleset itself is shallow.
+- **Recent additions**: SQL class (`rusqlite`, `sqlx`, `diesel`,
+  `postgres`), Deserialization class (`serde_yaml`, `bincode`,
+  `rmp_serde`, `ciborium`, `ron`, `toml`), expanded file I/O
+  (`fs::remove_file/dir/rename/copy`), `reqwest` SSRF builder chain.
+- **Closed by recent PathFact landings**
+  (`src/abstract_interp/path_domain.rs` + per-return-path PathFact entries
+  on `SsaFuncSummary`): `rs-safe-007` (`.replace("..","")` sanitiser),
+  `rs-safe-008` (negative-validation return), `rs-safe-009` (match-arm
+  guards via condition lifting), `rs-safe-010` (static-map lookup),
+  `rs-safe-012` (`.contains("..")` + `.starts_with('/')` rejection),
+  `rs-safe-014` (Option-returning user sanitiser), `rs-safe-015`
+  (`Path::new(p).is_absolute()` typed rejection), `rs-safe-016`
+  (cross-function `.contains("..")` rejection), and CVE patches
+  `CVE-2018-20997`, `CVE-2022-36113`, `CVE-2024-24576`.
+- **Not yet covered**: unsafe FFI / `std::mem::transmute` (no rules), Tokio
+  `process::Command` async variants (not distinguished from sync),
+  `hyper` / `surf` / `ureq` SSRF clients (reqwest family only).
 
 ### Preview tier
 
-C and C++ are labeled **Preview** (not Experimental) to convey a specific
-shape of limitation: the parser and existing rules produce useful findings
-on obvious unsafe-API uses, but the engine **structurally cannot model**
-several pervasive C/C++ constructs. Running Nyx on a C/C++ codebase and
-seeing a clean report should not be read as a clean audit. Pair Nyx with
+C and C++ remain **Preview** despite reporting 100% rule-level F1 on the
+synthetic corpus. The corpus exercises obvious unsafe-API uses
+(`system`, `sprintf`, `strcpy`, `getenv` → exec); it does not stress the
+constructs the engine **structurally cannot model**. A clean report on a
+real C or C++ codebase should not be read as a clean audit. Pair Nyx with
 clang-tidy, the Clang Static Analyzer, or Infer for production use.
 
 **Not modeled** (common to both C and C++):
@@ -143,123 +181,82 @@ clang-tidy, the Clang Static Analyzer, or Infer for production use.
 - Function pointers and callback dispatch. Indirect calls through
   `void (*fn)(char *)` resolve to no callee.
 - Array-element taint. Writes to `buf[i]` do not propagate taint to `buf`
-  in the general case; structural taint chains involving `fgets` → array →
-  `system` have rule-ID matching issues (`c-cmdi-004`).
+  in the general case.
 - STL container operations (C++ only). `std::vector`, `std::map`,
-  `std::string` methods are not taint-aware; `c_str()` breaks taint chains
-  (`cpp-cmdi-003`).
-- Lambdas and nested classes (C++ only). Not modeled.
-- Complex socket setup (C++ only). E.g. `connect()` chains are not detected
-  (`cpp-ssrf-002`).
+  `std::string` methods are not taint-aware; `c_str()` breaks taint chains.
+- Lambdas and nested classes (C++ only).
+- Complex socket setup (C++ only): `connect()` builder chains are not
+  detected.
 
-#### C: 85.7% P / 100% R / 92.3% F1 *(20-case corpus)*
+#### C: 100% P / 100% R / 100% F1 *(27-case corpus)*
 
 - **Rule depth**: 3 source families, **2** sanitizer families (prefix-based
   only), 5 sink matchers spanning Shell, File, SSRF, and Format-String.
-- **Known gaps**: no framework rules, no gated sinks. Path-validation via
-  `strstr()` is not recognized as a guard (`c-safe-006`). Forward-declared
-  sanitizers are not tracked (`c-safe-008`).
+- **Known gaps**: no framework rules, no gated sinks. The structural
+  limitations listed above are the dominant concern; rule additions alone
+  will not lift this language out of the Preview tier.
 
-#### C++: 80.0% P / 100% R / 88.9% F1 *(20-case corpus)*
+#### C++: 100% P / 100% R / 100% F1 *(27-case corpus)*
 
 - **Rule depth**: Clones the C ruleset (3 sources, 2 sanitizers, 5 sinks) and
   adds `std::cin` / `std::getline` sources.
-- **Known gaps**: same sanitizer-recognition gaps as C. See the "Not
-  modeled" list above for structural gaps (STL containers, `c_str()`,
-  `connect()`, lambdas, nested classes).
-
-### Experimental tier
-
-#### Rust: 76.0% P / 100% R / 86.4% F1 *(31-case adversarial corpus)*
-
-- **Rule depth**: 6 source families, **2** sanitizer families (prefix and
-  type-coercion), 11 sink matchers covering HTML, Shell, SQL, SSRF,
-  Deserialization, and File I/O. Extensive framework source coverage
-  (Axum, Actix, Rocket); the most of any language on the source side.
-- **Recent additions (2026-04-20)**: new SQL class (`rusqlite`, `sqlx`,
-  `diesel`, `postgres`), new Deserialization class (`serde_yaml`,
-  `bincode`, `rmp_serde`, `ciborium`, `ron`, `toml`), expanded file I/O
-  (`fs::remove_file/dir/rename/copy`), `reqwest` SSRF builder chain.
-- **Known gaps**:
-  - `rs-safe-003`: structural `cfg-unguarded-sink` fires when a tainted
-    variable is *declared* in scope but not used in the sink; intentional
-    for high-risk sinks.
-  - `rs-safe-009`: match-arm guards don't surface as `StmtKind::If`, so
-    `classify_condition` never sees the character-class validation.
-  - `safe_direct_sanitizer.rs`: still FP because the SSA lowering for
-    an OR-chain rejection (`if a || b || c { return X }`) joins both
-    return paths into a single block, losing the early-return
-    semantics.  Distinct from the merged-return-block defect closed in
-    2026-04-24; tracked separately.
-- **Closed by the 2026-04-23 PathFact domain**
-  (`src/abstract_interp/path_domain.rs`): `rs-safe-007` (`.replace("..",
-  "")` sanitiser), `rs-safe-008` (negative-validation return pattern),
-  `rs-safe-010` (static-map lookup; still handled by the dedicated
-  static-map analysis, but PathFact does not interfere), new `rs-safe-012`
-  (`.contains("..")` + `.starts_with('/')` intraprocedural rejection),
-  new `rs-safe-015` (`Path::new(p).is_absolute()` typed rejection), plus a
-  new `rs-path-006` negative-guard to prevent over-suppression.
-- **Closed by the 2026-04-24 per-return-path PathFact landing**
-  (`PathFactReturnEntry` on `SsaFuncSummary` + structural
-  variant-wrapper transparency + non-data-return skipping +
-  path-fact-proven leaf detection in
-  `trace_tainted_leaf_values`):
-  `rs-safe-014` (Option-returning user sanitiser),
-  new `rs-safe-016` (cross-function `.contains("..")` rejection),
-  `CVE-2018-20997` patched (tar-rs zip-slip),
-  `CVE-2022-36113` patched (cargo `.cargo-ok` symlink),
-  `CVE-2024-24576` patched (BatBadBut argv injection).
-- **Not yet covered**: unsafe FFI / `std::mem::transmute` (no rules), Tokio
-  `process::Command` async variants (not distinguished from sync),
-  `hyper` / `surf` / `ureq` SSRF clients (reqwest family only), and Rocket /
-  Actix positive cases (rules exist but no benchmark fixtures yet).
+- **Known gaps**: same sanitizer-recognition gaps as C, plus the
+  C++-specific structural gaps (STL containers, `c_str()`, `connect()`,
+  lambdas, nested classes) listed above.
 
 ---
 
 ## How the tiers were assigned
 
+Because rule-level F1 has saturated for nine of ten languages, the tier
+boundaries are drawn primarily on **rule depth** and **engine coverage of
+real-world idioms** rather than on benchmark scores alone.
+
 A language lands in **Stable** when all three hold:
 
 - Rule set covers ≥ 8 vulnerability classes with both source and sink
-  matchers, and at least one class has argument-role-aware gating.
+  matchers, and at least one class has argument-role-aware **gated-sink**
+  modeling (e.g. `setAttribute("href", url)` only flags href-like attrs).
 - Benchmark F1 ≥ 95% on a corpus of ≥ 25 cases.
-- Advanced analysis (SSA lowering, context-sensitivity, symbolic-execution)
-  is exercised by fixtures for the language.
+- Advanced analysis (SSA lowering, context-sensitivity, symbolic execution,
+  abstract interpretation) is exercised by fixtures for the language.
 
-A language lands in **Beta** when benchmark F1 ≥ 90% but at least one of the
-Stable criteria fails; usually narrower cap coverage or absence of gated
-sinks.
+A language lands in **Beta** when benchmark F1 ≥ 95% on a meaningful corpus
+but at least one Stable criterion fails — typically the absence of gated
+sinks, or sanitizer rule depth narrow enough that the engine compensates
+structurally rather than via the ruleset.
 
-A language lands in **Preview** when the engine structurally cannot model
-constructs that are pervasive in typical codebases for that language
+A language lands in **Preview** when the engine **structurally cannot
+model** constructs that are pervasive in typical codebases for that language
 (pointer aliasing, function pointers, array-element taint, STL containers
-for C/C++). Pattern-only coverage is useful but not sufficient as a sole
-SAST gate.
+for C/C++). Synthetic-corpus F1 is not a reliable signal for Preview-tier
+languages: a clean report can coexist with large structural blind spots.
 
-A language lands in **Experimental** when rule depth is clearly narrower
-(≤ 5 sinks and ≤ 2 sanitizers), or benchmark F1 < 90%, or documented weak
-spots require engine changes rather than rule additions to close, but the
-engine does not have the pervasive structural blind spots of the Preview
-tier.
+(The previous **Experimental** tier was retired in the 2026-04-25
+measurement when Rust's adversarial corpus reached 100% F1; no language
+currently sits in that tier.)
 
 ---
 
 ## What this means for you
 
 - **CI gates**: safe to set strict `--fail-on HIGH` gates on Stable-tier
-  languages. On Beta-tier, expect occasional FP triage; the weak-spot lists
-  above tell you exactly what to skim for. On Preview- and Experimental-tier,
-  treat Nyx findings as a starting point for manual review rather than
-  authoritative; Preview-tier languages in particular have structural
-  blind spots that a clean report will not disclose.
+  languages. On Beta-tier, expect occasional FP triage on production code
+  (the synthetic corpus does not cover every framework idiom); the
+  weak-spot lists above tell you what to skim for. On Preview-tier, treat
+  Nyx findings as a starting point for manual review rather than
+  authoritative — the structural blind spots (pointer aliasing, function
+  pointers, STL flows) mean a clean report does not disclose what the
+  engine cannot see.
 - **Rule contributions**: the shortest path to raising a language's tier is
   contributing sink matchers and gated-sink registrations. Label files live
   at `src/labels/<lang>.rs`; benchmark cases live at
   `tests/benchmark/corpus/<lang>/`.
-- **Scope planning**: if your primary stack is C, C++, or Rust, Nyx will
-  surface real findings, but you should budget for review time and consider
-  combining Nyx with a language-specific tool (e.g. `cargo-audit`,
-  `clang-tidy`) until those tiers mature.
+- **Scope planning**: if your primary stack is C or C++, Nyx will surface
+  real findings on obvious unsafe-API uses, but budget for review time and
+  combine Nyx with `clang-tidy` or the Clang Static Analyzer. Rust is now
+  Beta-tier and suitable as a CI gate; pair with `cargo-audit` for
+  dependency CVEs.
 
 The benchmark thresholds in `tests/benchmark_test.rs` are deliberately set
 ~5 pp below current baselines so any drop in a language's F1 fails CI. Tier

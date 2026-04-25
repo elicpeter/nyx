@@ -7,6 +7,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange)](https://www.rust-lang.org)
 [![CI](https://img.shields.io/github/actions/workflow/status/elicpeter/nyx/ci.yml?branch=master)](https://github.com/elicpeter/nyx/actions)
+[![Docs](https://img.shields.io/badge/docs-elicpeter.github.io%2Fnyx-blue)](https://elicpeter.github.io/nyx/)
 </div>
 
 <p align="center"><img src="assets/screenshots/demo.gif" alt="Nyx UI walkthrough: scan, browse findings, inspect flow path, triage" width="900"/></p>
@@ -43,7 +44,7 @@ Everything stays on your machine: loopback-only bind, host-header enforcement, C
 | **Config** | Live config editor; reload without restart |
 
 
-`nyx serve` flags: `--port <N>` (default `9700`), `--host <addr>` (loopback only: `127.0.0.1`, `localhost`, or `::1`), `--no-browser`. See `[server]` in `nyx.conf` for persistent settings, and [`docs/serve.md`](docs/serve.md) for the page-by-page UI tour and security model.
+`nyx serve` flags: `--port <N>` (default `9700`), `--host <addr>` (loopback only: `127.0.0.1`, `localhost`, or `::1`), `--no-browser`. See `[server]` in `nyx.conf` for persistent settings, and the [Browser UI guide](https://elicpeter.github.io/nyx/serve.html) for the page-by-page UI tour and security model.
 
 ---
 
@@ -68,7 +69,7 @@ nyx scan --mode ast
 nyx scan --engine-profile deep
 ```
 
-Forward cross-file taint runs in every profile. Symex and the demand-driven backwards walk are opt-in. Turn them on either via `--engine-profile deep`, or individually (`--symex`, `--backwards-analysis`). See [`docs/cli.md`](docs/cli.md#engine-depth-profile) for the full toggle matrix.
+Forward cross-file taint runs in every profile. Symex and the demand-driven backwards walk are opt-in. Turn them on either via `--engine-profile deep`, or individually (`--symex`, `--backwards-analysis`). See the [CLI reference](https://elicpeter.github.io/nyx/cli.html#engine-depth-profile) for the full toggle matrix.
 
 ### GitHub Action
 
@@ -114,16 +115,15 @@ Requires stable Rust 1.88+. The frontend is compiled and embedded in the binary 
 
 ## Languages
 
-All 10 languages parse via tree-sitter and run through the full pipeline, but rule depth is uneven. Tiers reflect benchmark F1 on the 305-case corpus at [`tests/benchmark/ground_truth.json`](tests/benchmark/ground_truth.json):
+All 10 languages parse via tree-sitter and run through the full pipeline, but rule depth and engine coverage are uneven. Benchmark F1 on the 368-case corpus at [`tests/benchmark/ground_truth.json`](tests/benchmark/ground_truth.json) is now ≥96% for every language and 100% for nine of ten — so F1 alone no longer separates the tiers. Tiering reflects rule depth, gated-sink coverage, and structural idioms the synthetic corpus does not fully stress:
 
 | Tier | Languages | F1 | Use as a CI gate? |
 |---|---|---|---|
-| **Stable** | Python, JavaScript, TypeScript | 96.8% to 100% | Yes |
-| **Beta** | Go, Java, Ruby, PHP | 92.9% to 97.0% | Yes, with light FP triage |
-| **Preview** | C, C++ | 88.9% to 92.3% | No. Pair with clang-tidy or Clang Static Analyzer |
-| **Experimental** | Rust | 86.4% | Review findings, don't block merges |
+| **Stable** | Python, JavaScript, TypeScript | 100% | Yes |
+| **Beta** | Go, Java, PHP, Ruby, Rust | 96.3% to 100% | Yes, with light FP triage |
+| **Preview** | C, C++ | 100% on synthetic corpus | No. Engine does not model pointer aliasing, function pointers, or STL containers — pair with clang-tidy or Clang Static Analyzer |
 
-Per-dimension detail and known blind spots live in [`docs/language-maturity.md`](docs/language-maturity.md).
+Aggregate rule-level F1: 99.7% (P=1.000, R=0.995). The lone FN is one Ruby interprocedural SQLi case (`rb-interproc-001`). Per-dimension detail and known blind spots live on the [Language maturity page](https://elicpeter.github.io/nyx/language-maturity.html).
 
 ### Validated against real CVEs
 
@@ -159,7 +159,7 @@ Two passes over the filesystem, with an optional SQLite index to skip unchanged 
 3. **Pass 2**: re-analyze each file with cross-file context under bounded context sensitivity (k=1 inlining for intra-file callees, SCC fixpoint capped at 64 iterations, and summary fallback for callees above the inline body-size cap). A forward dataflow worklist propagates taint through the SSA lattice with guaranteed convergence. Call-graph SCCs iterate to fixed-point (within the cap) so mutually recursive functions get accurate summaries.
 4. **Rank, dedupe, emit**: findings are scored by severity × evidence strength × source-kind exploitability, then emitted to console, JSON, or SARIF.
 
-Detector families: taint (cross-file source→sink), CFG structural (auth gaps, unguarded sinks, resource leaks), state model (use-after-close, double-close, must-leak, unauthed-access), AST patterns (tree-sitter structural match). Full detector docs: [`docs/detectors.md`](docs/detectors.md).
+Detector families: taint (cross-file source→sink), CFG structural (auth gaps, unguarded sinks, resource leaks), state model (use-after-close, double-close, must-leak, unauthed-access), AST patterns (tree-sitter structural match). Full detector docs: [Detectors](https://elicpeter.github.io/nyx/detectors.html).
 
 ---
 
@@ -184,13 +184,13 @@ kind     = "sanitizer"
 cap      = "html_escape"
 ```
 
-Or add rules interactively: `nyx config add-rule --lang javascript --matcher escapeHtml --kind sanitizer --cap html_escape`. Caps: `env_var`, `html_escape`, `shell_escape`, `url_encode`, `json_parse`, `file_io`, `fmt_string`, `sql_query`, `deserialize`, `ssrf`, `code_exec`, `crypto`, `unauthorized_id`, `all`. Full schema: [`docs/configuration.md`](docs/configuration.md).
+Or add rules interactively: `nyx config add-rule --lang javascript --matcher escapeHtml --kind sanitizer --cap html_escape`. Caps: `env_var`, `html_escape`, `shell_escape`, `url_encode`, `json_parse`, `file_io`, `fmt_string`, `sql_query`, `deserialize`, `ssrf`, `code_exec`, `crypto`, `unauthorized_id`, `all`. Full schema: [Configuration](https://elicpeter.github.io/nyx/configuration.html).
 
 ---
 
 ## Status
 
-Under active development. APIs, detector behavior, and configuration options may change between releases. Rule-level F1 on the 305-case corpus is the CI regression floor; per-language detail lives in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
+Under active development. APIs, detector behavior, and configuration options may change between releases. Rule-level F1 on the 368-case corpus is the CI regression floor; per-language detail lives in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
 
 Taint analysis is interprocedural. Persisted per-function SSA summaries carry per-return-path transforms and parameter-granularity points-to, and call-graph SCCs (including SCCs that span files) iterate to a joint fixed-point. The default `balanced` profile also runs k=1 context-sensitive inlining for intra-file callees. Symex (with cross-file and interprocedural frames) and the demand-driven backwards walk are opt-in. Enable them individually with `--symex` and `--backwards-analysis`, or together with `--engine-profile deep`.
 
@@ -198,17 +198,19 @@ Limitations:
 - Interprocedural precision is bounded rather than unlimited. Context-sensitive inlining is k=1 with a callee body-size cap, and SCC fixed-point has an iteration cap. When the engine hits a bound it falls back to summaries and records an `engine_note` on the finding.
 - Cross-language calls (FFI, subprocess, WASM) are not traversed. Each language is analysed independently.
 - Several language features are not modeled: macros, most dynamic dispatch, aliased imports, reflection.
-- Rust is experimental tier; C/C++ are preview tier. Pair them with a clang-based tool before using as a hard CI gate.
+- C/C++ are preview tier — the engine does not model pointer aliasing, function pointers, or STL containers, so a clean report should not be read as a clean audit. Pair them with a clang-based tool before using as a hard CI gate.
 - Results may contain false positives or false negatives; manual review is expected.
 
 ---
 
 ## Documentation
 
-- [Quick Start](docs/quickstart.md) · [CLI Reference](docs/cli.md) · [Installation](docs/installation.md)
-- [`nyx serve`](docs/serve.md) · [Output Formats](docs/output.md) · [Configuration](docs/configuration.md)
-- [How it works](docs/how-it-works.md) · [Detectors](docs/detectors.md) ([Taint](docs/detectors/taint.md), [CFG](docs/detectors/cfg.md), [State](docs/detectors/state.md), [AST Patterns](docs/detectors/patterns.md))
-- [Rule Reference](docs/rules.md) · [Language Maturity](docs/language-maturity.md) · [Advanced Analysis](docs/advanced-analysis.md) · [Auth Analysis](docs/auth.md)
+Browse the full docs site at **[elicpeter.github.io/nyx](https://elicpeter.github.io/nyx/)**.
+
+- [Quick Start](https://elicpeter.github.io/nyx/quickstart.html) · [CLI Reference](https://elicpeter.github.io/nyx/cli.html) · [Installation](https://elicpeter.github.io/nyx/installation.html)
+- [`nyx serve`](https://elicpeter.github.io/nyx/serve.html) · [Output Formats](https://elicpeter.github.io/nyx/output.html) · [Configuration](https://elicpeter.github.io/nyx/configuration.html)
+- [How it works](https://elicpeter.github.io/nyx/how-it-works.html) · [Detectors](https://elicpeter.github.io/nyx/detectors.html) ([Taint](https://elicpeter.github.io/nyx/detectors/taint.html), [CFG](https://elicpeter.github.io/nyx/detectors/cfg.html), [State](https://elicpeter.github.io/nyx/detectors/state.html), [AST Patterns](https://elicpeter.github.io/nyx/detectors/patterns.html))
+- [Rule Reference](https://elicpeter.github.io/nyx/rules.html) · [Language Maturity](https://elicpeter.github.io/nyx/language-maturity.html) · [Advanced Analysis](https://elicpeter.github.io/nyx/advanced-analysis.html) · [Auth Analysis](https://elicpeter.github.io/nyx/auth.html)
 
 ---
 

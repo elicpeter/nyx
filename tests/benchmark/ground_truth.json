@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 363
+    "corpus_size": 368
   },
   "cases": [
     {
@@ -11565,6 +11565,152 @@
       ],
       "disabled": false,
       "notes": "Happy-path `if (!data.error && Array.isArray(...))` and body-mentioning-err do not fire `cfg-error-fallthrough` (website/public/app/core/app.js)"
+    },
+    {
+      "case_id": "go-safe-realrepo-001",
+      "file": "go/safe/safe_error_log_only_function.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-error-fallthrough"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cfg",
+        "negative",
+        "real-repo-precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "`if err != nil { log() }` whose if is the LAST statement in the function — no fallthrough sink possible (gin/debug.go:debugPrintError)"
+    },
+    {
+      "case_id": "go-cmdi-realrepo-001",
+      "file": "go/cmdi/vuln_error_log_then_sink.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "cfg-error-fallthrough"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink",
+        "go.sqli.query_concat",
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          14,
+          14
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "cfg",
+        "positive",
+        "real-repo-precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Vulnerable counterpart: `if err { log() } sink()` — error logged then fallthrough to sink. Pins that the False-edge-only walk does NOT silence the rule for real fallthrough."
+    },
+    {
+      "case_id": "java-safe-realrepo-001",
+      "file": "java/safe/SafeLoggerIsEnabled.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-error-fallthrough"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cfg",
+        "negative",
+        "real-repo-precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "`if (logger.isErrorEnabled()) { print() } more_code()` — `isErrorEnabled` is a logging-state method, not an error variable; rule must reject camelCase names containing `err` (spring-boot/SpringApplication.java:854)"
+    },
+    {
+      "case_id": "go-safe-realrepo-002",
+      "file": "go/safe/safe_method_receiver_mutex.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-resource-leak",
+        "state-resource-leak-possible",
+        "cfg-resource-leak"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "state",
+        "negative",
+        "real-repo-precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Go method receiver `c *Context` with internal `c.mu.Lock`/`defer c.mu.Unlock` is NOT a leakable resource — the proxy-receiver extractor previously took the root identifier of multi-segment callees (`c.writer.header().set` → `c`) and section 2b's exception-path heuristic ran on Go (gin/context.go:Set/Get/MustGet)"
+    },
+    {
+      "case_id": "go-safe-realrepo-003",
+      "file": "go/safe/safe_const_bound_id.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "go.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "`id := \"id\"; c.AddParam(id, value)` — const-bound local must not count as a scoped-identifier subject (gin/context_test.go:TestContextAddParam)"
     }
   ]
 }

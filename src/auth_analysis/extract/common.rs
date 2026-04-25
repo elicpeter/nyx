@@ -347,6 +347,7 @@ pub fn build_function_unit(
         self_actor_vars: state.self_actor_vars,
         self_actor_id_vars: state.self_actor_id_vars,
         authorized_sql_vars: state.authorized_sql_vars,
+        const_bound_vars: state.const_bound_vars,
     }
 }
 
@@ -400,6 +401,15 @@ struct UnitState {
     /// `let Y = ROW.method(..)` propagation paths inside
     /// `collect_row_field_binding` and `collect_for_row_binding`.
     authorized_sql_vars: HashSet<String>,
+    /// Local variables whose declaration binds them to a string,
+    /// numeric, or boolean literal — `id := "id"` / `let id = "1"` /
+    /// `String id = "id";`.  These cannot be user-controlled and so
+    /// must not be treated as scoped-identifier subjects by
+    /// `is_relevant_target_subject`.  Closes the gin/context_test.go
+    /// FP where `id := "id"; c.AddParam(id, value)` triggered
+    /// `go.auth.missing_ownership_check` because the local `id`
+    /// matched `is_id_like` but had no actor-context exemption.
+    const_bound_vars: HashSet<String>,
 }
 
 fn collect_unit_state(
@@ -434,6 +444,26 @@ fn collect_unit_state(
             collect_self_actor_id_binding(node, bytes, state);
             collect_sql_authorized_binding(node, bytes, rules, state);
             propagate_sql_authorized_through_field_read(node, bytes, state);
+            collect_const_string_binding(node, bytes, state);
+        }
+        // Go `id := "id"` / Python `id = "id"` / JS `const id = "id"` /
+        // Java `String id = "id";` / Ruby `id = "id"` — language-
+        // specific binding nodes that the let_declaration arm above
+        // doesn't catch.  Const-only — never marks self_actor /
+        // row_field / sql vars (those need richer right-hand-side
+        // analysis already provided by the let_declaration arm).
+        "short_var_declaration"
+        | "const_declaration"
+        | "var_declaration"
+        | "var_spec"
+        | "variable_declarator"
+        | "lexical_declaration"
+        | "local_variable_declaration"
+        | "assignment"
+        | "assignment_expression"
+        | "augmented_assignment"
+        | "expression_statement" => {
+            collect_const_string_binding(node, bytes, state);
         }
         "for_expression" => {
             collect_for_row_binding(node, bytes, state);
@@ -760,6 +790,230 @@ fn collect_self_actor_binding(
     if value_is_self_actor_call(value, bytes, rules) {
         state.self_actor_vars.insert(var_name);
     }
+}
+
+/// Recognise variable bindings whose right-hand side is a literal
+/// constant — string, integer, float, or boolean.  A subject backed
+/// by a constant binding cannot be user-controlled and so must not
+/// trigger `<lang>.auth.missing_ownership_check` even when the
+/// variable name happens to match `is_id_like` (e.g.
+/// `id := "id"` in a Go test fixture).
+///
+/// Walks the binding's RHS through common wrappers
+/// (`parenthesized_expression`, `type_cast_expression`,
+/// reference/borrow expressions) before checking for a leaf literal
+/// kind.  Conservative: any non-literal subexpression on the RHS
+/// (a call, identifier, field-access) skips the binding — that var
+/// might still hold attacker-controlled data.
+///
+/// Handles the per-language declaration kinds wired in
+/// `collect_unit_state`: Go `short_var_declaration` (`x := "foo"`),
+/// JS `lexical_declaration` (`const x = "foo"`), Java
+/// `local_variable_declaration`, Rust `let_declaration`, and bare
+/// `assignment_expression`.
+fn collect_const_string_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+    // `assignment` / `assignment_expression`: `x = "foo"` — populate
+    // the LHS (`name` / `left`) when the RHS is a literal.
+    if matches!(
+        node.kind(),
+        "assignment" | "assignment_expression" | "augmented_assignment"
+    ) {
+        let lhs = node
+            .child_by_field_name("left")
+            .or_else(|| node.child_by_field_name("name"))
+            .or_else(|| node.child_by_field_name("target"));
+        let rhs = node
+            .child_by_field_name("right")
+            .or_else(|| node.child_by_field_name("value"));
+        if let (Some(lhs), Some(rhs)) = (lhs, rhs)
+            && rhs_is_pure_literal(rhs)
+        {
+            for var in collect_lhs_idents(lhs, bytes) {
+                state.const_bound_vars.insert(var);
+            }
+        }
+        return;
+    }
+
+    // Go `short_var_declaration` / `var_declaration` /
+    // `const_declaration`: `id := "id"` or `var id string = "id"`.
+    // Tree-sitter-go uses `left:expression_list` and
+    // `right:expression_list`.
+    if matches!(
+        node.kind(),
+        "short_var_declaration" | "var_spec" | "const_spec"
+    ) {
+        let left = node.child_by_field_name("left").or_else(|| {
+            // Some tree-sitter grammars expose name(s) instead of left
+            node.child_by_field_name("name")
+        });
+        let right = node.child_by_field_name("right").or_else(|| {
+            node.child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("default"))
+        });
+        if let (Some(left), Some(right)) = (left, right) {
+            // expression_list parallel — pair LHS idents with RHS exprs.
+            let lhs_idents = collect_lhs_idents(left, bytes);
+            let rhs_exprs: Vec<Node<'_>> = if right.kind() == "expression_list" {
+                let mut cursor = right.walk();
+                right
+                    .children(&mut cursor)
+                    .filter(|c| !matches!(c.kind(), "," | "(" | ")"))
+                    .collect()
+            } else {
+                vec![right]
+            };
+            for (idx, var) in lhs_idents.into_iter().enumerate() {
+                if let Some(expr) = rhs_exprs.get(idx)
+                    && rhs_is_pure_literal(*expr)
+                {
+                    state.const_bound_vars.insert(var);
+                }
+            }
+        }
+        return;
+    }
+
+    // `var_declaration` / `const_declaration` (Go top-level wrappers
+    // around var_spec/const_spec): recurse into children handled above.
+    if matches!(node.kind(), "var_declaration" | "const_declaration") {
+        for idx in 0..node.named_child_count() {
+            if let Some(child) = node.named_child(idx as u32) {
+                collect_const_string_binding(child, bytes, state);
+            }
+        }
+        return;
+    }
+
+    // Rust `let_declaration` / Python `expression_statement` wrapping a
+    // top-level assignment / JS `lexical_declaration` / Java
+    // `local_variable_declaration` — all expose the binding via
+    // `pattern`/`name` + `value`.
+    let pattern = node
+        .child_by_field_name("pattern")
+        .or_else(|| node.child_by_field_name("name"));
+    let value = node.child_by_field_name("value");
+    if let (Some(pattern), Some(value)) = (pattern, value)
+        && rhs_is_pure_literal(value)
+    {
+        for var in collect_lhs_idents(pattern, bytes) {
+            state.const_bound_vars.insert(var);
+        }
+        return;
+    }
+
+    // JS `lexical_declaration` / Java `local_variable_declaration` /
+    // Python `expression_statement` — the binding child is a wrapper
+    // (`variable_declarator`).  Recurse into wrappers; the
+    // `variable_declarator` arm in `collect_unit_state` handles them.
+    for idx in 0..node.named_child_count() {
+        let Some(child) = node.named_child(idx as u32) else {
+            continue;
+        };
+        if matches!(
+            child.kind(),
+            "variable_declarator"
+                | "init_declarator"
+                | "var_spec"
+                | "const_spec"
+                | "assignment"
+                | "assignment_expression"
+        ) {
+            collect_const_string_binding(child, bytes, state);
+        }
+    }
+}
+
+/// Returns true if `node` (after unwrapping common wrappers) is a
+/// pure literal — string, integer, float, boolean, or null.  Returns
+/// false for any expression that could carry attacker-controlled data
+/// (calls, identifiers, field access, template strings with
+/// interpolations).
+fn rhs_is_pure_literal(node: Node<'_>) -> bool {
+    // Unwrap wrappers that don't change taint provenance.
+    let inner = match node.kind() {
+        "parenthesized_expression"
+        | "type_cast_expression"
+        | "as_expression"
+        | "cast_expression"
+        | "reference_expression" => {
+            let value = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("expression"));
+            value.unwrap_or(node)
+        }
+        _ => node,
+    };
+    matches!(
+        inner.kind(),
+        "string_literal"
+            | "raw_string_literal"
+            | "string"
+            | "interpreted_string_literal"
+            | "rune_literal"
+            | "integer_literal"
+            | "int_literal"
+            | "float_literal"
+            | "true"
+            | "false"
+            | "boolean_literal"
+            | "nil"
+            | "null"
+            | "null_literal"
+            | "none"
+            | "character_literal"
+    ) || (inner.kind() == "template_string" && !template_has_interpolation(inner))
+        || (inner.kind() == "template_literal" && !template_has_interpolation(inner))
+}
+
+/// Returns true if a template literal/string contains any
+/// interpolation segment (which carries dynamic data).  Pure
+/// hard-coded template strings without `${...}` are still constants.
+fn template_has_interpolation(node: Node<'_>) -> bool {
+    for idx in 0..node.named_child_count() {
+        let Some(child) = node.named_child(idx as u32) else {
+            continue;
+        };
+        if matches!(
+            child.kind(),
+            "template_substitution" | "interpolation" | "string_interpolation"
+        ) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Collect identifier names from an LHS pattern: a bare `identifier`,
+/// a `tuple_pattern`, a Go `expression_list`, or a Rust `tuple_pattern`
+/// / `let_pattern`.  Returns the bound variable names.  Ignores
+/// destructured field accesses (we only track plain locals).
+fn collect_lhs_idents(node: Node<'_>, bytes: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    if node.kind() == "identifier" {
+        out.push(text(node, bytes));
+        return out;
+    }
+    // Walk children, picking up identifiers; recurse into list/tuple
+    // wrappers commonly seen on LHS of multi-binding declarations.
+    for idx in 0..node.named_child_count() {
+        let Some(child) = node.named_child(idx as u32) else {
+            continue;
+        };
+        match child.kind() {
+            "identifier" => out.push(text(child, bytes)),
+            "tuple_pattern"
+            | "expression_list"
+            | "pattern_list"
+            | "list_pattern"
+            | "field_identifier"
+            | "shorthand_field_identifier" => {
+                out.extend(collect_lhs_idents(child, bytes));
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Detect `let X = V.id` (or `(V.id as ..).into()`, `V.id.into()`,

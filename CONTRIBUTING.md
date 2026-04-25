@@ -2,6 +2,8 @@
 
 Thank you for your interest in improving Nyx. This guide covers everything you need to contribute effectively.
 
+User-facing documentation lives at **[elicpeter.github.io/nyx](https://elicpeter.github.io/nyx/)**; the source for those pages is in [`docs/`](docs/).
+
 Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
 ---

@@ -196,6 +196,13 @@ pub struct AnalysisUnit {
     /// and treats a subject as covered when the chain terminates in
     /// one of these names.
     pub authorized_sql_vars: HashSet<String>,
+    /// Local variables bound (by `let`, `:=`, `var`, `const`) to a
+    /// pure literal — string, integer, float, or boolean.  These are
+    /// developer-chosen constants and cannot be user-controlled, so
+    /// they must never trip `<lang>.auth.missing_ownership_check`
+    /// even when the variable name passes `is_id_like`.  Closes the
+    /// gin/context_test.go FP where `id := "id"` triggered the rule.
+    pub const_bound_vars: HashSet<String>,
 }
 
 /// Per-function summary of which positional parameters are

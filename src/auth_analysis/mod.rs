@@ -679,6 +679,7 @@ mod tests {
             self_actor_vars: HashSet::new(),
             self_actor_id_vars: HashSet::new(),
             authorized_sql_vars: HashSet::new(),
+            const_bound_vars: HashSet::new(),
         }
     }
 

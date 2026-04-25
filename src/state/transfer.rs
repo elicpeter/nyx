@@ -241,21 +241,34 @@ impl DefaultTransfer<'_> {
         // ── Resource method proxy ────────────────────────────────────────
         // When no direct resource pair matched, check if the callee is a
         // method wrapper for a known resource operation. Only fires when:
-        //   1. The callee is a method call (contains `.`)
+        //   1. The callee is a single-dot direct method call (`<recv>.<method>`)
+        //      — no chained / field-mediated receivers like
+        //      `c.writer.header().set` (would mis-attribute to `c`)
         //   2. An explicit receiver is identified
         //   3. The method suffix matches a ResourceMethodSummary
         //   4. For Release: the receiver was previously acquired by the same class group
-        if !direct_acquire && !direct_release && callee.contains('.') {
+        //
+        // Multi-segment paths (`a.b.c`) and call-chain receivers
+        // (`c.writer.header()`) used to take the root identifier as the
+        // receiver, but this collapses semantically distinct receivers:
+        // calling `c.writer.header().set(...)` does NOT acquire `c` —
+        // it touches a sub-object's response-header writer.  Conservative
+        // single-dot-only matching avoids this false attribution.
+        let one_dot_callee = callee.matches('.').count() == 1 && !callee.contains('(');
+        if !direct_acquire && !direct_release && one_dot_callee {
             // Extract receiver: prefer explicit NodeInfo.call.receiver, fall back
-            // to everything before the last `.` in the callee string.
+            // to the prefix before the single `.` in the callee string.
             let recv_from_callee: Option<String>;
             let recv_name: Option<&str> = if let Some(ref r) = info.call.receiver {
-                Some(r.as_str())
+                // Only honour explicit receiver when it's a bare identifier
+                // (no dots / parens — same conservative criterion as above).
+                if r.contains('.') || r.contains('(') {
+                    None
+                } else {
+                    Some(r.as_str())
+                }
             } else {
-                recv_from_callee = callee.rsplit_once('.').map(|(prefix, _)| {
-                    // For multi-segment paths like "a.b.c", use the root receiver
-                    prefix.split('.').next().unwrap_or(prefix).to_string()
-                });
+                recv_from_callee = callee.split_once('.').map(|(prefix, _)| prefix.to_string());
                 recv_from_callee.as_deref()
             };
             if let Some(recv) = recv_name {

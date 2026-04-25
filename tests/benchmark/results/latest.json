@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-25T21:03:22Z",
+  "timestamp": "2026-04-25T22:51:22Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:65a3ac50004942a55d443d90790a395054de67df7e8a75ddb91fd880b0a09a2a",
-  "corpus_size": 363,
-  "cases_run": 362,
+  "ground_truth_hash": "sha256:f32654530cb5ada9e629ae4183c11a1b7cb5d0cbb5f0c44a7c192271fac2eb76",
+  "corpus_size": 368,
+  "cases_run": 367,
   "cases_skipped": 1,
   "outcomes": [
     {
@@ -1532,6 +1532,29 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "go-cmdi-realrepo-001",
+      "file": "go/cmdi/vuln_error_log_then_sink.go",
+      "language": "go",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "cfg-error-fallthrough",
+        "cfg-unguarded-sink",
+        "go.sqli.query_concat"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "cfg-error-fallthrough",
+        "cfg-unguarded-sink",
+        "go.sqli.query_concat"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "go-fmt_string-001",
       "file": "go/fmt_string/fmt_injection.go",
       "language": "go",
@@ -1809,6 +1832,51 @@
     {
       "case_id": "go-safe-atoi-001",
       "file": "go/safe/safe_strconv_atoi.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-realrepo-001",
+      "file": "go/safe/safe_error_log_only_function.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-realrepo-002",
+      "file": "go/safe/safe_method_receiver_mutex.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-realrepo-003",
+      "file": "go/safe/safe_const_bound_id.go",
       "language": "go",
       "vuln_class": "safe",
       "is_vulnerable": false,
@@ -2379,6 +2447,21 @@
     {
       "case_id": "java-safe-prepared-001",
       "file": "java/safe/safe_prepared_statement.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-safe-realrepo-001",
+      "file": "java/safe/SafeLoggerIsEnabled.java",
       "language": "java",
       "vuln_class": "safe",
       "is_vulnerable": false,
@@ -3793,12 +3876,15 @@
         "py.cmdi.os_system",
         "taint-unsanitised-flow (source 6:5)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
       "all_finding_ids": [
+        "cfg-unguarded-sink",
         "py.cmdi.os_system",
         "taint-unsanitised-flow (source 6:5)"
       ],
-      "security_finding_count": 2,
+      "security_finding_count": 3,
       "non_security_finding_count": 0
     },
     {
@@ -4678,13 +4764,16 @@
       "matched_rule_ids": [
         "taint-unsanitised-flow (source 9:17)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
       "all_finding_ids": [
+        "cfg-unguarded-sink",
         "rs.quality.unwrap",
         "taint-unsanitised-flow (source 9:17)",
         "rs.quality.unwrap"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 2
     },
     {
@@ -4803,15 +4892,20 @@
       "matched_rule_ids": [
         "taint-unsanitised-flow (source 10:13)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink",
+        "cfg-unguarded-sink"
+      ],
       "all_finding_ids": [
+        "cfg-unguarded-sink",
         "rs.quality.unwrap",
         "taint-unsanitised-flow (source 10:13)",
+        "cfg-unguarded-sink",
         "rs.quality.unwrap",
         "rs.quality.unwrap",
         "rs.quality.unwrap"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 3,
       "non_security_finding_count": 4
     },
     {
@@ -6407,11 +6501,14 @@
       "matched_rule_ids": [
         "taint-unsanitised-flow (source 17:18)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
       "all_finding_ids": [
+        "cfg-unguarded-sink",
         "taint-unsanitised-flow (source 17:18)"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -6533,22 +6630,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 186,
+    "tp": 187,
     "fp": 0,
     "fn_": 0,
-    "tn": 176,
+    "tn": 180,
     "precision": 1.0,
     "recall": 1.0,
     "f1": 1.0
   },
   "aggregate_rule_level": {
-    "tp": 185,
+    "tp": 186,
     "fp": 0,
     "fn_": 1,
-    "tn": 176,
+    "tn": 180,
     "precision": 1.0,
-    "recall": 0.9946236559139785,
-    "f1": 0.9973045822102425
+    "recall": 0.9946524064171123,
+    "f1": 0.9973190348525469
   },
   "by_language": {
     "c": {
@@ -6570,10 +6667,10 @@
       "f1": 1.0
     },
     "go": {
-      "tp": 17,
+      "tp": 18,
       "fp": 0,
       "fn_": 0,
-      "tn": 16,
+      "tn": 19,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -6582,7 +6679,7 @@
       "tp": 16,
       "fp": 0,
       "fn_": 0,
-      "tn": 16,
+      "tn": 17,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -6662,7 +6759,7 @@
       "f1": 1.0
     },
     "cmdi": {
-      "tp": 50,
+      "tp": 51,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -6764,7 +6861,7 @@
       "tp": 0,
       "fp": 0,
       "fn_": 0,
-      "tn": 176,
+      "tn": 180,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -6808,31 +6905,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 85,
-      "fp": 87,
-      "fn_": 101,
-      "tn": 89,
-      "precision": 0.4941860465116279,
-      "recall": 0.45698924731182794,
-      "f1": 0.47486033519553067
+      "tp": 89,
+      "fp": 83,
+      "fn_": 98,
+      "tn": 97,
+      "precision": 0.5174418604651163,
+      "recall": 0.47593582887700536,
+      "f1": 0.49582172701949867
     },
     ">=Low": {
-      "tp": 86,
-      "fp": 90,
-      "fn_": 100,
-      "tn": 86,
-      "precision": 0.48863636363636365,
-      "recall": 0.46236559139784944,
-      "f1": 0.47513812154696133
+      "tp": 91,
+      "fp": 85,
+      "fn_": 96,
+      "tn": 95,
+      "precision": 0.5170454545454546,
+      "recall": 0.48663101604278075,
+      "f1": 0.5013774104683195
     },
     ">=Medium": {
-      "tp": 86,
-      "fp": 90,
-      "fn_": 100,
-      "tn": 86,
-      "precision": 0.48863636363636365,
-      "recall": 0.46236559139784944,
-      "f1": 0.47513812154696133
+      "tp": 91,
+      "fp": 85,
+      "fn_": 96,
+      "tn": 95,
+      "precision": 0.5170454545454546,
+      "recall": 0.48663101604278075,
+      "f1": 0.5013774104683195
     }
   }
 }
