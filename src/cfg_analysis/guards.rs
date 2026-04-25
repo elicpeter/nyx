@@ -130,6 +130,15 @@ fn ssa_all_sink_operands_constant(
 /// `!has_taint` — the taint engine has already proved no source-tainted
 /// data reaches the sink, so a non-source Param at operand position is
 /// inert payload-wise (e.g. HTTP writer in `Fprintf(w, "<h1>", "Guest")`).
+///
+/// Gated on the enclosing function actually containing a Source-labeled
+/// node: the suppression's purpose is the reassign-to-constant idiom
+/// (`name := req.x; name = "Guest"; sink(name, w)`), which by definition
+/// requires user input to have been present and then killed.  In a thin
+/// wrapper with no Source label (`fn wrap(p: &str) { sink(p) }`), the
+/// bare Param at operand position IS the payload and `cfg-unguarded-sink`
+/// must still fire — there's nothing to kill, so the rationale for
+/// accepting Params as inert does not apply.
 fn ssa_all_sink_operands_const_or_param(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     let Some(facts) = ctx.body_const_facts else {
         return false;
@@ -144,12 +153,53 @@ fn ssa_all_sink_operands_const_or_param(ctx: &AnalysisContext, sink: NodeIndex) 
         return false;
     };
 
+    if !func_body_has_named_const_assign(facts) {
+        return false;
+    }
+
     let operand_safe = |v: SsaValue| -> bool { ssa_operand_const_or_param(v, facts, ctx.cfg) };
     let args_ok = args
         .iter()
         .all(|group| group.iter().all(|v| operand_safe(*v)));
     let receiver_ok = receiver.is_none_or(operand_safe);
     args_ok && receiver_ok
+}
+
+/// Return true if the SSA body contains a *named* variable whose definition
+/// is a constant — the SSA signature of an explicit `name = "literal"`
+/// reassignment.  Used as the gate for the broader operand-Param suppression:
+/// the suppression's purpose is the reassign-to-constant idiom, which by
+/// definition has at least one named const assignment.  In a thin wrapper
+/// (`fn wrap(p) { sink(p) }` or `popen(buf, "r")` where `buf` is filled by
+/// `sprintf`), no such named const assignment exists and the suppression's
+/// rationale doesn't apply — so the bare-Param structural finding fires.
+fn func_body_has_named_const_assign(facts: &BodyConstFacts) -> bool {
+    for block in &facts.ssa.blocks {
+        for inst in &block.body {
+            if inst.var_name.is_none() {
+                continue;
+            }
+            let rhs_const = match &inst.op {
+                SsaOp::Const(_) => true,
+                SsaOp::Assign(vals) => vals.iter().all(|v| {
+                    matches!(
+                        facts.const_values.get(v),
+                        Some(
+                            ConstLattice::Str(_)
+                                | ConstLattice::Int(_)
+                                | ConstLattice::Bool(_)
+                                | ConstLattice::Null
+                        )
+                    )
+                }),
+                _ => false,
+            };
+            if rhs_const {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Variant of [`ssa_operand_constant`] that also accepts non-Source Params.

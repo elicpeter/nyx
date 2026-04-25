@@ -490,14 +490,14 @@ fn classify_c(method: &str) -> Option<StringMethodInfo> {
 /// Returns `None` for unrecognized methods. Rich sanitizers (DOMPurify,
 /// bleach, markupsafe, etc.) are intentionally NOT classified here — they
 /// are complex library-level sanitizers, not simple character-level escapes.
-///
-/// Initial scope: JS/TS, Python, PHP. Other languages deferred until
-/// the abstraction is validated.
 pub fn classify_transform_method(callee: &str, lang: Lang) -> Option<TransformMethodInfo> {
     match lang {
         Lang::JavaScript | Lang::TypeScript => classify_transform_js(callee),
         Lang::Python => classify_transform_python(callee),
         Lang::Php => classify_transform_php(callee),
+        Lang::Java => classify_transform_java(callee),
+        Lang::Go => classify_transform_go(callee),
+        Lang::Ruby => classify_transform_ruby(callee),
         _ => None,
     }
 }
@@ -610,6 +610,149 @@ fn classify_transform_php(callee: &str) -> Option<TransformMethodInfo> {
             kind: SqlEscape,
             operand_source: FirstArg,
         }),
+        _ => None,
+    }
+}
+
+fn classify_transform_java(callee: &str) -> Option<TransformMethodInfo> {
+    use StringOperandSource::*;
+    use TransformKind::*;
+
+    // Java callees arrive as fully-qualified or dotted forms (e.g.
+    // `URLEncoder.encode`, `Base64.getEncoder.encodeToString`). Match on
+    // the suffix after the last `.` for the leaf method name, but also
+    // examine the dotted callee for receiver-qualified disambiguation.
+    let method = callee.rsplit('.').next().unwrap_or(callee);
+
+    // URL encoding/decoding — `java.net.URLEncoder.encode` / `URLDecoder.decode`.
+    if callee.ends_with("URLEncoder.encode") {
+        return Some(TransformMethodInfo {
+            kind: UrlEncode,
+            operand_source: FirstArg,
+        });
+    }
+    if callee.ends_with("URLDecoder.decode") {
+        return Some(TransformMethodInfo {
+            kind: UrlDecode,
+            operand_source: FirstArg,
+        });
+    }
+
+    // Apache commons-text / commons-lang `StringEscapeUtils.escapeHtml4`,
+    // `escapeXml11`, `escapeXml10`. These are character-level entity escapes —
+    // NOT rich sanitizers like OWASP ESAPI's `Encoder`.
+    if callee.ends_with("StringEscapeUtils.escapeHtml4")
+        || callee.ends_with("StringEscapeUtils.escapeHtml")
+        || callee.ends_with("StringEscapeUtils.escapeXml11")
+        || callee.ends_with("StringEscapeUtils.escapeXml10")
+        || callee.ends_with("StringEscapeUtils.escapeXml")
+    {
+        return Some(TransformMethodInfo {
+            kind: HtmlEscape,
+            operand_source: FirstArg,
+        });
+    }
+
+    // Base64 — `Base64.getEncoder().encodeToString(bytes)` (and the URL-safe
+    // / MIME variants). Match by leaf method name; the encoder/decoder chain
+    // before it is opaque to symex, but the operand is still the first arg.
+    match method {
+        "encodeToString" => Some(TransformMethodInfo {
+            kind: Base64Encode,
+            operand_source: FirstArg,
+        }),
+        // `Base64.getDecoder().decode(s)` — the leaf `decode` collides with
+        // `URLDecoder.decode` (handled above) so this only matches when the
+        // URLDecoder branch did not.
+        "decode" if callee.contains("Base64") => Some(TransformMethodInfo {
+            kind: Base64Decode,
+            operand_source: FirstArg,
+        }),
+        _ => None,
+    }
+}
+
+fn classify_transform_go(callee: &str) -> Option<TransformMethodInfo> {
+    use StringOperandSource::*;
+    use TransformKind::*;
+
+    match callee {
+        // URL encoding/decoding — `net/url` package.
+        "url.QueryEscape" | "url.PathEscape" => Some(TransformMethodInfo {
+            kind: UrlEncode,
+            operand_source: FirstArg,
+        }),
+        "url.QueryUnescape" | "url.PathUnescape" => Some(TransformMethodInfo {
+            kind: UrlDecode,
+            operand_source: FirstArg,
+        }),
+        // HTML entity escaping — `html` package (NOT `template.HTMLEscapeString`,
+        // which is a context-aware sanitizer). `html.UnescapeString` is
+        // intentionally NOT classified: TransformKind has no `HtmlUnescape`
+        // variant, and reusing UrlDecode would label the witness wrongly.
+        "html.EscapeString" => Some(TransformMethodInfo {
+            kind: HtmlEscape,
+            operand_source: FirstArg,
+        }),
+        // Base64 — `encoding/base64` package, `StdEncoding`/`URLEncoding`/
+        // `RawStdEncoding`/`RawURLEncoding` all expose `EncodeToString`.
+        "base64.StdEncoding.EncodeToString"
+        | "base64.URLEncoding.EncodeToString"
+        | "base64.RawStdEncoding.EncodeToString"
+        | "base64.RawURLEncoding.EncodeToString" => Some(TransformMethodInfo {
+            kind: Base64Encode,
+            operand_source: FirstArg,
+        }),
+        "base64.StdEncoding.DecodeString"
+        | "base64.URLEncoding.DecodeString"
+        | "base64.RawStdEncoding.DecodeString"
+        | "base64.RawURLEncoding.DecodeString" => Some(TransformMethodInfo {
+            kind: Base64Decode,
+            operand_source: FirstArg,
+        }),
+        _ => None,
+    }
+}
+
+fn classify_transform_ruby(callee: &str) -> Option<TransformMethodInfo> {
+    use StringOperandSource::*;
+    use TransformKind::*;
+
+    // Ruby callees may arrive as `CGI.escape`, `CGI::escape`, or
+    // `ERB::Util.html_escape`. Normalise `::` → `.` for matching.
+    let normalised = callee.replace("::", ".");
+    match normalised.as_str() {
+        // URL percent-encoding. Note: `CGI.escape` in Ruby is percent-encoding
+        // (NOT HTML escape — that's `CGI.escapeHTML`).
+        "CGI.escape" | "URI.encode_www_form_component" => Some(TransformMethodInfo {
+            kind: UrlEncode,
+            operand_source: FirstArg,
+        }),
+        "CGI.unescape" | "URI.decode_www_form_component" => Some(TransformMethodInfo {
+            kind: UrlDecode,
+            operand_source: FirstArg,
+        }),
+        // HTML entity escaping (character-level — NOT Rails `sanitize` or
+        // `strip_tags` which are rich sanitizers).
+        "ERB::Util.html_escape" | "ERB.Util.html_escape" | "CGI.escapeHTML" => {
+            Some(TransformMethodInfo {
+                kind: HtmlEscape,
+                operand_source: FirstArg,
+            })
+        }
+        // Base64 — `Base64.strict_encode64` / `encode64` / `urlsafe_encode64`.
+        "Base64.strict_encode64" | "Base64.encode64" | "Base64.urlsafe_encode64" => {
+            Some(TransformMethodInfo {
+                kind: Base64Encode,
+                operand_source: FirstArg,
+            })
+        }
+        "Base64.strict_decode64" | "Base64.decode64" | "Base64.urlsafe_decode64" => {
+            Some(TransformMethodInfo {
+                kind: Base64Decode,
+                operand_source: FirstArg,
+            })
+        }
         _ => None,
     }
 }
@@ -1296,10 +1439,112 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_transform_unsupported_lang_returns_none() {
-        // Java/Go/Ruby not yet supported — deferred
-        assert!(classify_transform_method("URLEncoder.encode", Lang::Java).is_none());
-        assert!(classify_transform_method("url.QueryEscape", Lang::Go).is_none());
+    fn test_classify_transform_java_url_encoder() {
+        let info = classify_transform_method("URLEncoder.encode", Lang::Java).unwrap();
+        assert_eq!(info.kind, TransformKind::UrlEncode);
+        assert_eq!(info.operand_source, StringOperandSource::FirstArg);
+        let info = classify_transform_method("java.net.URLEncoder.encode", Lang::Java).unwrap();
+        assert_eq!(info.kind, TransformKind::UrlEncode);
+    }
+
+    #[test]
+    fn test_classify_transform_java_url_decoder() {
+        let info = classify_transform_method("URLDecoder.decode", Lang::Java).unwrap();
+        assert_eq!(info.kind, TransformKind::UrlDecode);
+    }
+
+    #[test]
+    fn test_classify_transform_java_string_escape_utils() {
+        let info = classify_transform_method("StringEscapeUtils.escapeHtml4", Lang::Java).unwrap();
+        assert_eq!(info.kind, TransformKind::HtmlEscape);
+        let info = classify_transform_method("StringEscapeUtils.escapeXml11", Lang::Java).unwrap();
+        assert_eq!(info.kind, TransformKind::HtmlEscape);
+    }
+
+    #[test]
+    fn test_classify_transform_java_base64() {
+        let info =
+            classify_transform_method("Base64.getEncoder.encodeToString", Lang::Java).unwrap();
+        assert_eq!(info.kind, TransformKind::Base64Encode);
+        let info = classify_transform_method("Base64.getDecoder.decode", Lang::Java).unwrap();
+        assert_eq!(info.kind, TransformKind::Base64Decode);
+    }
+
+    #[test]
+    fn test_classify_transform_go_url_query_escape() {
+        let info = classify_transform_method("url.QueryEscape", Lang::Go).unwrap();
+        assert_eq!(info.kind, TransformKind::UrlEncode);
+        assert_eq!(info.operand_source, StringOperandSource::FirstArg);
+    }
+
+    #[test]
+    fn test_classify_transform_go_url_path_escape() {
+        let info = classify_transform_method("url.PathEscape", Lang::Go).unwrap();
+        assert_eq!(info.kind, TransformKind::UrlEncode);
+    }
+
+    #[test]
+    fn test_classify_transform_go_html_escape() {
+        let info = classify_transform_method("html.EscapeString", Lang::Go).unwrap();
+        assert_eq!(info.kind, TransformKind::HtmlEscape);
+    }
+
+    #[test]
+    fn test_classify_transform_go_base64() {
+        let info =
+            classify_transform_method("base64.StdEncoding.EncodeToString", Lang::Go).unwrap();
+        assert_eq!(info.kind, TransformKind::Base64Encode);
+    }
+
+    #[test]
+    fn test_classify_transform_ruby_cgi_escape() {
+        let info = classify_transform_method("CGI.escape", Lang::Ruby).unwrap();
+        // CGI.escape is percent-encoding in Ruby (not HTML escape — that's
+        // CGI.escapeHTML).
+        assert_eq!(info.kind, TransformKind::UrlEncode);
+        let info = classify_transform_method("CGI::escape", Lang::Ruby).unwrap();
+        assert_eq!(info.kind, TransformKind::UrlEncode);
+    }
+
+    #[test]
+    fn test_classify_transform_ruby_cgi_unescape() {
+        let info = classify_transform_method("CGI.unescape", Lang::Ruby).unwrap();
+        assert_eq!(info.kind, TransformKind::UrlDecode);
+    }
+
+    #[test]
+    fn test_classify_transform_ruby_erb_html_escape() {
+        let info = classify_transform_method("ERB::Util.html_escape", Lang::Ruby).unwrap();
+        assert_eq!(info.kind, TransformKind::HtmlEscape);
+    }
+
+    #[test]
+    fn test_classify_transform_ruby_uri_encode_form() {
+        let info = classify_transform_method("URI.encode_www_form_component", Lang::Ruby).unwrap();
+        assert_eq!(info.kind, TransformKind::UrlEncode);
+    }
+
+    #[test]
+    fn test_classify_transform_ruby_base64() {
+        let info = classify_transform_method("Base64.strict_encode64", Lang::Ruby).unwrap();
+        assert_eq!(info.kind, TransformKind::Base64Encode);
+    }
+
+    #[test]
+    fn test_classify_transform_ruby_rich_sanitizer_not_matched() {
+        // Rails `sanitize` / `strip_tags` are rich library sanitizers — NOT
+        // simple character-level escapes.
+        assert!(classify_transform_method("sanitize", Lang::Ruby).is_none());
+        assert!(classify_transform_method("strip_tags", Lang::Ruby).is_none());
+    }
+
+    #[test]
+    fn test_classify_transform_unknown_callee_returns_none_for_new_langs() {
+        // Residual guard: truly unknown callees still return None for
+        // Java/Go/Ruby (no over-eager wildcard matching).
+        assert!(classify_transform_method("com.example.Foo.bar", Lang::Java).is_none());
+        assert!(classify_transform_method("mypkg.Quux", Lang::Go).is_none());
+        assert!(classify_transform_method("MyClass.unknown_method", Lang::Ruby).is_none());
     }
 
     // ── Concrete encoding ──────────────────────────────────────
