@@ -131,14 +131,13 @@ fn ssa_all_sink_operands_constant(
 /// data reaches the sink, so a non-source Param at operand position is
 /// inert payload-wise (e.g. HTTP writer in `Fprintf(w, "<h1>", "Guest")`).
 ///
-/// Gated on the enclosing function actually containing a Source-labeled
-/// node: the suppression's purpose is the reassign-to-constant idiom
-/// (`name := req.x; name = "Guest"; sink(name, w)`), which by definition
-/// requires user input to have been present and then killed.  In a thin
-/// wrapper with no Source label (`fn wrap(p: &str) { sink(p) }`), the
-/// bare Param at operand position IS the payload and `cfg-unguarded-sink`
-/// must still fire — there's nothing to kill, so the rationale for
-/// accepting Params as inert does not apply.
+/// Gated on the function body actually exhibiting the reassign-to-constant
+/// signature — at least one named SSA def whose RHS is a literal Const
+/// (`name = "Guest"`).  In a thin wrapper without a same-block named
+/// const assignment (`fn wrap(p) { sink(p) }`, or C `popen(buf, "r")` where
+/// `buf` is filled in-place by `sprintf` with no Const Assign on `buf`),
+/// the bare Param at operand position IS the payload and the suppression's
+/// rationale does not apply — `cfg-unguarded-sink` must still fire.
 fn ssa_all_sink_operands_const_or_param(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     let Some(facts) = ctx.body_const_facts else {
         return false;
