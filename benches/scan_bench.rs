@@ -155,6 +155,7 @@ fn bench_state_analysis_only(c: &mut Criterion) {
                 true,
                 &[],
                 &[],
+                &std::collections::HashSet::new(),
             )
         });
     });
