@@ -501,6 +501,21 @@ pub struct AuthAnalysisConfig {
     /// resolved (e.g. `visited`, `seen`, `counts`).  Matched against
     /// the first segment of the callee receiver chain.
     pub non_sink_receiver_name_prefixes: Vec<String>,
+    /// Built-in / framework receivers whose first-segment, when
+    /// matched exactly (case-sensitive), classifies the call as
+    /// inherently non-data-layer.  Used for browser/DOM globals
+    /// (`document`, `window`, `localStorage`, ...) and stdlib helpers
+    /// (`Math`, `JSON`, `Date`).  Defaults are per-language in
+    /// `auth_analysis::config::build_auth_rules`; user nyx.toml
+    /// entries are appended.
+    #[serde(default)]
+    pub non_sink_global_receivers: Vec<String>,
+    /// Method-name allowlist: when the LAST segment of a callee
+    /// matches (case-sensitive exact), the call is classified as
+    /// non-sink regardless of receiver.  Used for DOM-API methods
+    /// (`addEventListener`, `getElementById`, `appendChild`, ...).
+    #[serde(default)]
+    pub non_sink_method_names: Vec<String>,
     /// Receiver-chain first-segment prefixes that classify a call as
     /// a realtime publish / broadcast sink (pub/sub bus, websocket
     /// channel, event stream).  Treated as cross-tenant by default
@@ -537,6 +552,8 @@ impl Default for AuthAnalysisConfig {
             token_recipient_fields: Vec::new(),
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            non_sink_global_receivers: Vec::new(),
+            non_sink_method_names: Vec::new(),
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
@@ -1074,6 +1091,14 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
         extend_dedup(
             &mut entry.auth.non_sink_receiver_name_prefixes,
             user_lang_cfg.auth.non_sink_receiver_name_prefixes,
+        );
+        extend_dedup(
+            &mut entry.auth.non_sink_global_receivers,
+            user_lang_cfg.auth.non_sink_global_receivers,
+        );
+        extend_dedup(
+            &mut entry.auth.non_sink_method_names,
+            user_lang_cfg.auth.non_sink_method_names,
         );
         extend_dedup(
             &mut entry.auth.realtime_receiver_prefixes,

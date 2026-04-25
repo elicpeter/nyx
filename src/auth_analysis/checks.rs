@@ -448,6 +448,14 @@ fn is_actor_context_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
         }
     }
 
+    // Transitive copy of `V.id`: `let uid = user.id; query(.., &[uid])`
+    // — the subject `uid` is a plain identifier with no base/field, but
+    // was recorded as a self-actor id copy at extract time.  Treat it
+    // as actor context.
+    if unit.self_actor_id_vars.contains(&subject.name) {
+        return true;
+    }
+
     matches!(
         subject_identity_key(subject).as_deref(),
         Some(
@@ -464,7 +472,16 @@ fn is_actor_context_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
 
 fn is_self_actor_id_field(field: &str) -> bool {
     let lower = field.to_ascii_lowercase();
-    matches!(lower.as_str(), "id" | "user_id" | "userid" | "uid")
+    matches!(
+        lower.as_str(),
+        "id" | "user_id" | "userid" | "uid"
+            // Self-publish / self-channel fields: when the receiver
+            // is bound from `require_auth(..)`, `user.email` /
+            // `user.username` / `user.handle` reference the actor's
+            // own identity (e.g. `realtime.publish_to_user(&user.email,
+            // ...)` is a self-channel publish, not a foreign target).
+            | "email" | "username" | "handle"
+    )
 }
 
 fn subject_identity_key(subject: &ValueRef) -> Option<String> {
@@ -602,6 +619,7 @@ mod tests {
             line: 1,
             row_field_vars: HashMap::new(),
             self_actor_vars: HashSet::new(),
+            self_actor_id_vars: HashSet::new(),
             authorized_sql_vars: HashSet::new(),
         }
     }
@@ -654,5 +672,48 @@ mod tests {
             &member("user", "group_id"),
             &unit
         ));
+    }
+
+    fn plain(name: &str) -> ValueRef {
+        ValueRef {
+            source_kind: ValueSourceKind::Identifier,
+            name: name.to_string(),
+            base: None,
+            field: None,
+            index: None,
+            span: (0, 0),
+        }
+    }
+
+    /// Real-repo regression: `let uid = user.id; query(.., &[uid])`.
+    /// `uid` lives in `self_actor_id_vars` and the subject `uid`
+    /// (plain Local, no base/field) must count as actor context.
+    #[test]
+    fn self_actor_id_vars_widens_actor_context_for_plain_subjects() {
+        let mut unit = empty_unit();
+        unit.self_actor_id_vars.insert("uid".into());
+
+        // `uid` plain subject is recognised as actor context.
+        assert!(is_actor_context_subject(&plain("uid"), &unit));
+        // Plain identifiers NOT in the set still flag.
+        assert!(!is_actor_context_subject(&plain("trip_id"), &unit));
+        assert!(!is_actor_context_subject(&plain("doc_id"), &unit));
+    }
+
+    /// Self-publish identity fields: `&user.email` /
+    /// `&user.username` / `&user.handle` for a self-actor must be
+    /// recognised as actor context (real-repo `realtime::publish_to_user`
+    /// shape).
+    #[test]
+    fn self_actor_id_field_set_includes_email_username_handle() {
+        let mut unit = empty_unit();
+        unit.self_actor_vars.insert("user".into());
+
+        assert!(is_actor_context_subject(&member("user", "email"), &unit));
+        assert!(is_actor_context_subject(&member("user", "username"), &unit));
+        assert!(is_actor_context_subject(&member("user", "handle"), &unit));
+
+        // Foreign-user fields still flag.
+        assert!(!is_actor_context_subject(&member("target", "email"), &unit));
     }
 }

@@ -345,6 +345,7 @@ pub fn build_function_unit(
         line,
         row_field_vars: state.row_field_vars,
         self_actor_vars: state.self_actor_vars,
+        self_actor_id_vars: state.self_actor_id_vars,
         authorized_sql_vars: state.authorized_sql_vars,
     }
 }
@@ -384,6 +385,15 @@ struct UnitState {
     /// `AnalysisUnit.self_actor_vars` so `checks.rs` can recognize
     /// `V.id` as actor context rather than a foreign scoped id.
     self_actor_vars: HashSet<String>,
+    /// Transitive copies of the authenticated actor's id field
+    /// (`let X = V.id` / `let X = (V.id as ..).into()` /
+    /// `let X = V.user_id` / `V.uid`).  Populated by
+    /// `collect_self_actor_id_binding`.  Copied onto
+    /// `AnalysisUnit.self_actor_id_vars` so subjects whose name appears
+    /// here count as actor context — closes the FP where a route
+    /// handler does `let uid = user.id; query_all(.., &[uid])` and the
+    /// engine sees `uid` only as a plain scoped id.
+    self_actor_id_vars: HashSet<String>,
     /// B3: local variables bound (directly or transitively) to a
     /// SQL query whose literal text is auth-gated.  Populated by
     /// `collect_sql_authorized_binding` and the `for ROW in X` /
@@ -421,6 +431,7 @@ fn collect_unit_state(
             collect_row_field_binding(node, bytes, state);
             collect_row_population(node, bytes, state);
             collect_self_actor_binding(node, bytes, rules, state);
+            collect_self_actor_id_binding(node, bytes, state);
             collect_sql_authorized_binding(node, bytes, rules, state);
             propagate_sql_authorized_through_field_read(node, bytes, state);
         }
@@ -751,10 +762,131 @@ fn collect_self_actor_binding(
     }
 }
 
-/// Does `node` (possibly wrapped in `?`/`.await`/`&`) resolve to a
-/// call whose callee matches `is_login_guard` or
+/// Detect `let X = V.id` (or `(V.id as ..).into()`, `V.id.into()`,
+/// `V.user_id`, `V.uid`, `V.userId`) where `V` is in `self_actor_vars`.
+/// `X` is then a transitive copy of the authenticated actor's id and
+/// is recorded in `self_actor_id_vars` so subjects of that name count
+/// as actor context, not as foreign scoped IDs.
+///
+/// Closes a real-repo FP cluster: route handlers idiomatically reduce
+/// the authed user to a scalar id and reuse it across many SQL params
+/// (`let uid = user.id; query_all(.., &[uid]); query_all(.., &[uid])`).
+/// The original `V.id`-shape recognition only covered direct subject
+/// expressions; this captures the common copy-and-pass shape.
+fn collect_self_actor_id_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(var_name) = first_identifier_name(pattern, bytes) else {
+        return;
+    };
+    if var_name.is_empty() {
+        return;
+    }
+    let Some(value) = node.child_by_field_name("value") else {
+        return;
+    };
+    if value_is_self_actor_id_field(value, bytes, &state.self_actor_vars) {
+        state.self_actor_id_vars.insert(var_name);
+    }
+}
+
+/// Does `node` resolve to a `V.id` / `V.user_id` / `V.uid` / `V.userId`
+/// field access where `V` is in `actor_vars`?  Walks through common
+/// wrappers: `try_expression`, `await_expression`, `parenthesized_expression`,
+/// `reference_expression`, `type_cast_expression` (`v.id as i64`),
+/// and `call_expression` for chained `.into()` / `.to_string()` etc.
+fn value_is_self_actor_id_field(
+    node: Node<'_>,
+    bytes: &[u8],
+    actor_vars: &HashSet<String>,
+) -> bool {
+    match node.kind() {
+        "field_expression" | "member_expression" | "field_access" | "scoped_identifier" => {
+            let receiver = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("object"));
+            let field = node
+                .child_by_field_name("field")
+                .or_else(|| node.child_by_field_name("property"))
+                .or_else(|| node.child_by_field_name("name"));
+            let (Some(receiver), Some(field)) = (receiver, field) else {
+                return false;
+            };
+            let receiver_name = text(receiver, bytes);
+            let field_name = text(field, bytes);
+            actor_vars.contains(&receiver_name) && is_self_actor_id_field_name(&field_name)
+        }
+        "type_cast_expression"
+        | "as_expression"
+        | "cast_expression"
+        | "parenthesized_expression"
+        | "try_expression"
+        | "await_expression"
+        | "reference_expression" => {
+            let value = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("expression"));
+            if let Some(v) = value
+                && value_is_self_actor_id_field(v, bytes, actor_vars)
+            {
+                return true;
+            }
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if value_is_self_actor_id_field(child, bytes, actor_vars) {
+                    return true;
+                }
+            }
+            false
+        }
+        // `(v.id as i64).into()` / `v.id.to_string()` / `v.id.clone()` —
+        // call on a self-actor id field still propagates self-actor-id.
+        "call_expression" | "call" | "method_invocation" | "method_call_expression" => {
+            let receiver = node
+                .child_by_field_name("function")
+                .or_else(|| node.child_by_field_name("object"));
+            if let Some(r) = receiver {
+                // Function field of a method call is `receiver.method` —
+                // walk the receiver subtree for the self-actor id field.
+                if value_is_self_actor_id_field(r, bytes, actor_vars) {
+                    return true;
+                }
+                // Also check the receiver of a method-style chain:
+                // `(v.id as i64).into()` — `function` is the
+                // `field_expression` `(...).into`, whose `value` child
+                // is the cast expression.
+                if let Some(inner) = r
+                    .child_by_field_name("value")
+                    .or_else(|| r.child_by_field_name("object"))
+                    && value_is_self_actor_id_field(inner, bytes, actor_vars)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn is_self_actor_id_field_name(field: &str) -> bool {
+    let lower = field.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "id" | "user_id" | "userid" | "uid" | "email" | "username" | "handle"
+    )
+}
+
+/// Does `node` (possibly wrapped in `?`/`.await`/`&`/`match`) resolve
+/// to a call whose callee matches `is_login_guard` or
 /// `is_authorization_check`? Used to detect `let user =
-/// auth::require_auth(..).await?`-style bindings.
+/// auth::require_auth(..).await?`-style bindings, including the
+/// `let user = match require_auth() { Ok(u) => u, Err(_) => return ... }`
+/// shape used by Worker / Cloudflare-style handlers that propagate
+/// the auth failure response instead of using `?`.
 fn value_is_self_actor_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules) -> bool {
     match node.kind() {
         "call_expression" | "call" | "method_invocation" | "method_call_expression" => {
@@ -765,7 +897,14 @@ fn value_is_self_actor_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRu
         "try_expression"
         | "await_expression"
         | "reference_expression"
-        | "parenthesized_expression" => {
+        | "parenthesized_expression"
+        | "match_expression" => {
+            // For `match SCRUTINEE { ... }`, the scrutinee is the
+            // call we care about — if `require_auth().await` is being
+            // matched, the `Ok(u) => u` arm gives us a self-actor
+            // binding even when `?` isn't usable.  Walk all named
+            // children — tree-sitter exposes both the scrutinee and
+            // the arms.
             for idx in 0..node.named_child_count() {
                 let Some(child) = node.named_child(idx as u32) else {
                     continue;

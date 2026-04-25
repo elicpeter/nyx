@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 358
+    "corpus_size": 363
   },
   "cases": [
     {
@@ -11430,6 +11430,141 @@
       ],
       "disabled": false,
       "notes": "Destructured field straight into template-literal HTML sink"
+    },
+    {
+      "case_id": "rs-auth-realrepo-001",
+      "file": "rust/auth/self_actor_uid_copy.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "`let user = match require_auth() { Ok(u) => u, ... }; let uid = user.id; query(.., &[uid])` — transitive copy of self-actor id (website/handlers/accounts.rs)"
+    },
+    {
+      "case_id": "rs-auth-realrepo-002",
+      "file": "rust/auth/require_resource_role_helper.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "`require_trip_member(..)` recognised structurally as `require_<resource>_<role>` (website/handlers/activities.rs)"
+    },
+    {
+      "case_id": "rs-auth-realrepo-003",
+      "file": "rust/auth/self_publish_email.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "`realtime::publish_to_user(&user.email, ..)` — self-channel publish with email as self-identity field (website/handlers/social.rs)"
+    },
+    {
+      "case_id": "js-safe-realrepo-001",
+      "file": "javascript/safe/safe_dom_globals_and_methods.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "js.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Browser DOM globals (`document`, `window`, `localStorage`) and DOM-API methods (`addEventListener`, `appendChild`, `getElementById`) are non-data-layer (website/public/app/core/app.js)"
+    },
+    {
+      "case_id": "js-safe-realrepo-002",
+      "file": "javascript/safe/safe_happy_path_error_check.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-error-fallthrough"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cfg",
+        "negative",
+        "real-repo-precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Happy-path `if (!data.error && Array.isArray(...))` and body-mentioning-err do not fire `cfg-error-fallthrough` (website/public/app/core/app.js)"
     }
   ]
 }

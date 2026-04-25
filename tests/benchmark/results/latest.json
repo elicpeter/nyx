@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-25T14:09:47Z",
+  "timestamp": "2026-04-25T21:03:22Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:3bb6403a5cba56fb145ccbf1d4734801635390a58cae6556bd197ff29ad1481a",
-  "corpus_size": 358,
-  "cases_run": 357,
+  "ground_truth_hash": "sha256:65a3ac50004942a55d443d90790a395054de67df7e8a75ddb91fd880b0a09a2a",
+  "corpus_size": 363,
+  "cases_run": 362,
   "cases_skipped": 1,
   "outcomes": [
     {
@@ -2911,6 +2911,36 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "js-safe-realrepo-001",
+      "file": "javascript/safe/safe_dom_globals_and_methods.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-safe-realrepo-002",
+      "file": "javascript/safe/safe_happy_path_error_check.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "js-sqli-001",
       "file": "javascript/sqli/sqli_concat.js",
       "language": "javascript",
@@ -4537,6 +4567,51 @@
     {
       "case_id": "rs-auth-107",
       "file": "rust/auth/transitive_helper.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-realrepo-001",
+      "file": "rust/auth/self_actor_uid_copy.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-realrepo-002",
+      "file": "rust/auth/require_resource_role_helper.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-realrepo-003",
+      "file": "rust/auth/self_publish_email.rs",
       "language": "rust",
       "vuln_class": "safe",
       "is_vulnerable": false,
@@ -6461,7 +6536,7 @@
     "tp": 186,
     "fp": 0,
     "fn_": 0,
-    "tn": 171,
+    "tn": 176,
     "precision": 1.0,
     "recall": 1.0,
     "f1": 1.0
@@ -6470,7 +6545,7 @@
     "tp": 185,
     "fp": 0,
     "fn_": 1,
-    "tn": 171,
+    "tn": 176,
     "precision": 1.0,
     "recall": 0.9946236559139785,
     "f1": 0.9973045822102425
@@ -6516,7 +6591,7 @@
       "tp": 17,
       "fp": 0,
       "fn_": 0,
-      "tn": 18,
+      "tn": 20,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -6552,7 +6627,7 @@
       "tp": 29,
       "fp": 0,
       "fn_": 0,
-      "tn": 27,
+      "tn": 30,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -6689,7 +6764,7 @@
       "tp": 0,
       "fp": 0,
       "fn_": 0,
-      "tn": 171,
+      "tn": 176,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -6733,31 +6808,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 93,
-      "fp": 77,
-      "fn_": 93,
-      "tn": 94,
-      "precision": 0.5470588235294118,
-      "recall": 0.5,
-      "f1": 0.5224719101123596
+      "tp": 85,
+      "fp": 87,
+      "fn_": 101,
+      "tn": 89,
+      "precision": 0.4941860465116279,
+      "recall": 0.45698924731182794,
+      "f1": 0.47486033519553067
     },
     ">=Low": {
-      "tp": 94,
-      "fp": 79,
-      "fn_": 92,
-      "tn": 92,
-      "precision": 0.5433526011560693,
-      "recall": 0.5053763440860215,
-      "f1": 0.5236768802228412
+      "tp": 86,
+      "fp": 90,
+      "fn_": 100,
+      "tn": 86,
+      "precision": 0.48863636363636365,
+      "recall": 0.46236559139784944,
+      "f1": 0.47513812154696133
     },
     ">=Medium": {
-      "tp": 94,
-      "fp": 79,
-      "fn_": 92,
-      "tn": 92,
-      "precision": 0.5433526011560693,
-      "recall": 0.5053763440860215,
-      "f1": 0.5236768802228412
+      "tp": 86,
+      "fp": 90,
+      "fn_": 100,
+      "tn": 86,
+      "precision": 0.48863636363636365,
+      "recall": 0.46236559139784944,
+      "f1": 0.47513812154696133
     }
   }
 }

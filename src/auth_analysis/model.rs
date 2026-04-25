@@ -175,6 +175,15 @@ pub struct AnalysisUnit {
     /// Consulted by `is_actor_context_subject` so `V.id`-shaped subjects
     /// are treated as the caller's own id, not as a scoped foreign id.
     pub self_actor_vars: HashSet<String>,
+    /// Variables holding the authenticated actor's identifier (transitive
+    /// copies of `V.id` / `V.user_id` / `V.uid` / `V.userId` for some
+    /// `V ∈ self_actor_vars`).  Populated when the extractor sees
+    /// `let X = V.id` or `let X = (V.id as ..).into()` / `V.id.into()`
+    /// shapes — anywhere a route-handler reduces the authenticated
+    /// principal to a scalar id and reuses it as a SQL parameter.
+    /// Consulted by `is_actor_context_subject` so subjects whose `name`
+    /// is in this set count as actor context, not foreign scoped IDs.
+    pub self_actor_id_vars: HashSet<String>,
     /// Local variables bound (directly or transitively) to a SQL query
     /// whose literal text classifies as authorization-gated by
     /// `sql_semantics::classify_sql_query`. Includes:

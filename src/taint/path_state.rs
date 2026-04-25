@@ -351,8 +351,7 @@ pub fn classify_condition(text: &str) -> PredicateKind {
         // `(!validate(x))` (TypeScript / JS) or `not validate(x)` (Python)
         // produce an empty `callee_part` and the classifier misses
         // ValidationCall, defeating downstream validated-must propagation.
-        let trimmed =
-            lower.trim_start_matches(|c: char| c == '(' || c == '!' || c == ' ' || c == '\t');
+        let trimmed = lower.trim_start_matches(['(', '!', ' ', '\t']);
         // Strip a leading `not ` keyword (Python boolean not) plus surrounding
         // whitespace.  Without this, `not validate_no_dotdot(raw)` skips
         // ValidationCall classification and validation never propagates.
@@ -577,8 +576,7 @@ fn extract_validation_target(text: &str) -> Option<String> {
 
     // Strip leading wrappers (parens, `!`, `not `) so idiomatic forms like
     // `(!validate(x))` (TS/JS) and `not validate(x)` (Python) are reachable.
-    let trimmed =
-        trimmed.trim_start_matches(|c: char| c == '(' || c == '!' || c == ' ' || c == '\t');
+    let trimmed = trimmed.trim_start_matches(['(', '!', ' ', '\t']);
     let trimmed = trimmed.strip_prefix("not ").unwrap_or(trimmed).trim();
 
     // Find the first `(` which separates callee from args

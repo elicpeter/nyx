@@ -16,6 +16,20 @@ pub struct AuthAnalysisRules {
     pub token_recipient_fields: Vec<String>,
     pub non_sink_receiver_types: Vec<String>,
     pub non_sink_receiver_name_prefixes: Vec<String>,
+    /// Built-in / framework receivers whose first-segment, when matched
+    /// exactly (case-sensitive), classifies the call as inherently
+    /// non-data-layer.  Used for browser/DOM globals (`document`,
+    /// `window`, `localStorage`, `console`, ...) and stdlib helpers
+    /// (`Math`, `JSON`, `Date`) where method names like `getById` /
+    /// `addEventListener` would otherwise prefix-match the configured
+    /// `read_indicator_names` / `mutation_indicator_names`.
+    pub non_sink_global_receivers: Vec<String>,
+    /// Method-name allowlist: when the LAST segment of a callee matches
+    /// (case-sensitive exact), the call is classified as non-sink
+    /// regardless of receiver.  Used for DOM-API methods
+    /// (`addEventListener`, `getElementById`, `appendChild`, ...) that
+    /// are categorically client-side and never authorization-relevant.
+    pub non_sink_method_names: Vec<String>,
     /// Receiver-chain first-segment prefixes that classify a call as a
     /// realtime publish (pub/sub, websocket, event stream).
     pub realtime_receiver_prefixes: Vec<String>,
@@ -47,6 +61,8 @@ impl AuthAnalysisRules {
             token_recipient_fields: Vec::new(),
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            non_sink_global_receivers: Vec::new(),
+            non_sink_method_names: Vec::new(),
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
@@ -138,6 +154,35 @@ impl AuthAnalysisRules {
         self.receiver_matches_non_sink_prefix(first)
     }
 
+    /// Does the first receiver-chain segment match a configured
+    /// non-sink global (case-sensitive exact)?  Used to recognise
+    /// browser/DOM globals (`document.getElementById` →
+    /// first-segment `document`) and stdlib helpers
+    /// (`Math.random`, `JSON.stringify`).
+    pub fn callee_has_non_sink_global_receiver(&self, callee: &str) -> bool {
+        let first = first_receiver_segment(callee);
+        if first.is_empty() {
+            return false;
+        }
+        self.non_sink_global_receivers
+            .iter()
+            .any(|name| name == first)
+    }
+
+    /// Does the LAST segment of the callee match a configured non-sink
+    /// method name (case-sensitive exact)?  Used to recognise DOM-API
+    /// methods like `addEventListener` / `appendChild` regardless of
+    /// receiver — `someElement.addEventListener` is just as
+    /// categorically client-side as `document.addEventListener`.
+    pub fn callee_has_non_sink_method(&self, callee: &str) -> bool {
+        let last = callee.rsplit('.').next().unwrap_or(callee);
+        let last = last.rsplit("::").next().unwrap_or(last);
+        if last.is_empty() {
+            return false;
+        }
+        self.non_sink_method_names.iter().any(|name| name == last)
+    }
+
     /// Does the first segment of the callee's receiver chain match any
     /// configured prefix in `prefixes`?  Comparison is case-insensitive
     /// on the first segment and uses starts-with on each prefix.
@@ -174,6 +219,19 @@ impl AuthAnalysisRules {
         non_sink_vars: &std::collections::HashSet<String>,
     ) -> Option<SinkClass> {
         if self.callee_has_non_sink_receiver(callee, non_sink_vars) {
+            return Some(SinkClass::InMemoryLocal);
+        }
+        // Browser/DOM globals (`document.getElementById`, `window.scrollTo`,
+        // `Math.random`, `JSON.parse`) and DOM-API methods on any receiver
+        // (`el.addEventListener`, `parent.appendChild`) are categorically
+        // not data-layer auth-relevant operations.  These shapes would
+        // otherwise prefix-match read/mutation indicators (`get`, `add`,
+        // `remove`) — `getElementById` canonicalises to `getelementbyid`
+        // which `starts_with("get")` — and falsely classify as
+        // `DbCrossTenantRead` / `DbMutation`.
+        if self.callee_has_non_sink_global_receiver(callee)
+            || self.callee_has_non_sink_method(callee)
+        {
             return Some(SinkClass::InMemoryLocal);
         }
         let first = first_receiver_segment(callee);
@@ -277,9 +335,22 @@ impl AuthAnalysisRules {
     }
 
     pub fn is_authorization_check(&self, name: &str) -> bool {
-        self.authorization_check_names
+        if self
+            .authorization_check_names
             .iter()
             .any(|pattern| matches_name(name, pattern))
+        {
+            return true;
+        }
+        // Structural recogniser for the canonical Rust / cross-language
+        // `require_<resource>_<role>` shape (`require_trip_member`,
+        // `require_doc_owner`, `require_project_admin`).  The resource
+        // segment is project-specific so cannot be enumerated in the
+        // per-language defaults; the `<role>` suffix is a closed set of
+        // authorization vocabulary.  This recogniser closes a real-repo
+        // FP cluster where a project-named membership helper was
+        // shadowing every realtime/db sink in the file.
+        is_require_resource_role_call(name)
     }
 
     pub fn is_token_lookup(&self, name: &str) -> bool {
@@ -462,6 +533,8 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             ],
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            non_sink_global_receivers: Vec::new(),
+            non_sink_method_names: Vec::new(),
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
@@ -602,6 +675,8 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             ],
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            non_sink_global_receivers: Vec::new(),
+            non_sink_method_names: Vec::new(),
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
@@ -695,6 +770,8 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             ],
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            non_sink_global_receivers: Vec::new(),
+            non_sink_method_names: Vec::new(),
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
@@ -784,6 +861,8 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             ],
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            non_sink_global_receivers: Vec::new(),
+            non_sink_method_names: Vec::new(),
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
@@ -915,6 +994,10 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "FxHashSet".into(),
                 "DashMap".into(),
                 "DashSet".into(),
+                // `serde_json::Map` (last-segment `Map`) — common JSON
+                // body builder where `m.insert("k", v)` is a string-key
+                // assignment on an in-memory object, not a DB write.
+                "Map".into(),
             ],
             non_sink_receiver_name_prefixes: vec![
                 "local_map".into(),
@@ -932,6 +1015,8 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "queue".into(),
                 "stack".into(),
             ],
+            non_sink_global_receivers: Vec::new(),
+            non_sink_method_names: Vec::new(),
             realtime_receiver_prefixes: vec![
                 "realtime".into(),
                 "pubsub".into(),
@@ -1025,6 +1110,86 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             ],
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            // Browser/DOM globals — calls on these receivers are
+            // categorically client-side (no server-side authorization
+            // semantics).  Without this list, `document.getElementById`
+            // would prefix-match the read-indicator `get`,
+            // `window.scrollTo` would match `scroll`, etc.  Case-sensitive
+            // exact match against the first receiver-chain segment.
+            non_sink_global_receivers: vec![
+                "document".into(),
+                "window".into(),
+                "localStorage".into(),
+                "sessionStorage".into(),
+                "console".into(),
+                "navigator".into(),
+                "location".into(),
+                "history".into(),
+                "screen".into(),
+                "performance".into(),
+                "crypto".into(),
+                "Math".into(),
+                "JSON".into(),
+                "Date".into(),
+                "Number".into(),
+                "String".into(),
+                "Boolean".into(),
+                "Array".into(),
+                "Object".into(),
+                "Promise".into(),
+                "Symbol".into(),
+                "RegExp".into(),
+                "Error".into(),
+                "Map".into(),
+                "Set".into(),
+                "WeakMap".into(),
+                "WeakSet".into(),
+            ],
+            // DOM-API methods — when the LAST segment of the callee
+            // matches, the call is non-data-layer regardless of receiver
+            // (`el.addEventListener`, `parent.appendChild`).  These
+            // methods would otherwise prefix-match `add`, `remove`,
+            // `get`, `set` indicators.
+            non_sink_method_names: vec![
+                "addEventListener".into(),
+                "removeEventListener".into(),
+                "dispatchEvent".into(),
+                "appendChild".into(),
+                "removeChild".into(),
+                "replaceChild".into(),
+                "insertBefore".into(),
+                "cloneNode".into(),
+                "getElementById".into(),
+                "getElementsByClassName".into(),
+                "getElementsByTagName".into(),
+                "getElementsByName".into(),
+                "querySelector".into(),
+                "querySelectorAll".into(),
+                "getAttribute".into(),
+                "setAttribute".into(),
+                "removeAttribute".into(),
+                "hasAttribute".into(),
+                "toggleAttribute".into(),
+                "createElement".into(),
+                "createTextNode".into(),
+                "createDocumentFragment".into(),
+                "getBoundingClientRect".into(),
+                "getComputedStyle".into(),
+                "scrollIntoView".into(),
+                "scrollTo".into(),
+                "scrollBy".into(),
+                "focus".into(),
+                "blur".into(),
+                "submit".into(),
+                "reset".into(),
+                "click".into(),
+                "matches".into(),
+                "contains".into(),
+                "closest".into(),
+                "getItem".into(),
+                "setItem".into(),
+                "removeItem".into(),
+            ],
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
@@ -1082,6 +1247,14 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             &lang_cfg.auth.non_sink_receiver_name_prefixes,
         );
         extend_unique(
+            &mut rules.non_sink_global_receivers,
+            &lang_cfg.auth.non_sink_global_receivers,
+        );
+        extend_unique(
+            &mut rules.non_sink_method_names,
+            &lang_cfg.auth.non_sink_method_names,
+        );
+        extend_unique(
             &mut rules.realtime_receiver_prefixes,
             &lang_cfg.auth.realtime_receiver_prefixes,
         );
@@ -1119,6 +1292,59 @@ pub fn canonical_name(name: &str) -> String {
 /// for a callee with no receiver (`HashMap::new`) → the full name.
 pub fn first_receiver_segment(callee: &str) -> &str {
     callee.split('.').next().unwrap_or(callee)
+}
+
+/// Recognise `require_<resource>_<role>` / `ensure_<resource>_<role>`
+/// shapes where `<role>` is a closed-vocabulary authorization noun
+/// (`member`, `owner`, `admin`, `access`, `permission`, `manager`,
+/// `editor`, `viewer`).  The resource segment is project-specific
+/// (`trip`, `doc`, `project`, `workspace`, …) and cannot be enumerated
+/// in the static defaults — but the prefix+role pattern is unambiguous
+/// enough that recognising it as an authorization check is safe.
+///
+/// Strips path-namespace and method prefixes before matching:
+/// `authz::require_trip_member` → `require_trip_member`;
+/// `obj.require_trip_member` → `require_trip_member`.
+fn is_require_resource_role_call(name: &str) -> bool {
+    let last = name.rsplit("::").next().unwrap_or(name);
+    let last = last.rsplit('.').next().unwrap_or(last);
+    let lower = last.to_ascii_lowercase();
+    let after_prefix = if let Some(rest) = lower.strip_prefix("require_") {
+        rest
+    } else if let Some(rest) = lower.strip_prefix("ensure_") {
+        rest
+    } else {
+        return false;
+    };
+    let Some(last_underscore) = after_prefix.rfind('_') else {
+        return false;
+    };
+    // Must have at least one resource char before the role and a
+    // non-empty role after.  Rejects degenerate `require__member`,
+    // `require_member` (no resource).
+    if last_underscore == 0 || last_underscore == after_prefix.len() - 1 {
+        return false;
+    }
+    let role = &after_prefix[last_underscore + 1..];
+    matches!(
+        role,
+        "member"
+            | "members"
+            | "owner"
+            | "owners"
+            | "admin"
+            | "admins"
+            | "access"
+            | "permission"
+            | "permissions"
+            | "manager"
+            | "managers"
+            | "editor"
+            | "editors"
+            | "viewer"
+            | "viewers"
+            | "role"
+    )
 }
 
 pub fn matches_name(name: &str, pattern: &str) -> bool {
@@ -1304,5 +1530,88 @@ mod tests {
         assert!(SinkClass::OutboundNetwork.is_auth_relevant());
         assert!(SinkClass::CacheCrossTenant.is_auth_relevant());
         assert!(!SinkClass::InMemoryLocal.is_auth_relevant());
+    }
+
+    /// Pin the JS DOM-globals / DOM-methods allowlist that closes the
+    /// real-repo FP cluster of `document.getElementById` /
+    /// `el.addEventListener` shapes prefix-matching read/mutation
+    /// indicators (`get`, `add`).
+    #[test]
+    fn js_dom_globals_and_methods_classify_as_in_memory_local() {
+        use crate::auth_analysis::model::SinkClass;
+        use std::collections::HashSet;
+        let cfg = Config::default();
+        let rules = build_auth_rules(&cfg, "javascript");
+        let empty: HashSet<String> = HashSet::new();
+
+        // Globals — receiver-first-segment match.
+        assert_eq!(
+            rules.classify_sink_class("document.getElementById", &empty),
+            Some(SinkClass::InMemoryLocal)
+        );
+        assert_eq!(
+            rules.classify_sink_class("window.scrollTo", &empty),
+            Some(SinkClass::InMemoryLocal)
+        );
+        assert_eq!(
+            rules.classify_sink_class("localStorage.getItem", &empty),
+            Some(SinkClass::InMemoryLocal)
+        );
+        assert_eq!(
+            rules.classify_sink_class("Math.random", &empty),
+            Some(SinkClass::InMemoryLocal)
+        );
+
+        // Method allowlist — last-segment match regardless of receiver.
+        assert_eq!(
+            rules.classify_sink_class("input.addEventListener", &empty),
+            Some(SinkClass::InMemoryLocal)
+        );
+        assert_eq!(
+            rules.classify_sink_class("dropdown.appendChild", &empty),
+            Some(SinkClass::InMemoryLocal)
+        );
+        assert_eq!(
+            rules.classify_sink_class("el.querySelector", &empty),
+            Some(SinkClass::InMemoryLocal)
+        );
+
+        // Real data-layer reads/mutations on plausible names still
+        // classify (no over-suppression): `db.find_by_id` reads,
+        // `repo.save` mutates.
+        assert_eq!(
+            rules.classify_sink_class("UserRepo.findById", &empty),
+            Some(SinkClass::DbCrossTenantRead)
+        );
+        assert_eq!(
+            rules.classify_sink_class("repo.update", &empty),
+            Some(SinkClass::DbMutation)
+        );
+    }
+
+    /// `require_<resource>_<role>` structural recogniser for project
+    /// helpers like `require_trip_member`, `require_doc_owner`.
+    #[test]
+    fn is_authorization_check_recognises_require_resource_role_shapes() {
+        let cfg = Config::default();
+        let rules = build_auth_rules(&cfg, "rust");
+
+        assert!(rules.is_authorization_check("require_trip_member"));
+        assert!(rules.is_authorization_check("require_doc_owner"));
+        assert!(rules.is_authorization_check("require_project_admin"));
+        assert!(rules.is_authorization_check("ensure_workspace_access"));
+        assert!(rules.is_authorization_check("authz::require_trip_member"));
+        assert!(rules.is_authorization_check("self.require_album_editor"));
+
+        // Negatives — random `require_*` calls without a known role
+        // suffix do NOT count as authorization.
+        assert!(!rules.is_authorization_check("require_db"));
+        assert!(!rules.is_authorization_check("require_user"));
+        assert!(!rules.is_authorization_check("require_login"));
+        // Bare `require_member` / `require_owner` (no resource segment)
+        // aren't enough — the resource segment is what makes the helper
+        // unambiguous.
+        assert!(!rules.is_authorization_check("require_member"));
+        assert!(!rules.is_authorization_check("require_owner"));
     }
 }

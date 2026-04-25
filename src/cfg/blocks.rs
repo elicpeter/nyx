@@ -625,10 +625,8 @@ pub(super) fn build_switch<'a>(
                 // Keep only when the scrutinee is a single bare identifier;
                 // anything more complex falls back to no condition_text. This
                 // prevents synthesizing nonsense like `f(x) == 200`.
-                let single_ident = match (&text, idents.as_slice()) {
-                    (Some(t), [name]) if t == name => true,
-                    _ => false,
-                };
+                let single_ident =
+                    matches!((&text, idents.as_slice()), (Some(t), [name]) if t == name);
                 if single_ident {
                     (text, idents)
                 } else {
