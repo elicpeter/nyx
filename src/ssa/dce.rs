@@ -43,7 +43,17 @@ pub fn eliminate_dead_defs(body: &mut SsaBody, cfg: &Cfg) -> usize {
     total_removed
 }
 
-/// Build a map of SsaValue → number of uses across all instructions.
+/// Build a map of SsaValue → number of uses across all instructions and
+/// block terminators.
+///
+/// Terminator uses must be counted: `Terminator::Return(rv)` references the
+/// returned value and `Terminator::Branch { condition, .. }` references the
+/// condition variable.  Without counting these, a value used solely by a
+/// terminator (the canonical case for short helpers like
+/// `def f(s): return s`) is judged dead, and DCE strips every instruction
+/// in the body — leaving empty blocks whose terminators reference
+/// nonexistent SsaValues, breaking downstream analyses (per-return-path
+/// PathFact narrowing, inline-summary extraction, etc.).
 fn build_use_counts(body: &SsaBody) -> HashMap<SsaValue, usize> {
     let mut counts: HashMap<SsaValue, usize> = HashMap::new();
 
@@ -53,9 +63,39 @@ fn build_use_counts(body: &SsaBody) -> HashMap<SsaValue, usize> {
                 *counts.entry(v).or_insert(0) += 1;
             }
         }
+        for v in terminator_used_values(&block.terminator) {
+            *counts.entry(v).or_insert(0) += 1;
+        }
     }
 
     counts
+}
+
+/// Get all SSA values used by a block terminator.
+fn terminator_used_values(term: &Terminator) -> Vec<SsaValue> {
+    use crate::constraint::lower::{ConditionExpr, Operand};
+    match term {
+        Terminator::Return(Some(rv)) => vec![*rv],
+        Terminator::Return(None) => Vec::new(),
+        Terminator::Branch { condition, .. } => match condition.as_deref() {
+            Some(ConditionExpr::BoolTest { var }) => vec![*var],
+            Some(ConditionExpr::NullCheck { var, .. }) => vec![*var],
+            Some(ConditionExpr::TypeCheck { var, .. }) => vec![*var],
+            Some(ConditionExpr::Comparison { lhs, rhs, .. }) => {
+                let mut out = Vec::new();
+                if let Operand::Value(v) = lhs {
+                    out.push(*v);
+                }
+                if let Operand::Value(v) = rhs {
+                    out.push(*v);
+                }
+                out
+            }
+            Some(ConditionExpr::Unknown) | None => Vec::new(),
+        },
+        Terminator::Switch { scrutinee, .. } => vec![*scrutinee],
+        Terminator::Goto(_) | Terminator::Unreachable => Vec::new(),
+    }
 }
 
 /// Check if an instruction is dead and safe to remove.

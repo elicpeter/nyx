@@ -367,6 +367,40 @@ impl DefaultTransfer<'_> {
         } else {
             matches!(edge, Some(EdgeKind::True))
         };
+
+        // Resource null-check: `if (f)` or `if (!f)` where f is a tracked
+        // resource currently in OPEN state.  The "var is falsy" edge means
+        // the acquisition returned null/zero — no resource was actually
+        // produced — so subsequent close requirements do not apply on that
+        // path.  Clearing OPEN suppresses the spurious may-leak finding for
+        // the canonical NULL-safe close idiom in C / C++ / similar:
+        //
+        //     FILE *f = fopen(path, "r");
+        //     if (f) fclose(f);
+        //
+        // Without this rule the false edge keeps OPEN, joins with the true
+        // edge's CLOSED at function exit, and produces a may-leak FP even
+        // though the code is correct.
+        //
+        // Heuristic conditions:
+        //   * condition is a single-variable truth check (no comparisons,
+        //     no calls — `condition_vars.len() == 1` and the trimmed text
+        //     equals that variable name).
+        //   * the var has OPEN in its lifecycle bitset.
+        //   * the edge represents "var is falsy" (= !is_positive_edge).
+        if !is_positive_edge && is_simple_truth_check(info) {
+            for var in &info.condition_vars {
+                if let Some(sym) = self.get_sym(info, var) {
+                    let lc = state.resource.get(sym);
+                    if lc.contains(ResourceLifecycle::OPEN) {
+                        state
+                            .resource
+                            .set(sym, lc.difference(ResourceLifecycle::OPEN));
+                    }
+                }
+            }
+        }
+
         if !is_positive_edge {
             return;
         }
@@ -466,6 +500,29 @@ fn callee_matches(callee: &str, pattern: &str) -> bool {
 fn is_guard_like(callee: &str) -> bool {
     static GUARD_PREFIXES: &[&str] = &["validate", "sanitize", "check_", "verify_", "assert_"];
     GUARD_PREFIXES.iter().any(|p| callee.starts_with(p))
+}
+
+/// True iff the condition is a single-variable truth check (no comparison,
+/// no method call, no boolean composition) — the bare `if (f)` or `if (!f)`
+/// shape used as a NULL-safe gate around resource access.
+///
+/// Conservative: requires `condition_vars` to have exactly one entry, and
+/// the de-negated `condition_text` to be exactly that variable name (with
+/// optional parens stripped).  Rejects `if (f != NULL)`, `if (f.method())`,
+/// `if (f && g)`, etc., which are not the simple truth-check idiom and may
+/// have different semantics for the false-branch resource state.
+fn is_simple_truth_check(info: &NodeInfo) -> bool {
+    if info.condition_vars.len() != 1 {
+        return false;
+    }
+    let var = &info.condition_vars[0];
+    let Some(text) = info.condition_text.as_deref() else {
+        return false;
+    };
+    let stripped = text.trim();
+    let stripped = stripped.trim_start_matches('!').trim();
+    let stripped = stripped.trim_matches(|c: char| c == '(' || c == ')').trim();
+    stripped == var
 }
 
 /// Detect Go `map[string]bool` allowlist lookups used as boolean guards.
@@ -744,6 +801,140 @@ mod tests {
         assert!(is_guard_like("sanitize_html"));
         assert!(is_guard_like("check_permission"));
         assert!(!is_guard_like("open_file"));
+    }
+
+    #[test]
+    fn is_simple_truth_check_recognises_bare_identifier() {
+        let make = |text: &str, vars: Vec<&str>| NodeInfo {
+            kind: StmtKind::If,
+            ast: AstMeta::default(),
+            condition_text: Some(text.to_string()),
+            condition_vars: vars.into_iter().map(String::from).collect(),
+            ..Default::default()
+        };
+        // Plain `if (f)` truth check
+        assert!(is_simple_truth_check(&make("f", vec!["f"])));
+        // Negated form `if (!f)`
+        assert!(is_simple_truth_check(&make("!f", vec!["f"])));
+        // Parenthesised form `if ((f))`
+        assert!(is_simple_truth_check(&make("(f)", vec!["f"])));
+        // Negated parenthesised form `if (!(f))`
+        assert!(is_simple_truth_check(&make("!(f)", vec!["f"])));
+        // Negative: comparison
+        assert!(!is_simple_truth_check(&make("f != NULL", vec!["f"])));
+        // Negative: method call
+        assert!(!is_simple_truth_check(&make("f.is_valid()", vec!["f"])));
+        // Negative: composite condition
+        assert!(!is_simple_truth_check(&make("f && g", vec!["f", "g"])));
+        // Negative: empty vars
+        assert!(!is_simple_truth_check(&make("f", vec![])));
+    }
+
+    #[test]
+    fn null_check_clears_open_on_false_edge() {
+        let mut interner = SymbolInterner::new();
+        let sym_f = interner.intern("f");
+
+        let transfer = DefaultTransfer {
+            lang: Lang::C,
+            resource_pairs: rules::resource_pairs(Lang::C),
+            interner: &interner,
+            resource_method_summaries: &[],
+        };
+
+        let mut state = ProductState::initial();
+        state.resource.set(sym_f, ResourceLifecycle::OPEN);
+
+        let info = NodeInfo {
+            kind: StmtKind::If,
+            condition_text: Some("f".into()),
+            condition_vars: vec!["f".into()],
+            condition_negated: false,
+            ..Default::default()
+        };
+
+        // False edge: f is null → should clear OPEN
+        let (state_false, _) = transfer.apply(
+            NodeIndex::new(5),
+            &info,
+            Some(EdgeKind::False),
+            state.clone(),
+        );
+        assert!(
+            !state_false
+                .resource
+                .get(sym_f)
+                .contains(ResourceLifecycle::OPEN),
+            "OPEN should be cleared on the null edge of `if (f)`"
+        );
+
+        // True edge: f is non-null → OPEN preserved
+        let (state_true, _) = transfer.apply(
+            NodeIndex::new(5),
+            &info,
+            Some(EdgeKind::True),
+            state.clone(),
+        );
+        assert!(
+            state_true
+                .resource
+                .get(sym_f)
+                .contains(ResourceLifecycle::OPEN),
+            "OPEN should be preserved on the non-null edge of `if (f)`"
+        );
+    }
+
+    #[test]
+    fn null_check_negated_clears_open_on_true_edge() {
+        let mut interner = SymbolInterner::new();
+        let sym_f = interner.intern("f");
+
+        let transfer = DefaultTransfer {
+            lang: Lang::C,
+            resource_pairs: rules::resource_pairs(Lang::C),
+            interner: &interner,
+            resource_method_summaries: &[],
+        };
+
+        let mut state = ProductState::initial();
+        state.resource.set(sym_f, ResourceLifecycle::OPEN);
+
+        // `if (!f)` — condition_negated=true, true-edge means f is null
+        let info = NodeInfo {
+            kind: StmtKind::If,
+            condition_text: Some("!f".into()),
+            condition_vars: vec!["f".into()],
+            condition_negated: true,
+            ..Default::default()
+        };
+
+        let (state_true, _) = transfer.apply(
+            NodeIndex::new(5),
+            &info,
+            Some(EdgeKind::True),
+            state.clone(),
+        );
+        assert!(
+            !state_true
+                .resource
+                .get(sym_f)
+                .contains(ResourceLifecycle::OPEN),
+            "OPEN should be cleared on the null edge of `if (!f)` (true edge)"
+        );
+
+        let (state_false, _) = transfer.apply(
+            NodeIndex::new(5),
+            &info,
+            Some(EdgeKind::False),
+            state.clone(),
+        );
+        assert!(
+            state_false
+                .resource
+                .get(sym_f)
+                .contains(ResourceLifecycle::OPEN),
+            "OPEN should be preserved on the non-null edge of `if (!f)` (false edge)"
+        );
     }
 
     // ── callee_matches for resource patterns ───────────────────────────

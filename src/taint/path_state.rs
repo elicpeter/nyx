@@ -346,9 +346,20 @@ pub fn classify_condition(text: &str) -> PredicateKind {
 
     // ── Call-based kinds (require `(` to be present) ─────────────────────
     if lower.contains('(') {
+        // Strip leading wrappers (parens, `!`, whitespace) before locating
+        // the callee token.  Without this, idiomatic forms like
+        // `(!validate(x))` (TypeScript / JS) or `not validate(x)` (Python)
+        // produce an empty `callee_part` and the classifier misses
+        // ValidationCall, defeating downstream validated-must propagation.
+        let trimmed =
+            lower.trim_start_matches(|c: char| c == '(' || c == '!' || c == ' ' || c == '\t');
+        // Strip a leading `not ` keyword (Python boolean not) plus surrounding
+        // whitespace.  Without this, `not validate_no_dotdot(raw)` skips
+        // ValidationCall classification and validation never propagates.
+        let trimmed = trimmed.strip_prefix("not ").unwrap_or(trimmed).trim();
         // Extract a rough callee token: everything before the first `(`
         // that looks like an identifier (letters, digits, underscores, dots).
-        let callee_part = lower.split('(').next().unwrap_or("");
+        let callee_part = trimmed.split('(').next().unwrap_or("");
         // Take the last segment (after `.` or `::`) as the bare name.
         let bare = callee_part
             .rsplit(['.', ':'])
@@ -564,8 +575,11 @@ fn count_call_args(text: &str) -> Option<usize> {
 fn extract_validation_target(text: &str) -> Option<String> {
     let trimmed = text.trim();
 
-    // Check for negation prefix
-    let trimmed = trimmed.strip_prefix('!').unwrap_or(trimmed).trim();
+    // Strip leading wrappers (parens, `!`, `not `) so idiomatic forms like
+    // `(!validate(x))` (TS/JS) and `not validate(x)` (Python) are reachable.
+    let trimmed =
+        trimmed.trim_start_matches(|c: char| c == '(' || c == '!' || c == ' ' || c == '\t');
+    let trimmed = trimmed.strip_prefix("not ").unwrap_or(trimmed).trim();
 
     // Find the first `(` which separates callee from args
     let paren_pos = trimmed.find('(')?;

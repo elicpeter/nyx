@@ -1045,6 +1045,31 @@ fn rename_variables(
                     uses.push(const_v);
                 }
                 SsaOp::Assign(uses)
+            } else if matches!(info.kind, StmtKind::Return | StmtKind::Throw)
+                && !info.taint.uses.is_empty()
+            {
+                // `return s` / `throw e` with identifier uses: emit an
+                // `Assign(uses)` so the SSA carries an explicit pass-through
+                // for the returned/thrown value.  Without this, the Return
+                // node was lowered as a `Nop` and the terminator-setup
+                // "last non-Nop body inst" search returned None — producing
+                // `Terminator::Return(None)` for a function that visibly
+                // returns an identifier.  That broke per-return-path
+                // PathFact narrowing for non-Rust languages where the
+                // returned identifier wasn't computed in the same block
+                // (e.g. Python `def f(s): return s` — `s` is a Param in
+                // block 0, the Return block itself has no body insts).
+                let uses: SmallVec<[SsaValue; 4]> = info
+                    .taint
+                    .uses
+                    .iter()
+                    .filter_map(|u| var_stacks.get(u).and_then(|s| s.last().copied()))
+                    .collect();
+                if uses.is_empty() {
+                    SsaOp::Nop
+                } else {
+                    SsaOp::Assign(uses)
+                }
             } else if matches!(
                 info.kind,
                 StmtKind::Entry
@@ -2771,5 +2796,61 @@ mod tests {
             "rejection-arm block must terminate with Terminator::Return; got {:?}",
             rejection_block.terminator
         );
+    }
+
+    /// Cross-language regression: the same merged-return defect that the Rust
+    /// fix closed must not appear in C. The C OR-chain shape from
+    /// `tests/benchmark/corpus/c/safe/safe_direct_path_sanitizer.c` has both
+    /// a rejection arm (`return ""`) and a tail return (`return s`).  Both
+    /// must produce blocks whose terminator is `Terminator::Return(_)`.
+    #[test]
+    fn c_or_chain_both_return_arms_terminate_with_return() {
+        use crate::cfg::build_cfg;
+
+        let src = br#"
+            const char *sanitize_path(const char *s) {
+                if (strstr(s, "..") != NULL || s[0] == '/' || s[0] == '\\') {
+                    return "";
+                }
+                return s;
+            }
+        "#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter::Language::from(tree_sitter_c::LANGUAGE))
+            .unwrap();
+        let tree = parser.parse(src.as_slice(), None).unwrap();
+        let file_cfg = build_cfg(&tree, src.as_slice(), "c", "test.c", None);
+        let body = file_cfg.first_body();
+        let cfg = &body.graph;
+        let entry = body.entry;
+
+        let ssa = lower_to_ssa(cfg, entry, None, true).expect("SSA lowering should succeed");
+
+        let return_blocks: Vec<&SsaBlock> = ssa
+            .blocks
+            .iter()
+            .filter(|b| matches!(b.terminator, Terminator::Return(_)))
+            .collect();
+        assert!(
+            return_blocks.len() >= 2,
+            "Expected ≥2 Return-terminated blocks (rejection arm + tail); got {}: {:?}",
+            return_blocks.len(),
+            ssa.blocks
+                .iter()
+                .map(|b| (b.id, &b.terminator))
+                .collect::<Vec<_>>()
+        );
+
+        // Each Return-terminated block must have an empty successor list
+        // (no fall-through past Return).
+        for b in &return_blocks {
+            assert!(
+                b.succs.is_empty(),
+                "Return-terminated block id={:?} has succs={:?}",
+                b.id,
+                b.succs
+            );
+        }
     }
 }

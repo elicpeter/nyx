@@ -1,9 +1,10 @@
 use super::dominators;
 use super::rules;
 use super::{AnalysisContext, CfgAnalysis, CfgFinding, Confidence};
-use crate::cfg::StmtKind;
+use crate::cfg::{EdgeKind, StmtKind};
 use crate::patterns::Severity;
 use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
 use std::collections::HashSet;
 
 pub struct ResourceMisuse;
@@ -68,6 +69,14 @@ fn find_release_nodes(ctx: &AnalysisContext, release_patterns: &[&str]) -> Vec<N
 }
 
 /// Check if a release node is on all paths from acquire to every exit.
+///
+/// Treats null-guard-false edges as not-applicable: when control reaches an
+/// `if (acquire_var)` (or `if (!acquire_var)`) and the edge represents
+/// "acquire_var is null", the resource was never actually produced on that
+/// path, so a release is unnecessary.  This closes the canonical
+/// `FILE *f = fopen(...); if (f) fclose(f);` idiom — without this rule the
+/// false edge of the null check provides a path acquire→exit that misses
+/// the release, producing a may-leak FP.
 fn release_on_all_exit_paths(
     ctx: &AnalysisContext,
     acquire: NodeIndex,
@@ -83,18 +92,65 @@ fn release_on_all_exit_paths(
         }
     }
 
-    // Fall back to path enumeration via DFS
-    // Check if all paths from acquire to exit pass through a release
+    // Fall back to path enumeration with null-guard pruning.
+    let acquire_var = ctx.cfg[acquire].taint.defines.as_deref();
     let release_set: HashSet<_> = release_nodes.iter().copied().collect();
-    all_paths_pass_through(ctx, acquire, exit, &release_set)
+    all_paths_pass_through(ctx, acquire, exit, &release_set, acquire_var)
 }
 
-/// Check if all paths from `from` to `to` pass through at least one node in `through`.
+/// Identify whether a CFG edge is the "null-guard false edge" for the named
+/// acquired variable.  Returns `true` for the edge that, if traversed, means
+/// the resource handle is null/falsy and therefore not actually acquired.
+///
+/// Recognises:
+///   * `if (var)` — false edge means `var` is null
+///   * `if (!var)` — true edge means `var` is null
+///
+/// Rejects comparisons (`if (var != NULL)`), method calls
+/// (`if (var.is_valid())`), and composite conditions (`if (var && cond)`).
+fn is_null_guard_false_edge(
+    ctx: &AnalysisContext,
+    src: NodeIndex,
+    edge_kind: EdgeKind,
+    acquire_var: &str,
+) -> bool {
+    let info = &ctx.cfg[src];
+    if info.kind != StmtKind::If {
+        return false;
+    }
+    if info.condition_vars.len() != 1 || info.condition_vars[0] != acquire_var {
+        return false;
+    }
+    let Some(text) = info.condition_text.as_deref() else {
+        return false;
+    };
+    let stripped = text
+        .trim()
+        .trim_start_matches('!')
+        .trim()
+        .trim_matches(|c: char| c == '(' || c == ')')
+        .trim();
+    if stripped != acquire_var {
+        return false;
+    }
+    // Choose the null edge: false for plain truth check, true for negated.
+    let null_edge = if info.condition_negated {
+        EdgeKind::True
+    } else {
+        EdgeKind::False
+    };
+    edge_kind == null_edge
+}
+
+/// Check if all paths from `from` to `to` pass through at least one node in `through`,
+/// pruning null-guard-false edges for the acquired variable so the canonical
+/// `if (var) release(var);` idiom is recognised as a complete release.
 fn all_paths_pass_through(
     ctx: &AnalysisContext,
     from: NodeIndex,
     to: NodeIndex,
     through: &HashSet<NodeIndex>,
+    acquire_var: Option<&str>,
 ) -> bool {
     use std::collections::VecDeque;
 
@@ -116,7 +172,15 @@ fn all_paths_pass_through(
             continue;
         }
 
-        for succ in ctx.cfg.neighbors(node) {
+        for edge in ctx.cfg.edges(node) {
+            // Prune null-guard-false edges: those represent "var is null",
+            // a path on which the resource was never actually acquired.
+            if let Some(var) = acquire_var
+                && is_null_guard_false_edge(ctx, node, *edge.weight(), var)
+            {
+                continue;
+            }
+            let succ = edge.target();
             let new_passed = passed || through.contains(&succ);
             let state = (succ, new_passed);
             if visited.insert(state) {

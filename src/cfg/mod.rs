@@ -143,7 +143,7 @@ pub enum StmtKind {
     Call,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeKind {
     Seq,       // ordinary fall‑through
     True,      // `cond == true` branch

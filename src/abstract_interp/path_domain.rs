@@ -467,7 +467,43 @@ fn classify_path_rejection_atom(clause: &str) -> PathRejection {
     {
         return PathRejection::IsAbsolute;
     }
+    // C/C++ subscript form: `s[0] == '/'` or `s[0] == '\\'` (and reversed).
+    // Idiomatic C/C++ absolute-path check since C has no `.startsWith` method.
+    if has_first_char_absolute_check(clause) {
+        return PathRejection::AbsoluteSlash;
+    }
     PathRejection::None
+}
+
+/// Detect C/C++ `<var>[0] == '/'` or `<var>[0] == '\\'` subscript comparisons
+/// (and the reversed `'/' == <var>[0]` form).  Recognises quoted char or
+/// string-literal forms.  Conservative: needs both the `[0]` subscript and
+/// a `'/'`/`'\\'` or `"/"`/`"\\"` literal within 32 chars of an `==` or `!=`
+/// operator.  Idiomatic absolute-path check in C since C lacks
+/// `.starts_with` methods.
+fn has_first_char_absolute_check(clause: &str) -> bool {
+    // We look for a subscript token `[0]` within the clause, then check that
+    // an `==` or `!=` operator lies between the subscript and a `/`/`\` literal
+    // on either side.
+    let bytes = clause.as_bytes();
+    let mut i = 0usize;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'[' && bytes[i + 1] == b'0' && bytes[i + 2] == b']' {
+            let lo = i.saturating_sub(32);
+            let hi = (i + 3 + 32).min(bytes.len());
+            let window = &clause[lo..hi];
+            if (window.contains("==") || window.contains("!="))
+                && (window.contains("'/'")
+                    || window.contains("'\\\\'")
+                    || window.contains("\"/\"")
+                    || window.contains("\"\\\\\""))
+            {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Detect Python's `".." in s` operator form.  The check is conservative:
@@ -1306,6 +1342,56 @@ mod tests {
             f.prefix_lock.as_deref().unwrap().len() <= MAX_PREFIX_LOCK_LEN,
             "prefix_lock must be bounded"
         );
+    }
+
+    #[test]
+    fn c_or_chain_rejection_full() {
+        // Exact text shape that lowering produces for c-safe-014 / c-safe-016.
+        let axes = classify_path_rejection_axes(
+            "strstr(s, \"..\") != NULL || s[0] == '/' || s[0] == '\\\\'",
+        );
+        assert!(
+            axes.contains(&PathRejection::DotDot),
+            "expected DotDot in {:?}",
+            axes
+        );
+        assert!(
+            axes.contains(&PathRejection::AbsoluteSlash),
+            "expected AbsoluteSlash in {:?}",
+            axes
+        );
+    }
+
+    #[test]
+    fn classify_subscript_first_char_absolute() {
+        // C/C++ idiom: `s[0] == '/'`
+        assert_eq!(
+            classify_path_rejection_atom("s[0] == '/'"),
+            PathRejection::AbsoluteSlash
+        );
+        // `s[0] == '\\'` (backslash)
+        assert_eq!(
+            classify_path_rejection_atom("s[0] == '\\\\'"),
+            PathRejection::AbsoluteSlash
+        );
+        // Reversed comparison `'/' == s[0]`
+        assert_eq!(
+            classify_path_rejection_atom("'/' == in[0]"),
+            PathRejection::AbsoluteSlash
+        );
+        // `!=` operator inside a negated check (`s[0] != '/'`) also matches the
+        // literal-nearby pattern; classification callers gate on clause polarity.
+        assert_eq!(
+            classify_path_rejection_atom("s[0] != '\\\\'"),
+            PathRejection::AbsoluteSlash
+        );
+        // Negative: no literal near subscript
+        assert_eq!(
+            classify_path_rejection_atom("s[0] == c"),
+            PathRejection::None
+        );
+        // Negative: subscript but no equality op
+        assert_eq!(classify_path_rejection_atom("s[0]"), PathRejection::None);
     }
 
     #[test]
