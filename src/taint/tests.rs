@@ -2952,12 +2952,24 @@ fn unknown_predicate_not_pruned() {
 }
 
 #[test]
-fn multi_var_predicate_not_pruned() {
+fn duplicate_null_guard_prunes_unreachable_sink() {
     use crate::cfg::build_cfg;
     use tree_sitter::Language;
 
-    // Multi-variable conditions should never be pruned for contradiction,
-    // even if the kind is in the whitelist.
+    // After `if y.is_none() { return; }`, the false arm proves
+    // `y.is_none() == false` on the only surviving path.  A second
+    // `if y.is_none() { sink }` then adds `y.is_none() == true` on the
+    // body's True arm — a per-symbol PredicateSummary contradiction
+    // (known_true & known_false on bit NullCheck).  The body is
+    // structurally unreachable; the sink must not fire.
+    //
+    // Regression guard: this expected behaviour only emerges once the
+    // OR-chain / direct-return rejection arm correctly terminates its
+    // SSA block (see
+    // `src/ssa/lower.rs::tests::or_chain_rejection_block_terminates_with_return`).
+    // Pre-fix the rejection arm Goto'd into the merged tail and its
+    // contradicting predicate joined with the false-arm to empty,
+    // letting flow through.  Pruning here is the precise outcome.
     let src = br#"
         use std::env; use std::process::Command;
         fn main() {
@@ -2979,15 +2991,11 @@ fn multi_var_predicate_not_pruned() {
     let summaries = &file_cfg.summaries;
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
-    // Note: y.is_none() condition references `y` and `is_none` — two idents.
-    // Wait, `is_none` is a method — collect_idents finds `y` and `is_none` as
-    // separate identifiers.  That makes it multi-var, so contradiction should
-    // NOT fire.  However, the actual behavior depends on how many idents
-    // collect_idents extracts from `y.is_none()`.  If it returns ["y", "is_none"],
-    // then the predicate has 2 vars → multi-var → not pruned → finding exists.
     assert!(
-        !findings.is_empty(),
-        "multi-var predicate should not be pruned; flow should be detected"
+        findings.is_empty(),
+        "duplicate null-guard with intervening early-return must prune \
+         the second if's body as unreachable; got findings = {:?}",
+        findings
     );
 }
 

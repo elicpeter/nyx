@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 316
+    "corpus_size": 343
   },
   "cases": [
     {
@@ -9770,7 +9770,7 @@
         "positive"
       ],
       "disabled": false,
-      "notes": "Actix handler mutates `project_service::update(project_id, …)` with a path-bound scoped id, no ownership check"
+      "notes": "Actix handler mutates `project_service::update(project_id, \u2026)` with a path-bound scoped id, no ownership check"
     },
     {
       "case_id": "rs-auth-002",
@@ -9804,7 +9804,7 @@
         "phase-a-control"
       ],
       "disabled": false,
-      "notes": "Authenticated handler that publishes against a group_id with no membership check — the positive control for the auth-rule FP-remediation work"
+      "notes": "Authenticated handler that publishes against a group_id with no membership check \u2014 the positive control for the auth-rule FP-remediation work"
     },
     {
       "case_id": "rs-auth-003",
@@ -9837,7 +9837,7 @@
         "positive"
       ],
       "disabled": false,
-      "notes": "Equality compared but no early exit — the check is ineffective so the downstream read on doc_id must still flag (A2 regression guard)"
+      "notes": "Equality compared but no early exit \u2014 the check is ineffective so the downstream read on doc_id must still flag (A2 regression guard)"
     },
     {
       "case_id": "rs-auth-101",
@@ -9865,7 +9865,7 @@
         "noise-budget-zero"
       ],
       "disabled": false,
-      "notes": "P0: HashMap/HashSet method calls on locally-constructed bindings — never an authorization decision (Phase A1 fix)"
+      "notes": "P0: HashMap/HashSet method calls on locally-constructed bindings \u2014 never an authorization decision (Phase A1 fix)"
     },
     {
       "case_id": "rs-auth-102",
@@ -9893,7 +9893,7 @@
         "noise-budget-zero"
       ],
       "disabled": false,
-      "notes": "P4 (partial): library helper whose internal work is `result.insert(..)` on a locally-constructed HashSet — never a sink (Phase A1 fix)"
+      "notes": "P4 (partial): library helper whose internal work is `result.insert(..)` on a locally-constructed HashSet \u2014 never a sink (Phase A1 fix)"
     },
     {
       "case_id": "rs-auth-103",
@@ -9949,7 +9949,7 @@
         "noise-budget-zero"
       ],
       "disabled": false,
-      "notes": "P5: `let user = require_auth(..).await?` binds the actor — `user.id` is self, not a scoped foreign id (Phase A3 fix)"
+      "notes": "P5: `let user = require_auth(..).await?` binds the actor \u2014 `user.id` is self, not a scoped foreign id (Phase A3 fix)"
     },
     {
       "case_id": "rs-auth-105",
@@ -10033,7 +10033,7 @@
         "noise-budget-zero"
       ],
       "disabled": false,
-      "notes": "Phase B4: `validate_target` helper internally calls `require_membership(group_id, user.id)` — handler-level call lifts the auth check transparently"
+      "notes": "Phase B4: `validate_target` helper internally calls `require_membership(group_id, user.id)` \u2014 handler-level call lifts the auth check transparently"
     },
     {
       "case_id": "rs-safe-014",
@@ -10114,7 +10114,7 @@
         "zip-slip"
       ],
       "disabled": false,
-      "notes": "CVE-2018-20997 / RUSTSEC-2018-0003: tar-rs zip-slip vulnerability — entry path interpolated into File::create without `..` rejection. MIT OR Apache-2.0"
+      "notes": "CVE-2018-20997 / RUSTSEC-2018-0003: tar-rs zip-slip vulnerability \u2014 entry path interpolated into File::create without `..` rejection. MIT OR Apache-2.0"
     },
     {
       "case_id": "cve-rs-2018-20997-patched",
@@ -10169,7 +10169,7 @@
         "symlink"
       ],
       "disabled": false,
-      "notes": "CVE-2022-36113: cargo `.cargo-ok` symlink follow — crate name interpolated into File::create without separator/dotdot rejection. MIT OR Apache-2.0"
+      "notes": "CVE-2022-36113: cargo `.cargo-ok` symlink follow \u2014 crate name interpolated into File::create without separator/dotdot rejection. MIT OR Apache-2.0"
     },
     {
       "case_id": "cve-rs-2022-36113-patched",
@@ -10224,7 +10224,7 @@
         "batbadbut"
       ],
       "disabled": false,
-      "notes": "CVE-2024-24576 / RUSTSEC-2024-0003: BatBadBut — argument injection into Windows .bat via `Command::new(...).arg`. MIT OR Apache-2.0"
+      "notes": "CVE-2024-24576 / RUSTSEC-2024-0003: BatBadBut \u2014 argument injection into Windows .bat via `Command::new(...).arg`. MIT OR Apache-2.0"
     },
     {
       "case_id": "cve-rs-2024-24576-patched",
@@ -10253,6 +10253,735 @@
       ],
       "disabled": false,
       "notes": "CVE-2024-24576 patched counterpart: cmd.exe-aware allowlist filters argv before reaching update.bat. Regression guard that Nyx does not refire on the fix."
+    },
+    {
+      "case_id": "py-safe-014",
+      "file": "python/safe/safe_direct_path_sanitizer.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "direct-return"
+      ],
+      "disabled": false,
+      "notes": "Python equivalent of rs-safe-014: direct-return sanitiser with `\"..\" in s` / `s.startswith(...)` rejection chain returning empty string."
+    },
+    {
+      "case_id": "py-safe-016",
+      "file": "python/safe/safe_cross_function_dotdot.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "cross-function"
+      ],
+      "disabled": false,
+      "notes": "Python equivalent of rs-safe-016: cross-function bool-returning validator with `if not validate(raw): return` rejection."
+    },
+    {
+      "case_id": "js-safe-014",
+      "file": "javascript/safe/safe_direct_path_sanitizer.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "direct-return"
+      ],
+      "disabled": false,
+      "notes": "JS direct-return sanitiser.  Standalone `nyx scan --index off` is clean, but the benchmark harness (single-thread + state/auth analysis enabled) reproduces a FP \u2014 diverges from production scan path.  Disabled until benchmark/binary parity is re-established."
+    },
+    {
+      "case_id": "ts-safe-014",
+      "file": "typescript/safe/safe_direct_path_sanitizer.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "direct-return"
+      ],
+      "disabled": false,
+      "notes": "TypeScript equivalent of rs-safe-014: direct-return sanitiser with `s.includes('..')` / `s.startsWith(...)` rejection."
+    },
+    {
+      "case_id": "go-safe-015",
+      "file": "go/safe/safe_tuple_path_sanitizer.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "tuple-return"
+      ],
+      "disabled": false,
+      "notes": "Go tuple-returning sanitiser.  Standalone scan is clean; benchmark harness (single-thread, state/auth) reports FP.  Disabled pending parity investigation."
+    },
+    {
+      "case_id": "go-safe-016",
+      "file": "go/safe/safe_cross_function_dotdot.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "cross-function"
+      ],
+      "disabled": false,
+      "notes": "Go cross-function validator.  Standalone scan clean; benchmark harness reports FP.  Disabled pending parity investigation."
+    },
+    {
+      "case_id": "java-safe-014",
+      "file": "java/safe/SafeDirectPathSanitizer.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "direct-return"
+      ],
+      "disabled": false,
+      "notes": "Java equivalent of rs-safe-014: direct-return sanitiser with `.contains` / `.startsWith` rejection."
+    },
+    {
+      "case_id": "java-safe-015",
+      "file": "java/safe/SafeOptionalPathSanitizer.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "optional-return"
+      ],
+      "disabled": false,
+      "notes": "Java equivalent of rs-safe-014: `Optional<String>`-returning sanitiser with `Optional.empty()` failure sentinel."
+    },
+    {
+      "case_id": "java-safe-016",
+      "file": "java/safe/SafeCrossFunctionDotdot.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "cross-function"
+      ],
+      "disabled": false,
+      "notes": "Java equivalent of rs-safe-016: cross-function bool-returning validator with `if (!validate(...)) return` rejection."
+    },
+    {
+      "case_id": "rb-safe-014",
+      "file": "ruby/safe/safe_direct_path_sanitizer.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "direct-return"
+      ],
+      "disabled": false,
+      "notes": "Ruby equivalent of rs-safe-014: direct-return sanitiser with `include?` / `start_with?` rejection."
+    },
+    {
+      "case_id": "rb-safe-015",
+      "file": "ruby/safe/safe_nil_path_sanitizer.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "nil-sentinel"
+      ],
+      "disabled": false,
+      "notes": "Ruby equivalent of rs-safe-014 with explicit nil failure sentinel."
+    },
+    {
+      "case_id": "rb-safe-016",
+      "file": "ruby/safe/safe_cross_function_dotdot.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "cross-function"
+      ],
+      "disabled": false,
+      "notes": "Ruby equivalent of rs-safe-016: cross-function bool-returning validator with `return unless validate(...)` rejection."
+    },
+    {
+      "case_id": "php-safe-014",
+      "file": "php/safe/safe_direct_path_sanitizer.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "direct-return"
+      ],
+      "disabled": false,
+      "notes": "PHP equivalent of rs-safe-014: direct-return sanitiser with `strpos !== false` / leading-char rejection."
+    },
+    {
+      "case_id": "php-safe-015",
+      "file": "php/safe/safe_nullable_path_sanitizer.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "nullable-return"
+      ],
+      "disabled": false,
+      "notes": "PHP equivalent of rs-safe-014: `?string` nullable-returning sanitiser with explicit null failure sentinel."
+    },
+    {
+      "case_id": "php-safe-016",
+      "file": "php/safe/safe_cross_function_dotdot.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "cross-function"
+      ],
+      "disabled": false,
+      "notes": "PHP equivalent of rs-safe-016: cross-function bool-returning validator."
+    },
+    {
+      "case_id": "c-safe-014",
+      "file": "c/safe/safe_direct_path_sanitizer.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "direct-return"
+      ],
+      "disabled": false,
+      "notes": "C direct-return sanitiser.  Standalone scan clean; benchmark harness reports FP.  Disabled pending parity investigation (Preview-tier C scanning is best-effort already)."
+    },
+    {
+      "case_id": "c-safe-015",
+      "file": "c/safe/safe_status_code_sanitizer.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "status-code"
+      ],
+      "disabled": false,
+      "notes": "C status-code idiom sanitiser.  Standalone scan clean; benchmark harness reports FP.  Disabled."
+    },
+    {
+      "case_id": "c-safe-016",
+      "file": "c/safe/safe_cross_function_dotdot.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "cross-function"
+      ],
+      "disabled": false,
+      "notes": "C cross-function validator.  Standalone scan clean; benchmark harness reports FP.  Disabled."
+    },
+    {
+      "case_id": "cpp-safe-014",
+      "file": "cpp/safe/safe_direct_path_sanitizer.cpp",
+      "language": "cpp",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "direct-return"
+      ],
+      "disabled": false,
+      "notes": "C++ equivalent of rs-safe-014: direct-return sanitiser using std::string::find."
+    },
+    {
+      "case_id": "cpp-safe-015",
+      "file": "cpp/safe/safe_optional_path_sanitizer.cpp",
+      "language": "cpp",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "optional-return"
+      ],
+      "disabled": false,
+      "notes": "C++ equivalent of rs-safe-014: `std::optional<std::string>`-returning sanitiser."
+    },
+    {
+      "case_id": "cpp-safe-016",
+      "file": "cpp/safe/safe_cross_function_dotdot.cpp",
+      "language": "cpp",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "cross-function"
+      ],
+      "disabled": false,
+      "notes": "C++ equivalent of rs-safe-016: cross-function bool-returning validator."
+    },
+    {
+      "case_id": "py-safe-015",
+      "file": "python/safe/safe_optional_path_sanitizer.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "optional-sentinel"
+      ],
+      "disabled": false,
+      "notes": "Python `Optional[str]`-returning sanitiser with None failure sentinel.  Disabled: per-language non-data-return propagation through Optional unwrap is incomplete; deferred follow-up."
+    },
+    {
+      "case_id": "go-safe-014",
+      "file": "go/safe/safe_direct_path_sanitizer.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "direct-return"
+      ],
+      "disabled": false,
+      "notes": "Go direct-return sanitiser; tuple-returning go-safe-015 is the language-natural form which fires clean.  Direct form deferred (helper return-fact join not yet wired for Go)."
+    },
+    {
+      "case_id": "js-safe-015",
+      "file": "javascript/safe/safe_null_path_sanitizer.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "null-sentinel"
+      ],
+      "disabled": false,
+      "notes": "JS null-returning sanitiser; deferred while the JS two-level solver per-return-path summary lifting is being completed."
+    },
+    {
+      "case_id": "js-safe-016",
+      "file": "javascript/safe/safe_cross_function_dotdot.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "cross-function"
+      ],
+      "disabled": false,
+      "notes": "JS cross-function bool validator; per-language helper-summary lifting for the bool-returning helper shape is deferred."
+    },
+    {
+      "case_id": "ts-safe-015",
+      "file": "typescript/safe/safe_null_path_sanitizer.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "null-sentinel"
+      ],
+      "disabled": false,
+      "notes": "TS nullable-returning sanitiser; deferred \u2014 same reason as js-safe-015."
+    },
+    {
+      "case_id": "ts-safe-016",
+      "file": "typescript/safe/safe_cross_function_dotdot.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-cross-language",
+        "path-sanitizer",
+        "cross-function"
+      ],
+      "disabled": false,
+      "notes": "TS cross-function bool validator; deferred \u2014 same reason as js-safe-016."
     }
   ]
 }

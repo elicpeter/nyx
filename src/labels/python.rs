@@ -342,7 +342,16 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
 
 pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     params_field: "parameters",
-    param_node_kinds: &["identifier"],
+    // Python parameters: bare identifiers, typed (`x: T`), defaulted
+    // (`x=42`), and typed-with-default (`x: T = ...`).  Without the
+    // typed forms, type-annotated handlers register zero arity and
+    // their parameter taint never participates in summaries.
+    param_node_kinds: &[
+        "identifier",
+        "typed_parameter",
+        "default_parameter",
+        "typed_default_parameter",
+    ],
     self_param_kinds: &[],
     ident_fields: &["name"],
 };

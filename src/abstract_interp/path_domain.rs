@@ -433,24 +433,78 @@ pub fn classify_path_rejection_axes(text: &str) -> smallvec::SmallVec<[PathRejec
 }
 
 fn classify_path_rejection_atom(clause: &str) -> PathRejection {
+    // `.contains("..")` (Rust, Java) / `.includes("..")` (JS/TS) /
+    // `.include?("..")` (Ruby) / `strings.Contains(s, "..")` (Go) /
+    // `strstr(s, "..")` (C/C++) — every form recognised by
+    // `extract_contains_arg` returns `..` if the needle is the dotdot
+    // segment.
     if let Some(needle) = extract_contains_arg(clause)
         && needle == ".."
     {
         return PathRejection::DotDot;
     }
+    // Python `".." in s` — operator form.  Look for `".." in <something>`
+    // anywhere in the clause text.  Conservative: requires the literal
+    // `".." in ` substring (whitespace-tolerant).
+    if has_python_dotdot_in(clause) {
+        return PathRejection::DotDot;
+    }
+    // `.starts_with('/')` (Rust) / `.startsWith("/")` (JS/TS/Java) /
+    // `.startswith("/")` (Python) / `.start_with?("/")` (Ruby) /
+    // `strings.HasPrefix(s, "/")` (Go).
     if let Some(needle) = extract_starts_with_arg(clause)
         && (needle == "/" || needle == "\\")
     {
         return PathRejection::AbsoluteSlash;
     }
-    if clause.contains(".is_absolute()") {
+    // `.is_absolute()` (Rust) / `.isAbsolute()` (Java
+    // `Paths.get(s).isAbsolute()`) / `os.path.isabs(s)` (Python) /
+    // `filepath.IsAbs(s)` (Go).
+    if clause.contains(".is_absolute()")
+        || clause.contains(".isAbsolute()")
+        || clause.contains("os.path.isabs(")
+        || clause.contains("filepath.IsAbs(")
+    {
         return PathRejection::IsAbsolute;
     }
     PathRejection::None
 }
 
+/// Detect Python's `".." in s` operator form.  The check is conservative:
+/// it requires the literal substring `".." in ` (tolerating whitespace
+/// between `".."` and `in`) anywhere in the clause text.
+fn has_python_dotdot_in(clause: &str) -> bool {
+    // Look for `".."` followed by `in` keyword.
+    let bytes = clause.as_bytes();
+    let mut i = 0;
+    while i + 4 < bytes.len() {
+        if bytes[i] == b'"' && bytes[i + 1] == b'.' && bytes[i + 2] == b'.' && bytes[i + 3] == b'"'
+        {
+            // Skip whitespace after the closing quote.
+            let mut j = i + 4;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j + 2 <= bytes.len() && &bytes[j..j + 2] == b"in" {
+                // Require word boundary after `in`.
+                let after = bytes.get(j + 2).copied();
+                if after
+                    .map(|c| !c.is_ascii_alphanumeric() && c != b'_')
+                    .unwrap_or(true)
+                {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Split a condition text on top-level `||` operators, ignoring those
-/// inside string literals or nested parentheses.
+/// inside string literals or nested parentheses.  Also recognises Python's
+/// keyword form ` or ` (whitespace-bounded) at top level so OR-chain
+/// rejection idioms are decomposed identically across languages.
 fn split_top_level_or(text: &str) -> smallvec::SmallVec<[&str; 4]> {
     let mut out: smallvec::SmallVec<[&str; 4]> = smallvec::SmallVec::new();
     let bytes = text.as_bytes();
@@ -488,6 +542,25 @@ fn split_top_level_or(text: &str) -> smallvec::SmallVec<[&str; 4]> {
                 continue;
             }
             b'|' if depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'|' => {
+                out.push(&text[last..i]);
+                last = i + 2;
+                i += 2;
+                continue;
+            }
+            // Python `or` keyword at top level.  Require word boundaries on
+            // both sides: a preceding ASCII whitespace, and a following ASCII
+            // whitespace.  Avoids splitting inside identifiers like
+            // `record_or_default`.
+            b'o' | b'O'
+                if depth == 0
+                    && i + 2 < bytes.len()
+                    && (bytes[i + 1] == b'r' || bytes[i + 1] == b'R')
+                    && bytes[i + 2].is_ascii_whitespace()
+                    && (i == 0 || bytes[i - 1].is_ascii_whitespace()) =>
+            {
+                // i is start of `or`.  Trim trailing whitespace from the
+                // previous clause: out.push slice [last..i] but caller
+                // .trim()s anyway, so pushing the raw range is fine.
                 out.push(&text[last..i]);
                 last = i + 2;
                 i += 2;
@@ -584,7 +657,79 @@ pub fn is_structural_variant_ctor(callee: &str) -> bool {
 ///
 /// Returned [`None`] means the callee is not a recognised path primitive —
 /// the caller should leave the result at its pre-existing PathFact (Top).
+///
+/// Backwards-compatible wrapper around [`classify_path_primitive_rust`].
+/// New callers should prefer [`classify_path_primitive_for_lang`] which
+/// dispatches on the source language.
 pub fn classify_path_primitive(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
+    classify_path_primitive_rust(callee, input_fact)
+}
+
+/// Per-language path-primitive dispatcher.
+///
+/// Routes to the language-specific classifier — Rust, Python, JS/TS, Go,
+/// Java, Ruby, PHP, or C/C++.  Returns [`None`] for languages without a
+/// classifier (or callees the language's classifier doesn't recognise).
+pub fn classify_path_primitive_for_lang(
+    lang: crate::symbol::Lang,
+    callee: &str,
+    input_fact: &PathFact,
+) -> Option<PathFact> {
+    use crate::symbol::Lang;
+    match lang {
+        Lang::Rust => classify_path_primitive_rust(callee, input_fact),
+        Lang::Python => classify_path_primitive_python(callee, input_fact),
+        Lang::JavaScript | Lang::TypeScript => classify_path_primitive_js(callee, input_fact),
+        Lang::Go => classify_path_primitive_go(callee, input_fact),
+        Lang::Java => classify_path_primitive_java(callee, input_fact),
+        Lang::Ruby => classify_path_primitive_ruby(callee, input_fact),
+        Lang::Php => classify_path_primitive_php(callee, input_fact),
+        Lang::C | Lang::Cpp => classify_path_primitive_c_cpp(callee, input_fact),
+    }
+}
+
+/// Per-language structural-variant-constructor predicate.
+///
+/// Rust uses ASCII-uppercase variant naming; other languages with
+/// destructuring null/Optional idioms (Python `Optional[T]`, JS `null`,
+/// Go `(T, error)`, Java `Optional<T>`, Ruby `nil`, PHP `?T`,
+/// C++ `std::optional<T>`) don't share Rust's convention, so this
+/// predicate is conservatively true only for Rust today.  Per-language
+/// extensions can opt in later.
+pub fn is_structural_variant_ctor_for_lang(lang: crate::symbol::Lang, callee: &str) -> bool {
+    match lang {
+        crate::symbol::Lang::Rust => is_structural_variant_ctor(callee),
+        // Other languages: no grammatical variant-ctor convention to
+        // recognise structurally.  `Some(s)` / `Ok(s)` are Rust-specific;
+        // Java's `Optional.of(s)` is a method call, not a constructor; JS
+        // returns `s` directly with `null` as the failure sentinel.
+        _ => false,
+    }
+}
+
+/// Per-language predicate for "this callee is a zero-arg fresh-allocation
+/// constructor" — used by the variant-rejection-path classifier so that
+/// `String::new()` (Rust) / `''` (Python/JS/Java/...) is recognised as a
+/// no-attacker-content fresh value with cleared `dotdot`/`absolute` axes.
+///
+/// Rust uses the `Type::method` scoped form recognised by
+/// [`crate::ssa::type_facts::peel_identity_suffix`].  Other languages do
+/// not (yet) have an equivalent grammar-driven recogniser; the rejection
+/// arm in their fixtures returns either an empty string literal (handled
+/// by [`SsaOp::Const`] seeding) or `None`/`null`/`nil` (handled by the
+/// non-data-return skip).
+pub fn is_zero_arg_allocator_for_lang(lang: crate::symbol::Lang, _callee: &str) -> bool {
+    // Currently a no-op for non-Rust languages: rejection-arm constructors
+    // are absorbed via `SsaOp::Const` seeding (e.g. `""` literal) or the
+    // [`is_non_data_return`] sentinel skip (`None`/`null`/`nil`).  This
+    // function exists as the per-language extension point.
+    let _ = lang;
+    false
+}
+
+/// Rust path-primitive classifier — `fs::canonicalize`, `Path::new`,
+/// `PathBuf::from`, identity-string conversions.
+pub fn classify_path_primitive_rust(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
     // Accept both path-qualified (`std::fs::canonicalize`, `fs::canonicalize`)
     // and bare-leaf (`canonicalize`, produced from `p.canonicalize()` method
     // calls after normalisation) forms.
@@ -628,6 +773,209 @@ pub fn classify_path_primitive(callee: &str, input_fact: &PathFact) -> Option<Pa
     }
 }
 
+/// Python path-primitive classifier — `os.path.normpath`, `os.path.realpath`,
+/// `pathlib.Path.resolve`, `os.path.abspath`.
+///
+/// Pattern conventions: tree-sitter-python emits dotted attribute access as
+/// `obj.attr.method` after [`crate::callgraph`] normalisation.  Method calls
+/// on Path objects appear as `Path.resolve` / `<bare>.resolve`; free-function
+/// calls appear as `os.path.normpath` / `posixpath.normpath` / similar.
+pub fn classify_path_primitive_python(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
+    let leaf = rightmost_segment(callee);
+    match leaf {
+        // `os.path.normpath(s)` / `posixpath.normpath(s)` / `ntpath.normpath`:
+        //   Resolves `..` segments syntactically.  dotdot = No.
+        //   Does not make absolute.
+        "normpath" => {
+            let mut f = input_fact.clone();
+            f.dotdot = Tri::No;
+            f.normalized = Tri::Yes;
+            Some(f)
+        }
+        // `os.path.realpath(s)` / `pathlib.Path.resolve()`:
+        //   Resolves symlinks AND `..` AND yields an absolute path.
+        //   normalized = Yes, dotdot = No, absolute = Yes.
+        "realpath" | "resolve" => {
+            let mut f = input_fact.clone();
+            f.normalized = Tri::Yes;
+            f.dotdot = Tri::No;
+            f.absolute = Tri::Yes;
+            Some(f)
+        }
+        // `os.path.abspath(s)`:
+        //   Returns an absolute version of the input.  absolute = Yes.
+        //   Does NOT clear `..` (abspath joins with cwd; trailing `..` survives).
+        "abspath" => {
+            let mut f = input_fact.clone();
+            f.absolute = Tri::Yes;
+            Some(f)
+        }
+        // Identity conversions: `str(p)` / `Path(s)` / `os.fspath(s)` re-bind
+        // the same logical path.
+        "fspath" | "PurePath" | "PurePosixPath" | "PureWindowsPath" => Some(input_fact.clone()),
+        _ => None,
+    }
+}
+
+/// JavaScript / TypeScript path-primitive classifier — Node's `path` module:
+/// `path.normalize`, `path.resolve`, `path.join`.
+pub fn classify_path_primitive_js(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
+    let leaf = rightmost_segment(callee);
+    match leaf {
+        // `path.normalize(p)`:
+        //   Resolves `..` syntactically.  dotdot = No.
+        "normalize" => {
+            let mut f = input_fact.clone();
+            f.dotdot = Tri::No;
+            f.normalized = Tri::Yes;
+            Some(f)
+        }
+        // `path.resolve(p)`:
+        //   Resolves to an absolute path, collapsing `..`.
+        //   normalized = Yes, dotdot = No, absolute = Yes.
+        "resolve" => {
+            let mut f = input_fact.clone();
+            f.normalized = Tri::Yes;
+            f.dotdot = Tri::No;
+            f.absolute = Tri::Yes;
+            Some(f)
+        }
+        _ => None,
+    }
+}
+
+/// Go path-primitive classifier — `path/filepath` package:
+/// `filepath.Clean`, `filepath.Abs`.
+pub fn classify_path_primitive_go(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
+    let leaf = rightmost_segment(callee);
+    match leaf {
+        // `filepath.Clean(p)`:
+        //   Lexical normalisation that resolves `..`.  dotdot = No.
+        "Clean" => {
+            let mut f = input_fact.clone();
+            f.dotdot = Tri::No;
+            f.normalized = Tri::Yes;
+            Some(f)
+        }
+        // `filepath.Abs(p)`:
+        //   Returns an absolute path (also calls Clean).
+        //   normalized = Yes, dotdot = No, absolute = Yes.
+        "Abs" => {
+            let mut f = input_fact.clone();
+            f.normalized = Tri::Yes;
+            f.dotdot = Tri::No;
+            f.absolute = Tri::Yes;
+            Some(f)
+        }
+        _ => None,
+    }
+}
+
+/// Java path-primitive classifier — `java.nio.file.Path.normalize` /
+/// `Paths.get(s).normalize().toAbsolutePath()`.
+pub fn classify_path_primitive_java(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
+    let leaf = rightmost_segment(callee);
+    match leaf {
+        // `Path.normalize()`:
+        //   Lexical normalisation that resolves `..`.
+        "normalize" => {
+            let mut f = input_fact.clone();
+            f.dotdot = Tri::No;
+            f.normalized = Tri::Yes;
+            Some(f)
+        }
+        // `Path.toAbsolutePath()`:
+        //   Returns an absolute path.
+        "toAbsolutePath" => {
+            let mut f = input_fact.clone();
+            f.absolute = Tri::Yes;
+            Some(f)
+        }
+        // `Path.toRealPath()`:
+        //   Resolves symlinks and `..`, returns absolute path.
+        "toRealPath" => {
+            let mut f = input_fact.clone();
+            f.normalized = Tri::Yes;
+            f.dotdot = Tri::No;
+            f.absolute = Tri::Yes;
+            Some(f)
+        }
+        _ => None,
+    }
+}
+
+/// Ruby path-primitive classifier — `File.expand_path` / `Pathname#cleanpath`.
+pub fn classify_path_primitive_ruby(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
+    let leaf = rightmost_segment(callee);
+    match leaf {
+        // `File.expand_path(s)`:
+        //   Returns an absolute path with `..` collapsed.
+        "expand_path" => {
+            let mut f = input_fact.clone();
+            f.normalized = Tri::Yes;
+            f.dotdot = Tri::No;
+            f.absolute = Tri::Yes;
+            Some(f)
+        }
+        // `Pathname#cleanpath`:
+        //   Lexical normalisation that resolves `..`.
+        "cleanpath" => {
+            let mut f = input_fact.clone();
+            f.dotdot = Tri::No;
+            f.normalized = Tri::Yes;
+            Some(f)
+        }
+        _ => None,
+    }
+}
+
+/// PHP path-primitive classifier — `realpath`, `basename`.
+pub fn classify_path_primitive_php(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
+    let leaf = rightmost_segment(callee);
+    match leaf {
+        // `realpath($s)`:
+        //   Resolves symlinks and `..`, returns absolute path.  Returns
+        //   `false` if the file doesn't exist — but on the success path
+        //   (which is what reaches a sink), it produces a clean absolute path.
+        "realpath" => {
+            let mut f = input_fact.clone();
+            f.normalized = Tri::Yes;
+            f.dotdot = Tri::No;
+            f.absolute = Tri::Yes;
+            Some(f)
+        }
+        // `basename($s)`:
+        //   Strips directory components — guaranteed to contain no `..`
+        //   (basename of `..` is `..`, but basename of any traversal-
+        //   prefixed path is just the leaf).  Conservative: clear dotdot.
+        "basename" => {
+            let mut f = input_fact.clone();
+            f.dotdot = Tri::No;
+            f.absolute = Tri::No;
+            Some(f)
+        }
+        _ => None,
+    }
+}
+
+/// C / C++ path-primitive classifier — POSIX `realpath`,
+/// `std::filesystem::canonical`.
+pub fn classify_path_primitive_c_cpp(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
+    let leaf = rightmost_segment(callee);
+    match leaf {
+        // POSIX `realpath(in, out)` / C++ `std::filesystem::canonical(p)`:
+        //   Resolves to absolute canonical path.
+        "realpath" | "canonical" => {
+            let mut f = input_fact.clone();
+            f.normalized = Tri::Yes;
+            f.dotdot = Tri::No;
+            f.absolute = Tri::Yes;
+            Some(f)
+        }
+        _ => None,
+    }
+}
+
 // ── Text helpers (kept in sync with path_state.rs's parsing style) ─────
 
 fn rightmost_segment(s: &str) -> &str {
@@ -639,18 +987,118 @@ fn callee_contains_segment(callee: &str, seg: &str) -> bool {
     callee.split([':', '.']).any(|s| s == seg)
 }
 
-/// Extract the string argument passed to `receiver.contains("...")`.
+/// Extract the string argument passed to a "contains-like" call.  Matches
+/// the canonical method-call shapes across languages:
+///   * Rust / Java / JS String: `r.contains("..")`
+///   * JS / TS array: `r.includes("..")`
+///   * Ruby: `r.include?("..")`
+///   * Go: `strings.Contains(r, "..")`
+///   * C / C++: `strstr(r, "..")` / `strchr(r, '/')`
 fn extract_contains_arg(text: &str) -> Option<String> {
-    let method = ".contains(";
-    let idx = text.find(method)?;
-    extract_first_string_literal(&text[idx + method.len()..])
+    // Tier 1: method-call form `.contains(`, `.includes(`, `.include?(`.
+    for method in [".contains(", ".includes(", ".include?("] {
+        if let Some(idx) = text.find(method)
+            && let Some(s) = extract_first_string_literal(&text[idx + method.len()..])
+        {
+            return Some(s);
+        }
+    }
+    // Tier 2: free-function form with the receiver as first arg.  We can't
+    // recover the receiver from the text (the lowering already records it
+    // in `condition_vars`); we just need the literal needle to classify.
+    for prefix in [
+        "strings.Contains(",
+        "strings.HasPrefix(",
+        "strings.Index(",
+        "strstr(",
+    ] {
+        if let Some(idx) = text.find(prefix) {
+            // Skip past the first argument (receiver) — the literal needle
+            // is the second arg, separated by a comma.  Find the comma at
+            // top level inside this call.
+            let inner = &text[idx + prefix.len()..];
+            if let Some(comma_idx) = top_level_comma(inner) {
+                let after_comma = &inner[comma_idx + 1..];
+                if let Some(s) = extract_first_string_literal(after_comma) {
+                    return Some(s);
+                }
+            }
+        }
+    }
+    None
 }
 
-/// Extract the string argument passed to `receiver.starts_with("...")`.
+/// Extract the string argument passed to a "starts-with-like" call.
+///   * Rust: `r.starts_with('/')`
+///   * Ruby: `r.start_with?("/")`
+///   * JS / TS / Java: `r.startsWith("/")`
+///   * Python: `r.startswith("/")`
+///   * Go: `strings.HasPrefix(r, "/")`
 fn extract_starts_with_arg(text: &str) -> Option<String> {
-    let method = ".starts_with(";
-    let idx = text.find(method)?;
-    extract_first_string_literal(&text[idx + method.len()..])
+    for method in [
+        ".starts_with(",
+        ".start_with?(",
+        ".startsWith(",
+        ".startswith(",
+    ] {
+        if let Some(idx) = text.find(method)
+            && let Some(s) = extract_first_string_literal(&text[idx + method.len()..])
+        {
+            return Some(s);
+        }
+    }
+    // Go free-function form `strings.HasPrefix(r, "/")` — second arg.
+    if let Some(idx) = text.find("strings.HasPrefix(") {
+        let inner = &text[idx + "strings.HasPrefix(".len()..];
+        if let Some(comma_idx) = top_level_comma(inner) {
+            let after_comma = &inner[comma_idx + 1..];
+            if let Some(s) = extract_first_string_literal(after_comma) {
+                return Some(s);
+            }
+        }
+    }
+    None
+}
+
+/// Find the index of the first top-level `,` in a slice (depth 0, ignoring
+/// commas inside nested parentheses, brackets, braces, or string literals).
+/// Returns `None` if no top-level comma is present.
+fn top_level_comma(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth: i32 = 0;
+    let mut in_quote: Option<u8> = None;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if b == b'\\' && i + 1 < bytes.len() {
+                i += 2;
+                continue;
+            }
+            if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => {
+                in_quote = Some(b);
+                i += 1;
+            }
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                i += 1;
+            }
+            b',' if depth == 0 => return Some(i),
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 /// Parse a `"..."` / `'...'` literal at the start of a slice (after an

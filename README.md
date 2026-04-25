@@ -214,7 +214,11 @@ Limitations:
 
 ## Contributing
 
-Pull requests welcome. Run `cargo fmt`, `cargo clippy --all -- -D warnings`, and `cargo test` before submitting. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full guide including how to add rules and support new languages. Open an issue for crashes, panics, or suspicious results; attach a minimal snippet and the Nyx version.
+Contributions are welcome.
+
+Nyx is open source and will always have a fully open-source core. To support long-term development and keep the project sustainable, contributors may be asked to sign a Contributor License Agreement before their first merged contribution.
+
+Run `sh scripts/check.sh` before submitting. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full guide, including how to add rules and support new languages. Open an issue for crashes, panics, or suspicious results; attach a minimal snippet and the Nyx version.
 
 ---
 

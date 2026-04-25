@@ -2695,4 +2695,81 @@ mod tests {
             early_block_id
         );
     }
+
+    /// Regression: an OR-chain rejection arm such as
+    /// `if a || b || c { return X; } Y` must have its rejection body emit a
+    /// `Terminator::Return(_)` and have `succs.is_empty()`.  Pre-fix the
+    /// rejection body's String::new() Call shared a block whose only
+    /// successor was the merged tail — losing the early-return semantics
+    /// entirely and diluting per-return-path PathFact narrowing.
+    #[test]
+    fn or_chain_rejection_block_terminates_with_return() {
+        use crate::cfg::build_cfg;
+
+        let src = br#"
+            fn sanitize_path(s: &str) -> String {
+                if s.contains("..") || s.starts_with('/') || s.starts_with('\\') {
+                    return String::new();
+                }
+                s.to_string()
+            }
+        "#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter::Language::from(tree_sitter_rust::LANGUAGE))
+            .unwrap();
+        let tree = parser.parse(src.as_slice(), None).unwrap();
+        let file_cfg = build_cfg(&tree, src.as_slice(), "rust", "test.rs", None);
+        let body = if file_cfg.bodies.len() > 1 {
+            &file_cfg.bodies[1]
+        } else {
+            file_cfg.first_body()
+        };
+        let cfg = &body.graph;
+        let entry = body.entry;
+
+        // Locate the Return CFG node sourced from the if-body and the tail
+        // expression's Call node so the assertions are meaningful even if
+        // block ordering shifts.
+        let mut rejection_call: Option<NodeIndex> = None;
+        for idx in cfg.node_indices() {
+            let info = &cfg[idx];
+            if info.kind == StmtKind::Call {
+                if let Some(callee) = &info.call.callee {
+                    if callee == "String::new" || callee.ends_with("String::new") {
+                        rejection_call = Some(idx);
+                    }
+                }
+            }
+        }
+        let rejection_call = rejection_call
+            .expect("CFG must contain a String::new() Call node for the rejection arm");
+
+        let ssa = lower_to_ssa(cfg, entry, None, true).expect("SSA lowering should succeed");
+
+        // Find the SSA block containing the String::new() Call.  This is
+        // the rejection-arm block.
+        let rejection_block = ssa
+            .blocks
+            .iter()
+            .find(|b| {
+                b.body
+                    .iter()
+                    .chain(b.phis.iter())
+                    .any(|inst| inst.cfg_node == rejection_call)
+            })
+            .expect("rejection-arm Call must live in some SSA block");
+
+        assert!(
+            rejection_block.succs.is_empty(),
+            "rejection-arm block must have no block-level successors after \
+             return-frontier strip; got succs = {:?}",
+            rejection_block.succs
+        );
+        assert!(
+            matches!(rejection_block.terminator, Terminator::Return(_)),
+            "rejection-arm block must terminate with Terminator::Return; got {:?}",
+            rejection_block.terminator
+        );
+    }
 }

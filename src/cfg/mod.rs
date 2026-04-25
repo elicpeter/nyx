@@ -3048,10 +3048,25 @@ pub(super) fn build_sub<'a>(
         Kind::CallWrapper => {
             let mut cursor = ast.walk();
 
+            // Recurse into divergent control-flow constructs nested inside
+            // an expression-statement wrapper.  Rust's `expression_statement`
+            // wraps `return_expression` / `break_expression` /
+            // `continue_expression`; without this delegation the wrapper
+            // would lower the return as a plain `StmtKind::Call`, losing
+            // the return semantics and letting fall-through Seq edges
+            // survive into the SSA terminator (the OR-chain rejection-arm
+            // defect — see `or_chain_rejection_block_terminates_with_return`).
             if let Some(inner) = ast.children(&mut cursor).find(|c| {
                 matches!(
                     lookup(lang, c.kind()),
-                    Kind::InfiniteLoop | Kind::While | Kind::For | Kind::If
+                    Kind::InfiniteLoop
+                        | Kind::While
+                        | Kind::For
+                        | Kind::If
+                        | Kind::Return
+                        | Kind::Throw
+                        | Kind::Break
+                        | Kind::Continue
                 )
             }) {
                 return build_sub(

@@ -949,22 +949,32 @@ fn compute_succ_states(
                     transfer.interner,
                 );
 
-                // PathFact branch narrowing (Rust only):
-                //   `x.contains("..")` / `x.starts_with('/')` / `x.is_absolute()`
-                //   → rejection on the true branch; narrow axis on the false
-                //   branch (or on the enclosing fall-through when the true
-                //   branch unconditionally terminates).
-                //   `x.starts_with("<literal_root>")` → on the true branch,
-                //   attach `prefix_lock = Some(root)`.
-                if matches!(transfer.lang, Lang::Rust) {
-                    apply_path_fact_branch_narrowing(
-                        &mut true_state,
-                        &mut false_state,
-                        cond_text,
-                        &effective_vars,
-                        ssa,
-                    );
-                }
+                // PathFact branch narrowing — language-agnostic.  The
+                // text-level rejection patterns recognised by
+                // `classify_path_rejection_atom` cover the common idioms
+                // across all 10 supported languages:
+                //   * `.contains("..")` (Rust, Java, JS String) /
+                //     `.includes("..")` (JS/TS) / `.include?("..")` (Ruby) /
+                //     `strings.Contains(s, "..")` (Go) /
+                //     `".." in s` (Python).
+                //   * `.starts_with('/')` (Rust) /
+                //     `.startsWith("/")` (JS/TS/Java) /
+                //     `.startswith("/")` (Python) /
+                //     `.start_with?("/")` (Ruby) /
+                //     `strings.HasPrefix(s, "/")` (Go).
+                //   * `.is_absolute()` / `.isAbsolute()` /
+                //     `os.path.isabs(s)` / `filepath.IsAbs(s)`.
+                //
+                // Rust positive-assertion `prefix_lock` recognition still
+                // fires regardless of language; for non-Rust languages the
+                // assertion classifier returns `None` for unfamiliar shapes.
+                apply_path_fact_branch_narrowing(
+                    &mut true_state,
+                    &mut false_state,
+                    cond_text,
+                    &effective_vars,
+                    ssa,
+                );
 
                 // Constraint refinement
                 //
@@ -3586,13 +3596,28 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                 );
             } else if is_string_const(trimmed) {
                 let s = strip_string_quotes(trimmed);
+                // String literal: derive PathFact axes from the *literal*
+                // content.  An empty string has no `..` segment and no
+                // absolute root — both axes proven safe — so a Const `""`
+                // (Python / JS / TS / Java rejection-arm sentinel) carries a
+                // path-safe fact even without a per-language allocator
+                // recogniser like Rust's `String::new()`.  Non-empty
+                // literals also surface their own dotdot/absolute axes
+                // when the literal text proves them.
+                let mut pf = PathFact::top();
+                if !s.contains("..") {
+                    pf = pf.with_dotdot_cleared();
+                }
+                if !(s.starts_with('/') || s.starts_with('\\')) {
+                    pf = pf.with_absolute_cleared();
+                }
                 abs.set(
                     inst.value,
                     AbstractValue {
                         interval: IntervalFact::top(),
                         string: StringFact::exact(&s),
                         bits: BitFact::top(),
-                        path: PathFact::top(),
+                        path: pf,
                     },
                 );
             }
@@ -3790,19 +3815,26 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
             );
         }
 
-        // Rust path-primitive calls — `fs::canonicalize(p)`, `p.canonicalize()`,
-        // `Path::new(s)`, `PathBuf::from(s)` — produce a PathFact on the
-        // result derived from the input string/path's own PathFact.  See
-        // `crate::abstract_interp::path_domain::classify_path_primitive`.
+        // Path-primitive calls — per-language classifiers map known stdlib
+        // sanitisers (`fs::canonicalize`, `os.path.normpath`,
+        // `path.normalize`, `filepath.Clean`, `Path.normalize()`,
+        // `File.expand_path`, `realpath`, `std::filesystem::canonical`)
+        // onto a PathFact effect on the result.  See
+        // `crate::abstract_interp::path_domain::classify_path_primitive_for_lang`.
         //
-        // Separately, `s.replace("..", "")` clears the `..` axis and
-        // `s.replace("/", …)` / `s.replace("\\", …)` clear `absolute`.
-        // These are modelled as pure transfers on the Call result.
+        // Rust-only (gated by inner `matches!(lang, Some(Lang::Rust))` checks):
+        //   * `s.replace("..", "")` clears the `..` axis.
+        //   * Structural variant-wrapper transparency (`Some(s)` / `Ok(s)`).
+        //   * Zero-arg fresh-allocator constructor (`String::new()`).
+        //
+        // Other supported languages get the path-primitive transfer only;
+        // their grammar-specific extensions would slot in here behind a
+        // similar inner gate.
         SsaOp::Call {
             callee,
             args,
             receiver,
-        } if matches!(lang, Some(Lang::Rust)) => {
+        } if lang.is_some() => {
             // Determine the "input" SSA value: receiver for method calls,
             // first positional arg for free-function calls.
             let input_val = receiver
@@ -3813,12 +3845,20 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                 .map(|v| abs.get(v).path)
                 .unwrap_or_else(PathFact::top);
 
-            // Primary path-producing primitives.
-            if let Some(pf) =
-                crate::abstract_interp::path_domain::classify_path_primitive(callee, &input_fact)
-            {
+            // Primary path-producing primitives — per-language dispatch.
+            let lang_unwrapped = lang.expect("guard ensures lang.is_some()");
+            if let Some(pf) = crate::abstract_interp::path_domain::classify_path_primitive_for_lang(
+                lang_unwrapped,
+                callee,
+                &input_fact,
+            ) {
                 abs.set(inst.value, AbstractValue::with_path_fact(pf));
-            } else {
+            } else if matches!(lang, Some(Lang::Rust)) {
+                // Rust-specific: `.replace(...)` sanitiser, variant-wrapper
+                // transparency, and zero-arg fresh-allocator transfer.
+                // These rely on Rust grammar conventions (scoped `Type::method`,
+                // upper-camel-case variant ctor) that don't generalise.
+                //
                 // `.replace(...)` sanitiser on a string receiver.  The Call
                 // result re-binds the sanitised string; downstream
                 // `Path::new` / `PathBuf::from` carries the cleared axis.

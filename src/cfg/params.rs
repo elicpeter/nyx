@@ -64,6 +64,7 @@ pub(super) fn extract_param_names<'a>(
                 && let Some(txt) = text_of(child, code)
             {
                 names.push(txt);
+                found = true;
             }
             // Fallback for C/C++: look for nested declarator → identifier
             if !found && child.kind() == "parameter_declaration" {
@@ -71,6 +72,21 @@ pub(super) fn extract_param_names<'a>(
                 collect_idents(child, code, &mut tmp);
                 if let Some(last) = tmp.pop() {
                     names.push(last);
+                    found = true;
+                }
+            }
+            // Generic fallback for typed/default parameter wrappers (e.g.
+            // Python `typed_parameter`, `default_parameter`,
+            // `typed_default_parameter`): the wrapper node has no `name`
+            // field but contains the identifier as a child.  Pick the
+            // *first* identifier — that is the parameter name; subsequent
+            // identifiers are part of the type annotation or default
+            // expression.
+            if !found {
+                let mut tmp = Vec::new();
+                collect_idents(child, code, &mut tmp);
+                if let Some(first) = tmp.into_iter().next() {
+                    names.push(first);
                 }
             }
             continue;
