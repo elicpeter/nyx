@@ -841,9 +841,7 @@ fn step_switch(
     // known case (negate-eq refinement). When all cases are known and the
     // refinement makes the environment unsatisfiable, the default path is
     // recorded as Infeasible.
-    if default_reachable
-        && can_fork_per_path(outcomes.len(), work_queue.len(), planned_remaining)
-    {
+    if default_reachable && can_fork_per_path(outcomes.len(), work_queue.len(), planned_remaining) {
         planned_remaining = planned_remaining.saturating_sub(1);
         let mut default_state = ExplorationState {
             sym_state: state.sym_state.clone(),

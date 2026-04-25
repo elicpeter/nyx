@@ -1389,7 +1389,9 @@ fn rename_variables(
             // every entry is None (unknown), so the executor falls back to
             // first-reachable behavior on this terminator.
             let case_values: SmallVec<[Option<crate::constraint::domain::ConstValue>; 4]> =
-                std::iter::repeat_with(|| None).take(targets.len()).collect();
+                std::iter::repeat_with(|| None)
+                    .take(targets.len())
+                    .collect();
             tracing::debug!(
                 block = block_idx,
                 num_succs = succs.len(),
