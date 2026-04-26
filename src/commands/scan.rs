@@ -860,6 +860,35 @@ fn effective_scc_cap() -> usize {
     if o == 0 { SCC_FIXPOINT_SAFETY_CAP } else { o }
 }
 
+/// Observability hook: records the cumulative number of cross-batch
+/// summary refinements (FuncSummary, SsaFuncSummary, body, auth)
+/// persisted by non-recursive topo batches in the most recent
+/// [`run_topo_batches`] invocation.  Intended for the regression tests
+/// that prove the topo-refinement pipeline is wired and producing
+/// observable cross-batch state — see
+/// `tests/topo_pass2_refinement_tests.rs`.  Cheap relaxed load.
+static LAST_TOPO_NONRECURSIVE_REFINEMENTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Returns the cumulative count of non-recursive batch refinements
+/// (summary + ssa-summary + body + auth inserts) persisted to
+/// `global_summaries` during the most recent [`run_topo_batches`] call.
+/// Reset to zero at the start of each invocation.
+pub fn last_topo_nonrecursive_refinements() -> usize {
+    LAST_TOPO_NONRECURSIVE_REFINEMENTS.load(Ordering::Relaxed)
+}
+
+/// Returns `true` when topo-pass-2 cross-batch summary refinement is
+/// enabled.  Default: enabled.  Set `NYX_TOPO_REFINE=0` (or `false`)
+/// to fall back to the legacy non-recursive branch that runs
+/// [`run_rules_on_file`] without persisting refined SSA / body / auth
+/// artifacts to `global_summaries`.
+fn topo_refine_enabled() -> bool {
+    match std::env::var("NYX_TOPO_REFINE") {
+        Ok(v) => !matches!(v.as_str(), "0" | "false" | "FALSE" | "False"),
+        Err(_) => true,
+    }
+}
+
 /// Run pass 2 analysis on a sequence of topo-ordered file batches.
 ///
 /// For batches with mutual recursion, iterates until summaries converge
@@ -897,6 +926,9 @@ fn run_topo_batches(
     // Reset the observability counter for this invocation so tests and
     // diagnostics always see fresh data.
     LAST_SCC_MAX_ITERATIONS.store(0, Ordering::Relaxed);
+    LAST_TOPO_NONRECURSIVE_REFINEMENTS.store(0, Ordering::Relaxed);
+
+    let refine_nonrecursive = topo_refine_enabled();
 
     for (batch_idx, batch) in batches.iter().enumerate() {
         if batch.has_mutual_recursion {
@@ -1227,8 +1259,179 @@ fn run_topo_batches(
                 p.inc_batches_completed(1);
             }
             result.extend(iteration_diags);
+        } else if refine_nonrecursive {
+            // Non-recursive batch with cross-batch refinement.
+            //
+            // Run `analyse_file_fused` so the batch produces refined
+            // FuncSummary / SsaFuncSummary / CalleeSsaBody / AuthCheckSummary
+            // artifacts on top of pass-1's output.  After the batch's
+            // parallel section completes, persist those refinements into
+            // `global_summaries` sequentially.  Subsequent batches in
+            // topo order (caller-most batches) then resolve their call
+            // sites against the refined cross-file context — the final
+            // step in the callee-first topo pipeline that pass-2
+            // sequencing was always meant to deliver.
+            //
+            // Opt out via `NYX_TOPO_REFINE=0` if a precision regression
+            // surfaces; the legacy `run_rules_on_file` branch stays
+            // available for triage.
+            #[allow(clippy::type_complexity)]
+            let batch_results: Vec<(
+                std::path::PathBuf,
+                Vec<Diag>,
+                Vec<crate::summary::FuncSummary>,
+                Vec<(
+                    crate::symbol::FuncKey,
+                    crate::summary::ssa_summary::SsaFuncSummary,
+                )>,
+                Vec<(
+                    crate::symbol::FuncKey,
+                    crate::taint::ssa_transfer::CalleeSsaBody,
+                )>,
+                Vec<(
+                    crate::symbol::FuncKey,
+                    crate::auth_analysis::model::AuthCheckSummary,
+                )>,
+            )> = batch
+                .files
+                .par_iter()
+                .map(|path| {
+                    if let Some(p) = progress {
+                        p.set_current_file(&path.to_string_lossy());
+                    }
+                    let bytes = match std::fs::read(path) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            tracing::warn!(
+                                "pass 2 (non-recursive): cannot read {}: {e}",
+                                path.display()
+                            );
+                            if let Some(l) = logs {
+                                l.warn(
+                                    format!("Cannot read file for pass 2: {e}"),
+                                    Some(path.display().to_string()),
+                                    None,
+                                );
+                            }
+                            pb.inc(1);
+                            if let Some(p) = progress {
+                                p.inc_analyzed(1);
+                            }
+                            return (
+                                path.to_path_buf(),
+                                vec![],
+                                vec![],
+                                vec![],
+                                vec![],
+                                vec![],
+                            );
+                        }
+                    };
+                    match recover_or_propagate(
+                        cfg.scanner.enable_panic_recovery,
+                        path,
+                        logs,
+                        || {
+                            analyse_file_fused(
+                                &bytes,
+                                path,
+                                cfg,
+                                Some(global_summaries),
+                                scan_root,
+                            )
+                        },
+                    ) {
+                        Ok(r) => {
+                            pb.inc(1);
+                            if let Some(p) = progress {
+                                p.inc_analyzed(1);
+                            }
+                            (
+                                path.to_path_buf(),
+                                r.diags,
+                                r.summaries,
+                                r.ssa_summaries,
+                                r.ssa_bodies,
+                                r.auth_summaries,
+                            )
+                        }
+                        Err(e) => {
+                            tracing::warn!("pass 2 (non-recursive): {}: {e}", path.display());
+                            if let Some(l) = logs {
+                                l.warn(
+                                    format!("Pass 2 analysis failed: {e}"),
+                                    Some(path.display().to_string()),
+                                    None,
+                                );
+                            }
+                            pb.inc(1);
+                            if let Some(p) = progress {
+                                p.inc_analyzed(1);
+                            }
+                            (
+                                path.to_path_buf(),
+                                vec![],
+                                vec![],
+                                vec![],
+                                vec![],
+                                vec![],
+                            )
+                        }
+                    }
+                })
+                .collect();
+
+            // Sequential persistence: union refined artifacts back into
+            // `global_summaries` so caller-most batches see them.
+            let mut batch_diags: Vec<Diag> = Vec::new();
+            let mut refined_summaries: usize = 0;
+            let mut refined_ssa: usize = 0;
+            let mut refined_bodies: usize = 0;
+            let mut refined_auth: usize = 0;
+            for (_path, diags, summaries, ssa_summaries, ssa_bodies, auth_summaries) in
+                batch_results
+            {
+                batch_diags.extend(diags);
+                for s in summaries {
+                    let key = s.func_key(root_str_ref);
+                    global_summaries.insert(key, s);
+                    refined_summaries += 1;
+                }
+                for (key, ssa_sum) in ssa_summaries {
+                    global_summaries.insert_ssa(key, ssa_sum);
+                    refined_ssa += 1;
+                }
+                for (key, body) in ssa_bodies {
+                    global_summaries.insert_body(key, body);
+                    refined_bodies += 1;
+                }
+                for (key, auth_sum) in auth_summaries {
+                    global_summaries.insert_auth(key, auth_sum);
+                    refined_auth += 1;
+                }
+            }
+            let total_refinements =
+                refined_summaries + refined_ssa + refined_bodies + refined_auth;
+            LAST_TOPO_NONRECURSIVE_REFINEMENTS
+                .fetch_add(total_refinements, Ordering::Relaxed);
+
+            tracing::debug!(
+                batch = batch_idx,
+                files = batch.files.len(),
+                recursive = false,
+                refined_summaries,
+                refined_ssa,
+                refined_bodies,
+                refined_auth,
+                "non-recursive batch complete (refinements persisted)"
+            );
+            if let Some(p) = progress {
+                p.inc_batches_completed(1);
+            }
+            result.extend(batch_diags);
         } else {
-            // Non-recursive batch: single pass.
+            // Legacy non-recursive batch (NYX_TOPO_REFINE=0): single
+            // pass that discards refined SSA / body / auth artifacts.
             let batch_diags: Vec<Diag> = batch
                 .files
                 .par_iter()
@@ -1267,7 +1470,7 @@ fn run_topo_batches(
                 batch = batch_idx,
                 files = batch.files.len(),
                 recursive = false,
-                "non-recursive batch complete"
+                "non-recursive batch complete (legacy, refinement disabled)"
             );
             if let Some(p) = progress {
                 p.inc_batches_completed(1);
@@ -1507,7 +1710,7 @@ pub(crate) fn scan_filesystem_with_observer(
         );
     }
     let pass1_start = std::time::Instant::now();
-    let global_summaries: GlobalSummaries = {
+    let mut global_summaries: GlobalSummaries = {
         let _span = tracing::info_span!("pass1_fused", files = all_paths.len()).entered();
         let pb = make_progress_bar(
             all_paths.len() as u64,
@@ -1621,6 +1824,13 @@ pub(crate) fn scan_filesystem_with_observer(
         l.info("Building call graph", None);
     }
     let cg_start = std::time::Instant::now();
+    // Install the type-hierarchy index on `global_summaries` BEFORE
+    // building the call graph so the runtime taint engine consults
+    // exactly the same view of virtual dispatch that the call-graph
+    // builder uses to fan out edges.  See
+    // `GlobalSummaries::install_hierarchy` and
+    // `GlobalSummaries::resolve_callee_widened`.
+    global_summaries.install_hierarchy();
     let (call_graph, cg_analysis) = build_and_analyse_call_graph(&global_summaries);
     log_unresolved_callees(&call_graph);
     if let Some(p) = progress {
@@ -2383,6 +2593,13 @@ pub fn scan_with_index_parallel_observer(
         p.set_stage(ScanStage::BuildingCallGraph);
     }
     let cg_start = std::time::Instant::now();
+    // Install the type-hierarchy index on `global_summaries` BEFORE
+    // building the call graph so the runtime taint engine consults
+    // exactly the same view of virtual dispatch that the call-graph
+    // builder uses to fan out edges.  See
+    // `GlobalSummaries::install_hierarchy` and
+    // `GlobalSummaries::resolve_callee_widened`.
+    global_summaries.install_hierarchy();
     let (call_graph, cg_analysis) = build_and_analyse_call_graph(&global_summaries);
     log_unresolved_callees(&call_graph);
     if let Some(p) = progress {

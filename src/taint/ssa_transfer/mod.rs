@@ -7090,18 +7090,61 @@ fn resolve_callee_full(
         }
     }
 
-    // 0.5) Cross-file SSA summaries (GlobalSummaries.ssa_by_key)
+    // 0.5) Cross-file SSA summaries (GlobalSummaries.ssa_by_key) with
+    // optional Phase-6 hierarchy fan-out.
+    //
+    // When the call has an authoritative receiver type AND
+    // `GlobalSummaries::install_hierarchy` has been called AND the
+    // type has recorded sub-types whose `method` overrides exist, the
+    // taint engine sees ALL implementers, not just the super-type's
+    // own definition.  This is the runtime counterpart of the
+    // call-graph builder's `resolve_with_hierarchy` step — without
+    // it, virtual dispatch through a super-type silently lost
+    // sub-type sources / sinks.
     if let Some(gs) = transfer.global_summaries {
-        match gs.resolve_callee(&build_query()) {
-            CalleeResolution::Resolved(target_key) => {
-                if let Some(ssa_sum) = gs.get_ssa(&target_key) {
+        let widened = gs.resolve_callee_widened(&build_query());
+        match widened.len() {
+            0 => {}
+            1 => {
+                if let Some(ssa_sum) = gs.get_ssa(&widened[0]) {
                     return Some(convert_ssa_to_resolved_for_caller(
                         ssa_sum,
                         Some(transfer.namespace),
                     ));
                 }
             }
-            _ => {}
+            _ => {
+                // Hierarchy fan-out: union per-implementer SSA
+                // summaries with "any-impl" semantics so the caller
+                // sees taint from every reachable concrete target.
+                let mut accum: Option<ResolvedSummary> = None;
+                let mut covered: usize = 0;
+                for key in &widened {
+                    if let Some(ssa_sum) = gs.get_ssa(key) {
+                        let r = convert_ssa_to_resolved_for_caller(
+                            ssa_sum,
+                            Some(transfer.namespace),
+                        );
+                        accum = Some(match accum {
+                            None => r,
+                            Some(a) => merge_resolved_summaries_fanout(a, r),
+                        });
+                        covered += 1;
+                    }
+                }
+                if covered > 0 {
+                    tracing::debug!(
+                        callee = %callee,
+                        impls = covered,
+                        widened_total = widened.len(),
+                        "hierarchy fan-out: SSA summaries unioned at call site"
+                    );
+                    return accum;
+                }
+                // None of the widened keys had SSA summaries — fall
+                // through to step 2 (FuncSummary path) which may have
+                // hierarchy-widened FuncSummary entries.
+            }
         }
     }
 
@@ -7151,43 +7194,68 @@ fn resolve_callee_full(
         }
     }
 
-    // 2) Global same-language
+    // 2) Global same-language (FuncSummary path) with Phase-6 hierarchy
+    // fan-out.  Same semantics as step 0.5 but on coarse FuncSummary
+    // entries — the SSA path missed because no implementer had an SSA
+    // summary, so we widen the FuncSummary lookup symmetrically.
     if let Some(gs) = transfer.global_summaries {
-        match gs.resolve_callee(&build_query()) {
-            CalleeResolution::Resolved(target_key) => {
-                if let Some(fs) = gs.get(&target_key) {
-                    return Some(ResolvedSummary {
-                        source_caps: fs.source_caps(),
-                        sanitizer_caps: fs.sanitizer_caps(),
-                        sink_caps: fs.sink_caps(),
-                        param_to_sink: fs
-                            .tainted_sink_params
-                            .iter()
-                            .map(|&i| (i, fs.sink_caps()))
-                            .collect(),
-                        // Carry [`SinkSite`]s from the global FuncSummary
-                        // so cross-file findings can attribute to the
-                        // callee-internal dangerous instruction.
-                        param_to_sink_sites: fs.param_to_sink.clone(),
-                        propagates_taint: fs.propagates_any(),
-                        propagating_params: fs.propagating_params.clone(),
-                        param_container_to_return: vec![],
-                        param_to_container_store: vec![],
-                        return_type: None,
-                        return_abstract: None,
-                        source_to_callback: vec![],
-
-                        receiver_to_return: None,
-
-                        receiver_to_sink: Cap::empty(),
-
-                        abstract_transfer: vec![],
-                        param_return_paths: vec![],
-                        points_to: Default::default(),
-                    });
+        let widened = gs.resolve_callee_widened(&build_query());
+        let convert = |fs: &crate::summary::FuncSummary| ResolvedSummary {
+            source_caps: fs.source_caps(),
+            sanitizer_caps: fs.sanitizer_caps(),
+            sink_caps: fs.sink_caps(),
+            param_to_sink: fs
+                .tainted_sink_params
+                .iter()
+                .map(|&i| (i, fs.sink_caps()))
+                .collect(),
+            // Carry [`SinkSite`]s from the global FuncSummary
+            // so cross-file findings can attribute to the
+            // callee-internal dangerous instruction.
+            param_to_sink_sites: fs.param_to_sink.clone(),
+            propagates_taint: fs.propagates_any(),
+            propagating_params: fs.propagating_params.clone(),
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+            source_to_callback: vec![],
+            receiver_to_return: None,
+            receiver_to_sink: Cap::empty(),
+            abstract_transfer: vec![],
+            param_return_paths: vec![],
+            points_to: Default::default(),
+        };
+        match widened.len() {
+            0 => {}
+            1 => {
+                if let Some(fs) = gs.get(&widened[0]) {
+                    return Some(convert(fs));
                 }
             }
-            CalleeResolution::NotFound | CalleeResolution::Ambiguous(_) => {}
+            _ => {
+                let mut accum: Option<ResolvedSummary> = None;
+                let mut covered: usize = 0;
+                for key in &widened {
+                    if let Some(fs) = gs.get(key) {
+                        let r = convert(fs);
+                        accum = Some(match accum {
+                            None => r,
+                            Some(a) => merge_resolved_summaries_fanout(a, r),
+                        });
+                        covered += 1;
+                    }
+                }
+                if covered > 0 {
+                    tracing::debug!(
+                        callee = %callee,
+                        impls = covered,
+                        widened_total = widened.len(),
+                        "hierarchy fan-out: FuncSummaries unioned at call site"
+                    );
+                    return accum;
+                }
+            }
         }
     }
 
@@ -7407,4 +7475,124 @@ fn convert_ssa_to_resolved_for_caller(
         param_return_paths: ssa_sum.param_return_paths.clone(),
         points_to: ssa_sum.points_to.clone(),
     }
+}
+
+/// Merge two [`ResolvedSummary`] values into a single "any-implementer"
+/// summary suitable for use at a virtual-dispatch call site whose
+/// receiver static type fans out to multiple concrete implementers via
+/// [`crate::callgraph::TypeHierarchyIndex`].
+///
+/// Semantics — designed to keep the engine sound under fan-out:
+///
+/// * **Caps that *grow* the taint signal**
+///   (`source_caps`, `sink_caps`, `receiver_to_sink`,
+///   `propagates_taint`) — **OR**.  Any implementer that introduces
+///   the cap is a valid runtime target, so the union conservatively
+///   covers every dispatch outcome.
+/// * **`sanitizer_caps`** — **AND**.  Only bits sanitized by *every*
+///   implementer can be considered cleared at the call site, since
+///   the dispatch could land on the implementer that doesn't
+///   sanitize.
+/// * **Per-parameter vectors** (`param_to_sink`, `propagating_params`,
+///   `param_container_to_return`, `param_to_container_store`,
+///   `source_to_callback`) — **union**.  An impl that contributes a
+///   propagation/sink at parameter N is a valid runtime path; missing
+///   impls do not subtract.
+/// * **`param_to_sink_sites`** — concatenated per-parameter (dedup
+///   on `SinkSite::PartialEq`).  Each site is independently
+///   emittable; the dedup avoids reporting the same callee-internal
+///   sink twice.
+/// * **SSA-precision fields** (`return_type`, `return_abstract`,
+///   `receiver_to_return`, `abstract_transfer`, `param_return_paths`,
+///   `points_to`) — **drop on disagreement**.  These describe the
+///   precise behavior of *one* function body; merging two
+///   incompatible bodies yields a meaningless composite.  Identity
+///   is preserved when both sides agree exactly (string equality or
+///   PartialEq), keeping single-impl cases lossless.
+fn merge_resolved_summaries_fanout(
+    mut acc: ResolvedSummary,
+    r: ResolvedSummary,
+) -> ResolvedSummary {
+    // Caps + booleans
+    acc.source_caps |= r.source_caps;
+    acc.sanitizer_caps &= r.sanitizer_caps;
+    acc.sink_caps |= r.sink_caps;
+    acc.propagates_taint |= r.propagates_taint;
+    acc.receiver_to_sink |= r.receiver_to_sink;
+
+    // param_to_sink: union per-parameter caps
+    for (idx, caps) in r.param_to_sink {
+        if let Some(slot) = acc.param_to_sink.iter_mut().find(|(i, _)| *i == idx) {
+            slot.1 |= caps;
+        } else {
+            acc.param_to_sink.push((idx, caps));
+        }
+    }
+
+    // param_to_sink_sites: union per-parameter site lists with PartialEq
+    // dedup, so the same callee-internal sink isn't reported twice when
+    // multiple impls share an inherited definition.
+    for (idx, sites) in r.param_to_sink_sites {
+        if let Some(slot) = acc
+            .param_to_sink_sites
+            .iter_mut()
+            .find(|(i, _)| *i == idx)
+        {
+            for site in sites {
+                if !slot.1.iter().any(|s| s == &site) {
+                    slot.1.push(site);
+                }
+            }
+        } else {
+            acc.param_to_sink_sites.push((idx, sites));
+        }
+    }
+
+    // propagating_params: union (any propagator wins)
+    for p in r.propagating_params {
+        if !acc.propagating_params.contains(&p) {
+            acc.propagating_params.push(p);
+        }
+    }
+    for p in r.param_container_to_return {
+        if !acc.param_container_to_return.contains(&p) {
+            acc.param_container_to_return.push(p);
+        }
+    }
+    for pair in r.param_to_container_store {
+        if !acc.param_to_container_store.contains(&pair) {
+            acc.param_to_container_store.push(pair);
+        }
+    }
+
+    // source_to_callback: union per-parameter caps (mirrors param_to_sink)
+    for (idx, caps) in r.source_to_callback {
+        if let Some(slot) = acc.source_to_callback.iter_mut().find(|(i, _)| *i == idx) {
+            slot.1 |= caps;
+        } else {
+            acc.source_to_callback.push((idx, caps));
+        }
+    }
+
+    // SSA-precision fields: drop on any disagreement.
+    if acc.return_type != r.return_type {
+        acc.return_type = None;
+    }
+    if acc.return_abstract != r.return_abstract {
+        acc.return_abstract = None;
+    }
+    if acc.receiver_to_return != r.receiver_to_return {
+        acc.receiver_to_return = None;
+    }
+    if acc.abstract_transfer != r.abstract_transfer {
+        acc.abstract_transfer = Vec::new();
+    }
+    if acc.param_return_paths != r.param_return_paths {
+        acc.param_return_paths = Vec::new();
+    }
+    if acc.points_to != r.points_to {
+        acc.points_to = Default::default();
+    }
+
+    acc
 }

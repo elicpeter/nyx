@@ -3808,3 +3808,402 @@ fn cross_file_devirt_does_not_union_unrelated_findbyids() {
     );
     assert_eq!(cache_sum.tainted_sink_params, vec![0]);
 }
+
+// ── Phase 6 hierarchy fan-out at runtime resolution ────────────────────
+//
+// `GlobalSummaries::resolve_callee_widened` is the runtime counterpart of
+// the call-graph builder's `TypeHierarchyIndex::resolve_with_hierarchy`.
+// These tests pin the contract that *every* concrete implementer is
+// reachable when the receiver type is statically a super-class / trait /
+// interface, with the explicit fall-throughs that preserve today's
+// behaviour when no fan-out applies.
+mod hierarchy_widened_tests {
+    use super::*;
+
+    /// Build a minimal `(FuncKey, FuncSummary)` for a method on the
+    /// given container with optional `hierarchy_edges` carried through.
+    fn java_method(
+        namespace: &str,
+        container: &str,
+        name: &str,
+        arity: usize,
+        sink_bits: u16,
+        hierarchy_edges: Vec<(String, String)>,
+    ) -> (FuncKey, FuncSummary) {
+        let (key, mut summary) = fs_with(
+            namespace,
+            container,
+            name,
+            arity,
+            FuncKind::Method,
+            Some((namespace.len() + container.len() + name.len()) as u32),
+            sink_bits,
+        );
+        summary.hierarchy_edges = hierarchy_edges;
+        (key, summary)
+    }
+
+    /// A1 — no hierarchy installed.  Widening collapses to today's
+    /// single-result behaviour: one key in / one key out.
+    #[test]
+    fn widened_without_hierarchy_returns_single_resolved() {
+        let mut gs = GlobalSummaries::new();
+        let (k, s) = java_method("src/http.java", "HttpClient", "send", 1, 0x01, vec![]);
+        gs.insert(k.clone(), s);
+
+        // Hierarchy is intentionally NOT installed.
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "send",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("HttpClient"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(1),
+        });
+        assert_eq!(widened, vec![k]);
+    }
+
+    /// A2 — hierarchy installed but the receiver type has no recorded
+    /// sub-types.  Falls through to today's single-result behaviour.
+    #[test]
+    fn widened_no_subtypes_returns_single() {
+        let mut gs = GlobalSummaries::new();
+        let (k, s) = java_method("src/http.java", "HttpClient", "send", 1, 0x01, vec![]);
+        gs.insert(k.clone(), s);
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "send",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("HttpClient"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(1),
+        });
+        assert_eq!(widened, vec![k]);
+    }
+
+    /// A3 — hierarchy with one sub-type implementer.  Widening returns
+    /// both the direct receiver match and the sub-type's match.
+    #[test]
+    fn widened_one_subtype_returns_two_keys() {
+        let mut gs = GlobalSummaries::new();
+        // Carrier: ILogger -> ConsoleLogger edge.
+        let (k_iface, s_iface) = java_method(
+            "src/logger.java",
+            "ILogger",
+            "log",
+            1,
+            0x00,
+            vec![("ConsoleLogger".to_string(), "ILogger".to_string())],
+        );
+        let (k_impl, s_impl) =
+            java_method("src/logger.java", "ConsoleLogger", "log", 1, 0x01, vec![]);
+        gs.insert(k_iface.clone(), s_iface);
+        gs.insert(k_impl.clone(), s_impl);
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "log",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("ILogger"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(1),
+        });
+        assert_eq!(
+            widened.len(),
+            2,
+            "expected ILogger + ConsoleLogger fan-out, got {widened:?}"
+        );
+        assert!(widened.contains(&k_iface));
+        assert!(widened.contains(&k_impl));
+    }
+
+    /// A4 — hierarchy with multiple sub-types: every implementer's
+    /// matching method is in the result, deduplicated.
+    #[test]
+    fn widened_multiple_subtypes_returns_all() {
+        let mut gs = GlobalSummaries::new();
+        // Three impls + one interface.  The interface itself has no
+        // body so we omit a method on it (that is the more common
+        // shape — a pure interface plus concrete classes).
+        let edges = vec![
+            ("FileLogger".to_string(), "ILogger".to_string()),
+            ("NetLogger".to_string(), "ILogger".to_string()),
+            ("StdLogger".to_string(), "ILogger".to_string()),
+        ];
+        let (k_file, s_file) =
+            java_method("src/file_logger.java", "FileLogger", "log", 1, 0x01, edges.clone());
+        let (k_net, s_net) =
+            java_method("src/net_logger.java", "NetLogger", "log", 1, 0x02, vec![]);
+        let (k_std, s_std) =
+            java_method("src/std_logger.java", "StdLogger", "log", 1, 0x04, vec![]);
+        gs.insert(k_file.clone(), s_file);
+        gs.insert(k_net.clone(), s_net);
+        gs.insert(k_std.clone(), s_std);
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "log",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("ILogger"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(1),
+        });
+        assert_eq!(widened.len(), 3, "expected three impls, got {widened:?}");
+        assert!(widened.contains(&k_file));
+        assert!(widened.contains(&k_net));
+        assert!(widened.contains(&k_std));
+    }
+
+    /// A5 — the arity filter must apply across the whole fan-out, not
+    /// just the direct-receiver leg.  An implementer with a different
+    /// arity must not leak into the result.
+    #[test]
+    fn widened_arity_filter_applies_across_fanout() {
+        let mut gs = GlobalSummaries::new();
+        let edges = vec![
+            ("OneArg".to_string(), "IBase".to_string()),
+            ("TwoArg".to_string(), "IBase".to_string()),
+        ];
+        let (k_one, s_one) =
+            java_method("src/one.java", "OneArg", "do_it", 1, 0x01, edges.clone());
+        let (k_two, s_two) =
+            java_method("src/two.java", "TwoArg", "do_it", 2, 0x02, vec![]);
+        gs.insert(k_one.clone(), s_one);
+        gs.insert(k_two.clone(), s_two);
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "do_it",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("IBase"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(1),
+        });
+        assert_eq!(widened, vec![k_one], "arity-2 impl must be filtered out");
+    }
+
+    /// A6 — fan-out is bounded at `MAX_HIERARCHY_FANOUT`.  Build a
+    /// hierarchy with more impls than the cap allows and assert the
+    /// result is exactly capped (and that early impls are preserved
+    /// — the cap drops the *tail*, not the head).
+    #[test]
+    fn widened_caps_at_max_hierarchy_fanout() {
+        let cap = GlobalSummaries::MAX_HIERARCHY_FANOUT;
+        let mut gs = GlobalSummaries::new();
+
+        // Build cap+3 impls so we can assert the tail truncates and a
+        // deterministic prefix remains.
+        let extra = 3;
+        let total = cap + extra;
+        let edges: Vec<(String, String)> = (0..total)
+            .map(|i| (format!("Impl{i:02}"), "IBase".to_string()))
+            .collect();
+
+        // Carrier — first impl carries every edge so the index is
+        // populated in one shot.
+        let (k0, s0) =
+            java_method("src/impl00.java", "Impl00", "run", 0, 0x01, edges);
+        gs.insert(k0.clone(), s0);
+        for i in 1..total {
+            let (k, s) = java_method(
+                &format!("src/impl{i:02}.java"),
+                &format!("Impl{i:02}"),
+                "run",
+                0,
+                0x01,
+                vec![],
+            );
+            gs.insert(k, s);
+        }
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "run",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("IBase"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert_eq!(
+            widened.len(),
+            cap,
+            "fan-out must cap at MAX_HIERARCHY_FANOUT={cap}, got {}",
+            widened.len()
+        );
+    }
+
+    /// A7 — when hierarchy widening produces no candidates AND the
+    /// receiver_type lookup is authoritative (Step 1), the secondary
+    /// fall-through goes through `resolve_callee` which returns
+    /// Ambiguous/NotFound rather than silently picking an unrelated
+    /// leaf — exactly the "subset of today's targets, never a
+    /// superset" rule.  Test asserts the empty result is preserved.
+    #[test]
+    fn widened_empty_does_not_silently_pick_unrelated_leaf() {
+        let mut gs = GlobalSummaries::new();
+        // Edge: IUnused has a sub Used, but neither declares
+        // `something`.  An unrelated free function `something` exists
+        // in the same namespace — under today's authoritative
+        // receiver_type rules, that function MUST NOT be picked when
+        // the call is annotated with receiver_type "IUnused".
+        let edges = vec![("Used".to_string(), "IUnused".to_string())];
+        let (k_carrier, s_carrier) = java_method(
+            "src/util.java", "Used", "carrier", 0, 0x00, edges,
+        );
+        let (k_free, s_free) = free_summary("src/app.java", "something", 0, 0x01);
+        gs.insert(k_carrier, s_carrier);
+        gs.insert(k_free, s_free);
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "something",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("IUnused"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert!(
+            widened.is_empty(),
+            "receiver_type IUnused with no matching method must NOT silently \
+             pick an unrelated free function — got {widened:?}"
+        );
+    }
+
+    /// A7b — when hierarchy widening produces nothing AND today's
+    /// `resolve_callee` *does* resolve (no receiver_type, just bare
+    /// leaf or qualifier hint), the fallback returns the single key.
+    /// This pins the secondary-fallback contract on the path where it
+    /// actually matters (no authoritative receiver_type).
+    #[test]
+    fn widened_falls_through_when_resolve_callee_resolves() {
+        let mut gs = GlobalSummaries::new();
+        let (k_free, s_free) = free_summary("src/app.java", "helper", 0, 0x01);
+        gs.insert(k_free.clone(), s_free);
+        gs.install_hierarchy();
+
+        // No receiver_type → first branch of `resolve_callee_widened`
+        // is the single-result fallback path.
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "helper",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: None,
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert_eq!(widened, vec![k_free]);
+    }
+
+    /// A8 — receiver_type is None → no widening; behaves identically
+    /// to `resolve_callee` (single-result wrap).
+    #[test]
+    fn widened_no_receiver_type_collapses_to_resolve_callee() {
+        let mut gs = GlobalSummaries::new();
+        let (k_free, s_free) = free_summary("src/app.java", "helper", 0, 0x01);
+        gs.insert(k_free.clone(), s_free);
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "helper",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: None,
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert_eq!(widened, vec![k_free]);
+    }
+
+    /// A9 — `merge()` must invalidate the cached hierarchy index so a
+    /// post-merge call to `resolve_callee_widened` doesn't look up a
+    /// stale view.  Since `install_hierarchy` is required after merges,
+    /// the test asserts: post-merge, before reinstall, fan-out must
+    /// fall through to single-result behaviour.
+    #[test]
+    fn merge_invalidates_hierarchy_cache() {
+        let mut gs_a = GlobalSummaries::new();
+        let edges = vec![("Sub".to_string(), "Super".to_string())];
+        let (k_super, s_super) =
+            java_method("src/super.java", "Super", "m", 0, 0x00, edges);
+        let (k_sub, s_sub) = java_method("src/sub.java", "Sub", "m", 0, 0x01, vec![]);
+        gs_a.insert(k_super.clone(), s_super);
+        gs_a.insert(k_sub.clone(), s_sub);
+        gs_a.install_hierarchy();
+        // Before merge: fan-out works.
+        let pre_merge = gs_a.resolve_callee_widened(&CalleeQuery {
+            name: "m",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("Super"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert_eq!(pre_merge.len(), 2);
+
+        // Merge in an empty `gs_b` — should invalidate the cached
+        // hierarchy.
+        gs_a.merge(GlobalSummaries::new());
+        assert!(
+            gs_a.hierarchy().is_none(),
+            "merge() must clear the cached hierarchy"
+        );
+
+        // After merge, before reinstall: the resolver must fall back
+        // to single-result behaviour (no fan-out).
+        let post_merge_no_install = gs_a.resolve_callee_widened(&CalleeQuery {
+            name: "m",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("Super"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert_eq!(post_merge_no_install.len(), 1);
+        assert_eq!(post_merge_no_install[0], k_super);
+
+        // After reinstall: fan-out is restored.
+        gs_a.install_hierarchy();
+        let post_merge_reinstalled = gs_a.resolve_callee_widened(&CalleeQuery {
+            name: "m",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("Super"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert_eq!(post_merge_reinstalled.len(), 2);
+        assert!(post_merge_reinstalled.contains(&k_super));
+        assert!(post_merge_reinstalled.contains(&k_sub));
+    }
+}

@@ -1518,3 +1518,223 @@ mod receiver_candidates_field_proj_tests {
         assert_eq!(cands.as_slice(), &[SsaValue(0)]);
     }
 }
+
+// ── Phase 6 hierarchy fan-out: ResolvedSummary union semantics ──────────
+//
+// `merge_resolved_summaries_fanout` is invoked at virtual-dispatch call
+// sites where the receiver's static type has multiple concrete
+// implementers.  These tests pin the merge contract that taint
+// soundness depends on.
+#[cfg(test)]
+mod fanout_merge_tests {
+    use super::super::ResolvedSummary;
+    use super::super::merge_resolved_summaries_fanout;
+    use crate::labels::Cap;
+    use crate::summary::SinkSite;
+    use smallvec::smallvec;
+
+    fn empty() -> ResolvedSummary {
+        ResolvedSummary {
+            source_caps: Cap::empty(),
+            sanitizer_caps: Cap::empty(),
+            sink_caps: Cap::empty(),
+            param_to_sink: vec![],
+            param_to_sink_sites: vec![],
+            propagates_taint: false,
+            propagating_params: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+            source_to_callback: vec![],
+            receiver_to_return: None,
+            receiver_to_sink: Cap::empty(),
+            abstract_transfer: vec![],
+            param_return_paths: vec![],
+            points_to: Default::default(),
+        }
+    }
+
+    /// B1 — caps that grow taint signal (source/sink/receiver_to_sink)
+    /// are unioned.  sanitizer_caps are intersected so only bits
+    /// stripped by EVERY implementer count as cleared at the call site.
+    #[test]
+    fn merge_caps_union_or_intersect() {
+        let mut a = empty();
+        a.source_caps = Cap::from_bits(0b0011).unwrap();
+        a.sanitizer_caps = Cap::from_bits(0b1110).unwrap();
+        a.sink_caps = Cap::from_bits(0b0001).unwrap();
+        a.receiver_to_sink = Cap::from_bits(0b0010).unwrap();
+
+        let mut b = empty();
+        b.source_caps = Cap::from_bits(0b0100).unwrap();
+        b.sanitizer_caps = Cap::from_bits(0b0110).unwrap();
+        b.sink_caps = Cap::from_bits(0b1000).unwrap();
+        b.receiver_to_sink = Cap::from_bits(0b0001).unwrap();
+
+        let m = merge_resolved_summaries_fanout(a, b);
+        assert_eq!(m.source_caps.bits(), 0b0111, "source_caps must OR");
+        assert_eq!(m.sanitizer_caps.bits(), 0b0110, "sanitizer_caps must AND");
+        assert_eq!(m.sink_caps.bits(), 0b1001, "sink_caps must OR");
+        assert_eq!(m.receiver_to_sink.bits(), 0b0011, "receiver_to_sink must OR");
+    }
+
+    /// B2 — propagates_taint is OR'd; propagating_params is the union
+    /// (any implementer's propagator counts).
+    #[test]
+    fn merge_propagation_unions() {
+        let mut a = empty();
+        a.propagates_taint = false;
+        a.propagating_params = vec![0, 2];
+
+        let mut b = empty();
+        b.propagates_taint = true;
+        b.propagating_params = vec![1, 2];
+
+        let m = merge_resolved_summaries_fanout(a, b);
+        assert!(m.propagates_taint, "propagates_taint must be OR'd");
+        let mut params = m.propagating_params.clone();
+        params.sort();
+        assert_eq!(params, vec![0, 1, 2]);
+    }
+
+    /// B3 — param_to_sink merges per-parameter caps (OR).  An impl
+    /// that adds a sink at param N composes with another impl that
+    /// adds a different cap at the same N.
+    #[test]
+    fn merge_param_to_sink_unions_per_param() {
+        let mut a = empty();
+        a.param_to_sink = vec![
+            (0, Cap::from_bits(0b0001).unwrap()),
+            (1, Cap::from_bits(0b0010).unwrap()),
+        ];
+        let mut b = empty();
+        b.param_to_sink = vec![
+            (0, Cap::from_bits(0b0100).unwrap()),
+            (2, Cap::from_bits(0b1000).unwrap()),
+        ];
+
+        let m = merge_resolved_summaries_fanout(a, b);
+        let mut sorted: Vec<(usize, u16)> =
+            m.param_to_sink.iter().map(|(i, c)| (*i, c.bits())).collect();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            vec![(0, 0b0101), (1, 0b0010), (2, 0b1000)],
+            "param_to_sink must union per-parameter caps and preserve disjoint params"
+        );
+    }
+
+    /// B4 — param_to_sink_sites merges per-parameter site lists with
+    /// PartialEq dedup.  The same site appearing in both impls (e.g.
+    /// inherited definition) must not be reported twice.
+    #[test]
+    fn merge_param_to_sink_sites_dedups() {
+        let shared = SinkSite {
+            file_rel: "src/lib.rs".into(),
+            line: 10,
+            col: 5,
+            snippet: "exec(q)".into(),
+            cap: Cap::from_bits(0b0001).unwrap(),
+        };
+        let unique_a = SinkSite {
+            file_rel: "src/a.rs".into(),
+            line: 20,
+            col: 3,
+            snippet: "do_a(q)".into(),
+            cap: Cap::from_bits(0b0001).unwrap(),
+        };
+        let unique_b = SinkSite {
+            file_rel: "src/b.rs".into(),
+            line: 30,
+            col: 7,
+            snippet: "do_b(q)".into(),
+            cap: Cap::from_bits(0b0001).unwrap(),
+        };
+        let mut a = empty();
+        a.param_to_sink_sites = vec![(0, smallvec![shared.clone(), unique_a.clone()])];
+        let mut b = empty();
+        b.param_to_sink_sites = vec![(0, smallvec![shared.clone(), unique_b.clone()])];
+
+        let m = merge_resolved_summaries_fanout(a, b);
+        assert_eq!(m.param_to_sink_sites.len(), 1);
+        let (idx, sites) = &m.param_to_sink_sites[0];
+        assert_eq!(*idx, 0);
+        assert_eq!(sites.len(), 3, "shared site must dedup, unique sites preserved");
+        assert!(sites.iter().any(|s| s == &shared));
+        assert!(sites.iter().any(|s| s == &unique_a));
+        assert!(sites.iter().any(|s| s == &unique_b));
+    }
+
+    /// B5 — SSA-precision fields are dropped on disagreement.  Two
+    /// summaries with different `return_type` collapse to None;
+    /// agreement is preserved.
+    #[test]
+    fn merge_ssa_precision_drops_on_disagreement() {
+        use crate::ssa::type_facts::TypeKind;
+
+        let mut a = empty();
+        a.return_type = Some(TypeKind::Int);
+        let mut b = empty();
+        b.return_type = Some(TypeKind::String);
+        let m = merge_resolved_summaries_fanout(a, b);
+        assert_eq!(
+            m.return_type, None,
+            "disagreeing return_type values must be dropped to None"
+        );
+
+        let mut a = empty();
+        a.return_type = Some(TypeKind::Int);
+        let mut b = empty();
+        b.return_type = Some(TypeKind::Int);
+        let m = merge_resolved_summaries_fanout(a, b);
+        assert_eq!(
+            m.return_type,
+            Some(TypeKind::Int),
+            "agreeing return_type values must be preserved"
+        );
+    }
+
+    /// B6 — abstract_transfer + param_return_paths drop on
+    /// disagreement (precise predicate-path data is not safely
+    /// composable across distinct function bodies).
+    #[test]
+    fn merge_abstract_and_path_data_drops_on_disagreement() {
+        use crate::abstract_interp::AbstractTransfer;
+        use crate::summary::ssa_summary::{ReturnPathTransform, TaintTransform};
+
+        let mut a = empty();
+        a.abstract_transfer = vec![(0, AbstractTransfer::default())];
+        a.param_return_paths = vec![(
+            0,
+            smallvec![ReturnPathTransform {
+                transform: TaintTransform::Identity,
+                path_predicate_hash: 0,
+                known_true: 0,
+                known_false: 0,
+                abstract_contribution: None,
+            }],
+        )];
+        let b = empty(); // empty path data → disagreement on element-by-element compare
+
+        let m = merge_resolved_summaries_fanout(a, b);
+        assert!(
+            m.abstract_transfer.is_empty(),
+            "abstract_transfer must drop on disagreement"
+        );
+        assert!(
+            m.param_return_paths.is_empty(),
+            "param_return_paths must drop on disagreement"
+        );
+    }
+
+    /// B7 — empty + empty = empty (no panic on degenerate inputs).
+    #[test]
+    fn merge_empties_is_identity() {
+        let m = merge_resolved_summaries_fanout(empty(), empty());
+        assert_eq!(m.source_caps, Cap::empty());
+        assert_eq!(m.sink_caps, Cap::empty());
+        assert!(m.param_to_sink.is_empty());
+        assert!(!m.propagates_taint);
+    }
+}
