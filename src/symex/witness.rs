@@ -772,6 +772,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: [(sink_node, sink_val)].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let finding = Finding {
@@ -824,6 +825,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: [(sink_node, SsaValue(5))].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
         let cfg = Cfg::new();
         let finding = Finding {
@@ -882,6 +884,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: [(sink_node, sink_val)].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let finding = Finding {
@@ -941,6 +944,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: [(sink_node, sink_val)].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let finding = Finding {

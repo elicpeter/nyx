@@ -143,6 +143,7 @@ fn inst_used_values(inst: &SsaInst) -> Vec<SsaValue> {
             }
             vals
         }
+        SsaOp::FieldProj { receiver, .. } => vec![*receiver],
         SsaOp::Source
         | SsaOp::Const(_)
         | SsaOp::Param { .. }
@@ -214,6 +215,7 @@ mod tests {
             ],
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
@@ -260,6 +262,7 @@ mod tests {
             }],
             cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
@@ -307,6 +310,7 @@ mod tests {
             }],
             cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
@@ -350,6 +354,7 @@ mod tests {
             }],
             cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
@@ -385,10 +390,139 @@ mod tests {
             }],
             cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
         assert_eq!(removed, 1, "unlabeled dead assignment must be removed");
+        assert!(body.blocks[0].body.is_empty());
+    }
+
+    #[test]
+    fn dce_keeps_field_proj_when_used() {
+        // v0 = source(); v1 = field_proj(v0, "field"); ret v1
+        // The terminator references v1, so the FieldProj's receiver chain
+        // (v0) must stay reachable.
+        let mut cfg: Cfg = Graph::new();
+        let n0 = cfg.add_node(make_cfg_node(StmtKind::Seq));
+        let n1 = cfg.add_node(make_cfg_node(StmtKind::Seq));
+
+        let mut interner = crate::ssa::ir::FieldInterner::new();
+        let fid = interner.intern("field");
+
+        let mut body = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![
+                    SsaInst {
+                        value: SsaValue(0),
+                        op: SsaOp::Source,
+                        cfg_node: n0,
+                        var_name: Some("obj".into()),
+                        span: (0, 5),
+                    },
+                    SsaInst {
+                        value: SsaValue(1),
+                        op: SsaOp::FieldProj {
+                            receiver: SsaValue(0),
+                            field: fid,
+                            projected_type: None,
+                        },
+                        cfg_node: n1,
+                        var_name: Some("obj.field".into()),
+                        span: (10, 20),
+                    },
+                ],
+                terminator: Terminator::Return(Some(SsaValue(1))),
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs: vec![
+                ValueDef {
+                    var_name: Some("obj".into()),
+                    cfg_node: n0,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("obj.field".into()),
+                    cfg_node: n1,
+                    block: BlockId(0),
+                },
+            ],
+            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
+            exception_edges: vec![],
+            field_interner: interner,
+        };
+
+        let removed = eliminate_dead_defs(&mut body, &cfg);
+        assert_eq!(removed, 0, "FieldProj reachable from terminator must survive");
+        assert_eq!(body.blocks[0].body.len(), 2);
+    }
+
+    #[test]
+    fn dce_removes_dead_field_proj() {
+        // v0 = const("x"); v1 = field_proj(v0, "field"); ret (no v1 use)
+        // Both should be removed since neither has a use and neither is
+        // a Source/Call/labeled instruction.
+        let mut cfg: Cfg = Graph::new();
+        let n0 = cfg.add_node(make_cfg_node(StmtKind::Seq));
+        let n1 = cfg.add_node(make_cfg_node(StmtKind::Seq));
+
+        let mut interner = crate::ssa::ir::FieldInterner::new();
+        let fid = interner.intern("field");
+
+        let mut body = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![
+                    SsaInst {
+                        value: SsaValue(0),
+                        op: SsaOp::Const(Some("x".into())),
+                        cfg_node: n0,
+                        var_name: Some("obj".into()),
+                        span: (0, 1),
+                    },
+                    SsaInst {
+                        value: SsaValue(1),
+                        op: SsaOp::FieldProj {
+                            receiver: SsaValue(0),
+                            field: fid,
+                            projected_type: None,
+                        },
+                        cfg_node: n1,
+                        var_name: Some("obj.field".into()),
+                        span: (2, 12),
+                    },
+                ],
+                terminator: Terminator::Return(None),
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs: vec![
+                ValueDef {
+                    var_name: Some("obj".into()),
+                    cfg_node: n0,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("obj.field".into()),
+                    cfg_node: n1,
+                    block: BlockId(0),
+                },
+            ],
+            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
+            exception_edges: vec![],
+            field_interner: interner,
+        };
+
+        let removed = eliminate_dead_defs(&mut body, &cfg);
+        // First pass removes the FieldProj (no uses), second removes the Const
+        // (no uses after FieldProj is gone).
+        assert_eq!(removed, 2, "dead FieldProj and its dead receiver const must be removed");
         assert!(body.blocks[0].body.is_empty());
     }
 
@@ -438,6 +572,7 @@ mod tests {
             ],
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);

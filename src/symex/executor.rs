@@ -1379,6 +1379,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let empty_succs = HashMap::new();
@@ -1436,6 +1437,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let empty_succs = HashMap::new();
@@ -1566,6 +1568,7 @@ mod tests {
             value_defs: vec![make_value_def(b0, n0), make_value_def(b1, n1)],
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let finding = make_finding(n0, n1);
@@ -1671,6 +1674,7 @@ mod tests {
             .into_iter()
             .collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         // Finding path goes through B0 → B1 → B3
@@ -1814,6 +1818,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let finding = Finding {
@@ -1923,6 +1928,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![(b0, b2)],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let mut exc_succs: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
@@ -1987,6 +1993,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![(b0, b2)],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let mut exc_succs: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
@@ -2041,6 +2048,7 @@ mod tests {
                         value: SsaValue(1),
                         op: SsaOp::Call {
                             callee: "JSON.parse".into(),
+                            callee_text: None,
                             args: vec![smallvec![SsaValue(0)]],
                             receiver: None,
                         },
@@ -2091,6 +2099,7 @@ mod tests {
             .into_iter()
             .collect(),
             exception_edges: vec![(b1, b2)],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let finding = Finding {

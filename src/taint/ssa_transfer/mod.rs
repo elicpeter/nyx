@@ -2130,6 +2130,7 @@ fn is_non_data_return(rv: SsaValue, ssa: &SsaBody) -> bool {
                     callee,
                     args,
                     receiver,
+                    ..
                 } => {
                     if receiver.is_none()
                         && args.is_empty()
@@ -2176,6 +2177,7 @@ pub(super) fn detect_variant_inner_fact(
                 callee,
                 args,
                 receiver,
+                ..
             } = &inst.op
             else {
                 return None;
@@ -2395,6 +2397,7 @@ pub(super) fn transfer_inst(
             callee,
             args,
             receiver,
+            ..
         } => {
             // Excluded callees (e.g. router.get, app.post) should not propagate
             // taint through their return value — they are framework scaffolding,
@@ -3583,6 +3586,20 @@ pub(super) fn transfer_inst(
             // lookup (`state.get(operand_val)`) returns `None` for
             // predecessors whose incoming edge carries no definition.
         }
+
+        SsaOp::FieldProj { receiver, .. } => {
+            // Field projection: propagate the receiver's full taint
+            // record to the projected value.  Phase 1 keeps the simple
+            // pass-through behaviour — `obj.f` carries `obj`'s caps and
+            // origins; Phase 4 will introduce field-sensitive narrowing.
+            //
+            // Strict pass-through: if the receiver is untainted, the
+            // projection stays untainted (no entry inserted), preserving
+            // the existing block-state semantics.
+            if let Some(t) = state.get(*receiver).cloned() {
+                state.set(inst.value, t);
+            }
+        }
     }
 
     // Constraint propagation through instructions
@@ -3947,6 +3964,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
             callee,
             args,
             receiver,
+            ..
         } if lang.is_some() => {
             // Determine the "input" SSA value: receiver for method calls,
             // first positional arg for free-function calls.
@@ -5621,6 +5639,7 @@ fn inst_use_values(inst: &SsaInst) -> Vec<SsaValue> {
             }
             vals
         }
+        SsaOp::FieldProj { receiver, .. } => vec![*receiver],
         SsaOp::Source
         | SsaOp::Const(_)
         | SsaOp::Param { .. }

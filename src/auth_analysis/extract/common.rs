@@ -348,6 +348,7 @@ pub fn build_function_unit(
         self_actor_id_vars: state.self_actor_id_vars,
         authorized_sql_vars: state.authorized_sql_vars,
         const_bound_vars: state.const_bound_vars,
+        typed_bounded_vars: HashSet::new(),
     }
 }
 

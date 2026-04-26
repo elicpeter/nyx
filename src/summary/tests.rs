@@ -890,6 +890,7 @@ fn make_callee_body(
             value_defs,
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         },
         opt: crate::ssa::OptimizeResult {
             const_values: std::collections::HashMap::new(),
@@ -1046,6 +1047,7 @@ fn callee_body_serde_with_all_ssa_op_variants() {
             value: SsaValue(7),
             op: SsaOp::Call {
                 callee: "foo".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)], smallvec![SsaValue(1)]],
                 receiver: Some(SsaValue(2)),
             },
@@ -1077,6 +1079,7 @@ fn callee_body_serde_with_all_ssa_op_variants() {
             callee,
             args,
             receiver,
+            ..
         } => {
             assert_eq!(callee, "foo");
             assert_eq!(args.len(), 2);

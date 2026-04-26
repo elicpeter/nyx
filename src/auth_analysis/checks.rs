@@ -429,6 +429,7 @@ fn is_relevant_target_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
     is_id_like(subject)
         && !is_actor_context_subject(subject, unit)
         && !is_const_bound_subject(subject, unit)
+        && !is_typed_bounded_subject(subject, unit)
 }
 
 /// True iff `subject` is a plain identifier whose declaration binds
@@ -442,6 +443,21 @@ fn is_const_bound_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
         return false;
     }
     unit.const_bound_vars.contains(&subject.name)
+}
+
+/// True iff `subject` is a plain identifier that resolves to a
+/// function parameter whose static type is a payload-incompatible
+/// scalar (numeric or boolean — see [`super::apply_typed_bounded_params`]).
+/// Spring `@PathVariable Long userId`, Axum `Path<i64>`, NestJS
+/// `@Param('id') id: number`, and FastAPI `user_id: int` all qualify.
+/// Only matches plain `Identifier`-kind subjects (no base/field) so
+/// member chains like `req.params.id` continue through the regular
+/// checks.
+fn is_typed_bounded_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
+    if subject.base.is_some() || subject.field.is_some() {
+        return false;
+    }
+    unit.typed_bounded_vars.contains(&subject.name)
 }
 
 fn is_actor_context_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
@@ -637,6 +653,7 @@ mod tests {
             self_actor_id_vars: HashSet::new(),
             authorized_sql_vars: HashSet::new(),
             const_bound_vars: HashSet::new(),
+            typed_bounded_vars: HashSet::new(),
         }
     }
 
@@ -755,5 +772,31 @@ mod tests {
         // (different ValueRef shape).
         unit.const_bound_vars.insert("req".into());
         assert!(is_relevant_target_subject(&member("req", "id"), &unit));
+    }
+
+    /// Phase 5 typed-bounded subject exclusion: a parameter whose
+    /// static type was recovered as `Int`/`Bool` (Spring `Long userId`,
+    /// Axum `Path<i64>`, FastAPI `user_id: int`) has its name added to
+    /// `unit.typed_bounded_vars` by `apply_typed_bounded_params`.  The
+    /// subject `userId` then must not be classified as a scoped
+    /// identifier — the framework guarantees the value is numeric and
+    /// cannot drive ownership-bypass.
+    #[test]
+    fn typed_bounded_plain_subjects_are_not_relevant() {
+        let mut unit = empty_unit();
+        unit.typed_bounded_vars.insert("user_id".into());
+
+        // `user_id` matches is_id_like but is bounded by static type.
+        assert!(!is_relevant_target_subject(&plain("user_id"), &unit));
+
+        // Plain `user_id` NOT in the typed-bounded set still flags.
+        let unit2 = empty_unit();
+        assert!(is_relevant_target_subject(&plain("user_id"), &unit2));
+
+        // Member access `req.user_id` is unaffected (only plain
+        // identifiers are exempted — fields/base remain regular
+        // subjects so DTO-shape leaks still flag).
+        unit.typed_bounded_vars.insert("req".into());
+        assert!(is_relevant_target_subject(&member("req", "user_id"), &unit));
     }
 }

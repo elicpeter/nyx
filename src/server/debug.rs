@@ -298,6 +298,7 @@ fn op_view(op: &SsaOp) -> (String, Vec<String>) {
             callee,
             args,
             receiver,
+            ..
         } => {
             let mut ops = Vec::new();
             if let Some(rv) = receiver {
@@ -320,6 +321,15 @@ fn op_view(op: &SsaOp) -> (String, Vec<String>) {
         SsaOp::CatchParam => ("CatchParam".into(), vec![]),
         SsaOp::Nop => ("Nop".into(), vec![]),
         SsaOp::Undef => ("Undef".into(), vec![]),
+        // FieldProj prints field-id (resolution to name requires the
+        // owning SsaBody, which the serializer does not have here).
+        // Debug consumers walk to the owning body when the name matters.
+        SsaOp::FieldProj {
+            receiver, field, ..
+        } => (
+            "FieldProj".into(),
+            vec![format!("recv=v{}", receiver.0), format!("field={}", field.0)],
+        ),
     }
 }
 
@@ -945,7 +955,12 @@ pub fn analyse_function_ssa(
     );
 
     let mut ssa = ssa_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let opt = ssa::optimize_ssa(&mut ssa, &body.graph, Some(analysis.lang));
+    let opt = ssa::optimize_ssa_with_param_types(
+        &mut ssa,
+        &body.graph,
+        Some(analysis.lang),
+        &body.meta.param_types,
+    );
 
     Ok((ssa, opt))
 }

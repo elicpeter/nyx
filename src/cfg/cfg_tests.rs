@@ -1107,6 +1107,7 @@ fn clone_preserves_all_sub_structs() {
         kind: StmtKind::Call,
         call: CallMeta {
             callee: Some("foo".into()),
+            callee_text: Some("obj.foo".into()),
             outer_callee: Some("bar".into()),
             callee_span: Some((7, 17)),
             call_ordinal: 5,

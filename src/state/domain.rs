@@ -160,6 +160,24 @@ impl Lattice for AuthDomainState {
 
 // ── ProductState ─────────────────────────────────────────────────────────
 
+/// Per-chain-receiver proxy tracking entry.
+///
+/// The state machine carries this for every chained-receiver resource
+/// proxy call (`c.mu.Lock()`, `c.writer.header.set(...)`).  Stored in
+/// [`ProductState::chain_proxies`] keyed by the joined chain text
+/// (e.g. `"c.mu"`, `"c.writer.header"`) so distinct field projections
+/// of the same chain root are tracked independently.
+///
+/// Chain-keyed proxy state is the Phase 3 replacement for the single-dot
+/// band-aid that conservatively dropped chain receivers entirely — chain
+/// receivers are now first-class, semantically distinct from their root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChainProxyState {
+    pub lifecycle: ResourceLifecycle,
+    pub class_group: crate::cfg::BodyId,
+    pub acquire_span: (usize, usize),
+}
+
 /// Composable product of resource and auth domains.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProductState {
@@ -173,6 +191,20 @@ pub struct ProductState {
     /// Used by `extract_findings` to attribute leaks to the original resource
     /// operation (e.g., fs.openSync at line 7) rather than the proxy call.
     pub proxy_acquire_spans: HashMap<SymbolId, (usize, usize)>,
+    /// Per-chain-receiver proxy tracking, keyed by joined chain text
+    /// (`"c.mu"`, `"c.writer.header"`).  Each chain receiver has its own
+    /// lifecycle, class group, and acquire span — independent of both the
+    /// chain root and any other chain.  Phase 3 of the field-projections
+    /// rollout introduces this map; consumers that previously used
+    /// [`receiver_class_group`] for chain receivers (via the deleted
+    /// single-dot band-aid) now route through here for 2+ dot callees.
+    ///
+    /// Phase 3 ships chain_proxies in tracking-only mode: chain receivers
+    /// that remain OPEN at exit are NOT promoted to leak findings (so the
+    /// addition is strictly behaviour-preserving against the existing
+    /// benchmark).  Phase 4 / a follow-up adds chain-rooted leak findings
+    /// once the receiver-class detection is broad enough to avoid new FPs.
+    pub chain_proxies: HashMap<String, ChainProxyState>,
 }
 
 impl ProductState {
@@ -182,6 +214,7 @@ impl ProductState {
             auth: AuthDomainState::new(),
             receiver_class_group: HashMap::new(),
             proxy_acquire_spans: HashMap::new(),
+            chain_proxies: HashMap::new(),
         }
     }
 }
@@ -193,6 +226,7 @@ impl Lattice for ProductState {
             auth: AuthDomainState::bot(),
             receiver_class_group: HashMap::new(),
             proxy_acquire_spans: HashMap::new(),
+            chain_proxies: HashMap::new(),
         }
     }
 
@@ -202,11 +236,27 @@ impl Lattice for ProductState {
         class_group.extend(other.receiver_class_group.iter());
         let mut proxy_spans = self.proxy_acquire_spans.clone();
         proxy_spans.extend(other.proxy_acquire_spans.iter());
+        // Chain proxies: union, with lifecycle joined per-key so an OPEN
+        // entry on one path remains OPEN if joined with a missing entry
+        // on another path (matches the existing receiver_class_group
+        // semantics).  Last-writer-wins for class_group / acquire_span:
+        // both are stable per chain receiver in practice (a chain root +
+        // field path is monomorphic), so the conflict cases collapse.
+        let mut chain = self.chain_proxies.clone();
+        for (key, other_state) in &other.chain_proxies {
+            chain
+                .entry(key.clone())
+                .and_modify(|e| {
+                    e.lifecycle = e.lifecycle.join(&other_state.lifecycle);
+                })
+                .or_insert_with(|| other_state.clone());
+        }
         Self {
             resource: self.resource.join(&other.resource),
             auth: self.auth.join(&other.auth),
             receiver_class_group: class_group,
             proxy_acquire_spans: proxy_spans,
+            chain_proxies: chain,
         }
     }
 

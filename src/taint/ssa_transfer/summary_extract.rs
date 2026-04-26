@@ -909,6 +909,7 @@ pub(crate) fn extract_container_flow_summary(
                 callee,
                 args,
                 receiver,
+                ..
             } = &inst.op
             {
                 let op = match classify_container_op(callee, lang) {

@@ -608,6 +608,7 @@ mod tests {
             value_defs,
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         }
     }
 

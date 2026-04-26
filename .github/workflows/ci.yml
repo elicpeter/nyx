@@ -213,7 +213,7 @@ jobs:
   benchmark-gate:
     name: benchmark-gate
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
 
@@ -222,6 +222,9 @@ jobs:
           toolchain: stable
           cache: true
           cache-key: benchmark-gate-release
+
+      - name: Build benchmark + perf test binaries
+        run: cargo test --release --all-features --test benchmark_test --test perf_tests --no-run
 
       - name: Accuracy regression gate (P/R/F1)
         run: cargo test --release --all-features --test benchmark_test -- --ignored --nocapture benchmark_evaluation

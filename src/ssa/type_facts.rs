@@ -107,32 +107,41 @@ impl TypeFactResult {
     }
 }
 
-/// Check whether the given sink-operand SSA values are all int-typed for the
-/// sink's capability set.  Returns `false` when `sink_caps` carries no
-/// type-suppressible bits, when `values` is empty, or when any value is not
-/// known to be `TypeKind::Int`.  Shared by the SSA taint engine and the
-/// structural `cfg-unguarded-sink` analysis so both agree on when a sink's
-/// arguments are provably non-injectable.
+/// Check whether the given sink-operand SSA values are all type-safe for
+/// the sink's capability set.  Returns `false` when `sink_caps` carries
+/// no type-suppressible bits, when `values` is empty, or when any value
+/// is not known to be a payload-incompatible scalar type.  Shared by
+/// the SSA taint engine and the structural `cfg-unguarded-sink`
+/// analysis so both agree on when a sink's arguments are provably
+/// non-injectable.
+///
+/// Suppression policy:
+/// * [`TypeKind::Int`] (and float, treated as numeric): suppresses
+///   `SQL_QUERY`, `FILE_IO`, `SHELL_ESCAPE`, `HTML_ESCAPE`, `SSRF` —
+///   numeric values cannot carry the metacharacters required to drive
+///   any of these injection classes.
+/// * [`TypeKind::Bool`]: suppresses every type-suppressible bit —
+///   `true`/`false` cannot carry a payload of any kind.
 pub fn is_type_safe_for_sink(
     values: &[SsaValue],
     sink_caps: crate::labels::Cap,
     type_facts: &TypeFactResult,
 ) -> bool {
     use crate::labels::Cap;
-    // Int-typed values cannot carry injection payloads for these caps:
-    //   SQL_QUERY    — digits can't form meta SQL tokens
-    //   FILE_IO      — digits can't form path traversal sequences
-    //   SHELL_ESCAPE — digits can't form shell metacharacters
-    //   HTML_ESCAPE  — digits can't form HTML metachars (<, >, ", ', &, /, :)
-    //                  in either text or attribute context
-    let type_suppressible = Cap::SQL_QUERY | Cap::FILE_IO | Cap::SHELL_ESCAPE | Cap::HTML_ESCAPE;
+    let type_suppressible =
+        Cap::SQL_QUERY | Cap::FILE_IO | Cap::SHELL_ESCAPE | Cap::HTML_ESCAPE | Cap::SSRF;
     if !sink_caps.intersects(type_suppressible) {
         return false;
     }
     if values.is_empty() {
         return false;
     }
-    values.iter().all(|v| type_facts.is_int(*v))
+    values.iter().all(|v| {
+        let Some(kind) = type_facts.get_type(*v) else {
+            return false;
+        };
+        matches!(kind, TypeKind::Int | TypeKind::Bool)
+    })
 }
 
 /// Infer a type from a constructor, factory, or allocator call.
@@ -394,6 +403,21 @@ pub fn analyze_types(
     consts: &HashMap<SsaValue, ConstLattice>,
     lang: Option<Lang>,
 ) -> TypeFactResult {
+    analyze_types_with_param_types(body, cfg, consts, lang, &[])
+}
+
+/// Same as [`analyze_types`] but seeds [`SsaOp::Param`] values with
+/// per-position [`TypeKind`] facts from `param_types` (parallel-vec to
+/// the function's BodyMeta.params).  An entry of `None` (or an out-of-
+/// range index) leaves the value at the default Param fact (Unknown),
+/// preserving the pre-Phase-3 behaviour.
+pub fn analyze_types_with_param_types(
+    body: &SsaBody,
+    cfg: &Cfg,
+    consts: &HashMap<SsaValue, ConstLattice>,
+    lang: Option<Lang>,
+    param_types: &[Option<TypeKind>],
+) -> TypeFactResult {
     let mut facts: HashMap<SsaValue, TypeFact> = HashMap::new();
 
     // First pass: direct type inference from instruction kind and constant values
@@ -424,7 +448,16 @@ pub fn analyze_types(
                     }
                 }
                 SsaOp::Source => TypeFact::from_kind(TypeKind::String),
-                SsaOp::Param { .. } => TypeFact::unknown(),
+                SsaOp::Param { index } => {
+                    // Seed from the function's BodyMeta.param_types when
+                    // a TypeKind was recovered at CFG construction time.
+                    // Out-of-range / None entries fall back to Unknown,
+                    // matching the pre-Phase-3 behaviour.
+                    match param_types.get(*index).and_then(|t| t.clone()) {
+                        Some(tk) => TypeFact::from_kind(tk),
+                        None => TypeFact::unknown(),
+                    }
+                }
                 SsaOp::SelfParam => TypeFact::from_kind(TypeKind::Object),
                 SsaOp::CatchParam => TypeFact::from_kind(TypeKind::Object),
                 SsaOp::Call { callee, .. } => {
@@ -473,6 +506,14 @@ pub fn analyze_types(
                     // Defer: will be filled in second pass
                     TypeFact::unknown()
                 }
+                // FieldProj: when the projection carries an inferred type
+                // (set during lowering or by future field-type analysis),
+                // honour it; otherwise the field type is unknown until a
+                // points-to / heap query resolves it.
+                SsaOp::FieldProj { projected_type, .. } => match projected_type {
+                    Some(tk) => TypeFact::from_kind(tk.clone()),
+                    None => TypeFact::unknown(),
+                },
                 // Undef contributes no type information — phi joins
                 // pick up the type from the other (defined) operand.
                 SsaOp::Undef => TypeFact::unknown(),
@@ -840,6 +881,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let consts = HashMap::from([
@@ -911,6 +953,7 @@ mod tests {
                         value: SsaValue(0),
                         op: SsaOp::Call {
                             callee: "URL".into(),
+                            callee_text: None,
                             args: vec![],
                             receiver: None,
                         },
@@ -922,6 +965,7 @@ mod tests {
                         value: SsaValue(1),
                         op: SsaOp::Call {
                             callee: "HttpClient.newHttpClient".into(),
+                            callee_text: None,
                             args: vec![],
                             receiver: None,
                         },
@@ -949,6 +993,7 @@ mod tests {
             ],
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let consts = HashMap::new();
@@ -977,6 +1022,159 @@ mod tests {
         assert!(!result.is_type(SsaValue(0), &TypeKind::Url));
         assert!(result.is_int(SsaValue(1)));
         assert_eq!(result.get_type(SsaValue(99)), None);
+    }
+
+    /// Phase 4: Int-typed values must suppress every type-suppressible
+    /// cap — including the freshly-added `SSRF` bit.  Numeric IDs
+    /// cannot rewrite a URL host, cannot form path traversal sequences,
+    /// cannot carry SQL/HTML/shell metacharacters.
+    #[test]
+    fn int_suppresses_every_type_suppressible_cap() {
+        use crate::labels::Cap;
+        let mut facts = HashMap::new();
+        facts.insert(SsaValue(0), TypeFact::from_kind(TypeKind::Int));
+        let result = TypeFactResult { facts };
+
+        for cap in [
+            Cap::SQL_QUERY,
+            Cap::FILE_IO,
+            Cap::SHELL_ESCAPE,
+            Cap::HTML_ESCAPE,
+            Cap::SSRF,
+        ] {
+            assert!(
+                is_type_safe_for_sink(&[SsaValue(0)], cap, &result),
+                "Int must suppress {cap:?}",
+            );
+        }
+        // Caps outside the type-suppressible set never qualify.
+        assert!(!is_type_safe_for_sink(
+            &[SsaValue(0)],
+            Cap::CODE_EXEC,
+            &result
+        ));
+        assert!(!is_type_safe_for_sink(
+            &[SsaValue(0)],
+            Cap::DESERIALIZE,
+            &result
+        ));
+    }
+
+    /// Phase 4: Bool-typed values are even safer than ints — `true` /
+    /// `false` cannot carry any payload and must suppress every
+    /// type-suppressible cap.
+    #[test]
+    fn bool_suppresses_every_type_suppressible_cap() {
+        use crate::labels::Cap;
+        let mut facts = HashMap::new();
+        facts.insert(SsaValue(0), TypeFact::from_kind(TypeKind::Bool));
+        let result = TypeFactResult { facts };
+
+        for cap in [
+            Cap::SQL_QUERY,
+            Cap::FILE_IO,
+            Cap::SHELL_ESCAPE,
+            Cap::HTML_ESCAPE,
+            Cap::SSRF,
+        ] {
+            assert!(
+                is_type_safe_for_sink(&[SsaValue(0)], cap, &result),
+                "Bool must suppress {cap:?}",
+            );
+        }
+    }
+
+    /// String-typed values must NOT trigger suppression — they are the
+    /// canonical injection carrier.  Regression guard so a future
+    /// change to `is_type_safe_for_sink` does not silently silence
+    /// real String-payload findings.
+    #[test]
+    fn string_does_not_trigger_sink_suppression() {
+        use crate::labels::Cap;
+        let mut facts = HashMap::new();
+        facts.insert(SsaValue(0), TypeFact::from_kind(TypeKind::String));
+        let result = TypeFactResult { facts };
+        assert!(!is_type_safe_for_sink(
+            &[SsaValue(0)],
+            Cap::SQL_QUERY,
+            &result
+        ));
+        assert!(!is_type_safe_for_sink(&[SsaValue(0)], Cap::SSRF, &result));
+        assert!(!is_type_safe_for_sink(
+            &[SsaValue(0)],
+            Cap::SHELL_ESCAPE,
+            &result
+        ));
+    }
+
+    /// Phase 3: Param values seeded from `param_types` must surface
+    /// the right TypeKind for downstream sink suppression.  An out-of-
+    /// range index falls back to Unknown (the pre-Phase-3 default).
+    #[test]
+    fn param_types_seed_param_value_facts() {
+        use crate::cfg::Cfg;
+        let n0 = NodeIndex::new(0);
+        let n1 = NodeIndex::new(1);
+        let body = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![
+                    SsaInst {
+                        value: SsaValue(0),
+                        op: SsaOp::Param { index: 0 },
+                        cfg_node: n0,
+                        var_name: Some("user_id".into()),
+                        span: (0, 7),
+                    },
+                    SsaInst {
+                        value: SsaValue(1),
+                        op: SsaOp::Param { index: 99 },
+                        cfg_node: n1,
+                        var_name: Some("oob".into()),
+                        span: (8, 11),
+                    },
+                ],
+                terminator: Terminator::Return(None),
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs: vec![
+                ValueDef {
+                    var_name: Some("user_id".into()),
+                    cfg_node: n0,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("oob".into()),
+                    cfg_node: n1,
+                    block: BlockId(0),
+                },
+            ],
+            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
+            exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+        };
+
+        let consts = HashMap::new();
+        let cfg: Cfg = petgraph::Graph::new();
+        let param_types = vec![Some(TypeKind::Int)];
+
+        let result = analyze_types_with_param_types(
+            &body,
+            &cfg,
+            &consts,
+            Some(Lang::Java),
+            &param_types,
+        );
+        assert_eq!(result.get_type(SsaValue(0)), Some(&TypeKind::Int));
+        // Index 99 is out of range → falls back to Unknown.
+        assert_eq!(result.get_type(SsaValue(1)), Some(&TypeKind::Unknown));
+
+        // Empty slice = pre-Phase-3 behaviour.
+        let result2 = analyze_types(&body, &cfg, &consts, Some(Lang::Java));
+        assert_eq!(result2.get_type(SsaValue(0)), Some(&TypeKind::Unknown));
     }
 
     // ── TypeHierarchy::is_subtype_of ─────────────────────────────────────

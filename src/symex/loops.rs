@@ -387,6 +387,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let info = analyse_loops(&ssa);
@@ -430,6 +431,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let info = analyse_loops(&ssa);
@@ -509,6 +511,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let info = analyse_loops(&ssa);
@@ -569,6 +572,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let info = analyse_loops(&ssa);
@@ -647,6 +651,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let info = analyse_loops(&ssa);
@@ -716,6 +721,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let info = analyse_loops(&ssa);
@@ -748,6 +754,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let info = analyse_loops(&ssa);
@@ -802,6 +809,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let info = analyse_loops(&ssa);
@@ -880,6 +888,7 @@ mod tests {
             ],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let info = analyse_loops(&ssa);
@@ -929,6 +938,7 @@ mod tests {
                         2,
                         SsaOp::Call {
                             callee: "f".into(),
+                            callee_text: None,
                             args: vec![smallvec![SsaValue(1)]],
                             receiver: None,
                         },
@@ -955,6 +965,7 @@ mod tests {
             ],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let info = analyse_loops(&ssa);
@@ -988,6 +999,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let info = analyse_loops(&ssa);

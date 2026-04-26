@@ -213,6 +213,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let (eliminated, copy_map) = copy_propagate(&mut body, &cfg);

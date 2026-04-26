@@ -83,6 +83,7 @@ mod cross_file_tests {
                 ],
                 cfg_node_map: std::collections::HashMap::new(),
                 exception_edges: vec![],
+                field_interner: crate::ssa::ir::FieldInterner::default(),
             },
             opt: crate::ssa::OptimizeResult {
                 const_values: std::collections::HashMap::new(),
@@ -800,6 +801,7 @@ mod primary_sink_location_tests {
                         value: SsaValue(1),
                         op: SsaOp::Call {
                             callee: "dangerous_exec".into(),
+                            callee_text: None,
                             args: vec![smallvec![SsaValue(0)]],
                             receiver: None,
                         },
@@ -827,6 +829,7 @@ mod primary_sink_location_tests {
             ],
             cfg_node_map,
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         }
     }
 
@@ -956,6 +959,7 @@ mod goto_succ_propagation_tests {
             value_defs: vec![],
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let cfg: Cfg = Graph::new();
@@ -1043,6 +1047,7 @@ mod goto_succ_propagation_tests {
             value_defs: vec![],
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
         let cfg: Cfg = Graph::new();
         let interner = SymbolInterner::new();
@@ -1099,6 +1104,7 @@ mod goto_succ_propagation_tests {
             }],
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         }
     }
 
@@ -1283,6 +1289,7 @@ mod goto_succ_propagation_tests {
             }],
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         }
     }
 

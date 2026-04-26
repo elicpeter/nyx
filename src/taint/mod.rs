@@ -592,7 +592,12 @@ fn analyse_body_with_seed(
 
     match ssa_result {
         Ok(mut ssa_body) => {
-            let opt = crate::ssa::optimize_ssa(&mut ssa_body, cfg, Some(lang));
+            let opt = crate::ssa::optimize_ssa_with_param_types(
+                &mut ssa_body,
+                cfg,
+                Some(lang),
+                &body.meta.param_types,
+            );
             if tracing::enabled!(tracing::Level::TRACE) {
                 tracing::trace!(
                     func = body.meta.name.as_deref().unwrap_or("<anon>"),
@@ -1445,7 +1450,12 @@ fn lower_all_functions_from_bodies(
             }
         }
 
-        let opt = crate::ssa::optimize_ssa(&mut func_ssa, &body.graph, Some(lang));
+        let opt = crate::ssa::optimize_ssa_with_param_types(
+            &mut func_ssa,
+            &body.graph,
+            Some(lang),
+            &body.meta.param_types,
+        );
 
         bodies.insert(
             key,

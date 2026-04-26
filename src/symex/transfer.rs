@@ -130,6 +130,19 @@ pub fn transfer_inst(
             state.set(inst.value, SymbolicValue::Unknown);
         }
 
+        SsaOp::FieldProj { receiver, .. } => {
+            // Symbolic field read: model `obj.field` as an opaque value
+            // tied to the projection's SsaValue, and propagate the
+            // receiver's taint to the result so flat root-set tracking
+            // continues to flow taint through chained accesses.
+            //
+            // Phase 4 will refine this to produce a structured `Field`
+            // expression node, enabling sub-field reasoning.  For Phase 1
+            // this conservative pass-through preserves taint reachability.
+            state.set(inst.value, SymbolicValue::Symbol(inst.value));
+            state.propagate_taint(inst.value, std::slice::from_ref(receiver));
+        }
+
         SsaOp::Assign(uses) => {
             let uses_slice: &[_] = uses;
             match uses_slice.len() {
@@ -202,6 +215,7 @@ pub fn transfer_inst(
             callee,
             args,
             receiver,
+            ..
         } => {
             // Collect symbolic values for arguments
             let mut arg_syms: Vec<SymbolicValue> = Vec::new();
@@ -985,6 +999,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         }
     }
 
@@ -1133,6 +1148,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "parseInt".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -1159,6 +1175,7 @@ mod tests {
             2,
             SsaOp::Call {
                 callee: "send".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(1)]],
                 receiver: Some(SsaValue(0)),
             },
@@ -1255,6 +1272,7 @@ mod tests {
             4,
             SsaOp::Call {
                 callee: "toString".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(3)]],
                 receiver: None,
             },
@@ -1567,6 +1585,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "passthrough".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -1632,6 +1651,7 @@ mod tests {
             2,
             SsaOp::Call {
                 callee: "ambig".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)], smallvec![SsaValue(1)]],
                 receiver: None,
             },
@@ -1697,6 +1717,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "sanitize".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -1757,6 +1778,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "enrich".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -1817,6 +1839,7 @@ mod tests {
             0,
             SsaOp::Call {
                 callee: "readEnv".into(),
+                callee_text: None,
                 args: vec![],
                 receiver: None,
             },
@@ -1855,6 +1878,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "unknown_func".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -1892,6 +1916,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "foo".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -2017,6 +2042,7 @@ mod tests {
             2,
             SsaOp::Call {
                 callee: "send".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: Some(SsaValue(1)),
             },
@@ -2092,6 +2118,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "passthrough".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -2222,6 +2249,7 @@ mod tests {
             2,
             SsaOp::Call {
                 callee: "send".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: Some(SsaValue(1)),
             },
@@ -2297,6 +2325,7 @@ mod tests {
             2,
             SsaOp::Call {
                 callee: "send".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: Some(SsaValue(1)),
             },
@@ -2400,6 +2429,7 @@ mod tests {
             2,
             SsaOp::Call {
                 callee: "send".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: Some(SsaValue(1)),
             },

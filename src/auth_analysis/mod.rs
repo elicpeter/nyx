@@ -59,6 +59,7 @@ pub fn run_auth_analysis(
     // (skipped for slug-lookup / unit-test call sites).
     if let Some(types) = var_types {
         apply_var_types_to_model(&mut model, &rules, types);
+        apply_typed_bounded_params(&mut model, types);
     }
 
     // Lift per-function auth-check summaries and synthesise call-site
@@ -215,6 +216,25 @@ fn apply_var_types_to_model(
             };
             if let Some(new_class) = sink_class_for_type(ty, &op.callee, rules) {
                 op.sink_class = Some(new_class);
+            }
+        }
+    }
+}
+
+/// Populate each [`model::AnalysisUnit::typed_bounded_vars`] with the
+/// names of formal parameters whose SSA-inferred [`TypeKind`] is a
+/// payload-incompatible scalar ([`TypeKind::Int`] or
+/// [`TypeKind::Bool`]).  Only parameter-rooted entries are considered;
+/// function-local bindings stay outside this set so a downstream
+/// reassignment from user input (`let id = req.params.id`) never gets
+/// suppressed by accident.
+fn apply_typed_bounded_params(model: &mut model::AuthorizationModel, var_types: &VarTypes) {
+    for unit in &mut model.units {
+        for name in &unit.params {
+            if let Some(ty) = var_types.get(name) {
+                if matches!(ty, TypeKind::Int | TypeKind::Bool) {
+                    unit.typed_bounded_vars.insert(name.clone());
+                }
             }
         }
     }
@@ -680,6 +700,7 @@ mod tests {
             self_actor_id_vars: HashSet::new(),
             authorized_sql_vars: HashSet::new(),
             const_bound_vars: HashSet::new(),
+            typed_bounded_vars: HashSet::new(),
         }
     }
 

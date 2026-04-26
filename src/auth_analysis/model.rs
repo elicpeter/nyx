@@ -203,6 +203,17 @@ pub struct AnalysisUnit {
     /// even when the variable name passes `is_id_like`.  Closes the
     /// gin/context_test.go FP where `id := "id"` triggered the rule.
     pub const_bound_vars: HashSet<String>,
+    /// Function parameter names whose static type maps to a
+    /// payload-incompatible scalar ([`crate::ssa::type_facts::TypeKind::Int`]
+    /// or [`crate::ssa::type_facts::TypeKind::Bool`]).  Populated
+    /// per-file by [`super::apply_typed_bounded_params`] using the
+    /// SSA-derived `VarTypes` map.  Consulted by
+    /// `is_typed_bounded_subject` so parameters like Spring `Long
+    /// userId`, Axum `Path<i64>`, or FastAPI `user_id: int` are not
+    /// classified as scoped-identifier subjects even when their name
+    /// passes `is_id_like` — the framework guarantees the value is a
+    /// number that cannot carry a SQL/file/shell payload.
+    pub typed_bounded_vars: HashSet<String>,
 }
 
 /// Per-function summary of which positional parameters are

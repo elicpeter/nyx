@@ -54,7 +54,7 @@ use literals::{
     has_only_literal_args, is_parameterized_query_call,
 };
 use params::{
-    compute_container_and_kind, extract_param_names, inject_framework_param_sources,
+    compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
     is_configured_terminator,
 };
 
@@ -187,6 +187,18 @@ pub enum BinOp {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CallMeta {
     pub callee: Option<String>,
+    /// Original textual callee path (e.g. `"c.mu.Lock"`) preserved for legacy
+    /// consumers when SSA lowering decomposes a chained-receiver call into a
+    /// `FieldProj` chain plus a bare-method `Call`.
+    ///
+    /// Reserved for the field-projections rollout: CFG construction does NOT
+    /// populate this field today (callee already carries the full path).
+    /// Phase 5 of the rollout will rip out textual `callee.rsplit_once('.')`
+    /// parsing across consumers; this field is the canonical place to read
+    /// the original textual callee when needed (debug/display only — analysis
+    /// code should walk SSA receivers).
+    #[serde(default)]
+    pub callee_text: Option<String>,
     /// When `find_classifiable_inner_call` overrides the primary callee
     /// (e.g. `parts.add(req.getParameter("input"))` → callee becomes
     /// "req.getParameter"), this field preserves the original outer callee
@@ -449,6 +461,13 @@ pub struct BodyMeta {
     pub kind: BodyKind,
     pub name: Option<String>,
     pub params: Vec<String>,
+    /// Per-parameter [`crate::ssa::type_facts::TypeKind`] inferred from
+    /// decorators / annotations / static type text at CFG construction
+    /// time.  Same length as `params`; positions with no recoverable
+    /// type info are `None`.  Strictly additive — when every entry is
+    /// `None`, downstream behaviour is identical to the pre-Phase-1
+    /// engine.
+    pub param_types: Vec<Option<crate::ssa::type_facts::TypeKind>>,
     pub param_count: usize,
     pub span: (usize, usize),
     pub parent_body_id: Option<BodyId>,
@@ -1873,6 +1892,7 @@ pub(super) fn push_node<'a>(
         kind,
         call: CallMeta {
             callee,
+            callee_text: None,
             outer_callee,
             callee_span,
             call_ordinal,
@@ -2764,8 +2784,12 @@ pub(super) fn build_sub<'a>(
             };
 
             let is_anon = is_anon_fn_name(&fn_name);
-            let param_names = extract_param_names(ast, lang, code);
-            let param_count = param_names.len();
+            let param_meta = extract_param_meta(ast, lang, code);
+            let param_count = param_meta.len();
+            let param_names: Vec<String> =
+                param_meta.iter().map(|(n, _)| n.clone()).collect();
+            let param_types: Vec<Option<crate::ssa::type_facts::TypeKind>> =
+                param_meta.iter().map(|(_, t)| t.clone()).collect();
 
             // ── 1b) Compute identity discriminators ───────────────────────────
             let (fn_container, fn_kind) =
@@ -3021,6 +3045,7 @@ pub(super) fn build_sub<'a>(
                     },
                     name: if is_anon { None } else { Some(fn_name.clone()) },
                     params: param_names,
+                    param_types,
                     param_count,
                     span: (ast.start_byte(), ast.end_byte()),
                     parent_body_id: Some(current_body_id),
@@ -3469,6 +3494,7 @@ pub(crate) fn build_cfg<'a>(
             kind: BodyKind::TopLevel,
             name: None,
             params: Vec::new(),
+            param_types: Vec::new(),
             param_count: 0,
             span: (0, code.len()),
             parent_body_id: None,

@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 368
+    "corpus_size": 370
   },
   "cases": [
     {
@@ -11513,6 +11513,33 @@
       "notes": "`realtime::publish_to_user(&user.email, ..)` — self-channel publish with email as self-identity field (website/handlers/social.rs)"
     },
     {
+      "case_id": "rs-auth-typed-extractors-001",
+      "file": "rust/auth/safe_typed_path_int_extractor.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "typed-extractors-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Phase 5: Axum `Path<i64>` is a framework-validated numeric extractor; the parameter cannot carry an injection payload nor bypass ownership, so the rule must not flag."
+    },
+    {
       "case_id": "js-safe-realrepo-001",
       "file": "javascript/safe/safe_dom_globals_and_methods.js",
       "language": "javascript",
@@ -11684,6 +11711,35 @@
       ],
       "disabled": false,
       "notes": "Go method receiver `c *Context` with internal `c.mu.Lock`/`defer c.mu.Unlock` is NOT a leakable resource — the proxy-receiver extractor previously took the root identifier of multi-segment callees (`c.writer.header().set` → `c`) and section 2b's exception-path heuristic ran on Go (gin/context.go:Set/Get/MustGet)"
+    },
+    {
+      "case_id": "go-safe-fieldproj-phase3",
+      "file": "go/safe/safe_chained_receiver_field_proj.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-resource-leak",
+        "state-resource-leak-possible",
+        "cfg-resource-leak"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "state",
+        "negative",
+        "field-projections-phase3-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Phase 3 of the field-projections rollout: chained-receiver method calls (`c.writer.header.set(...)`) must NOT mark the chain root `c` as proxy-acquired.  The single-dot band-aid in state/transfer.rs is replaced by chain_proxies tracking that records each receiver chain as its own entity."
     },
     {
       "case_id": "go-safe-realrepo-003",

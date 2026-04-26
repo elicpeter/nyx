@@ -251,6 +251,7 @@ pub fn backward_transfer(
             callee,
             args,
             receiver,
+            ..
         } => {
             // For Call ops the full demand transfer depends on callee
             // metadata (summary or body).  The driver handles that —
@@ -271,6 +272,15 @@ pub fn backward_transfer(
                 },
                 flat,
             )
+        }
+        SsaOp::FieldProj { receiver, .. } => {
+            // Field projection: demand for `obj.f` flows to `obj`.  Treated
+            // structurally like a single-operand Assign for the backwards
+            // walk — sufficient until Phase 4 introduces field-sensitive
+            // demand discrimination.
+            let mut next: SmallVec<[(SsaValue, DemandState); 4]> = SmallVec::new();
+            next.push((*receiver, demand.clone()));
+            (BackwardStep::Assign, next)
         }
     }
 }
@@ -740,6 +750,7 @@ mod tests {
             ],
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: Vec::new(),
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         (ssa, cfg)
@@ -786,6 +797,7 @@ mod tests {
             value_defs: vec![make_value_def(BlockId(0), c_node)],
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: Vec::new(),
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
         let demand = DemandState::new(Cap::all());
         let (step, next) = backward_transfer(&ssa, SsaValue(0), &demand);
@@ -816,6 +828,7 @@ mod tests {
             value_defs: vec![make_value_def(BlockId(0), p_node)],
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: Vec::new(),
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
         let demand = DemandState::new(Cap::all());
         let (step, _next) = backward_transfer(&ssa, SsaValue(0), &demand);
@@ -901,6 +914,7 @@ mod tests {
             ],
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: Vec::new(),
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let demand = DemandState::new(Cap::all());
@@ -987,6 +1001,7 @@ mod tests {
             ],
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: Vec::new(),
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
 
         let ctx = BackwardsCtx::new(&ssa, &cfg, Lang::JavaScript);

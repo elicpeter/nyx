@@ -2521,6 +2521,7 @@ fn make_test_callee_body(
             value_defs,
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::new(),
         },
         opt: crate::ssa::OptimizeResult {
             const_values: std::collections::HashMap::new(),

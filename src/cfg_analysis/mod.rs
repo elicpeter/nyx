@@ -42,7 +42,12 @@ pub fn build_body_const_facts(body: &crate::cfg::BodyCfg, lang: Lang) -> Option<
         &body.meta.params,
     )
     .ok()?;
-    let opt = crate::ssa::optimize_ssa(&mut ssa, &body.graph, Some(lang));
+    let opt = crate::ssa::optimize_ssa_with_param_types(
+        &mut ssa,
+        &body.graph,
+        Some(lang),
+        &body.meta.param_types,
+    );
     Some(BodyConstFacts {
         ssa,
         const_values: opt.const_values,

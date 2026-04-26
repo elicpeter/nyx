@@ -256,6 +256,7 @@ pub fn analyze(
                     callee,
                     args,
                     receiver,
+                    ..
                 } => {
                     if candidates.contains_key(&inst.value) && is_rust_map_constructor(callee) {
                         continue;
@@ -437,6 +438,7 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         };
         let cfg: Cfg = Graph::new();
         let const_values = HashMap::new();

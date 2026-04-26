@@ -279,6 +279,12 @@ fn eval_inst(inst: &SsaInst, values: &HashMap<SsaValue, ConstLattice>) -> ConstL
         | SsaOp::Param { .. }
         | SsaOp::SelfParam
         | SsaOp::CatchParam => ConstLattice::Varying,
+        // FieldProj: projecting a field is dynamic with respect to the
+        // const-propagation lattice — there is no general way to fold
+        // `obj.field` to a known scalar at this phase.  Returning Varying
+        // matches Call: callers needing field-level constness will go
+        // through the points-to / heap analysis.
+        SsaOp::FieldProj { .. } => ConstLattice::Varying,
         SsaOp::Phi(_) => ConstLattice::Varying, // phis in body shouldn't happen
         SsaOp::Nop => ConstLattice::Varying,
         // Undef contributes no knowledge: `Top` is the lattice identity
@@ -303,6 +309,7 @@ fn inst_uses(inst: &SsaInst) -> Vec<SsaValue> {
             }
             vals
         }
+        SsaOp::FieldProj { receiver, .. } => vec![*receiver],
         SsaOp::Source
         | SsaOp::Const(_)
         | SsaOp::Param { .. }
@@ -626,6 +633,7 @@ mod tests {
             value_defs,
             cfg_node_map,
             exception_edges: Vec::new(),
+            field_interner: crate::ssa::ir::FieldInterner::default(),
         }
     }
 
