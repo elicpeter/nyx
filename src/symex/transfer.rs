@@ -136,9 +136,15 @@ pub fn transfer_inst(
             // receiver's taint to the result so flat root-set tracking
             // continues to flow taint through chained accesses.
             //
-            // Phase 4 will refine this to produce a structured `Field`
-            // expression node, enabling sub-field reasoning.  For Phase 1
-            // this conservative pass-through preserves taint reachability.
+            // Phase 4 deliberately keeps the opaque-Symbol model: without
+            // a field-sensitive heap, a dedicated `Field { receiver, name }`
+            // SymbolicValue variant cannot soundly carry concrete reads
+            // across method boundaries — the witness pipeline already
+            // reconstructs `obj.field` text from `ValueDef.var_name`
+            // (populated by lower.rs to `"base.f1.f2"` for chain projections).
+            // The structured variant is deferred to the field-sensitive
+            // pointer analysis prompt, where heap loads consume `FieldProj`
+            // directly.
             state.set(inst.value, SymbolicValue::Symbol(inst.value));
             state.propagate_taint(inst.value, std::slice::from_ref(receiver));
         }

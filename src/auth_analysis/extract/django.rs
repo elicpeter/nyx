@@ -5,6 +5,7 @@ use super::common::{
     string_literal_value, text, visit_named_nodes,
 };
 use crate::auth_analysis::config::{AuthAnalysisRules, matches_name};
+use crate::labels::bare_method_name;
 use crate::auth_analysis::extract::common::{attach_route_handler, collect_top_level_units};
 use crate::auth_analysis::model::{
     AnalysisUnitKind, AuthorizationModel, CallSite, Framework, HttpMethod,
@@ -55,7 +56,7 @@ fn maybe_collect_django_path(
         return;
     };
     let callee = text(function, bytes);
-    let target = callee.rsplit('.').next().unwrap_or(&callee);
+    let target = bare_method_name(&callee);
     if !matches!(target, "path" | "re_path") {
         return;
     }

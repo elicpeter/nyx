@@ -3185,6 +3185,98 @@ fn insert_ssa_arity_overflow_rekeys() {
     assert!(kept.param_to_sink.is_empty());
 }
 
+/// Audit gap A.2.1.G1 reproducer: a summary whose only param-index
+/// references come from synthetic SSA `Param` ops for external
+/// captures (free identifiers, module imports, unresolved method
+/// names) lands at the original key when no existing entry occupies
+/// it.
+///
+/// This is the case `lower_to_ssa` produces for Java instance/static
+/// methods that reference free identifiers (e.g. `f.close()` where
+/// `close` is treated as an external capture — the synthetic Param 0
+/// then leaks into `param_to_return`/`param_to_sink`).  Without the
+/// audit-gap fix, `reconcile_ssa_summary_key` would synthesise a
+/// disambig and Phase 3's `summaries.get_ssa(caller_key)` lookup
+/// (consuming `typed_call_receivers` at the FuncSummary-aligned key)
+/// would miss.
+#[test]
+fn insert_ssa_arity_overflow_keeps_original_key_when_no_collision() {
+    // Single-file fresh insert: no prior entry at `key` to protect, so
+    // the synthetic-Param overflow is treated as the function's own
+    // signal and lands at the original FuncKey.
+    let mut gs = GlobalSummaries::new();
+    let key = FuncKey {
+        lang: Lang::Java,
+        namespace: "Reader.java".into(),
+        container: "Reader".into(),
+        name: "read".into(),
+        arity: Some(0),
+        ..Default::default()
+    };
+    let summary = SsaFuncSummary {
+        // Synthetic Param-0 for the external `close` identifier inside
+        // the static `read()` body — `param_count == 0` per the source-
+        // level signature.
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        typed_call_receivers: vec![(1, "FileHandle".to_string())],
+        ..Default::default()
+    };
+    gs.insert_ssa(key.clone(), summary.clone());
+
+    let kept = gs
+        .get_ssa(&key)
+        .expect("Reader::read SSA must be reachable at the FuncSummary-aligned key");
+    assert_eq!(kept.typed_call_receivers, summary.typed_call_receivers);
+    // The synthetic Param-0 reference is preserved verbatim — pass-2
+    // analysis still aligns it with the caller's implicit-uses
+    // argument group at the same index.
+    assert_eq!(kept.param_to_return, summary.param_to_return);
+}
+
+/// Companion to `insert_ssa_arity_overflow_keeps_original_key_when_no_collision`:
+/// when both rounds of an iterative scan produce summaries whose
+/// param-index references overflow the FuncKey arity (the same
+/// synthetic-Param signal each round), the second-round insert must
+/// land at the original key (last-writer-wins for the same function),
+/// not split off into a synthetic disambig.
+#[test]
+fn insert_ssa_arity_overflow_iterative_rescan_stays_at_original_key() {
+    let mut gs = GlobalSummaries::new();
+    let key = FuncKey {
+        lang: Lang::Java,
+        namespace: "Reader.java".into(),
+        container: "Reader".into(),
+        name: "read".into(),
+        arity: Some(0),
+        ..Default::default()
+    };
+    let round1 = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        typed_call_receivers: vec![(1, "FileHandle".to_string())],
+        ..Default::default()
+    };
+    gs.insert_ssa(key.clone(), round1);
+
+    // Iteration 2 of the scan loop produces the same shape with
+    // refined typed_call_receivers (e.g. a new constructor type
+    // discovered cross-file).
+    let round2 = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        typed_call_receivers: vec![
+            (1, "FileHandle".to_string()),
+            (2, "Cache".to_string()),
+        ],
+        ..Default::default()
+    };
+    gs.insert_ssa(key.clone(), round2.clone());
+
+    let kept = gs
+        .get_ssa(&key)
+        .expect("iterative-rescan summary must stay at the original key");
+    assert_eq!(kept.typed_call_receivers, round2.typed_call_receivers);
+    assert_eq!(kept.param_to_return, round2.param_to_return);
+}
+
 // ── Primary sink-location attribution — SinkSite round-trips ────────────
 
 #[test]
@@ -3520,8 +3612,15 @@ fn cf4_union_param_return_paths_by_index() {
 }
 
 #[test]
-fn cf4_ssa_summary_fits_arity_rejects_out_of_range_path_idx() {
-    // A path whose param index exceeds the key's arity is incompatible.
+fn cf4_ssa_summary_fits_arity_keeps_out_of_range_path_idx_at_original_key() {
+    // A path whose param index exceeds the key's arity is treated as a
+    // synthetic external-capture artefact (audit gap A.2.1.G1 — see
+    // `project_typed_callgraph_audit_gap_ssa_disambig.md`).  When no
+    // existing entry sits at the key, `insert_ssa` keeps the (untrimmed)
+    // summary at the original key so the SSA FuncKey stays aligned with
+    // the matching FuncSummary FuncKey — Phase 3's
+    // `summaries.get_ssa(caller_key)` lookup (consuming
+    // `typed_call_receivers`) depends on this alignment.
     let bad = SsaFuncSummary {
         param_return_paths: vec![(5, smallvec![rpt(TaintTransform::Identity, 1, 0, 0)])],
         ..Default::default()
@@ -3530,14 +3629,16 @@ fn cf4_ssa_summary_fits_arity_rejects_out_of_range_path_idx() {
         lang: Lang::Rust,
         namespace: "test.rs".into(),
         name: "helper".into(),
-        arity: Some(2), // too small for idx 5
+        arity: Some(2), // too small for idx 5 — synthetic-Param marker
         ..Default::default()
     };
     let mut gs = GlobalSummaries::new();
     gs.insert_ssa(key.clone(), bad);
-    // Reconciliation synthesises a disambig to keep the bad entry under a
-    // different key; the original key stays empty.
-    assert!(gs.get_ssa(&key).is_none());
+    let kept = gs
+        .get_ssa(&key)
+        .expect("synthetic-Param summary inserted at original key");
+    assert_eq!(kept.param_return_paths.len(), 1);
+    assert_eq!(kept.param_return_paths[0].0, 5);
 }
 
 // ── Parameter-granularity points-to summary ─────────────────────────────
@@ -3585,10 +3686,14 @@ fn cf6_ssa_summary_legacy_json_without_points_to_deserialises() {
 }
 
 #[test]
-fn cf6_ssa_summary_fits_arity_rejects_out_of_range_points_to_idx() {
+fn cf6_ssa_summary_fits_arity_keeps_out_of_range_points_to_idx_at_original_key() {
+    // Same arity-overflow handling as `cf4_ssa_summary_fits_arity_*`
+    // for the points-to channel: when the summary references a
+    // synthetic-Param index beyond `key.arity` and no existing entry
+    // occupies the key, `insert_ssa` preserves the FuncKey-aligned
+    // identity by inserting at the original key (audit gap A.2.1.G1).
     use crate::summary::points_to::{AliasKind, AliasPosition, PointsToSummary};
     let mut pts = PointsToSummary::empty();
-    // Index 7 exceeds arity 2 below.
     pts.insert(
         AliasPosition::Param(7),
         AliasPosition::Return,
@@ -3607,8 +3712,10 @@ fn cf6_ssa_summary_fits_arity_rejects_out_of_range_points_to_idx() {
     };
     let mut gs = GlobalSummaries::new();
     gs.insert_ssa(key.clone(), bad);
-    // Reconciliation rekeys the bad entry; the original key is empty.
-    assert!(gs.get_ssa(&key).is_none());
+    let kept = gs
+        .get_ssa(&key)
+        .expect("synthetic-Param points_to summary inserted at original key");
+    assert_eq!(kept.points_to.max_param_index(), Some(7));
 }
 
 /// Phase 4 (typed call-graph devirtualisation): two `findById`

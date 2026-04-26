@@ -23,7 +23,7 @@
 #![allow(clippy::collapsible_if, clippy::unnecessary_map_or)]
 
 use crate::cfg::Cfg;
-use crate::labels::Cap;
+use crate::labels::{bare_method_name, Cap};
 use crate::ssa::ir::*;
 use crate::ssa::pointsto::{ContainerOp, classify_container_op};
 use crate::symbol::Lang;
@@ -588,7 +588,7 @@ fn is_container_literal(text: &str) -> bool {
 /// Check if a callee creates a new container (constructor/factory).
 pub fn is_container_constructor(callee: &str, lang: Lang) -> bool {
     // Extract last segment after '.' or '::' (whichever comes last)
-    let after_dot = callee.rsplit('.').next().unwrap_or(callee);
+    let after_dot = bare_method_name(callee);
     let suffix = after_dot.rsplit("::").next().unwrap_or(after_dot);
     let suffix_lower = suffix.to_ascii_lowercase();
 

@@ -111,9 +111,13 @@ pub enum SsaOp {
         callee: String,
         /// Original textual full path when SSA decomposed a chained receiver.
         /// `None` when the callee was not rewritten — `callee` already holds
-        /// the source-level textual form.  Reserved for legacy display /
-        /// debug consumers; analysis code should walk the SSA receiver chain
-        /// (through `FieldProj` ops) instead.
+        /// the source-level textual form.
+        ///
+        /// **Debug / display only.** Analysis code must walk the SSA receiver
+        /// chain (through `FieldProj` ops) for precise field structure, or
+        /// use [`crate::labels::bare_method_name`] when only the terminal
+        /// method name is needed from a textual callee.
+        #[doc(hidden)]
         #[serde(default)]
         callee_text: Option<String>,
         /// Per-argument SSA value uses.

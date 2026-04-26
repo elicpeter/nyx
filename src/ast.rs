@@ -889,6 +889,20 @@ impl<'a> ParsedFile<'a> {
             self.source.lang_slug,
         );
 
+        // Phase 6 (typed call-graph subtype awareness): every
+        // `FuncSummary` exported from this file carries a copy of the
+        // file's `hierarchy_edges` so the inheritance / impl /
+        // implements relationships persist through SQLite round-trips
+        // and re-merge into `crate::callgraph::TypeHierarchyIndex` at
+        // call-graph build time.  Cheap (one clone per summary) and
+        // strictly additive — `merge_summaries` deduplicates downstream.
+        if !self.file_cfg.hierarchy_edges.is_empty() {
+            let edges = self.file_cfg.hierarchy_edges.clone();
+            for s in &mut out {
+                s.hierarchy_edges = edges.clone();
+            }
+        }
+
         // Rust-specific enrichment: derive the crate-relative module path for
         // this file and parse every top-level `use` declaration into an alias
         // map. The information lets the call graph resolve same-name functions

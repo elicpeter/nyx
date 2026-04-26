@@ -5932,11 +5932,23 @@ fn resolve_type_qualified_labels(
     SmallVec::new()
 }
 
-/// Walk back through `SsaOp::Call.receiver` chains to collect candidate SSA
-/// values for type-fact lookup.  Needed for languages (Rust) where a chain
-/// like `conn.execute(x).unwrap()` is represented as a single outer call
-/// whose receiver is itself a call expression — the stable base identifier
-/// (`conn`) is several receivers up.
+/// Walk back through `SsaOp::Call.receiver` and `SsaOp::FieldProj.receiver`
+/// chains to collect candidate SSA values for type-fact lookup.
+///
+/// Two motivating shapes:
+/// - Rust chained methods: `conn.execute(x).unwrap()` is one outer call whose
+///   receiver is itself a call.  The stable base identifier (`conn`) is
+///   several `Call.receiver` hops up.
+/// - Phase 2 `FieldProj` decomposition (all languages): `c.client.send(req)`
+///   lowers to `v_client = FieldProj(v_c, "client")`, `Call("send", [v_client])`.
+///   The typed root (`c`, of e.g. `RouterContext` type) sits one
+///   `FieldProj.receiver` hop above `v_client`.  Walking through FieldProj
+///   lets `resolve_type_qualified_labels` discover the typed root regardless
+///   of intermediate field accesses.
+///
+/// FieldProj walking runs for every language (it's the universal Phase 2
+/// decomposition).  Call-receiver walking remains Rust-only — other
+/// languages have method-call nesting handled at AST level.
 fn receiver_candidates_for_type_lookup(
     start: SsaValue,
     ssa: Option<&SsaBody>,
@@ -5944,9 +5956,6 @@ fn receiver_candidates_for_type_lookup(
 ) -> SmallVec<[SsaValue; 4]> {
     let mut out: SmallVec<[SsaValue; 4]> = SmallVec::new();
     out.push(start);
-    if !matches!(lang, Lang::Rust) {
-        return out;
-    }
     let Some(body) = ssa else {
         return out;
     };
@@ -5957,11 +5966,19 @@ fn receiver_candidates_for_type_lookup(
         'scan: for block in &body.blocks {
             for inst in block.phis.iter().chain(block.body.iter()) {
                 if inst.value == current {
-                    if let SsaOp::Call {
-                        receiver: Some(rv), ..
-                    } = &inst.op
-                    {
-                        next_receiver = Some(*rv);
+                    match &inst.op {
+                        // Phase 2: FieldProj receiver chain — universal.
+                        SsaOp::FieldProj { receiver, .. } => {
+                            next_receiver = Some(*receiver);
+                        }
+                        // Rust-only: chain through nested Call receivers
+                        // (`conn.execute(x).unwrap()` parsed as one outer call).
+                        SsaOp::Call {
+                            receiver: Some(rv), ..
+                        } if matches!(lang, Lang::Rust) => {
+                            next_receiver = Some(*rv);
+                        }
+                        _ => {}
                     }
                     break 'scan;
                 }
@@ -6962,7 +6979,10 @@ fn resolve_callee_full(
             // Try to resolve the actual function via FuncKey-keyed SSA summaries
             if let Some(ssa_sums) = transfer.ssa_summaries {
                 if let Some(ssa_sum) = ssa_sums.get(real_key) {
-                    return Some(convert_ssa_to_resolved(ssa_sum));
+                    return Some(convert_ssa_to_resolved_for_caller(
+                        ssa_sum,
+                        Some(transfer.namespace),
+                    ));
                 }
             }
             // Try local summaries (already FuncKey-keyed)
@@ -7075,7 +7095,10 @@ fn resolve_callee_full(
         match gs.resolve_callee(&build_query()) {
             CalleeResolution::Resolved(target_key) => {
                 if let Some(ssa_sum) = gs.get_ssa(&target_key) {
-                    return Some(convert_ssa_to_resolved(ssa_sum));
+                    return Some(convert_ssa_to_resolved_for_caller(
+                        ssa_sum,
+                        Some(transfer.namespace),
+                    ));
                 }
             }
             _ => {}
@@ -7307,6 +7330,13 @@ fn effective_param_sanitizer(
 fn convert_ssa_to_resolved(
     ssa_sum: &crate::summary::ssa_summary::SsaFuncSummary,
 ) -> ResolvedSummary {
+    convert_ssa_to_resolved_for_caller(ssa_sum, None)
+}
+
+fn convert_ssa_to_resolved_for_caller(
+    ssa_sum: &crate::summary::ssa_summary::SsaFuncSummary,
+    caller_namespace: Option<&str>,
+) -> ResolvedSummary {
     use crate::summary::ssa_summary::TaintTransform;
 
     let propagating_params: Vec<usize> = ssa_sum
@@ -7331,7 +7361,32 @@ fn convert_ssa_to_resolved(
     // with coordinates of `(0, 0)` (cap-only, no tree/bytes context at
     // extraction time) remain in the list but contribute no primary
     // location — the emission site filters by `SinkSite::line != 0`.
-    let param_to_sink_sites = ssa_sum.param_to_sink.clone();
+    //
+    // Strip same-file sites when `caller_namespace` is supplied: the
+    // caller's own taint analysis already produces a finding at the
+    // callee's internal sink (e.g. closure body's `eval(q)` finding at
+    // pass-1 lexical containment), so promoting `primary_location` at
+    // the call site to the same line collides with that finding under
+    // [`crate::commands::scan::deduplicate_taint_flows`] and silently
+    // drops the call-site finding.  Cross-file sites are preserved
+    // (the other file's analysis can't be deduped against this one).
+    let param_to_sink_sites = if let Some(caller_ns) = caller_namespace {
+        ssa_sum
+            .param_to_sink
+            .iter()
+            .map(|(idx, sites)| {
+                let filtered: SmallVec<[crate::summary::SinkSite; 1]> = sites
+                    .iter()
+                    .filter(|s| s.file_rel.is_empty() || s.file_rel != caller_ns)
+                    .cloned()
+                    .collect();
+                (*idx, filtered)
+            })
+            .filter(|(_, sites)| !sites.is_empty())
+            .collect()
+    } else {
+        ssa_sum.param_to_sink.clone()
+    };
 
     ResolvedSummary {
         source_caps: ssa_sum.source_caps,

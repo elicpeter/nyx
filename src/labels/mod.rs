@@ -1063,6 +1063,29 @@ pub fn normalize_chained_call_for_classify(text: &str) -> String {
     normalize_chained_call(text)
 }
 
+/// Return the bare method-name segment of a callee text.
+///
+/// Centralised replacement for the textual `callee.rsplit('.').next().unwrap_or(callee)`
+/// pattern that used to be scattered across the codebase.
+///
+/// Behaviour-preserving across the Phase 2 SSA chain decomposition rollout:
+/// - When SSA lowering rewrites a chained-receiver call (`c.mu.Lock()` →
+///   `Call("Lock", [v_mu])`), the call's `callee` is already the bare method
+///   name, so this helper is a no-op pass-through.
+/// - For 1-dot callees (`obj.method`) and for languages where Phase 2 lowering
+///   doesn't run yet (PHP/Ruby) the helper still extracts the trailing method
+///   from the textual form, exactly as the old per-callsite split did.
+/// - For bare callees (no dot), it returns the input unchanged.
+///
+/// Use this helper when you need the *terminal* method name from a callee
+/// string regardless of whether the call had a chained receiver. When you
+/// have an `SsaOp::Call` in hand, prefer reading `callee` directly and
+/// walking `receiver` through `FieldProj` ops — that's the precise path.
+/// This helper is the textual fallback for callsites that only see a `&str`.
+pub fn bare_method_name(callee: &str) -> &str {
+    callee.rsplit('.').next().unwrap_or(callee)
+}
+
 /// Normalize a chained method call: strip `()` between `.` segments.
 /// e.g. `r.URL.Query().Get` → `r.URL.Query.Get`
 /// e.g. `r.URL.Query().Get("host")` → `r.URL.Query.Get`
@@ -1259,6 +1282,26 @@ pub fn custom_rule_id(lang: &str, kind: &str, matchers: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bare_method_name_strips_chain() {
+        // No-dot input → returned as-is.
+        assert_eq!(bare_method_name("foo"), "foo");
+        // 1-dot → trailing segment (Phase 2 leaves these alone in SSA).
+        assert_eq!(bare_method_name("obj.method"), "method");
+        // Multi-dot → trailing segment (matches AST-only callees from
+        // PHP/Ruby and any pre-Phase-2 textual paths kept around in
+        // `callee_text` for display).
+        assert_eq!(bare_method_name("a.b.c.method"), "method");
+        // Trailing dot → empty trailing segment, matching the legacy
+        // `rsplit('.').next()` behaviour bit-for-bit.
+        assert_eq!(bare_method_name("foo."), "");
+        // Empty input.
+        assert_eq!(bare_method_name(""), "");
+        // Phase 2 invariant: when SSA decomposed a chain, `callee` is
+        // the bare method already and the helper is a no-op.
+        assert_eq!(bare_method_name("Lock"), "Lock");
+    }
 
     #[test]
     fn handler_param_names_exact_and_prefix() {

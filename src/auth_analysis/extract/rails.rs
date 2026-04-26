@@ -4,6 +4,7 @@ use super::common::{
     named_children, span, text,
 };
 use crate::auth_analysis::config::{AuthAnalysisRules, matches_name, strip_quotes};
+use crate::labels::bare_method_name;
 use crate::auth_analysis::model::{
     AnalysisUnitKind, AuthorizationModel, CallSite, Framework, HttpMethod, RouteRegistration,
 };
@@ -175,7 +176,7 @@ fn class_filter_directives(body: Node<'_>, bytes: &[u8]) -> Vec<FilterDirective>
             continue;
         }
         let callee = call_name(child, bytes);
-        let directive_name = callee.rsplit('.').next().unwrap_or(&callee);
+        let directive_name = bare_method_name(&callee);
         if !matches_name(directive_name, "before_action")
             && !matches_name(directive_name, "prepend_before_action")
             && !matches_name(directive_name, "skip_before_action")

@@ -4,6 +4,7 @@
 //! across all supported languages so that taint flows correctly through
 //! collection operations.
 
+use crate::labels::bare_method_name;
 use crate::symbol::Lang;
 use smallvec::SmallVec;
 
@@ -92,7 +93,7 @@ fn load_indexed(idx_pos: usize) -> Option<ContainerOp> {
 /// Returns `None` if the callee is not a recognised container operation.
 pub fn classify_container_op(callee: &str, lang: Lang) -> Option<ContainerOp> {
     // Extract method name: last segment after '.' (or full name if no dot).
-    let method = callee.rsplit('.').next().unwrap_or(callee);
+    let method = bare_method_name(callee);
 
     match lang {
         Lang::JavaScript | Lang::TypeScript => classify_js(method),

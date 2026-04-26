@@ -4,6 +4,7 @@ use super::common::{
     collect_top_level_units, named_children, span, string_literal_value,
 };
 use crate::auth_analysis::config::{AuthAnalysisRules, matches_name};
+use crate::labels::bare_method_name;
 use crate::auth_analysis::model::{
     AnalysisUnitKind, AuthorizationModel, CallSite, Framework, HttpMethod, RouteRegistration,
 };
@@ -43,7 +44,7 @@ fn collect_before_filters(root: Node<'_>, bytes: &[u8]) -> Vec<CallSite> {
             continue;
         }
         let callee = call_name(child, bytes);
-        let target = callee.rsplit('.').next().unwrap_or(&callee);
+        let target = bare_method_name(&callee);
         if !matches_name(target, "before") {
             continue;
         }
@@ -79,7 +80,7 @@ fn maybe_collect_route(
     model: &mut AuthorizationModel,
 ) {
     let callee = call_name(node, bytes);
-    let route_name = callee.rsplit('.').next().unwrap_or(&callee);
+    let route_name = bare_method_name(&callee);
     let method = match route_name.to_ascii_lowercase().as_str() {
         "get" => HttpMethod::Get,
         "post" => HttpMethod::Post,

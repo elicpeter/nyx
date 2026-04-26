@@ -1,4 +1,5 @@
 use crate::auth_analysis::config::{AuthAnalysisRules, canonical_name, matches_name, strip_quotes};
+use crate::labels::bare_method_name;
 use crate::auth_analysis::model::{
     AnalysisUnit, AnalysisUnitKind, AuthCheck, AuthCheckKind, AuthorizationModel, CallSite,
     Framework, HttpMethod, OperationKind, RouteRegistration, SensitiveOperation, SinkClass,
@@ -1302,7 +1303,7 @@ fn find_authorized_sql_call_in_chain<'tree>(
         }
 
         let callee = call_name(cur, bytes);
-        let last_segment = callee.rsplit('.').next().unwrap_or(callee.as_str());
+        let last_segment = bare_method_name(&callee);
         if is_sql_prepare_method(last_segment) {
             // Check first arg is a string literal that classifies
             // as authorized.
@@ -1451,7 +1452,7 @@ fn single_iter_source_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
         }
         "call_expression" | "call" | "method_invocation" | "method_call_expression" => {
             let callee = call_name(node, bytes);
-            let last = callee.rsplit('.').next().unwrap_or(callee.as_str());
+            let last = bare_method_name(&callee);
             if !matches!(
                 last,
                 "iter" | "iter_mut" | "into_iter" | "values" | "keys" | "drain"
@@ -2581,7 +2582,7 @@ fn accessor_call_value_ref(
     args: &[Node<'_>],
     bytes: &[u8],
 ) -> Option<ValueRef> {
-    let method = callee.rsplit('.').next().unwrap_or(callee);
+    let method = bare_method_name(callee);
     let field = args
         .first()
         .and_then(|arg| string_literal_value(*arg, bytes));

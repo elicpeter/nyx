@@ -23,6 +23,7 @@ mod conditions;
 mod decorators;
 mod dto;
 mod helpers;
+mod hierarchy;
 mod imports;
 mod literals;
 mod params;
@@ -230,12 +231,12 @@ pub struct CallMeta {
     /// consumers when SSA lowering decomposes a chained-receiver call into a
     /// `FieldProj` chain plus a bare-method `Call`.
     ///
-    /// Reserved for the field-projections rollout: CFG construction does NOT
-    /// populate this field today (callee already carries the full path).
-    /// Phase 5 of the rollout will rip out textual `callee.rsplit_once('.')`
-    /// parsing across consumers; this field is the canonical place to read
-    /// the original textual callee when needed (debug/display only — analysis
-    /// code should walk SSA receivers).
+    /// CFG construction does NOT populate this field today (callee already
+    /// carries the full path). It is the canonical place to read the original
+    /// textual callee for **debug/display only** — analysis code should walk
+    /// SSA `FieldProj` receivers (Phase 4) or use the
+    /// [`crate::labels::bare_method_name`] textual fallback (Phase 5).
+    #[doc(hidden)]
     #[serde(default)]
     pub callee_text: Option<String>,
     /// When `find_classifiable_inner_call` overrides the primary callee
@@ -586,6 +587,15 @@ pub struct FileCfg {
     /// Promisify wrapper aliases: local name → wrapped callee name.
     /// Only populated for JS/TS files.
     pub promisify_aliases: PromisifyAliases,
+    /// Phase 6: per-file class / trait / interface hierarchy edges.
+    /// Each entry is `(sub_container, super_container)` after
+    /// language-specific normalisation.  See
+    /// [`crate::cfg::hierarchy`] for the per-language extraction
+    /// rules and [`crate::callgraph::TypeHierarchyIndex`] for the
+    /// downstream consumer.  Empty for languages without an
+    /// extractor (Go, C) and for files with no inheritance / impl
+    /// declarations.
+    pub hierarchy_edges: Vec<(String, String)>,
 }
 
 impl FileCfg {
@@ -3656,11 +3666,22 @@ pub(crate) fn build_cfg<'a>(
     // Phase 6: same hygiene for the DTO map.
     DTO_CLASSES.with(|cell| cell.borrow_mut().clear());
 
+    // Phase 6 (typed call-graph subtype awareness): collect every
+    // declared inheritance / impl / implements relationship in the
+    // file.  Per-language extractor in `cfg::hierarchy`; empty for
+    // Go and C.  Each `(sub, super)` pair gets duplicated onto every
+    // FuncSummary produced for the file by
+    // `crate::cfg::export_summaries` so the information persists
+    // through SQLite round-trips and re-merges into
+    // `crate::callgraph::TypeHierarchyIndex` at call-graph build time.
+    let hierarchy_edges = hierarchy::collect_hierarchy_edges(tree.root_node(), lang, code);
+
     FileCfg {
         bodies,
         summaries,
         import_bindings,
         promisify_aliases,
+        hierarchy_edges,
     }
 }
 
@@ -3791,6 +3812,10 @@ pub(crate) fn export_summaries(
             module_path: None,
             rust_use_map: None,
             rust_wildcards: None,
+            // Phase 6 hierarchy edges live on `FileCfg`, not on the
+            // graph-local `FuncSummaries`.  `ParsedFile::export_summaries_with_root`
+            // attaches them after this transform returns.
+            hierarchy_edges: Vec::new(),
         })
         .collect()
 }

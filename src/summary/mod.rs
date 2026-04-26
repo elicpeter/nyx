@@ -403,6 +403,31 @@ pub struct FuncSummary {
     /// alias.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust_wildcards: Option<Vec<String>>,
+
+    /// Per-file class / trait / interface hierarchy edges captured at
+    /// CFG-construction time.  Each entry is
+    /// `(sub_container, super_container)` after language-specific
+    /// normalisation:
+    ///
+    /// * Java `class X extends Y` → `(X, Y)`; `implements I, J` → `(X, I)`, `(X, J)`
+    /// * Rust `impl Trait for Type` → `(Type, Trait)`
+    /// * TypeScript `class X extends Y implements I` → `(X, Y)`, `(X, I)`
+    /// * Python `class X(A, B)` → `(X, A)`, `(X, B)`
+    /// * PHP `class X extends Y implements I` → `(X, Y)`, `(X, I)`
+    /// * Ruby `class X < Y` → `(X, Y)`
+    /// * C++ `class X : public Y` → `(X, Y)`
+    ///
+    /// Empty for files with no declared inheritance / impl
+    /// relationships and for Go (which uses implicit interface
+    /// satisfaction — Phase 6 does not try to compute it).
+    ///
+    /// **Per-file duplication.**  Every `FuncSummary` produced from a
+    /// given file carries the **same** `hierarchy_edges` vector so the
+    /// information survives summary-by-summary persistence to SQLite.
+    /// `merge_summaries` deduplicates downstream when building
+    /// [`crate::callgraph::TypeHierarchyIndex`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hierarchy_edges: Vec<(String, String)>,
 }
 
 // ── Cap conversion helpers ──────────────────────────────────────────────
@@ -873,8 +898,74 @@ impl GlobalSummaries {
     /// functions — we synthesize a disambig so both are kept.  Silent
     /// replacement in that case would drop one function's cross-file
     /// taint signal entirely, which the caller cannot recover.
+    ///
+    /// Before reconciliation, drop any parameter-index reference at or
+    /// above `key.arity`.  Such indices come from synthetic SSA `Param`
+    /// ops emitted by scoped lowering for **external captures** (free
+    /// identifiers like `this`, module imports, or unresolved method
+    /// names) and are useful for *intra-file* pass-2 analysis (the
+    /// caller's implicit-uses argument group at the same index aligns
+    /// with the synthetic Param) but never for cross-file consumers,
+    /// which key off the FuncKey arity exclusively.  Without the trim,
+    /// `ssa_summary_fits_arity` would reject the summary and
+    /// `reconcile_ssa_summary_key` would synthesise a disambig that
+    /// uncouples the SSA FuncKey from the matching FuncSummary FuncKey
+    /// (audit gap A.2.1.G1 —
+    /// `project_typed_callgraph_audit_gap_ssa_disambig.md`).
     pub fn insert_ssa(&mut self, key: FuncKey, summary: SsaFuncSummary) {
-        let key = self.reconcile_ssa_summary_key(key, &summary);
+        // The summary may reference a parameter index ≥ `key.arity` when
+        // scoped SSA lowering synthesised `Param` ops for **external
+        // captures** (free identifiers like `this`, module imports,
+        // unresolved method names) — see audit gap A.2.1.G1
+        // (`project_typed_callgraph_audit_gap_ssa_disambig.md`).  These
+        // synthetic refs are useful inside the file they were extracted
+        // in (the caller's implicit-uses argument group at the same
+        // index aligns with the synthetic Param) and stay useful when
+        // resolved cross-file by name from this map (the same
+        // implicit-uses alignment applies).  But they would trip
+        // [`ssa_summary_fits_arity`] inside [`reconcile_ssa_summary_key`],
+        // forcing a synthetic disambig that uncouples the SSA FuncKey
+        // from the matching FuncSummary FuncKey — and Phase 3's
+        // `summaries.get_ssa(caller_key)` lookup (consuming
+        // `typed_call_receivers` at the FuncSummary-aligned key) would
+        // miss.
+        //
+        // Resolution rule (applies only when `summary` does not fit
+        // arity):
+        //
+        // * **No existing entry, or existing entry also has out-of-range
+        //   refs** — keep the (untrimmed) summary at the original key,
+        //   bypassing the disambig synthesis.  Phase 3 finds the entry
+        //   under the FuncSummary's own disambig; cross-file resolvers
+        //   find the same entry with its full per-param signal
+        //   (closures, lambdas, captured-var sinks).  The "existing also
+        //   has out-of-range refs" branch covers the iterative-rescan
+        //   case where round 2's incoming summary lands on top of round
+        //   1's already-installed copy of the same function.
+        //
+        // * **Existing entry fits arity (legit) but new doesn't** — fall
+        //   back to the disambig synthesis.  This preserves the
+        //   `insert_ssa_arity_overflow_rekeys` invariant: a structurally
+        //   incompatible incoming summary (different function sharing
+        //   name + container + arity, with param refs at indices that
+        //   don't even exist in the legitimate function) cannot
+        //   dethrone the existing entry by silent overwrite.  Both
+        //   summaries survive — the existing one at the original key,
+        //   the new one at the synthesised disambig.
+        let key = if key.arity.is_some() && !ssa_summary_fits_arity(&summary, key.arity) {
+            let existing_also_overflows = self
+                .ssa_by_key
+                .get(&key)
+                .is_some_and(|existing| !ssa_summary_fits_arity(existing, key.arity));
+            let existing_present = self.ssa_by_key.contains_key(&key);
+            if !existing_present || existing_also_overflows {
+                key
+            } else {
+                self.reconcile_ssa_summary_key(key, &summary)
+            }
+        } else {
+            self.reconcile_ssa_summary_key(key, &summary)
+        };
         self.ssa_by_key.insert(key, summary);
     }
 

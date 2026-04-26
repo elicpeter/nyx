@@ -1319,3 +1319,202 @@ mod goto_succ_propagation_tests {
         );
     }
 }
+
+// ── Phase 4.2: receiver_candidates_for_type_lookup walks FieldProj ──────
+//
+// After Phase 2 SSA decomposition, `c.client.send(req)` lowers to
+//   v_c      = Param("c", 0)
+//   v_client = FieldProj(v_c, "client")
+//   v_call   = Call("send", receiver: v_client, args: [v_req])
+//
+// The `receiver` of the outer call is `v_client`, not `v_c`.  For
+// type-qualified label resolution to find the typed root (`c` of e.g.
+// `RouterContext`), the candidate walk must traverse FieldProj receivers
+// in addition to the existing Rust-only Call.receiver chain.  These tests
+// pin the FieldProj-walking contract.
+#[cfg(test)]
+mod receiver_candidates_field_proj_tests {
+    use super::super::*;
+    use crate::symbol::Lang;
+    use petgraph::graph::NodeIndex;
+    use smallvec::smallvec;
+    use std::collections::HashMap;
+
+    fn empty_value_def(name: &str) -> ValueDef {
+        ValueDef {
+            var_name: Some(name.into()),
+            cfg_node: NodeIndex::new(0),
+            block: BlockId(0),
+        }
+    }
+
+    /// Build a one-block SSA body for `c.client.send(req)`:
+    ///   v0 = Param(c, 0)
+    ///   v1 = Param(req, 1)
+    ///   v2 = FieldProj(v0, "client")
+    ///   v3 = Call("send", receiver: v2, args: [v1])
+    fn body_with_field_proj_chain() -> SsaBody {
+        let mut interner = crate::ssa::ir::FieldInterner::default();
+        let client_id = interner.intern("client");
+        let blocks = vec![SsaBlock {
+            id: BlockId(0),
+            phis: vec![],
+            body: vec![
+                SsaInst {
+                    value: SsaValue(0),
+                    op: SsaOp::Param { index: 0 },
+                    cfg_node: NodeIndex::new(0),
+                    var_name: Some("c".into()),
+                    span: (0, 0),
+                },
+                SsaInst {
+                    value: SsaValue(1),
+                    op: SsaOp::Param { index: 1 },
+                    cfg_node: NodeIndex::new(0),
+                    var_name: Some("req".into()),
+                    span: (0, 0),
+                },
+                SsaInst {
+                    value: SsaValue(2),
+                    op: SsaOp::FieldProj {
+                        receiver: SsaValue(0),
+                        field: client_id,
+                        projected_type: None,
+                    },
+                    cfg_node: NodeIndex::new(0),
+                    var_name: Some("c.client".into()),
+                    span: (0, 0),
+                },
+                SsaInst {
+                    value: SsaValue(3),
+                    op: SsaOp::Call {
+                        callee: "send".into(),
+                        callee_text: Some("c.client.send".into()),
+                        args: vec![smallvec![SsaValue(1)]],
+                        receiver: Some(SsaValue(2)),
+                    },
+                    cfg_node: NodeIndex::new(0),
+                    var_name: Some("c.client.send".into()),
+                    span: (0, 0),
+                },
+            ],
+            terminator: Terminator::Return(Some(SsaValue(3))),
+            preds: smallvec![],
+            succs: smallvec![],
+        }];
+        SsaBody {
+            blocks,
+            entry: BlockId(0),
+            value_defs: vec![
+                empty_value_def("c"),
+                empty_value_def("req"),
+                empty_value_def("c.client"),
+                empty_value_def("c.client.send"),
+            ],
+            cfg_node_map: HashMap::new(),
+            exception_edges: vec![],
+            field_interner: interner,
+        }
+    }
+
+    #[test]
+    fn field_proj_receiver_walks_to_typed_root_in_go() {
+        // Go is not Rust, so pre-Phase-4 the candidate walk would have
+        // returned ONLY the immediate receiver (v2 = FieldProj). With
+        // Phase 4 we walk through FieldProj.receiver to recover v0 (the
+        // typed root `c`).
+        let body = body_with_field_proj_chain();
+        let cands = super::super::receiver_candidates_for_type_lookup(
+            SsaValue(2),
+            Some(&body),
+            Lang::Go,
+        );
+        assert!(cands.contains(&SsaValue(2)), "starts with the immediate receiver");
+        assert!(
+            cands.contains(&SsaValue(0)),
+            "must walk FieldProj.receiver to reach the typed root v0 (`c`); got {cands:?}",
+        );
+    }
+
+    #[test]
+    fn field_proj_receiver_walks_in_python_and_java() {
+        let body = body_with_field_proj_chain();
+        for lang in [Lang::Python, Lang::Java, Lang::JavaScript, Lang::TypeScript] {
+            let cands = super::super::receiver_candidates_for_type_lookup(
+                SsaValue(2),
+                Some(&body),
+                lang,
+            );
+            assert!(
+                cands.contains(&SsaValue(0)),
+                "{:?}: FieldProj.receiver walk must reach v0; got {cands:?}",
+                lang,
+            );
+        }
+    }
+
+    #[test]
+    fn rust_walks_call_receiver_and_field_proj() {
+        // Rust still walks Call.receiver (chained `.unwrap()` shape), and
+        // now ALSO walks FieldProj.receiver for any intermediate field
+        // accesses in the chain.
+        let body = body_with_field_proj_chain();
+        let cands = super::super::receiver_candidates_for_type_lookup(
+            SsaValue(2),
+            Some(&body),
+            Lang::Rust,
+        );
+        assert!(cands.contains(&SsaValue(0)));
+    }
+
+    #[test]
+    fn no_ssa_body_returns_only_start() {
+        let cands = super::super::receiver_candidates_for_type_lookup(
+            SsaValue(2),
+            None,
+            Lang::Go,
+        );
+        assert_eq!(cands.as_slice(), &[SsaValue(2)]);
+    }
+
+    #[test]
+    fn cycle_safety_no_infinite_loop_on_self_ref() {
+        // Pathological: a FieldProj whose receiver is itself.  Should not
+        // infinite-loop; should bail after one step (out.contains check).
+        let mut interner = crate::ssa::ir::FieldInterner::default();
+        let f_id = interner.intern("self_ref");
+        let blocks = vec![SsaBlock {
+            id: BlockId(0),
+            phis: vec![],
+            body: vec![SsaInst {
+                value: SsaValue(0),
+                op: SsaOp::FieldProj {
+                    receiver: SsaValue(0),
+                    field: f_id,
+                    projected_type: None,
+                },
+                cfg_node: NodeIndex::new(0),
+                var_name: None,
+                span: (0, 0),
+            }],
+            terminator: Terminator::Return(Some(SsaValue(0))),
+            preds: smallvec![],
+            succs: smallvec![],
+        }];
+        let body = SsaBody {
+            blocks,
+            entry: BlockId(0),
+            value_defs: vec![empty_value_def("v0")],
+            cfg_node_map: HashMap::new(),
+            exception_edges: vec![],
+            field_interner: interner,
+        };
+        let cands = super::super::receiver_candidates_for_type_lookup(
+            SsaValue(0),
+            Some(&body),
+            Lang::Go,
+        );
+        // Cycle: only the start value is recorded; no infinite walk.
+        assert_eq!(cands.as_slice(), &[SsaValue(0)]);
+    }
+}

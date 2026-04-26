@@ -1,4 +1,5 @@
 use crate::auth_analysis::model::SinkClass;
+use crate::labels::bare_method_name;
 use crate::utils::config::Config;
 
 #[derive(Debug, Clone)]
@@ -175,7 +176,7 @@ impl AuthAnalysisRules {
     /// receiver — `someElement.addEventListener` is just as
     /// categorically client-side as `document.addEventListener`.
     pub fn callee_has_non_sink_method(&self, callee: &str) -> bool {
-        let last = callee.rsplit('.').next().unwrap_or(callee);
+        let last = bare_method_name(callee);
         let last = last.rsplit("::").next().unwrap_or(last);
         if last.is_empty() {
             return false;
