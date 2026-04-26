@@ -1584,6 +1584,142 @@ fn cpp_source_to_sink() {
     );
 }
 
+/// Phase 2 (cpp-precision): `c_str()` is a const accessor on `std::string`
+/// that returns a pointer to the same buffer.  It must propagate taint from
+/// the receiver to the result so the downstream sink fires.
+#[test]
+fn cpp_c_str_propagates_taint() {
+    let src = b"#include <cstdlib>\n#include <string>\nint main() {\n  char* input = std::getenv(\"X\");\n  std::string s = input;\n  std::system(s.c_str());\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: tainted s.c_str() into system() must fire (Phase 2 c_str passthrough)",
+    );
+}
+
+/// Phase 2: `std::move(x)` returns its argument unchanged in terms of
+/// data flow — the rvalue cast is a representation move, not a sanitiser.
+/// Default propagation collects argument taint into the result.
+#[test]
+fn cpp_std_move_propagates_taint() {
+    let src = b"#include <cstdlib>\n#include <string>\n#include <utility>\nint main() {\n  char* input = std::getenv(\"X\");\n  std::string s = input;\n  std::string moved = std::move(s);\n  std::system(moved.c_str());\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: taint must flow through std::move() into the sink",
+    );
+}
+
+/// Phase 2: `static_cast<T>(x)` is parsed as a call expression by
+/// tree-sitter-cpp; default propagation transports taint from the casted
+/// argument to the result.
+#[test]
+fn cpp_static_cast_propagates_taint() {
+    let src = b"#include <cstdlib>\nint main() {\n  char* input = std::getenv(\"X\");\n  const char* casted = static_cast<const char*>(input);\n  std::system(casted);\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: taint must flow through static_cast<T>() into the sink",
+    );
+}
+
+/// Phase 5 (cpp-precision): a fluent builder chain whose host
+/// argument is tainted should fire on the terminal `.connect()`
+/// SSRF sink.  The chained `.host(...)` / `.port(...)` calls return
+/// the receiver, and default Call-arg propagation puts the tainted
+/// argument on the chain so it reaches the terminal sink.
+#[test]
+fn cpp_builder_chain_user_host_fires() {
+    let src = b"#include <cstdlib>\n#include <string>\nclass Socket {\npublic:\n  static Socket builder() { return Socket(); }\n  Socket& host(const std::string& h) { host_ = h; return *this; }\n  Socket& port(int p) { port_ = p; return *this; }\n  void connect() {}\nprivate:\n  std::string host_;\n  int port_ = 0;\n};\nint main() {\n  char* h = std::getenv(\"X\");\n  Socket::builder().host(h).port(80).connect();\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: tainted host through fluent builder chain must reach terminal connect() (Phase 5)",
+    );
+}
+
+/// Phase 5: a fluent builder chain with a hardcoded host literal
+/// must NOT fire on the terminal connect() sink — the chain carries
+/// no taint.
+#[test]
+fn cpp_builder_chain_const_host_silent() {
+    let src = b"#include <string>\nclass Socket {\npublic:\n  static Socket builder() { return Socket(); }\n  Socket& host(const std::string& h) { host_ = h; return *this; }\n  Socket& port(int p) { port_ = p; return *this; }\n  void connect() {}\nprivate:\n  std::string host_;\n  int port_ = 0;\n};\nint main() {\n  Socket::builder().host(\"api.example.com\").port(80).connect();\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        findings.is_empty(),
+        "C++: builder chain with literal host must NOT fire (Phase 5 negative)",
+    );
+}
+
+/// Phase 4 (cpp-precision): inline member-function bodies inside a
+/// `class_specifier` must be extracted as separate functions and
+/// intra-file calls must resolve to their bodies. Pre-Phase-4, the
+/// `class_specifier` AST kind was unmapped in cpp KINDS, so the CFG
+/// walker treated the entire class as a leaf `Seq` node and never
+/// descended into inline methods.
+#[test]
+fn cpp_inline_class_method_resolves() {
+    let src = b"#include <cstdlib>\nclass Inner {\npublic:\n  void run(const char* arg) { std::system(arg); }\n};\nint main() {\n  char* input = std::getenv(\"X\");\n  Inner inner;\n  inner.run(input);\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: tainted arg through inline class method must reach system() (Phase 4)",
+    );
+}
+
+/// Phase 3 (cpp-precision): a tainted argument passed through an
+/// identity-style lambda (`auto echo = [](const char* s) { return s; }`)
+/// must reach the downstream sink. This is handled by the same default
+/// Call-arg propagation as `std::move`/`static_cast`; pinning the
+/// behaviour here so future engine work doesn't silently regress
+/// identity lambdas.
+#[test]
+fn cpp_identity_lambda_propagates_taint() {
+    let src = b"#include <cstdlib>\nint main() {\n  char* input = std::getenv(\"X\");\n  auto echo = [](const char* s) { return s; };\n  std::system(echo(input));\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: taint must flow through identity lambda echo() into system()",
+    );
+}
+
+/// Phase 2: `std::vector<char>::data()` is a Load-style container op that
+/// returns a pointer to the underlying buffer; `system(v.data())` should
+/// fire when `v` is tainted.
+#[test]
+fn cpp_vector_data_propagates_taint() {
+    let src = b"#include <cstdlib>\n#include <vector>\nint main() {\n  char* input = std::getenv(\"X\");\n  std::vector<char> v(input, input + 8);\n  std::system(v.data());\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: taint must flow through v.data() into the sink",
+    );
+}
+
 #[test]
 fn php_source_to_sink() {
     let src =

@@ -479,7 +479,15 @@ fn lang_for_path(path: &Path) -> Option<(Language, &'static str)> {
     match lowercase_ext(path) {
         Some("rs") => Some((Language::from(tree_sitter_rust::LANGUAGE), "rust")),
         Some("c") => Some((Language::from(tree_sitter_c::LANGUAGE), "c")),
-        Some("cpp") => Some((Language::from(tree_sitter_cpp::LANGUAGE), "cpp")),
+        // Real-world C++ codebases (gRPC, rocksdb, LLVM, …) overwhelmingly
+        // use `.cc` / `.cxx` / `.hpp` / `.hh` / `.h++` rather than the
+        // `.cpp` synthetic-fixture extension.  Without these mappings,
+        // the scanner silently skipped them.  Headers (`.h` is omitted
+        // intentionally — it's also valid C and disambiguating without a
+        // build system is brittle).
+        Some("cpp" | "cc" | "cxx" | "c++" | "hpp" | "hxx" | "hh" | "h++") => {
+            Some((Language::from(tree_sitter_cpp::LANGUAGE), "cpp"))
+        }
         Some("java") => Some((Language::from(tree_sitter_java::LANGUAGE), "java")),
         Some("go") => Some((Language::from(tree_sitter_go::LANGUAGE), "go")),
         Some("php") => Some((Language::from(tree_sitter_php::LANGUAGE_PHP), "php")),

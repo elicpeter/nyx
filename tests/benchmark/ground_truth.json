@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 372
+    "corpus_size": 378
   },
   "cases": [
     {
@@ -5421,6 +5421,117 @@
       "notes": "Direct flow from getenv to execvp()"
     },
     {
+      "case_id": "cpp-cmdi-005",
+      "file": "cpp/cmdi/cmdi_stl_vector_string.cpp",
+      "language": "cpp",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          17,
+          17
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "tags": [
+        "stl-container",
+        "c_str-passthrough",
+        "cpp-precision-2026-04-26"
+      ],
+      "disabled": false,
+      "notes": "Tainted env var stored in std::vector<std::string>, read via front() and converted via c_str(); flow must reach system()"
+    },
+    {
+      "case_id": "cpp-cmdi-006",
+      "file": "cpp/cmdi/cmdi_lambda_passthrough.cpp",
+      "language": "cpp",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          16,
+          16
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          14,
+          14
+        ]
+      ],
+      "tags": [
+        "lambda",
+        "passthrough",
+        "cpp-precision-2026-04-26"
+      ],
+      "disabled": false,
+      "notes": "Tainted input passed through identity-lambda echo into system(); default Call-arg propagation carries the taint."
+    },
+    {
+      "case_id": "cpp-cmdi-007",
+      "file": "cpp/cmdi/cmdi_class_inline_method.cpp",
+      "language": "cpp",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          20,
+          27
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          25,
+          25
+        ]
+      ],
+      "tags": [
+        "class-method",
+        "inline-definition",
+        "cpp-precision-2026-04-26"
+      ],
+      "disabled": false,
+      "notes": "Inline member-function definition; tainted arg flows through Inner::run into system(). Pinned by Phase 4 KINDS additions for class_specifier."
+    },
+    {
       "case_id": "cpp-path-001",
       "file": "cpp/path_traversal/path_traversal_fopen.cpp",
       "language": "cpp",
@@ -5647,6 +5758,43 @@
       ],
       "disabled": false,
       "notes": "Direct flow from getenv to connect()"
+    },
+    {
+      "case_id": "cpp-ssrf-003",
+      "file": "cpp/ssrf/ssrf_builder_user_host.cpp",
+      "language": "cpp",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          24,
+          24
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          23,
+          23
+        ]
+      ],
+      "tags": [
+        "builder-chain",
+        "fluent-api",
+        "cpp-precision-2026-04-26"
+      ],
+      "disabled": false,
+      "notes": "Tainted host through fluent Socket::builder().host(h).port(p).connect() chain; terminal connect() must fire."
     },
     {
       "case_id": "cpp-buf-001",
@@ -5914,6 +6062,57 @@
       ],
       "disabled": false,
       "notes": "Input sanitized through strtol() type conversion (C-style)"
+    },
+    {
+      "case_id": "cpp-safe-017",
+      "file": "cpp/safe/safe_stl_vector_int.cpp",
+      "language": "cpp",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "sanitized",
+        "stl-container",
+        "cpp-precision-2026-04-26"
+      ],
+      "disabled": false,
+      "notes": "stoi sanitises tainted env var before push_back / front; downstream system() must be TN"
+    },
+    {
+      "case_id": "cpp-safe-018",
+      "file": "cpp/safe/safe_builder_const_host.cpp",
+      "language": "cpp",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "safe",
+        "builder-chain",
+        "constant-host",
+        "cpp-precision-2026-04-26"
+      ],
+      "disabled": false,
+      "notes": "Builder chain with hardcoded host literal; terminal connect() must NOT fire (no taint on chain)."
     },
     {
       "case_id": "rs-cmdi-001",

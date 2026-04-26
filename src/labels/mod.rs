@@ -1435,6 +1435,29 @@ mod tests {
     }
 
     #[test]
+    fn classify_cpp_sto_family_is_sanitizer() {
+        // Phase 1: full `std::sto*` family (including 64-bit and `long
+        // double` variants) clears every taint cap that flows through it,
+        // matching the existing `std::stoi`/`std::stol` rule.
+        for callee in [
+            "std::stoi",
+            "std::stol",
+            "std::stoll",
+            "std::stoul",
+            "std::stoull",
+            "std::stof",
+            "std::stod",
+            "std::stold",
+        ] {
+            assert_eq!(
+                classify("cpp", callee, None),
+                Some(DataLabel::Sanitizer(Cap::all())),
+                "{callee} should be a Cap::all() sanitizer",
+            );
+        }
+    }
+
+    #[test]
     fn parse_cap_works() {
         assert_eq!(parse_cap("html_escape"), Some(Cap::HTML_ESCAPE));
         assert_eq!(parse_cap("shell_escape"), Some(Cap::SHELL_ESCAPE));

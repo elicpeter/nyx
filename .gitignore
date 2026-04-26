@@ -5,3 +5,4 @@
 /.nyx
 /book
 .DS_Store
+.z3-trace

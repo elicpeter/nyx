@@ -2,7 +2,12 @@ pub fn lowercase_ext(path: &std::path::Path) -> Option<&'static str> {
     path.extension().and_then(|s| match s.to_str()? {
         "rs" | "RS" => Some("rs"),
         "c" => Some("c"),
-        "cpp" | "c++" => Some("cpp"),
+        // Real-world C++ codebases overwhelmingly use `.cc` / `.cxx` /
+        // `.hpp` / `.hh` / `.h++` rather than the `.cpp` synthetic-fixture
+        // extension.  All map to the same tree-sitter-cpp grammar.  `.h`
+        // is intentionally NOT mapped — it's also valid C and
+        // disambiguating without a build system is brittle.
+        "cpp" | "c++" | "cc" | "cxx" | "hpp" | "hxx" | "hh" | "h++" => Some("cpp"),
         "java" => Some("java"),
         "go" => Some("go"),
         "php" => Some("php"),
@@ -44,6 +49,12 @@ fn lowercase_ext_all_supported_extensions() {
         ("util.c", "c"),
         ("util.cpp", "cpp"),
         ("util.c++", "cpp"),
+        ("util.cc", "cpp"),
+        ("util.cxx", "cpp"),
+        ("util.hpp", "cpp"),
+        ("util.hxx", "cpp"),
+        ("util.hh", "cpp"),
+        ("util.h++", "cpp"),
         ("App.java", "java"),
         ("server.go", "go"),
         ("index.php", "php"),

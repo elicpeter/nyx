@@ -196,9 +196,22 @@ fn classify_php(method: &str) -> Option<ContainerOp> {
 
 fn classify_cpp(method: &str) -> Option<ContainerOp> {
     match method {
-        "push_back" | "emplace_back" | "insert" | "emplace" | "push" => store(0),
-        "front" | "back" | "pop_back" | "pop_front" | "top" => load(),
-        // vector.at(index) — index at 0
+        // Mutating container operations.
+        // `assign` overwrites the container's contents with the argument
+        // sequence — modeled as Store so the receiver inherits the argument
+        // taint, matching the runtime "the values now live inside this
+        // container" semantics shared with `push_back`/`emplace_back`.
+        "push_back" | "emplace_back" | "insert" | "emplace" | "push" | "assign" => store(0),
+        // Map/unordered_map insertion: `m.insert_or_assign(k, v)` — value at 1.
+        "insert_or_assign" => store_indexed(1, 0),
+        // Read-only container observers.  `find`/`count` return iterators or
+        // counts that carry the container's value taint when queried with a
+        // tainted needle; `data` returns a pointer to the underlying buffer
+        // (its real identity-passthrough behaviour for `c_str`/`data` is
+        // refined in the labels phase, but Load propagation gives us the
+        // baseline cap-flow without further plumbing).
+        "front" | "back" | "pop_back" | "pop_front" | "top" | "find" | "count" | "data" => load(),
+        // Indexed reads: `vector::at(i)`, `unordered_map::at(k)`.
         "at" => load_indexed(0),
         _ => None,
     }
@@ -310,6 +323,67 @@ mod tests {
             assert_eq!(index_arg, None);
         } else {
             panic!("expected Load");
+        }
+    }
+
+    // ── C++ Phase 1 additions ──────────────────────────────────────
+
+    #[test]
+    fn cpp_push_back_is_store() {
+        let op = classify_container_op("v.push_back", Lang::Cpp);
+        match op {
+            Some(ContainerOp::Store {
+                value_args,
+                index_arg,
+            }) => {
+                assert_eq!(value_args.as_slice(), &[0]);
+                assert_eq!(index_arg, None);
+            }
+            _ => panic!("expected Store"),
+        }
+    }
+
+    #[test]
+    fn cpp_assign_is_store() {
+        // vector::assign(args) overwrites the container's contents — the
+        // receiver inherits argument taint just like push_back.
+        let op = classify_container_op("v.assign", Lang::Cpp);
+        assert!(matches!(op, Some(ContainerOp::Store { .. })));
+    }
+
+    #[test]
+    fn cpp_insert_or_assign_indexes_value() {
+        // map::insert_or_assign(key, value) — value is at arg 1, key at arg 0.
+        match classify_container_op("m.insert_or_assign", Lang::Cpp) {
+            Some(ContainerOp::Store {
+                value_args,
+                index_arg,
+            }) => {
+                assert_eq!(value_args.as_slice(), &[1]);
+                assert_eq!(index_arg, Some(0));
+            }
+            other => panic!("expected indexed Store, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cpp_find_count_data_are_load() {
+        for callee in ["m.find", "m.count", "v.data"] {
+            assert!(
+                matches!(
+                    classify_container_op(callee, Lang::Cpp),
+                    Some(ContainerOp::Load { .. })
+                ),
+                "{callee} should be a Load",
+            );
+        }
+    }
+
+    #[test]
+    fn cpp_at_is_indexed_load() {
+        match classify_container_op("v.at", Lang::Cpp) {
+            Some(ContainerOp::Load { index_arg }) => assert_eq!(index_arg, Some(0)),
+            other => panic!("expected indexed Load, got {other:?}"),
         }
     }
 }
