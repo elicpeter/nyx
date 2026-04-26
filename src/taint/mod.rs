@@ -1457,6 +1457,27 @@ fn lower_all_functions_from_bodies(
             &body.meta.param_types,
         );
 
+        // Phase 2 (typed call-graph devirtualisation): walk every SSA
+        // method call in this body, look up the receiver SSA value's
+        // [`crate::ssa::type_facts::TypeKind`] in the just-computed
+        // `opt.type_facts`, and record `(call_ordinal, container_name)`
+        // on the matching summary so Phase 3 in `build_call_graph` can
+        // narrow the indirect-method-call edge to the receiver-typed
+        // container.  Free-function calls (`receiver: None`) and
+        // unknown receiver types are silently skipped — the bare-name
+        // resolution path applies unchanged in that case.
+        let typed_receivers =
+            collect_typed_call_receivers(&func_ssa, &body.graph, &opt.type_facts);
+        if !typed_receivers.is_empty() {
+            // The summary may not have been inserted above (zero-param,
+            // no-fresh-alloc bodies are skipped).  Force-insert in that
+            // case so the receiver-type info reaches Phase 3 — without
+            // it, the cross-file devirtualisation signal would be lost
+            // for any method invoked inside a parameterless caller.
+            let entry = summaries.entry(key.clone()).or_default();
+            entry.typed_call_receivers = typed_receivers;
+        }
+
         bodies.insert(
             key,
             ssa_transfer::CalleeSsaBody {
@@ -1478,6 +1499,65 @@ fn lower_all_functions_from_bodies(
     }
 
     (summaries, bodies)
+}
+
+/// Walk every SSA `Call` instruction in `ssa` and produce
+/// `(call_ordinal, container_name)` entries for those whose receiver
+/// SSA value has a [`crate::ssa::type_facts::TypeKind`] with a
+/// non-empty [`crate::ssa::type_facts::TypeKind::container_name`].
+///
+/// Free-function calls (`receiver: None`) and unknown receiver types
+/// are skipped — the cross-file call-graph builder will fall back to
+/// today's name-only resolution for those, preserving the
+/// "subset of today's targets, never a superset" invariant from
+/// `docs/typed-call-graph-prompt.md`.
+///
+/// Ordinals are pulled from the underlying CFG node's
+/// [`crate::cfg::CallMeta::call_ordinal`] so they line up with
+/// [`crate::summary::CalleeSite::ordinal`] at consumer time.  Calls
+/// whose CFG node has no recoverable ordinal (synthetic / removed
+/// nodes) are silently dropped.
+fn collect_typed_call_receivers(
+    ssa: &crate::ssa::ir::SsaBody,
+    cfg: &crate::cfg::Cfg,
+    type_facts: &crate::ssa::type_facts::TypeFactResult,
+) -> Vec<(u32, String)> {
+    use crate::ssa::ir::SsaOp;
+
+    let mut out: Vec<(u32, String)> = Vec::new();
+    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+
+    for block in &ssa.blocks {
+        for inst in block.body.iter() {
+            let SsaOp::Call { receiver, .. } = &inst.op else {
+                continue;
+            };
+            let Some(receiver_val) = receiver else {
+                continue; // free-function call — no devirtualisation possible
+            };
+            let Some(kind) = type_facts.get_type(*receiver_val) else {
+                continue; // type unknown — fall back to name-only resolution
+            };
+            let Some(container) = kind.container_name() else {
+                continue; // scalar/unknown type — no useful container
+            };
+            let Some(node_info) = cfg.node_weight(inst.cfg_node) else {
+                continue;
+            };
+            let ordinal = node_info.call.call_ordinal;
+            // A single SSA call instruction maps 1:1 with a CFG call
+            // node, so each ordinal should appear at most once.  The
+            // dedup guard exists in case lowering ever introduces a
+            // second SSA Call sharing a cfg_node — first wins.
+            if !seen.insert(ordinal) {
+                continue;
+            }
+            out.push((ordinal, container));
+        }
+    }
+
+    out.sort_by_key(|(ord, _)| *ord);
+    out
 }
 
 /// Maximum blocks for a callee body to be eligible for cross-file persistence.

@@ -439,6 +439,7 @@ fn ssa_summary_serde_round_trip_identity() {
         param_return_paths: vec![],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -469,6 +470,7 @@ fn ssa_summary_serde_round_trip_strip_bits() {
         param_return_paths: vec![],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -496,6 +498,7 @@ fn ssa_summary_serde_round_trip_add_bits() {
         param_return_paths: vec![],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -530,6 +533,7 @@ fn ssa_summary_serde_round_trip_all_variants() {
         param_return_paths: vec![],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -566,6 +570,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         param_return_paths: vec![],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     gs.insert_ssa(key.clone(), v1.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v1));
@@ -590,6 +595,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         param_return_paths: vec![],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     gs.insert_ssa(key.clone(), v2.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v2));
@@ -634,6 +640,7 @@ fn global_summaries_merge_with_ssa_entries() {
         param_return_paths: vec![],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let sum_b = SsaFuncSummary {
         param_to_return: vec![],
@@ -654,6 +661,7 @@ fn global_summaries_merge_with_ssa_entries() {
         param_return_paths: vec![],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
 
     gs1.insert_ssa(key_a.clone(), sum_a.clone());
@@ -698,6 +706,7 @@ fn global_summaries_is_empty_considers_ssa() {
             param_return_paths: vec![],
             points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
+            typed_call_receivers: vec![],
         },
     );
 
@@ -725,6 +734,7 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
         param_return_paths: vec![],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -767,6 +777,7 @@ fn ssa_summary_serde_round_trip_container_fields() {
         param_return_paths: vec![],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -819,6 +830,7 @@ fn ssa_summary_serde_round_trip_return_abstract() {
         param_return_paths: vec![],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -1334,6 +1346,7 @@ fn global_summaries_resolve_body_requires_body_present() {
             param_return_paths: vec![],
             points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
+            typed_call_receivers: vec![],
         },
     );
     // Don't insert body
@@ -3386,6 +3399,7 @@ fn cf4_return_path_transform_serde_round_trip() {
         )],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -3595,4 +3609,95 @@ fn cf6_ssa_summary_fits_arity_rejects_out_of_range_points_to_idx() {
     gs.insert_ssa(key.clone(), bad);
     // Reconciliation rekeys the bad entry; the original key is empty.
     assert!(gs.get_ssa(&key).is_none());
+}
+
+/// Phase 4 (typed call-graph devirtualisation): two `findById`
+/// definitions on different containers must remain structurally
+/// disjoint after [`merge_summaries`] — no cap union may leak
+/// across them.  The FuncKey identity model already keys on
+/// `(lang, namespace, container, name, arity, ...)` so this is
+/// supposed to be true today; the test pins it down so a future
+/// refactor can't silently widen the merge granularity.
+///
+/// Concretely: `Repository::findById` is parameterised (no
+/// `SQL_QUERY` sink cap), `UnsafeCache::findById` runs a string-
+/// concatenated query (carries `Cap::SQL_QUERY`).  After merge,
+/// each FuncKey must own only its own caps — Repository must NOT
+/// inherit Cache's `SQL_QUERY` bit.
+#[test]
+fn cross_file_devirt_does_not_union_unrelated_findbyids() {
+    use crate::labels::Cap;
+    use crate::symbol::FuncKey;
+
+    fn method_summary(name: &str, container: &str, file: &str, sink_caps: u16) -> FuncSummary {
+        FuncSummary {
+            name: name.into(),
+            file_path: file.into(),
+            lang: "rust".into(),
+            param_count: 1,
+            param_names: vec!["id".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps,
+            propagating_params: vec![],
+            propagates_taint: false,
+            tainted_sink_params: if sink_caps != 0 { vec![0] } else { vec![] },
+            callees: vec![],
+            container: container.into(),
+            ..Default::default()
+        }
+    }
+
+    let safe_repo = method_summary("findById", "Repository", "src/repo.rs", 0);
+    let unsafe_cache = method_summary(
+        "findById",
+        "UnsafeCache",
+        "src/cache.rs",
+        Cap::SQL_QUERY.bits(),
+    );
+
+    let gs = merge_summaries(vec![safe_repo, unsafe_cache], None);
+
+    // Two distinct keys must coexist — no merge collision.
+    let repo_key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "src/repo.rs".into(),
+        container: "Repository".into(),
+        name: "findById".into(),
+        arity: Some(1),
+        ..Default::default()
+    };
+    let cache_key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "src/cache.rs".into(),
+        container: "UnsafeCache".into(),
+        name: "findById".into(),
+        arity: Some(1),
+        ..Default::default()
+    };
+
+    let repo_sum = gs.get(&repo_key).expect("Repository::findById missing");
+    let cache_sum = gs.get(&cache_key).expect("UnsafeCache::findById missing");
+
+    // Sink caps stay on their own owner — the whole point of
+    // devirtualisation.  Repository must not have inherited the
+    // SQL_QUERY bit from UnsafeCache.
+    assert_eq!(
+        repo_sum.sink_caps, 0,
+        "Repository::findById inherited a sink cap from UnsafeCache::findById — \
+         the per-FuncKey identity model has been broken (sink_caps bits = {:#x})",
+        repo_sum.sink_caps,
+    );
+    assert_eq!(
+        cache_sum.sink_caps,
+        Cap::SQL_QUERY.bits(),
+        "UnsafeCache::findById lost its own sink cap during merge"
+    );
+    // Same invariant on tainted_sink_params — must not bleed across.
+    assert!(
+        repo_sum.tainted_sink_params.is_empty(),
+        "Repository::findById inherited tainted_sink_params from UnsafeCache: {:?}",
+        repo_sum.tainted_sink_params,
+    );
+    assert_eq!(cache_sum.tainted_sink_params, vec![0]);
 }

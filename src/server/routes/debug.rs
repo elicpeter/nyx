@@ -397,6 +397,7 @@ mod tests {
                         param_return_paths: vec![],
                         points_to: Default::default(),
                         return_path_facts: smallvec::SmallVec::new(),
+                        typed_call_receivers: vec![],
                     },
                 )],
             )
@@ -603,6 +604,7 @@ mod tests {
                         param_return_paths: vec![],
                         points_to: Default::default(),
                         return_path_facts: smallvec::SmallVec::new(),
+                        typed_call_receivers: vec![],
                     },
                 )],
             )

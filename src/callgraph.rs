@@ -4,6 +4,7 @@ use crate::summary::{CalleeQuery, CalleeResolution, GlobalSummaries};
 use crate::symbol::{FuncKey, Lang};
 use petgraph::graph::NodeIndex;
 use petgraph::prelude::*;
+use smallvec::SmallVec;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -153,6 +154,117 @@ pub(crate) fn callee_container_hint(raw: &str) -> &str {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Class / container → method index
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-language `(container, method_name)` → candidate [`FuncKey`] index.
+///
+/// Built once per call-graph construction over every merged
+/// [`FuncSummary`].  Used by edge insertion to restrict an indirect method
+/// call (`receiver.method(...)`) to only those targets whose defining
+/// container matches the receiver's static type.  Without a container
+/// hint the index falls back to the bare-name list, matching today's
+/// name-only resolution byte-for-byte.
+///
+/// Key design notes:
+///
+/// * Keys are **language-scoped** — a Java `findById` and a Python
+///   `findById` never alias.  Every other index in this module is also
+///   language-scoped (`by_lang_name`, `by_lang_qualified`); keeping the
+///   same partition here means devirtualisation's "subset of today's
+///   targets" invariant is structurally preserved.
+/// * The container key carries the [`FuncKey::container`] verbatim
+///   (e.g. `"Repository"` or nested `"Outer::Inner"`).  Empty containers
+///   are not indexed in `by_container` — free top-level functions live
+///   only in `by_name` and are looked up via the `None` container path.
+/// * `SmallVec` inline capacity is sized for the common case (≤ 2 same-
+///   container overloads, ≤ 4 same-name candidates across containers);
+///   spillover allocates but keeps lookups O(1) amortised.
+#[derive(Debug, Default, Clone)]
+pub struct ClassMethodIndex {
+    /// `(lang, container, method_name)` → all candidate `FuncKey`s
+    /// whose defining container matches.  Empty containers are not
+    /// indexed here; use the `None` arm of [`Self::resolve`] for those.
+    by_container: HashMap<(Lang, String, String), SmallVec<[FuncKey; 2]>>,
+    /// `(lang, method_name)` → every `FuncKey` with that leaf name in
+    /// the language, regardless of container.  This is the fallback
+    /// path for calls with no resolvable receiver type and matches
+    /// today's name-only edge insertion.
+    by_name: HashMap<(Lang, String), SmallVec<[FuncKey; 4]>>,
+}
+
+impl ClassMethodIndex {
+    /// Build the index from a [`GlobalSummaries`] map.
+    ///
+    /// Iteration is over every `FuncKey` in the map; each key is
+    /// inserted into `by_name` and (when its container is non-empty)
+    /// into `by_container`.  No ordering guarantees on the candidate
+    /// vectors — call sites that need determinism should sort downstream.
+    pub fn build(summaries: &GlobalSummaries) -> Self {
+        let mut by_container: HashMap<(Lang, String, String), SmallVec<[FuncKey; 2]>> =
+            HashMap::new();
+        let mut by_name: HashMap<(Lang, String), SmallVec<[FuncKey; 4]>> = HashMap::new();
+
+        for (key, _) in summaries.iter() {
+            let name_key = (key.lang, key.name.clone());
+            by_name.entry(name_key).or_default().push(key.clone());
+
+            if !key.container.is_empty() {
+                let cont_key = (key.lang, key.container.clone(), key.name.clone());
+                by_container.entry(cont_key).or_default().push(key.clone());
+            }
+        }
+
+        ClassMethodIndex {
+            by_container,
+            by_name,
+        }
+    }
+
+    /// Resolve `(container, method)` to its candidate target set.
+    ///
+    /// * `container = Some(c)` — return only candidates whose defining
+    ///   container equals `c`.  Empty slice when no such target exists,
+    ///   even if a same-name function lives in another container.
+    ///   This is the **devirtualised** path: a hard subset of `by_name`.
+    /// * `container = None` — return every same-name candidate in the
+    ///   language.  This is the **fallback** path used when the receiver
+    ///   type is unknown; matches today's name-only behaviour.
+    ///
+    /// The returned slice is borrowed from the index; lifetime ties to
+    /// `&self`.  Callers may need to clone keys before mutating the
+    /// owning graph.
+    pub fn resolve(&self, lang: Lang, container: Option<&str>, method: &str) -> &[FuncKey] {
+        match container {
+            Some(c) if !c.is_empty() => self
+                .by_container
+                .get(&(lang, c.to_string(), method.to_string()))
+                .map(|v| v.as_slice())
+                .unwrap_or_default(),
+            _ => self
+                .by_name
+                .get(&(lang, method.to_string()))
+                .map(|v| v.as_slice())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Number of distinct `(lang, container, method)` keys.  Exposed
+    /// for diagnostics / tests; production code uses [`Self::resolve`].
+    #[allow(dead_code)]
+    pub fn container_keys_len(&self) -> usize {
+        self.by_container.len()
+    }
+
+    /// Number of distinct `(lang, method)` keys.  Exposed for
+    /// diagnostics / tests.
+    #[allow(dead_code)]
+    pub fn name_keys_len(&self) -> usize {
+        self.by_name.len()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Call-graph construction
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -163,6 +275,16 @@ pub(crate) fn callee_container_hint(raw: &str) -> &str {
 ///   2. Same-language, arity-filtered, namespace-disambiguated lookup
 ///   3. On ambiguity: use two-segment qualified name to narrow candidates
 ///   4. Interop edges (explicit cross-language bridges)
+///
+/// **Phase 3 (typed call-graph devirtualisation):** when an SSA
+/// summary on the caller carries a `(call_ordinal, container_name)`
+/// entry in [`crate::summary::ssa_summary::SsaFuncSummary::typed_call_receivers`],
+/// the matching call site is first resolved via [`ClassMethodIndex`]
+/// restricted to the receiver-typed container.  An exact match (after
+/// arity filter) becomes the edge; a multi-candidate hit is fed back
+/// into the standard resolver via `CalleeQuery.receiver_type`; a
+/// zero-candidate hit falls through to today's name-only resolution
+/// so receiver-type misclassifications never silently drop edges.
 ///
 /// Unresolved and ambiguous callees are recorded for diagnostics but
 /// do **not** create edges.
@@ -175,6 +297,14 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
         let idx = graph.add_node(key.clone());
         index.insert(key.clone(), idx);
     }
+
+    // Phase 3: build a single `(lang, container, name) → candidates`
+    // index from the merged summaries.  Used below to devirtualise
+    // every method-call edge whose receiver has a recoverable type
+    // fact.  Cost is one allocation per FuncKey across the program;
+    // amortised against the per-call-site savings, this is a clear
+    // win on codebases with many same-name methods.
+    let method_index = ClassMethodIndex::build(summaries);
 
     let mut unresolved_not_found = Vec::new();
     let mut unresolved_ambiguous = Vec::new();
@@ -197,6 +327,23 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
             None
         };
 
+        // Phase 3: per-caller `(call_ordinal → container_name)` map
+        // pulled from the caller's SSA summary, when one exists.
+        // Empty when the caller has no SSA summary (zero-param trivial
+        // bodies skip extraction unless they had typed receivers) or
+        // when no method call inside the caller had a recoverable
+        // receiver type.  Empty maps mean today's resolution path
+        // applies unchanged for every site in this caller.
+        let typed_receivers: HashMap<u32, &str> = summaries
+            .get_ssa(caller_key)
+            .map(|ssa| {
+                ssa.typed_call_receivers
+                    .iter()
+                    .map(|(ord, c)| (*ord, c.as_str()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         for site in &summary.callees {
             let raw_callee = site.name.as_str();
             // Use leaf name for the initial lookup (FuncKey.name is always leaf).
@@ -206,6 +353,82 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
             // Structured arity carried per call site — used to disambiguate
             // same-name/different-arity overloads during resolution.
             let arity_hint: Option<usize> = site.arity;
+
+            // Phase 3 devirtualisation entry point.  Only fires for
+            // method calls (sites carrying a structured receiver) when
+            // the caller's SSA summary recorded a typed container for
+            // this ordinal.  When `Some(container)` resolves to a
+            // single arity-matching target, we add the edge and skip
+            // the standard resolver.  When it resolves to multiple,
+            // we fall through with the container hinted as
+            // `receiver_type` so `resolve_callee`'s authoritative
+            // step-1 picks the right one.  When it resolves to zero,
+            // we fall through entirely so today's name-only path can
+            // still find the edge — preserving the
+            // "subset of today's targets, never a superset" rule
+            // even under type-fact misclassification.
+            let typed_container: Option<&str> = if site.receiver.is_some() {
+                typed_receivers.get(&site.ordinal).copied()
+            } else {
+                None
+            };
+
+            if let Some(container) = typed_container {
+                let candidates = method_index.resolve(caller_key.lang, Some(container), leaf);
+                let arity_filtered: Vec<&FuncKey> = candidates
+                    .iter()
+                    .filter(|k| match arity_hint {
+                        Some(a) => k.arity == Some(a),
+                        None => true,
+                    })
+                    .collect();
+                if arity_filtered.len() == 1 {
+                    if let Some(&target_node) = index.get(arity_filtered[0]) {
+                        graph.add_edge(
+                            caller_node,
+                            target_node,
+                            CallEdge {
+                                call_site: raw_callee.to_string(),
+                            },
+                        );
+                    }
+                    continue;
+                }
+                // Either zero matches (fall through to legacy path) or
+                // multiple matches — let `resolve_callee` apply its
+                // authoritative receiver_type filter + tie-breakers.
+                if !arity_filtered.is_empty() {
+                    let caller_container: Option<&str> = if caller_key.container.is_empty() {
+                        None
+                    } else {
+                        Some(caller_key.container.as_str())
+                    };
+                    let resolution = summaries.resolve_callee(&CalleeQuery {
+                        name: leaf,
+                        caller_lang: caller_key.lang,
+                        caller_namespace: &caller_key.namespace,
+                        caller_container,
+                        receiver_type: Some(container),
+                        namespace_qualifier: site.qualifier.as_deref(),
+                        receiver_var: site.receiver.as_deref(),
+                        arity: arity_hint,
+                    });
+                    if let CalleeResolution::Resolved(key) = resolution
+                        && let Some(&target_node) = index.get(&key)
+                    {
+                        graph.add_edge(
+                            caller_node,
+                            target_node,
+                            CallEdge {
+                                call_site: raw_callee.to_string(),
+                            },
+                        );
+                        continue;
+                    }
+                    // Authoritative receiver_type miss with multiple
+                    // bare candidates: fall through to today's path.
+                }
+            }
 
             // Rust callers with a module-qualified call (no receiver) go
             // through the `use`-map aware resolver first.  When the call has
@@ -1569,6 +1792,332 @@ mod tests {
         let caller = make_summary("main", "src/lib.rs", "rust", 0, vec!["helper"]);
         let gs = merge_summaries(vec![helper, caller], None);
         let cg = build_call_graph(&gs, &[]);
+        assert_eq!(cg.graph.edge_count(), 1);
+        assert!(cg.unresolved_not_found.is_empty());
+        assert!(cg.unresolved_ambiguous.is_empty());
+    }
+
+    // ── ClassMethodIndex (Phase 1: structural index, no behaviour wiring) ──
+
+    /// Helper: `(name, container)` pairs in the same file.  Builds two
+    /// summaries with the same leaf name on different containers so the
+    /// container-keyed map has a non-trivial discriminator to preserve.
+    fn make_method_summary(
+        name: &str,
+        container: &str,
+        file_path: &str,
+        lang: &str,
+        param_count: usize,
+    ) -> FuncSummary {
+        let mut s = make_summary(name, file_path, lang, param_count, vec![]);
+        s.container = container.into();
+        s
+    }
+
+    #[test]
+    fn class_method_index_disambiguates_same_name_across_containers() {
+        // Two `findById` definitions on different classes in different
+        // files.  The container-keyed lookup must return only the
+        // container-matching candidate; the bare-name lookup must
+        // return both.
+        let repo = make_method_summary("findById", "Repository", "src/repo.rs", "rust", 1);
+        let cache = make_method_summary("findById", "Cache", "src/cache.rs", "rust", 1);
+
+        let gs = merge_summaries(vec![repo, cache], None);
+        let idx = ClassMethodIndex::build(&gs);
+
+        let repo_hits = idx.resolve(Lang::Rust, Some("Repository"), "findById");
+        assert_eq!(
+            repo_hits.len(),
+            1,
+            "Repository::findById should resolve to exactly one target"
+        );
+        assert_eq!(repo_hits[0].container, "Repository");
+
+        let cache_hits = idx.resolve(Lang::Rust, Some("Cache"), "findById");
+        assert_eq!(cache_hits.len(), 1);
+        assert_eq!(cache_hits[0].container, "Cache");
+
+        // Bare-name lookup keeps both candidates — fallback behaviour.
+        let bare_hits = idx.resolve(Lang::Rust, None, "findById");
+        assert_eq!(
+            bare_hits.len(),
+            2,
+            "bare-name lookup should keep both same-name candidates"
+        );
+    }
+
+    #[test]
+    fn class_method_index_falls_back_to_name_when_container_unknown() {
+        // `None` container or empty-string container both route to
+        // the bare-name index — equivalent to today's name-only edge
+        // insertion.
+        let svc = make_method_summary("process", "OrderService", "src/svc.rs", "rust", 1);
+        let helper = make_summary("process", "src/util.rs", "rust", 1, vec![]);
+
+        let gs = merge_summaries(vec![svc, helper], None);
+        let idx = ClassMethodIndex::build(&gs);
+
+        // None → bare-name list (both targets).
+        let none_hits = idx.resolve(Lang::Rust, None, "process");
+        assert_eq!(none_hits.len(), 2);
+
+        // Empty string container behaves identically to None — it is
+        // not stored under any container key.
+        let empty_hits = idx.resolve(Lang::Rust, Some(""), "process");
+        assert_eq!(empty_hits.len(), 2);
+
+        // Container `"OrderService"` narrows to the method only; the
+        // free-function helper lives under empty container and does
+        // not appear here.
+        let cont_hits = idx.resolve(Lang::Rust, Some("OrderService"), "process");
+        assert_eq!(cont_hits.len(), 1);
+        assert_eq!(cont_hits[0].container, "OrderService");
+    }
+
+    #[test]
+    fn class_method_index_empty_for_unknown_method() {
+        let svc = make_method_summary("findById", "Repository", "src/repo.rs", "rust", 1);
+        let gs = merge_summaries(vec![svc], None);
+        let idx = ClassMethodIndex::build(&gs);
+
+        // Wrong method name on the right container → empty.
+        assert!(
+            idx.resolve(Lang::Rust, Some("Repository"), "findByName")
+                .is_empty()
+        );
+        // Right method, wrong container → empty (no fallback to bare-name
+        // when a container is supplied — that's the whole devirtualisation
+        // promise).
+        assert!(
+            idx.resolve(Lang::Rust, Some("OtherClass"), "findById")
+                .is_empty()
+        );
+        // Unknown method name with no container → empty.
+        assert!(idx.resolve(Lang::Rust, None, "doesNotExist").is_empty());
+    }
+
+    #[test]
+    fn class_method_index_partitions_by_language() {
+        // Same `(container, name)` in Java and TypeScript → must not
+        // alias.  Cross-language calls are forbidden by the rest of the
+        // pipeline; the index reflects that partition.
+        let java_repo = make_method_summary("findById", "Repository", "Repo.java", "java", 1);
+        let ts_repo = make_method_summary("findById", "Repository", "repo.ts", "typescript", 1);
+
+        let gs = merge_summaries(vec![java_repo, ts_repo], None);
+        let idx = ClassMethodIndex::build(&gs);
+
+        let java_hits = idx.resolve(Lang::Java, Some("Repository"), "findById");
+        assert_eq!(java_hits.len(), 1);
+        assert_eq!(java_hits[0].lang, Lang::Java);
+
+        let ts_hits = idx.resolve(Lang::TypeScript, Some("Repository"), "findById");
+        assert_eq!(ts_hits.len(), 1);
+        assert_eq!(ts_hits[0].lang, Lang::TypeScript);
+    }
+
+    #[test]
+    fn class_method_index_handles_arity_overloads() {
+        // Two arity overloads on the same container are both kept under
+        // the same `(container, name)` key — arity narrowing is the
+        // caller's responsibility (today's resolver also does this).
+        let one = make_method_summary("encode", "Codec", "src/codec.rs", "rust", 1);
+        let two = make_method_summary("encode", "Codec", "src/codec.rs", "rust", 2);
+
+        let gs = merge_summaries(vec![one, two], None);
+        let idx = ClassMethodIndex::build(&gs);
+
+        let hits = idx.resolve(Lang::Rust, Some("Codec"), "encode");
+        assert_eq!(
+            hits.len(),
+            2,
+            "arity overloads should both appear under the same container key"
+        );
+    }
+
+    // ── Phase 3: devirtualised edge insertion via typed_call_receivers ──
+
+    /// Two `findById` definitions live on different containers in
+    /// different files.  A caller whose SSA summary records the
+    /// receiver type as `"Repository"` for the relevant ordinal must
+    /// produce an edge **only** to `Repository::findById`, not to
+    /// `Cache::findById`.  Without typed_call_receivers, today's
+    /// receiver_var-based resolution would have to guess between the
+    /// two and would record the call as ambiguous (no edge at all).
+    #[test]
+    fn typed_call_receivers_devirtualises_method_call() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        let repo = make_method_summary("findById", "Repository", "src/repo.rs", "rust", 1);
+        let cache = make_method_summary("findById", "Cache", "src/cache.rs", "rust", 1);
+        // Caller's SSA summary will record `(ordinal=0, "Repository")`
+        // for the single method call below.
+        let caller = summary_with_sites(
+            "lookup",
+            "src/main.rs",
+            "rust",
+            0,
+            vec![CalleeSite {
+                name: "findById".into(),
+                arity: Some(1),
+                receiver: Some("repo".into()),
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![repo, cache, caller], None);
+
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/main.rs".into(),
+            name: "lookup".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                typed_call_receivers: vec![(0, "Repository".to_string())],
+                ..Default::default()
+            },
+        );
+
+        let cg = build_call_graph(&gs, &[]);
+
+        let repo_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/repo.rs".into(),
+            container: "Repository".into(),
+            name: "findById".into(),
+            arity: Some(1),
+            ..Default::default()
+        };
+        let caller_node = cg.index[&caller_key];
+        let repo_node = cg.index[&repo_key];
+
+        let edges: Vec<_> = cg.graph.edges(caller_node).collect();
+        assert_eq!(
+            edges.len(),
+            1,
+            "typed receiver should resolve to exactly one target; got {edges:?}"
+        );
+        assert_eq!(
+            edges[0].target(),
+            repo_node,
+            "edge must point to Repository::findById, not Cache::findById"
+        );
+        assert!(cg.unresolved_ambiguous.is_empty());
+    }
+
+    /// Negative control: when typed_call_receivers points at a
+    /// container that doesn't define the method, devirtualisation
+    /// must NOT silently drop the edge.  We fall through to today's
+    /// name-only resolution so a stale or misclassified type fact
+    /// can never cause regression.
+    #[test]
+    fn typed_call_receivers_falls_through_on_zero_match() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        // Single `process` on `Worker`.  No `process` exists on
+        // `Other` — that's the receiver type the caller's SSA
+        // summary will (incorrectly) record.
+        let worker = make_method_summary("process", "Worker", "src/worker.rs", "rust", 1);
+        let caller = summary_with_sites(
+            "drive",
+            "src/main.rs",
+            "rust",
+            0,
+            vec![CalleeSite {
+                name: "process".into(),
+                arity: Some(1),
+                receiver: Some("worker".into()),
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![worker, caller], None);
+
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/main.rs".into(),
+            name: "drive".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                // Wrong receiver type — `Other::process` does not exist.
+                typed_call_receivers: vec![(0, "Other".to_string())],
+                ..Default::default()
+            },
+        );
+
+        let cg = build_call_graph(&gs, &[]);
+
+        let caller_node = cg.index[&caller_key];
+        let edges: Vec<_> = cg.graph.edges(caller_node).collect();
+        // Today's name-only resolution finds the unique `process`
+        // candidate (Worker::process) and records the edge.  The
+        // typed_call_receivers miss must not have suppressed it.
+        assert_eq!(
+            edges.len(),
+            1,
+            "stale/wrong type fact must fall through to today's resolution; \
+             got {edges:?} (cf. ambiguous: {:?})",
+            cg.unresolved_ambiguous,
+        );
+    }
+
+    /// Free-function calls (no receiver on the CalleeSite) must
+    /// never trigger the devirtualisation path, even if some bogus
+    /// typed_call_receivers entry happened to match the ordinal.
+    /// Regression guard: today's namespace + use-map resolution
+    /// stays in charge for free-function calls.
+    #[test]
+    fn typed_call_receivers_skips_free_function_sites() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        let helper = make_summary("helper", "src/lib.rs", "rust", 0, vec![]);
+        let caller = summary_with_sites(
+            "main",
+            "src/lib.rs",
+            "rust",
+            0,
+            // No receiver on the call site → free function.
+            vec![CalleeSite {
+                name: "helper".into(),
+                arity: Some(0),
+                receiver: None,
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![helper, caller], None);
+
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/lib.rs".into(),
+            name: "main".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        // A typed_call_receivers entry with ordinal=0 — but since the
+        // site has receiver=None, this MUST be ignored.
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                typed_call_receivers: vec![(0, "FakeContainer".to_string())],
+                ..Default::default()
+            },
+        );
+
+        let cg = build_call_graph(&gs, &[]);
+        // Standard same-namespace resolution still finds `helper`.
         assert_eq!(cg.graph.edge_count(), 1);
         assert!(cg.unresolved_not_found.is_empty());
         assert!(cg.unresolved_ambiguous.is_empty());

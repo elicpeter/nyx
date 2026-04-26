@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-26T02:08:38Z",
+  "timestamp": "2026-04-26T04:41:16Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:22959b1503443fba22be43d55c7df9e1cdba0548de299e2ae6aab188577ab3eb",
-  "corpus_size": 370,
-  "cases_run": 369,
+  "ground_truth_hash": "sha256:051c8a40f005f42aeaef23a5f616b5badcb05adefa7b6be235d3353ae3262a84",
+  "corpus_size": 372,
+  "cases_run": 371,
   "cases_skipped": 1,
   "outcomes": [
     {
@@ -4681,6 +4681,40 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "rs-auth-dto-int-field-001",
+      "file": "rust/auth/safe_dto_int_field_axum.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-dto-string-field-001",
+      "file": "rust/auth/unsafe_dto_string_field_axum.rs",
+      "language": "rust",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "rs-auth-realrepo-001",
       "file": "rust/auth/self_actor_uid_copy.rs",
       "language": "rust",
@@ -6660,22 +6694,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 187,
+    "tp": 188,
     "fp": 0,
     "fn_": 0,
-    "tn": 182,
+    "tn": 183,
     "precision": 1.0,
     "recall": 1.0,
     "f1": 1.0
   },
   "aggregate_rule_level": {
-    "tp": 186,
+    "tp": 187,
     "fp": 0,
     "fn_": 1,
-    "tn": 182,
+    "tn": 183,
     "precision": 1.0,
-    "recall": 0.9946524064171123,
-    "f1": 0.9973190348525469
+    "recall": 0.9946808510638298,
+    "f1": 0.9973333333333333
   },
   "by_language": {
     "c": {
@@ -6751,10 +6785,10 @@
       "f1": 0.962962962962963
     },
     "rust": {
-      "tp": 29,
+      "tp": 30,
       "fp": 0,
       "fn_": 0,
-      "tn": 31,
+      "tn": 32,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -6771,7 +6805,7 @@
   },
   "by_vuln_class": {
     "auth": {
-      "tp": 4,
+      "tp": 5,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -6891,7 +6925,7 @@
       "tp": 0,
       "fp": 0,
       "fn_": 0,
-      "tn": 182,
+      "tn": 183,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -6935,31 +6969,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 91,
-      "fp": 83,
+      "tp": 92,
+      "fp": 80,
       "fn_": 96,
-      "tn": 99,
-      "precision": 0.5229885057471264,
-      "recall": 0.48663101604278075,
-      "f1": 0.5041551246537397
+      "tn": 103,
+      "precision": 0.5348837209302325,
+      "recall": 0.48936170212765956,
+      "f1": 0.5111111111111111
     },
     ">=Low": {
-      "tp": 93,
-      "fp": 86,
+      "tp": 94,
+      "fp": 84,
       "fn_": 94,
-      "tn": 96,
-      "precision": 0.5195530726256983,
-      "recall": 0.49732620320855614,
-      "f1": 0.5081967213114753
+      "tn": 99,
+      "precision": 0.5280898876404494,
+      "recall": 0.5,
+      "f1": 0.5136612021857924
     },
     ">=Medium": {
-      "tp": 93,
-      "fp": 86,
+      "tp": 94,
+      "fp": 84,
       "fn_": 94,
-      "tn": 96,
-      "precision": 0.5195530726256983,
-      "recall": 0.49732620320855614,
-      "f1": 0.5081967213114753
+      "tn": 99,
+      "precision": 0.5280898876404494,
+      "recall": 0.5,
+      "f1": 0.5136612021857924
     }
   }
 }

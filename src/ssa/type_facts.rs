@@ -1,6 +1,6 @@
 #![allow(clippy::if_same_then_else)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::const_prop::ConstLattice;
 use super::ir::*;
@@ -32,6 +32,40 @@ pub enum TypeKind {
     /// `label_prefix` — it never participates in label-based callee
     /// resolution.
     LocalCollection,
+    /// Phase 6: a framework-injected DTO body whose field types are
+    /// known.  Populated only when a parameter is recognised as a typed
+    /// extractor by a Phase 1-2 matcher AND the DTO class / struct /
+    /// Pydantic model is resolvable in the current scan scope.
+    /// Strictly additive — when no DTO definition is found, callers
+    /// fall through to today's pre-Phase-6 behaviour.
+    Dto(DtoFields),
+}
+
+/// Phase 6: structural carrier for a recognised DTO type.  Maps
+/// declared field names to their inferred [`TypeKind`].  Nested DTOs
+/// use [`TypeKind::Dto`] recursively.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DtoFields {
+    pub class_name: String,
+    /// Sorted-by-key map for stable iteration / serialisation.
+    pub fields: BTreeMap<String, TypeKind>,
+}
+
+impl DtoFields {
+    pub fn new(class_name: impl Into<String>) -> Self {
+        Self {
+            class_name: class_name.into(),
+            fields: BTreeMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, field: impl Into<String>, kind: TypeKind) {
+        self.fields.insert(field.into(), kind);
+    }
+
+    pub fn get(&self, field: &str) -> Option<&TypeKind> {
+        self.fields.get(field)
+    }
 }
 
 impl TypeKind {
@@ -44,6 +78,38 @@ impl TypeKind {
             Self::DatabaseConnection => Some("DatabaseConnection"),
             Self::FileHandle => Some("FileHandle"),
             Self::Url => Some("URL"),
+            _ => None,
+        }
+    }
+
+    /// Container name used by the typed call-graph devirtualisation
+    /// (`docs/typed-call-graph-prompt.md`, Phase 2).
+    ///
+    /// Returns the class / impl / module string under which an SSA
+    /// receiver value of this type would be looked up in
+    /// [`crate::callgraph::ClassMethodIndex`].  Mirrors
+    /// [`Self::label_prefix`] for the security-relevant abstract
+    /// types (HttpClient → `"HttpClient"`, DatabaseConnection →
+    /// `"DatabaseConnection"`, etc.) and additionally returns the DTO
+    /// class name for [`TypeKind::Dto`] receivers.
+    ///
+    /// Scalar / unknown types return `None` — they have no defining
+    /// container and would not narrow a method-call edge meaningfully.
+    pub fn container_name(&self) -> Option<String> {
+        if let Some(prefix) = self.label_prefix() {
+            return Some(prefix.to_string());
+        }
+        if let Self::Dto(d) = self {
+            return Some(d.class_name.clone());
+        }
+        None
+    }
+
+    /// Phase 6: convenience accessor for the inner `DtoFields` if this
+    /// type is a recognised DTO.
+    pub fn as_dto(&self) -> Option<&DtoFields> {
+        match self {
+            Self::Dto(d) => Some(d),
             _ => None,
         }
     }
@@ -78,6 +144,13 @@ impl TypeFact {
             TypeKind::Unknown
         };
         TypeFact { kind, nullable }
+    }
+
+    /// Phase 6: factory used by the field-access propagation rule.
+    pub(crate) fn from_dto_field(receiver: &TypeKind, field: &str) -> Option<Self> {
+        let dto = receiver.as_dto()?;
+        let kind = dto.get(field)?.clone();
+        Some(Self::from_kind(kind))
     }
 }
 
@@ -571,6 +644,38 @@ pub fn analyze_types_with_param_types(
                 }
             }
 
+            // Phase 6.3: FieldProj receiver-driven type narrowing.  When
+            // SSA lowering decomposed `a.b.c()` into a FieldProj chain,
+            // intermediate FieldProj insts default to `projected_type =
+            // None`.  If the receiver value carries a Dto fact and the
+            // projected field name is in its `fields` map, route the
+            // FieldProj's type fact to the field's declared TypeKind.
+            for inst in &block.body {
+                let SsaOp::FieldProj {
+                    receiver,
+                    field,
+                    projected_type,
+                } = &inst.op
+                else {
+                    continue;
+                };
+                // If the lowering already pinned a type, keep it.
+                if projected_type.is_some() {
+                    continue;
+                }
+                let Some(recv_fact) = facts.get(receiver).cloned() else {
+                    continue;
+                };
+                let field_name = body.field_name(*field).to_string();
+                let Some(new_fact) = TypeFact::from_dto_field(&recv_fact.kind, &field_name) else {
+                    continue;
+                };
+                if facts.get(&inst.value) != Some(&new_fact) {
+                    facts.insert(inst.value, new_fact);
+                    changed = true;
+                }
+            }
+
             // Phi nodes
             for inst in &block.phis {
                 if let SsaOp::Phi(operands) = &inst.op {
@@ -607,13 +712,29 @@ pub fn analyze_types_with_param_types(
                 }
                 if let SsaOp::Assign(uses) = &inst.op {
                     if uses.len() == 1 {
-                        let src_fact = facts
-                            .get(&uses[0])
-                            .cloned()
-                            .unwrap_or_else(TypeFact::unknown);
+                        // Phase 6.3: when the RHS is a single member-access
+                        // expression and the receiver value carries a
+                        // `TypeKind::Dto(fields)` fact, route the assignment's
+                        // type to the field's declared `TypeKind`.  Strictly
+                        // additive — falls through to copy-prop when the
+                        // receiver isn't a DTO or the field isn't recorded.
+                        let dto_field_fact = cfg
+                            .node_weight(inst.cfg_node)
+                            .and_then(|ni| ni.member_field.as_deref())
+                            .and_then(|field| {
+                                let recv_kind = facts.get(&uses[0])?.kind.clone();
+                                TypeFact::from_dto_field(&recv_kind, field)
+                            });
+                        let new_fact = match dto_field_fact {
+                            Some(f) => f,
+                            None => facts
+                                .get(&uses[0])
+                                .cloned()
+                                .unwrap_or_else(TypeFact::unknown),
+                        };
                         let old = facts.get(&inst.value);
-                        if old != Some(&src_fact) {
-                            facts.insert(inst.value, src_fact);
+                        if old != Some(&new_fact) {
+                            facts.insert(inst.value, new_fact);
                             changed = true;
                         }
                     } else if uses.len() == 2 {
@@ -1103,6 +1224,118 @@ mod tests {
         assert!(!is_type_safe_for_sink(
             &[SsaValue(0)],
             Cap::SHELL_ESCAPE,
+            &result
+        ));
+    }
+
+    /// Audit A3: The full `(TypeKind, Cap)` suppression matrix.  Encoded
+    /// as a single table-driven test so any future change to
+    /// `is_type_safe_for_sink` requires an intentional matrix edit + a
+    /// test update.  Truth values:
+    ///
+    /// | TypeKind  | SQL | FILE | SHELL | HTML | SSRF | CODE_EXEC | DESERIALIZE |
+    /// |-----------|-----|------|-------|------|------|-----------|-------------|
+    /// | Int       |  Y  |  Y   |   Y   |  Y   |  Y   |     N     |      N      |
+    /// | Bool      |  Y  |  Y   |   Y   |  Y   |  Y   |     N     |      N      |
+    /// | String    |  N  |  N   |   N   |  N   |  N   |     N     |      N      |
+    /// | Url       |  N  |  N   |   N   |  N   |  N   |     N     |      N      |
+    /// | Object    |  N  |  N   |   N   |  N   |  N   |     N     |      N      |
+    /// | Unknown   |  N  |  N   |   N   |  N   |  N   |     N     |      N      |
+    #[test]
+    fn type_kind_cap_suppression_matrix() {
+        use crate::labels::Cap;
+        let caps = [
+            ("SQL_QUERY", Cap::SQL_QUERY),
+            ("FILE_IO", Cap::FILE_IO),
+            ("SHELL_ESCAPE", Cap::SHELL_ESCAPE),
+            ("HTML_ESCAPE", Cap::HTML_ESCAPE),
+            ("SSRF", Cap::SSRF),
+            ("CODE_EXEC", Cap::CODE_EXEC),
+            ("DESERIALIZE", Cap::DESERIALIZE),
+        ];
+        // (kind_name, kind, [suppress for each cap in `caps` order])
+        let rows: &[(&str, TypeKind, [bool; 7])] = &[
+            ("Int", TypeKind::Int, [true, true, true, true, true, false, false]),
+            ("Bool", TypeKind::Bool, [true, true, true, true, true, false, false]),
+            ("String", TypeKind::String, [false, false, false, false, false, false, false]),
+            ("Url", TypeKind::Url, [false, false, false, false, false, false, false]),
+            ("Object", TypeKind::Object, [false, false, false, false, false, false, false]),
+            ("Unknown", TypeKind::Unknown, [false, false, false, false, false, false, false]),
+        ];
+        for (kind_name, kind, expected) in rows {
+            let mut facts = HashMap::new();
+            facts.insert(SsaValue(0), TypeFact::from_kind(kind.clone()));
+            let result = TypeFactResult { facts };
+            for (i, (cap_name, cap)) in caps.iter().enumerate() {
+                let got = is_type_safe_for_sink(&[SsaValue(0)], *cap, &result);
+                assert_eq!(
+                    got, expected[i],
+                    "matrix mismatch for ({kind_name}, {cap_name}): expected {}, got {got}",
+                    expected[i]
+                );
+            }
+        }
+    }
+
+    /// Audit A3 (companion): empty `values` slice never suppresses,
+    /// regardless of cap or per-value type facts.
+    #[test]
+    fn empty_values_never_suppress() {
+        use crate::labels::Cap;
+        let mut facts = HashMap::new();
+        facts.insert(SsaValue(0), TypeFact::from_kind(TypeKind::Int));
+        let result = TypeFactResult { facts };
+        for cap in [
+            Cap::SQL_QUERY,
+            Cap::FILE_IO,
+            Cap::SHELL_ESCAPE,
+            Cap::HTML_ESCAPE,
+            Cap::SSRF,
+            Cap::CODE_EXEC,
+            Cap::DESERIALIZE,
+        ] {
+            assert!(
+                !is_type_safe_for_sink(&[], cap, &result),
+                "empty values must never suppress {cap:?}",
+            );
+        }
+    }
+
+    /// Audit A3 (companion): a Cap with NO type-suppressible bits never
+    /// suppresses, even when the value's type kind is otherwise
+    /// suppression-eligible.
+    #[test]
+    fn caps_without_type_suppressible_bits_never_fire() {
+        use crate::labels::Cap;
+        let mut facts = HashMap::new();
+        facts.insert(SsaValue(0), TypeFact::from_kind(TypeKind::Int));
+        let result = TypeFactResult { facts };
+        for cap in [
+            Cap::CODE_EXEC,
+            Cap::DESERIALIZE,
+            Cap::CRYPTO,
+            Cap::URL_ENCODE,
+        ] {
+            assert!(
+                !is_type_safe_for_sink(&[SsaValue(0)], cap, &result),
+                "Int must NOT suppress non-type-suppressible {cap:?}",
+            );
+        }
+    }
+
+    /// Audit A3 (companion): mixed-type operand list — only one Int
+    /// among operands of unknown type — must NOT suppress.  The
+    /// suppression rule requires every operand to be payload-incompatible.
+    #[test]
+    fn mixed_type_operands_do_not_suppress() {
+        use crate::labels::Cap;
+        let mut facts = HashMap::new();
+        facts.insert(SsaValue(0), TypeFact::from_kind(TypeKind::Int));
+        facts.insert(SsaValue(1), TypeFact::from_kind(TypeKind::String));
+        let result = TypeFactResult { facts };
+        assert!(!is_type_safe_for_sink(
+            &[SsaValue(0), SsaValue(1)],
+            Cap::SQL_QUERY,
             &result
         ));
     }
@@ -1681,5 +1914,91 @@ mod tests {
             constructor_type(Lang::Go, "http.Get"),
             Some(TypeKind::HttpClient)
         );
+    }
+
+    // ── Phase 6 DTO field-level taint ─────────────────────────────────────
+
+    /// Phase 6: `TypeFact::from_dto_field` returns `Some(field_kind)`
+    /// for a DTO receiver whose `fields` map contains the requested
+    /// field, and `None` otherwise.
+    #[test]
+    fn dto_field_lookup_returns_field_type_kind() {
+        let mut dto = DtoFields::new("CreateUser");
+        dto.insert("age", TypeKind::Int);
+        dto.insert("email", TypeKind::String);
+        let recv = TypeKind::Dto(dto);
+        let age = TypeFact::from_dto_field(&recv, "age").expect("age field present");
+        assert_eq!(age.kind, TypeKind::Int);
+        let email = TypeFact::from_dto_field(&recv, "email").expect("email field present");
+        assert_eq!(email.kind, TypeKind::String);
+        assert!(TypeFact::from_dto_field(&recv, "missing").is_none());
+    }
+
+    /// Phase 6: a non-DTO receiver kind never produces a field fact —
+    /// `from_dto_field` falls through to the legacy copy-prop path.
+    #[test]
+    fn dto_field_lookup_on_non_dto_returns_none() {
+        for k in [
+            TypeKind::Int,
+            TypeKind::String,
+            TypeKind::Object,
+            TypeKind::Unknown,
+            TypeKind::HttpClient,
+        ] {
+            assert!(
+                TypeFact::from_dto_field(&k, "any_field").is_none(),
+                "non-DTO {k:?} must not produce a field fact",
+            );
+        }
+    }
+
+    /// Phase 6: nested DTO — the parent DTO's field type is
+    /// `TypeKind::Dto`, and `from_dto_field` returns that nested DTO
+    /// fact directly.  Phase 6.3 callers can recurse into the inner
+    /// fields by following the returned receiver's `as_dto()` chain.
+    #[test]
+    fn dto_field_lookup_supports_nested_dto() {
+        let mut inner = DtoFields::new("Address");
+        inner.insert("zip", TypeKind::String);
+        let mut outer = DtoFields::new("CreateUser");
+        outer.insert("address", TypeKind::Dto(inner.clone()));
+        outer.insert("age", TypeKind::Int);
+        let recv = TypeKind::Dto(outer);
+        let addr = TypeFact::from_dto_field(&recv, "address").expect("address present");
+        assert_eq!(addr.kind, TypeKind::Dto(inner));
+    }
+
+    /// Phase 6: an empty DTO (class declared but with no inferred
+    /// fields) never resolves field reads.  Documents the safe-fallback
+    /// invariant so the legacy path runs when class fields couldn't be
+    /// classified.
+    #[test]
+    fn empty_dto_never_resolves_fields() {
+        let recv = TypeKind::Dto(DtoFields::new("EmptyDto"));
+        assert!(TypeFact::from_dto_field(&recv, "anything").is_none());
+    }
+
+    /// Phase 6: an `Int`-typed field in a DTO survives the
+    /// type-suppression matrix exactly the same way a freestanding
+    /// `Int` does — sanity-check the bridge between Phase 6 and Phase 4.
+    #[test]
+    fn dto_int_field_suppresses_sql_query_via_matrix() {
+        use crate::labels::Cap;
+        let mut dto = DtoFields::new("CreateUser");
+        dto.insert("age", TypeKind::Int);
+        let field = TypeFact::from_dto_field(&TypeKind::Dto(dto), "age").unwrap();
+        let mut facts = HashMap::new();
+        facts.insert(SsaValue(0), field);
+        let result = TypeFactResult { facts };
+        assert!(is_type_safe_for_sink(
+            &[SsaValue(0)],
+            Cap::SQL_QUERY,
+            &result
+        ));
+        assert!(!is_type_safe_for_sink(
+            &[SsaValue(0)],
+            Cap::CODE_EXEC,
+            &result
+        ));
     }
 }

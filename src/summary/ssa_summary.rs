@@ -285,6 +285,25 @@ pub struct SsaFuncSummary {
     /// behaviour.
     #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
     pub return_path_facts: SmallVec<[PathFactReturnEntry; 2]>,
+    /// Per-call-site receiver-type info: `(call_ordinal, container_name)`.
+    ///
+    /// Populated during SSA lowering (`lower_all_functions_from_bodies`)
+    /// when type-fact analysis can resolve a method call's receiver SSA
+    /// value to a concrete [`crate::ssa::type_facts::TypeKind`] with a
+    /// non-empty [`crate::ssa::type_facts::TypeKind::container_name`].
+    ///
+    /// Consumed by [`crate::callgraph::build_call_graph`] to feed
+    /// `CalleeQuery.receiver_type` for the matching ordinal — letting
+    /// the call graph narrow indirect method-call edges to only those
+    /// targets whose defining container matches the inferred type.
+    /// Strictly additive: an empty map means today's name-only
+    /// resolution applies unchanged.
+    ///
+    /// Ordinal here is the per-function `CallMeta.call_ordinal` shared
+    /// with [`crate::summary::CalleeSite::ordinal`] so the two tables
+    /// can be joined by ordinal at call-graph build time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub typed_call_receivers: Vec<(u32, String)>,
 }
 
 /// A per-return-path [`PathFact`] entry.

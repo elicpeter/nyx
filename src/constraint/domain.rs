@@ -184,6 +184,12 @@ fn type_kind_index(kind: &TypeKind) -> u32 {
         TypeKind::Url => 10,
         TypeKind::HttpClient => 11,
         TypeKind::LocalCollection => 12,
+        // Phase 6 DTO types carry per-field structural info that the
+        // bitset domain can't represent.  Collapse to Unknown so callers
+        // still see "any type possible" rather than crashing on an
+        // unhandled variant.  Same-file/cross-file Dto-aware paths read
+        // the structured TypeKind directly, not via this index.
+        TypeKind::Dto(_) => 6,
     }
 }
 

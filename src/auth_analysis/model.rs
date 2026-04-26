@@ -214,6 +214,15 @@ pub struct AnalysisUnit {
     /// passes `is_id_like` — the framework guarantees the value is a
     /// number that cannot carry a SQL/file/shell payload.
     pub typed_bounded_vars: HashSet<String>,
+    /// Phase 6: per-DTO-extractor parameter, the field names whose
+    /// declared type is a payload-incompatible scalar.  Map key is the
+    /// parameter name (e.g. `dto`), value is the list of field names
+    /// (e.g. `["age", "count"]`).  Populated by
+    /// [`super::apply_typed_bounded_params`] only when the parameter
+    /// itself was recognised as a typed extractor by a Phase 1-2
+    /// matcher — bare parameters with no framework gate never lift
+    /// their fields.
+    pub typed_bounded_dto_fields: HashMap<String, Vec<String>>,
 }
 
 /// Per-function summary of which positional parameters are

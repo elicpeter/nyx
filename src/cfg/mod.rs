@@ -21,6 +21,7 @@ use std::collections::{HashMap, HashSet};
 mod blocks;
 mod conditions;
 mod decorators;
+mod dto;
 mod helpers;
 mod imports;
 mod literals;
@@ -58,6 +59,35 @@ use params::{
     is_configured_terminator,
 };
 
+/// Test-only re-export of [`extract_param_meta`] so the external
+/// `tests/typed_extractors_audit.rs` harness can drive the per-param
+/// classifier directly without spinning up the full scan pipeline.
+pub fn extract_param_meta_for_test<'a>(
+    func_node: tree_sitter::Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+) -> Vec<(String, Option<crate::ssa::type_facts::TypeKind>)> {
+    extract_param_meta(func_node, lang, code)
+}
+
+/// Test-only helper to populate the per-file DTO class map without
+/// running `build_cfg`.  Used by the Phase 6 audit harness in
+/// `tests/typed_extractors_audit.rs` to verify that
+/// `classify_param_type_*` resolves a same-file DTO via the
+/// thread-local map.
+pub fn populate_dto_classes_for_test(root: tree_sitter::Node<'_>, lang: &str, code: &[u8]) {
+    DTO_CLASSES.with(|cell| {
+        *cell.borrow_mut() = dto::collect_dto_classes(root, lang, code);
+    });
+}
+
+/// Test-only counterpart to [`populate_dto_classes_for_test`].  Always
+/// call this at the end of a test that populated the map so per-thread
+/// state never leaks into another test.
+pub fn clear_dto_classes_for_test() {
+    DTO_CLASSES.with(|cell| cell.borrow_mut().clear());
+}
+
 // -------------------------------------------------------------------------
 // Structural DFS index for function bodies
 // -------------------------------------------------------------------------
@@ -73,6 +103,15 @@ use params::{
 // before the next one starts.
 thread_local! {
     static FN_DFS_INDICES: RefCell<HashMap<usize, u32>> = RefCell::new(HashMap::new());
+    /// Phase 6: per-file DTO class definitions.  Populated at the top
+    /// of [`build_cfg`] by [`dto::collect_dto_classes`] so per-parameter
+    /// classifiers can resolve `@RequestBody T dto` /
+    /// `Json<CreateUser>` / `Annotated[CreateUser, Body()]` to a
+    /// [`crate::ssa::type_facts::TypeKind::Dto`] when the DTO type is
+    /// declared in the same file.  Cleared at the end of `build_cfg`
+    /// so thread-local state never leaks between files.
+    pub(crate) static DTO_CLASSES: RefCell<HashMap<String, crate::ssa::type_facts::DtoFields>>
+        = RefCell::new(HashMap::new());
 }
 
 /// Populate the per-file DFS-index map from a preorder walk of the
@@ -377,6 +416,14 @@ pub struct NodeInfo {
     /// FILE_IO / SHELL_ESCAPE sink suppression for provably numeric
     /// payloads.
     pub is_numeric_length_access: bool,
+    /// Phase 6.3: the field name read on the RHS of an assignment whose
+    /// RHS is a single member-access expression (e.g. `let x = dto.email`).
+    /// Set to `Some("email")` for that shape; left `None` otherwise.
+    /// Consumed by the type-fact analysis (`ssa::type_facts`) so reads
+    /// against a [`crate::ssa::type_facts::TypeKind::Dto`] receiver pick
+    /// up the field's declared `TypeKind`.  Strictly additive — when
+    /// `None`, the legacy copy-prop semantics apply.
+    pub member_field: Option<String>,
 }
 
 impl NodeInfo {
@@ -1098,6 +1145,66 @@ fn is_numeric_length_property(name: &str) -> bool {
 /// Consumed by the type-fact analysis (`ssa::type_facts::analyze_types`) to
 /// infer `TypeKind::Int` on the defined value so sink-cap suppression can
 /// treat `"row " + arr.length` as a non-injectable payload.
+/// Phase 6.3: when the RHS of an assignment / declaration is a single
+/// member-access expression (`let x = dto.email`, `x = obj.field`,
+/// `let x = obj["field"]`), return the property name.  The CFG type-fact
+/// analysis uses the recovered name to look up the field's declared
+/// [`crate::ssa::type_facts::TypeKind`] when the receiver is a
+/// [`crate::ssa::type_facts::TypeKind::Dto`].
+///
+/// Returns `None` for any other shape (function calls, complex
+/// expressions, computed-key subscripts, optional-chaining, etc.) so
+/// the legacy copy-prop / Unknown propagation continues to apply.
+fn detect_member_field_assignment(ast: Node, code: &[u8]) -> Option<String> {
+    // Pull the RHS the same way `detect_numeric_length_access` does so
+    // both detectors look at the same node grain.
+    let target = ast
+        .child_by_field_name("value")
+        .or_else(|| ast.child_by_field_name("right"))
+        .or_else(|| {
+            let mut cursor = ast.walk();
+            ast.named_children(&mut cursor)
+                .find(|c| matches!(c.kind(), "variable_declarator" | "init_declarator"))
+                .and_then(|d| {
+                    d.child_by_field_name("value")
+                        .or_else(|| d.child_by_field_name("initializer"))
+                })
+        })
+        .unwrap_or(ast);
+    extract_member_field_name(target, code)
+}
+
+fn extract_member_field_name(node: Node, code: &[u8]) -> Option<String> {
+    match node.kind() {
+        // JS / TS / Java / C / C++ / Go (selector) / Rust (field).
+        "member_expression"
+        | "member_access_expression"
+        | "field_expression"
+        | "selector_expression"
+        | "attribute" => {
+            let prop = node
+                .child_by_field_name("property")
+                .or_else(|| node.child_by_field_name("attribute"))
+                .or_else(|| node.child_by_field_name("field"))
+                .or_else(|| node.child_by_field_name("name"))?;
+            let text = text_of(prop, code)?;
+            // Defensive: reject anything that doesn't look like an
+            // identifier (e.g. numeric subscripts).  Allows ASCII
+            // letters / digits / underscore.
+            if text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !text.is_empty()
+            {
+                Some(text)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn detect_numeric_length_access(ast: Node, _lang: &str, code: &[u8]) -> bool {
     // Pull the value expression for variable declarations / assignments.
     // Other node shapes (e.g. plain member-expression reads) are checked
@@ -1929,6 +2036,7 @@ pub(super) fn push_node<'a>(
         string_prefix,
         is_eq_with_const: detect_eq_with_const(ast, lang),
         is_numeric_length_access: detect_numeric_length_access(ast, lang, code),
+        member_field: detect_member_field_assignment(ast, code),
     });
 
     debug!(
@@ -3413,6 +3521,13 @@ pub(crate) fn build_cfg<'a>(
     // function so thread-local state never leaks between files.
     populate_fn_dfs_indices(tree, lang);
 
+    // Phase 6: harvest DTO class definitions before any param classifier
+    // runs.  Empty for languages without a Phase 6 collector.  Cleared
+    // alongside the DFS map at end-of-build_cfg.
+    DTO_CLASSES.with(|cell| {
+        *cell.borrow_mut() = dto::collect_dto_classes(tree.root_node(), lang, code);
+    });
+
     // Create the top-level body graph (BodyId(0)).
     let (mut g, entry, exit) = create_body_graph(0, code.len(), None);
 
@@ -3538,6 +3653,8 @@ pub(crate) fn build_cfg<'a>(
     // Clear the per-file DFS-index map so it does not leak to the next
     // file built on this thread.
     clear_fn_dfs_indices();
+    // Phase 6: same hygiene for the DTO map.
+    DTO_CLASSES.with(|cell| cell.borrow_mut().clear());
 
     FileCfg {
         bodies,

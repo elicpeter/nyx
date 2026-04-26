@@ -2176,6 +2176,7 @@ fn ssa_summaries_round_trip() {
                 param_return_paths: vec![],
                 points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         ),
         (
@@ -2208,6 +2209,7 @@ fn ssa_summaries_round_trip() {
                 param_return_paths: vec![],
                 points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         ),
     ];
@@ -2378,6 +2380,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             param_return_paths: vec![],
             points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
+            typed_call_receivers: vec![],
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v1, &sums_v1)
@@ -2412,6 +2415,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             param_return_paths: vec![],
             points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
+            typed_call_receivers: vec![],
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v2, &sums_v2)
@@ -2467,6 +2471,7 @@ fn clear_drops_ssa_summaries_table() {
             param_return_paths: vec![],
             points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
+            typed_call_receivers: vec![],
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
@@ -2735,6 +2740,7 @@ fn make_test_ssa_summary() -> crate::summary::ssa_summary::SsaFuncSummary {
         param_return_paths: vec![],
         points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     }
 }
 

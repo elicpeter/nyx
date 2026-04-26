@@ -551,6 +551,12 @@ pub fn extract_ssa_func_summary(
         param_return_paths,
         return_path_facts,
         points_to,
+        // Populated post-extraction in
+        // `taint::lower_all_functions_from_bodies` once SSA optimisation
+        // has computed `opt.type_facts`.  Empty here means the
+        // extractor itself doesn't carry receiver-type info — the
+        // caller patches it in.
+        typed_call_receivers: Vec::new(),
     }
 }
 

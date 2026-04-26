@@ -5584,3 +5584,104 @@ fn link_alternative_paths_three_way_group() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Typed call-graph devirtualisation — Phase 2 (typed_call_receivers)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Phase 2: when a method call's receiver was constructed from a known
+/// constructor (`File::open` → `FileHandle`), the SSA-extraction
+/// pipeline must record `(call_ordinal, "FileHandle")` on the
+/// caller's [`crate::summary::ssa_summary::SsaFuncSummary::typed_call_receivers`]
+/// so Phase 3 can devirtualise the cross-file edge.
+///
+/// Uses Java because `FileInputStream` / `FileOutputStream` are part
+/// of the [`crate::ssa::type_facts::constructor_type`] table for Java
+/// and yield [`crate::ssa::type_facts::TypeKind::FileHandle`] without
+/// any framework annotation plumbing.
+#[test]
+fn typed_call_receivers_populated_for_constructor_typed_receiver() {
+    let src = br#"
+class Reader {
+    void read() {
+        FileInputStream f = new FileInputStream("/etc/passwd");
+        f.close();
+    }
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
+    let file_cfg = parse_lang(src, "java", lang);
+
+    let (summaries, _bodies) = super::extract_ssa_artifacts_from_file_cfg(
+        &file_cfg,
+        Lang::Java,
+        "Reader.java",
+        &file_cfg.summaries,
+        None,
+        None,
+    );
+
+    let read_sum = summaries
+        .iter()
+        .find(|(k, _)| k.name == "read")
+        .map(|(_, s)| s)
+        .expect("read() summary must be extracted");
+
+    let containers: Vec<&str> = read_sum
+        .typed_call_receivers
+        .iter()
+        .map(|(_, c)| c.as_str())
+        .collect();
+    assert!(
+        containers.contains(&"FileHandle"),
+        "FileInputStream-typed receiver must surface as `FileHandle` container; got {:?}",
+        read_sum.typed_call_receivers,
+    );
+}
+
+/// Phase 2 negative control: free-function calls (no receiver) must
+/// never appear in `typed_call_receivers`.  Even when the callee is a
+/// known type-producing constructor, it sits in the body as a Call
+/// with `receiver = None` and is not a candidate for devirtualisation.
+#[test]
+fn typed_call_receivers_skips_free_function_calls() {
+    // `new FileInputStream(...)` is a constructor invocation with no
+    // receiver — exactly the shape we want to ignore.
+    let src = br#"
+class Maker {
+    void make() {
+        new FileInputStream("/tmp/x");
+    }
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
+    let file_cfg = parse_lang(src, "java", lang);
+
+    let (summaries, _) = super::extract_ssa_artifacts_from_file_cfg(
+        &file_cfg,
+        Lang::Java,
+        "Maker.java",
+        &file_cfg.summaries,
+        None,
+        None,
+    );
+
+    // make() has zero parameters and no fresh-allocation return, so the
+    // generic insertion gate skips it.  The phase-2 patch only force-
+    // inserts when `typed_call_receivers` is non-empty — which it
+    // isn't here, since `new FileInputStream(...)` is a free-function-
+    // shaped constructor call (no SSA receiver).  So either the
+    // summary is absent, or — if some other side effect inserted it —
+    // its `typed_call_receivers` is empty.  Both forms prove no
+    // spurious typed entry was recorded.
+    let typed = summaries
+        .iter()
+        .find(|(k, _)| k.name == "make")
+        .map(|(_, s)| s.typed_call_receivers.clone())
+        .unwrap_or_default();
+    assert!(
+        typed.is_empty(),
+        "constructor-invocation Call has no receiver and must not surface a typed entry; \
+         got {typed:?}",
+    );
+}

@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 370
+    "corpus_size": 372
   },
   "cases": [
     {
@@ -11538,6 +11538,60 @@
       ],
       "disabled": false,
       "notes": "Phase 5: Axum `Path<i64>` is a framework-validated numeric extractor; the parameter cannot carry an injection payload nor bypass ownership, so the rule must not flag."
+    },
+    {
+      "case_id": "rs-auth-dto-int-field-001",
+      "file": "rust/auth/safe_dto_int_field_axum.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "typed-extractors-phase6-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Phase 6: Axum `Json<UpdateDoc>` whose `doc_id` field is `i64`. DTO field-level taint exempts `dto.doc_id` member-access subject; numeric DTO fields cannot bypass ownership."
+    },
+    {
+      "case_id": "rs-auth-dto-string-field-001",
+      "file": "rust/auth/unsafe_dto_string_field_axum.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-639",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "positive",
+        "typed-extractors-phase6-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Phase 6 negative-control: DTO whose `doc_id` field is `String` must NOT be exempted — String DTO fields can carry injection payloads, so the auth rule must continue to fire."
     },
     {
       "case_id": "js-safe-realrepo-001",

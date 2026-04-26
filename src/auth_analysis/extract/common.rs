@@ -349,6 +349,7 @@ pub fn build_function_unit(
         authorized_sql_vars: state.authorized_sql_vars,
         const_bound_vars: state.const_bound_vars,
         typed_bounded_vars: HashSet::new(),
+        typed_bounded_dto_fields: std::collections::HashMap::new(),
     }
 }
 

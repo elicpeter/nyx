@@ -450,14 +450,30 @@ fn is_const_bound_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
 /// scalar (numeric or boolean — see [`super::apply_typed_bounded_params`]).
 /// Spring `@PathVariable Long userId`, Axum `Path<i64>`, NestJS
 /// `@Param('id') id: number`, and FastAPI `user_id: int` all qualify.
-/// Only matches plain `Identifier`-kind subjects (no base/field) so
-/// member chains like `req.params.id` continue through the regular
-/// checks.
+///
+/// Phase 6: also matches member-access subjects like `dto.userId`
+/// when `dto` is a typed-extractor parameter recognised by a Phase
+/// 1-2 matcher AND the field's declared TypeKind is Int/Bool.
 fn is_typed_bounded_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
-    if subject.base.is_some() || subject.field.is_some() {
-        return false;
+    if subject.base.is_none() && subject.field.is_none() {
+        return unit.typed_bounded_vars.contains(&subject.name);
     }
-    unit.typed_bounded_vars.contains(&subject.name)
+    // Phase 6: member-access shape `base.field` whose `base` is a
+    // typed-extractor parameter and whose field is declared as an
+    // Int/Bool in the same-file DTO definition.  Per Hard Rule 3,
+    // only fires when the base param itself was recognised by a
+    // Phase 1-2 matcher — bare `dto.age` without a framework gate
+    // never lifts.
+    let Some(base) = subject.base.as_deref() else {
+        return false;
+    };
+    let Some(field) = subject.field.as_deref() else {
+        return false;
+    };
+    let root = base.split('.').next().unwrap_or(base);
+    unit.typed_bounded_dto_fields
+        .get(root)
+        .is_some_and(|fields| fields.iter().any(|f| f == field))
 }
 
 fn is_actor_context_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
@@ -654,6 +670,7 @@ mod tests {
             authorized_sql_vars: HashSet::new(),
             const_bound_vars: HashSet::new(),
             typed_bounded_vars: HashSet::new(),
+            typed_bounded_dto_fields: HashMap::new(),
         }
     }
 
