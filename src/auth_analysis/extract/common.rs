@@ -571,6 +571,17 @@ fn collect_unit_state(
         | "augmented_assignment"
         | "expression_statement" => {
             collect_const_string_binding(node, bytes, state);
+            // Ruby `@issue = Issue.find(params[:id])` is the canonical
+            // controller idiom: instance-variable assignment whose RHS
+            // is a row-fetch call.  The let_declaration arm above
+            // doesn't fire for this kind, so register the row
+            // population separately.  `collect_row_population` reads
+            // either `pattern`/`value` or `left`/`right`, so it works
+            // unchanged for Ruby `assignment` once the LHS recognises
+            // `instance_variable`.
+            if matches!(node.kind(), "assignment" | "assignment_expression") {
+                collect_row_population(node, bytes, state);
+            }
         }
         "for_expression" => {
             collect_for_row_binding(node, bytes, state);
@@ -773,7 +784,19 @@ fn collect_non_sink_binding(
 fn first_identifier_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
     if matches!(
         node.kind(),
-        "identifier" | "shorthand_property_identifier_pattern"
+        "identifier"
+            | "shorthand_property_identifier_pattern"
+            // Ruby `@foo` instance vars and `@@foo` class vars:
+            // Rails controllers populate the row via `@issue =
+            // Issue.find(...)`, so the row var is the *full* `@issue`
+            // text — chain_root in checks.rs strips on `.` only, so an
+            // auth check on `@issue.visible?` resolves to root `@issue`,
+            // matching the row var.
+            | "instance_variable"
+            | "class_variable"
+            // Ruby globals `$foo` are unusual but match the same
+            // handler-state idiom — kept symmetric with @-vars.
+            | "global_variable"
     ) {
         let value = text(node, bytes);
         if !value.is_empty() {
@@ -906,7 +929,14 @@ fn collect_member_alias_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitSt
 /// check route handler that wraps the read across two lines was
 /// flagged despite a textual auth check on the resulting row.
 fn collect_row_population(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
-    let Some(pattern) = node.child_by_field_name("pattern") else {
+    // Most languages expose `pattern`/`value` on let / const / var
+    // declarations.  Ruby `assignment` uses `left`/`right` instead, so
+    // accept either.  When both fields are missing, the node isn't an
+    // RHS-bound binding and we skip.
+    let Some(pattern) = node
+        .child_by_field_name("pattern")
+        .or_else(|| node.child_by_field_name("left"))
+    else {
         return;
     };
     let Some(var_name) = first_identifier_name(pattern, bytes) else {
@@ -915,7 +945,10 @@ fn collect_row_population(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
     if var_name.is_empty() {
         return;
     }
-    let Some(value) = node.child_by_field_name("value") else {
+    let Some(value) = node
+        .child_by_field_name("value")
+        .or_else(|| node.child_by_field_name("right"))
+    else {
         return;
     };
     let call_node = unwrap_try_like(value);
@@ -3026,7 +3059,15 @@ pub fn extract_value_refs(node: Node<'_>, bytes: &[u8]) -> Vec<ValueRef> {
                     refs
                 })
         }
-        "identifier" => vec![ValueRef {
+        "identifier"
+        // Ruby `@foo` instance variables and `@@foo` class variables are
+        // leaves with no named children, so the catch-all recurse arm
+        // would yield an empty subject set.  Surface them as Identifier
+        // value-refs so receiver-side ownership checks (`@issue.visible?`)
+        // produce a subject that the row-fetch exemption can match.
+        | "instance_variable"
+        | "class_variable"
+        | "global_variable" => vec![ValueRef {
             source_kind: ValueSourceKind::Identifier,
             name: text(node, bytes),
             base: None,

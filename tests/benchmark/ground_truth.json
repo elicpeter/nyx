@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 401
+    "corpus_size": 406
   },
   "cases": [
     {
@@ -12518,7 +12518,7 @@
         "real-repo-precision-2026-04-27"
       ],
       "disabled": false,
-      "notes": "Vulnerable counterpart to ts-auth-realrepo-001: `userId = req.params.targetUserId` is a foreign id (URL param), not a session copy — the rule must still fire."
+      "notes": "Vulnerable counterpart to ts-auth-realrepo-001: `userId = req.params.targetUserId` is a foreign id (URL param), not a session copy \u2014 the rule must still fire."
     },
     {
       "case_id": "js-auth-realrepo-001",
@@ -12572,7 +12572,7 @@
         "real-repo-precision-2026-04-27"
       ],
       "disabled": false,
-      "notes": "Destructure shapes: `const { user } = ctx.session` / `const { user } = await getServerSession()` / `const { user: me } = ctx.session` / `const { id } = req.user`.  cal.com NextAuth idiom — destructured local IS the actor (or actor's id), not a foreign tenant id."
+      "notes": "Destructure shapes: `const { user } = ctx.session` / `const { user } = await getServerSession()` / `const { user: me } = ctx.session` / `const { id } = req.user`.  cal.com NextAuth idiom \u2014 destructured local IS the actor (or actor's id), not a foreign tenant id."
     },
     {
       "case_id": "ts-auth-realrepo-004",
@@ -12680,7 +12680,177 @@
         "real-repo-precision-2026-04-27"
       ],
       "disabled": false,
-      "notes": "Negative counterpart for the LocalUserView recogniser: handler takes the typed extractor but mutates a row by `req.target_user_id` (foreign id) without any ownership check — must still flag.  Guards against an over-broad recogniser that would treat any handler with a self-actor extractor as authorised by default."
+      "notes": "Negative counterpart for the LocalUserView recogniser: handler takes the typed extractor but mutates a row by `req.target_user_id` (foreign id) without any ownership check \u2014 must still flag.  Guards against an over-broad recogniser that would treat any handler with a self-actor extractor as authorised by default."
+    },
+    {
+      "case_id": "ruby-safe-ar-query-shapes-001",
+      "file": "ruby/safe/safe_active_record_query_shapes.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "",
+      "provenance": "real-repo-precision-2026-04-27",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "active-record",
+        "rails",
+        "sqli",
+        "shape-safe",
+        "real-repo-precision"
+      ],
+      "disabled": false,
+      "notes": "ActiveRecord query methods (where/order/group/having/joins/pluck) with parameter-safe arg-0 shapes (hash, symbol, array, parameterised string) \u2014 Rails escapes the values, no SQLi exposure."
+    },
+    {
+      "case_id": "ruby-sqli-where-string-interp-001",
+      "file": "ruby/sqli/sqli_where_string_interpolation.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "real-repo-precision-2026-04-27",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "tags": [
+        "active-record",
+        "rails",
+        "sqli",
+        "string-interpolation",
+        "real-repo-precision"
+      ],
+      "disabled": false,
+      "notes": "Counterpart to safe_active_record_query_shapes \u2014 same  method becomes a real SQLi sink when arg 0 is a string with #{...} interpolation. Engine must keep flagging this even though the safe-shape fixtures suppress SQL_QUERY at the same callee."
+    },
+    {
+      "case_id": "ruby-sqli-where-chained-interp-001",
+      "file": "ruby/sqli/sqli_where_chained_interpolation.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "real-repo-precision-2026-04-27",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "tags": [
+        "active-record",
+        "rails",
+        "sqli",
+        "string-interpolation",
+        "chained",
+        "real-repo-precision"
+      ],
+      "disabled": false,
+      "notes": "Chained shape: Model.where(\"...#{x}...\").preload(...).to_a. CFG collapses chained calls into one node whose outermost callee is .to_a (no args). The shape suppressor walks the receiver chain to reach the inner where(...) \u2014 chain-walking only suppresses SAFE shapes, so this dangerous form must still fire."
+    },
+    {
+      "case_id": "ruby-safe-post-fetch-ownership-001",
+      "file": "ruby/safe/safe_post_fetch_ownership_check.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "",
+      "provenance": "real-repo-precision-2026-04-27",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rb.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "rails",
+        "auth",
+        "post-fetch-check",
+        "real-repo-precision"
+      ],
+      "disabled": false,
+      "notes": "Rails canonical \"load by id, then check ownership\" idiom \u2014 row-fetch exemption (row_population_data reverse-walk in auth_check_covers_subject) closes the gap when the per-record permission check appears textually after the fetch."
+    },
+    {
+      "case_id": "ruby-auth-missing-post-fetch-001",
+      "file": "ruby/auth/auth_missing_post_fetch_check.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-639",
+      "provenance": "real-repo-precision-2026-04-27",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rb.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "rails",
+        "auth",
+        "missing-ownership",
+        "real-repo-precision"
+      ],
+      "disabled": false,
+      "notes": "Counterpart to safe_post_fetch_ownership_check \u2014 same controller shape but the per-record permission check is omitted, so the row-fetch exemption does not fire. Engine must keep flagging this even though the safe-shape fixtures train the exemption on the same Issue.find(params[:id]) pattern."
     }
   ]
 }

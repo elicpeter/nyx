@@ -5,7 +5,7 @@ mod java;
 mod javascript;
 mod php;
 mod python;
-mod ruby;
+pub(crate) mod ruby;
 mod rust;
 mod typescript;
 

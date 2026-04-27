@@ -122,30 +122,7 @@ fn byte_offset_to_point(tree: &tree_sitter::Tree, byte: usize) -> tree_sitter::P
         .unwrap_or_else(|| tree_sitter::Point { row: 0, column: 0 })
 }
 
-/// Extract the source line containing `byte_offset`, trimmed and capped at 120 chars.
-fn extract_line_snippet(src: &[u8], byte_offset: usize) -> Option<String> {
-    if byte_offset >= src.len() {
-        return None;
-    }
-    let line_start = src[..byte_offset]
-        .iter()
-        .rposition(|&b| b == b'\n')
-        .map_or(0, |p| p + 1);
-    let line_end = src[byte_offset..]
-        .iter()
-        .position(|&b| b == b'\n')
-        .map_or(src.len(), |p| byte_offset + p);
-    let line = std::str::from_utf8(&src[line_start..line_end]).ok()?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed.len() > 120 {
-        Some(format!("{}...", &trimmed[..120]))
-    } else {
-        Some(trimmed.to_string())
-    }
-}
+use crate::utils::snippet::line_snippet as extract_line_snippet;
 
 /// Resolve a `file_rel` (relative to `scan_root` per
 /// [`normalize_namespace`] convention) back to the absolute path the

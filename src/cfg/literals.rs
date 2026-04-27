@@ -244,6 +244,76 @@ pub(super) fn has_keyword_arg(call_node: Node, keyword_name: &str, code: &[u8]) 
     false
 }
 
+/// Inspect the first positional argument of a call node and return its
+/// tree-sitter `kind()` plus a flag indicating whether any descendant is an
+/// `interpolation` node.  Skips parenthesisation (`(arg0)` is treated as
+/// `arg0`).  Returns `None` when the call has no arguments.
+///
+/// Used by per-language shape-aware sink suppression — for example, Ruby
+/// ActiveRecord query methods (`where`, `order`, `pluck`, …) are intrinsically
+/// parameterised when arg 0 is a hash/symbol/array/non-interpolated string,
+/// regardless of taint reaching that argument.
+pub(super) fn arg0_kind_and_interpolation(call_node: Node) -> Option<(String, bool)> {
+    let args = call_node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let arg0 = args.named_children(&mut cursor).next()?;
+    let arg0 = unwrap_parens(arg0);
+    let kind = arg0.kind().to_string();
+    let has_interp = subtree_has_interpolation(arg0);
+    Some((kind, has_interp))
+}
+
+/// Walk a Ruby method-chain receiver-side looking for the inner call whose
+/// method identifier matches one of `target_methods`, then return that
+/// inner call's [`arg0_kind_and_interpolation`].  Used when the CFG node
+/// represents a chained expression like `Model.where(...).preload(...).to_a`
+/// — the outermost call (`to_a`) has no arguments, so the shape suppressor
+/// must reach down the chain to inspect `where`'s arg 0.
+///
+/// Conservative: returns `None` if the chain doesn't contain a matching
+/// method, so callers fall through to the no-suppression path.
+pub(super) fn ruby_chain_arg0_for_method(
+    expr: Node,
+    target_methods: &[&str],
+    code: &[u8],
+) -> Option<(String, bool)> {
+    let n = unwrap_parens(expr);
+    if n.kind() == "call"
+        && let Some(method) = n.child_by_field_name("method")
+        && let Some(name) = text_of(method, code)
+        && target_methods.iter().any(|m| *m == name)
+    {
+        return arg0_kind_and_interpolation(n);
+    }
+    // Recurse into the receiver chain (`call.receiver` → next call up).
+    if n.kind() == "call"
+        && let Some(recv) = n
+            .child_by_field_name("receiver")
+            .or_else(|| n.child_by_field_name("object"))
+        && let Some(found) = ruby_chain_arg0_for_method(recv, target_methods, code)
+    {
+        return Some(found);
+    }
+    // Also descend into named children to handle wrapping (assignment RHS,
+    // begin-end blocks, parenthesised expressions, etc.).
+    let mut cursor = n.walk();
+    for c in n.named_children(&mut cursor) {
+        if let Some(found) = ruby_chain_arg0_for_method(c, target_methods, code) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn subtree_has_interpolation(n: Node) -> bool {
+    if n.kind() == "interpolation" || n.kind() == "string_interpolation" {
+        return true;
+    }
+    let mut cursor = n.walk();
+    n.named_children(&mut cursor)
+        .any(subtree_has_interpolation)
+}
+
 /// Recursively find a call-expression node within an AST subtree (up to
 /// 4 levels deep).  Unlike `find_call_node` which only checks 2 levels,
 /// this handles `await`-wrapped calls inside declarations.

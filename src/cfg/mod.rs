@@ -49,11 +49,11 @@ use imports::{extract_import_bindings, extract_promisify_aliases};
 #[cfg(test)]
 use literals::has_sql_placeholders;
 use literals::{
-    call_ident_of, def_use, detect_rust_replace_chain_sanitizer, extract_arg_callees,
-    extract_arg_string_literals, extract_arg_uses, extract_const_keyword_arg,
+    arg0_kind_and_interpolation, call_ident_of, def_use, detect_rust_replace_chain_sanitizer,
+    extract_arg_callees, extract_arg_string_literals, extract_arg_uses, extract_const_keyword_arg,
     extract_const_string_arg, extract_destination_field_idents, extract_kwargs,
     extract_literal_rhs, find_call_node, find_call_node_deep, has_keyword_arg,
-    has_only_literal_args, is_parameterized_query_call,
+    has_only_literal_args, is_parameterized_query_call, ruby_chain_arg0_for_method,
 };
 use params::{
     compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
@@ -1755,6 +1755,53 @@ pub(super) fn push_node<'a>(
                 if let Some(caps) = detect_rust_replace_chain_sanitizer(cn, code) {
                     labels.push(DataLabel::Sanitizer(caps));
                 }
+            }
+        }
+    }
+
+    // Shape-based sanitizer synthesis for Ruby ActiveRecord query methods.
+    // The static label table marks `where` / `order` / `pluck` / `group` /
+    // `having` / `joins` as `Sink(SQL_QUERY)` because their string-interpolation
+    // form (`Model.where("id = #{x}")`) is a real SQLi vector.  But the same
+    // methods are intrinsically parameterised when arg 0 is a hash, symbol,
+    // array, or non-interpolated string — Rails escapes the values.  Rather
+    // than dropping the sink (which would lose the genuine TPs), synthesise
+    // a same-node `Sanitizer(SQL_QUERY)` for the safe shapes; this clears
+    // SQL taint at the call and reflexively dominates the sink, suppressing
+    // both `taint-unsanitised-flow` and `cfg-unguarded-sink` for the safe
+    // forms while leaving the dangerous ones to fire.
+    //
+    // Chained calls (`Model.where(...).preload(...).to_a`) collapse into a
+    // single CFG node whose outer `call_ast` may be `to_a` (no args). The
+    // shape inspection has to walk the receiver chain to reach the AR query
+    // call itself — `ruby_chain_arg0_for_method` does that walk.
+    if (lang == "ruby" || lang == "rb")
+        && labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(Cap::SQL_QUERY)))
+        && !labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Sanitizer(c) if c.contains(Cap::SQL_QUERY)))
+    {
+        // Identify the matched AR query method from the callee `text`
+        // (e.g. "Issue.where" → "where", "joins(:project).where" → "where").
+        let leaf = text
+            .rsplit(|c: char| c == '.' || c == ':')
+            .next()
+            .unwrap_or(&text);
+        const AR_QUERY_METHODS: &[&str] =
+            &["where", "order", "group", "having", "joins", "pluck"];
+        if AR_QUERY_METHODS.iter().any(|m| *m == leaf) {
+            // Try the outer call's arg 0 first (handles direct calls);
+            // fall back to walking the receiver chain for collapsed
+            // chained-call CFG nodes.
+            let shape = call_ast
+                .and_then(arg0_kind_and_interpolation)
+                .or_else(|| ruby_chain_arg0_for_method(ast, &[leaf], code));
+            if let Some((arg0_kind, has_interp)) = shape
+                && crate::labels::ruby::ar_query_safe_shape(&text, &arg0_kind, has_interp)
+            {
+                labels.push(DataLabel::Sanitizer(Cap::SQL_QUERY));
             }
         }
     }

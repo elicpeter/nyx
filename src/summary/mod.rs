@@ -112,32 +112,7 @@ impl<'a> SinkSiteLocator<'a> {
     }
 }
 
-/// Extract the source line containing `byte_offset`, trimmed and capped at
-/// 120 chars.  Returns `None` when the offset is out of range or the line
-/// is entirely blank after trimming.
-pub(crate) fn line_snippet(src: &[u8], byte_offset: usize) -> Option<String> {
-    if byte_offset >= src.len() {
-        return None;
-    }
-    let line_start = src[..byte_offset]
-        .iter()
-        .rposition(|&b| b == b'\n')
-        .map_or(0, |p| p + 1);
-    let line_end = src[byte_offset..]
-        .iter()
-        .position(|&b| b == b'\n')
-        .map_or(src.len(), |p| byte_offset + p);
-    let line = std::str::from_utf8(&src[line_start..line_end]).ok()?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed.len() > 120 {
-        Some(format!("{}...", &trimmed[..120]))
-    } else {
-        Some(trimmed.to_string())
-    }
-}
+pub(crate) use crate::utils::snippet::line_snippet;
 
 /// Union two `SmallVec<[SinkSite; 1]>` lists with `(file_rel, line, col,
 /// cap)` dedup.  Preserves insertion order of `existing` then appends any

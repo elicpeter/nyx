@@ -615,6 +615,38 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "verify_access!".into(),
                 "can_access?".into(),
                 "can?".into(),
+                // Rails per-record permission predicates — the canonical
+                // "load by id, then check on the loaded record" idiom
+                // (see redmine `app/controllers/issues_controller.rb`,
+                // mastodon controllers, diaspora ApplicationController).
+                // Combined with `row_population_data` reverse-walk, this
+                // recognises the post-fetch ownership check that is
+                // textually after the find call.
+                "visible?".into(),
+                "editable?".into(),
+                "editable_by?".into(),
+                "deletable?".into(),
+                "deletable_by?".into(),
+                "destroyable?".into(),
+                "destroyable_by?".into(),
+                "commentable?".into(),
+                "commentable_by?".into(),
+                "permitted?".into(),
+                "accessible?".into(),
+                "accessible_by?".into(),
+                "authorized?".into(),
+                "allowed_to?".into(),
+                "allowed?".into(),
+                "viewable?".into(),
+                "viewable_by?".into(),
+                "writable?".into(),
+                "writable_by?".into(),
+                "readable?".into(),
+                "readable_by?".into(),
+                "manageable?".into(),
+                "manageable_by?".into(),
+                "owned_by?".into(),
+                "belongs_to?".into(),
             ],
             mutation_indicator_names: vec![
                 "update".into(),
