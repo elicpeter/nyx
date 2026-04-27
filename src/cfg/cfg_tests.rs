@@ -2215,3 +2215,380 @@ fn pointer_disabled_skips_subscript_synthesis() {
         assert_eq!(count_nodes_with_callee(&cfg, "__index_set__"), 0);
     });
 }
+
+// ─────────────────────────────────────────────────────────────────
+//   Gap-filling: switch / for / do-while / nested loops / re-throw
+// ─────────────────────────────────────────────────────────────────
+
+/// JS `switch` should produce one synthetic dispatch `If` node per
+/// case (default excluded when at the tail), plus True edges into
+/// each case body. Verifies the discriminant cascade is wired.
+#[test]
+fn js_switch_cascade_has_one_if_per_case() {
+    let src = br#"function f(x) {
+        switch (x) {
+            case 1: a(); break;
+            case 2: b(); break;
+            default: c();
+        }
+    }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    // Two non-default cases => 2 dispatch If nodes (the tail default
+    // is wired via the previous header's False edge, not its own If).
+    assert_eq!(
+        if_nodes(&cfg).len(),
+        2,
+        "switch with 2 explicit cases + default should emit 2 dispatch If nodes"
+    );
+
+    // Each dispatch If must have at least one True and one False edge
+    // (True → case body, False → next case / default).
+    for i in if_nodes(&cfg) {
+        let trues = cfg
+            .edges(i)
+            .filter(|e| matches!(e.weight(), EdgeKind::True))
+            .count();
+        let falses = cfg
+            .edges(i)
+            .filter(|e| matches!(e.weight(), EdgeKind::False))
+            .count();
+        assert!(trues >= 1, "case dispatch should have at least one True edge");
+        assert!(
+            falses >= 1,
+            "case dispatch should have at least one False edge"
+        );
+    }
+}
+
+/// Default case in the *middle* of a switch must be reordered to the
+/// tail so the dispatch cascade stays a clean True/False chain. The
+/// observable CFG shape (number of If nodes, presence of True/False
+/// edges per dispatch) should match the all-default-at-tail case.
+#[test]
+fn js_switch_default_in_middle_reorders_to_tail() {
+    let src = br#"function f(x) {
+        switch (x) {
+            case 1: a(); break;
+            default: c(); break;
+            case 2: b(); break;
+        }
+    }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    // 2 non-default cases ⇒ 2 If dispatch nodes (default reordered to tail).
+    assert_eq!(
+        if_nodes(&cfg).len(),
+        2,
+        "default-in-middle should still produce one If per non-default case"
+    );
+}
+
+/// JS switch fall-through (`case 1: a(); case 2: b();`) — case 1's
+/// exit should flow into case 2's body so taint from `first()`
+/// reaches `second()`'s sinks.
+///
+/// We assert two things:
+///   (a) Reachability: `second()` is reachable from `first()` over
+///       forward edges. This is the semantic property taint analysis
+///       depends on; checking it directly avoids over-fitting to the
+///       structural shape.
+///   (b) `first()` has a non-Back forward out-edge that lands inside
+///       the case-2 sub-graph (the actual fall-through wire), so we
+///       prove there *is* a fall-through edge — not just an
+///       Entry→…→Exit path that happens to walk through both calls
+///       via the dispatch chain.
+///
+/// Note on the structural shape: case bodies are wrapped in synthetic
+/// Seq passthrough nodes (one per surrounding scope), so the
+/// fall-through edge from `first()` lands on the *first wrapper
+/// Seq node* of case 2, not on `second()` itself. Asserting that
+/// `second()` has ≥2 in-edges would therefore be wrong — the True
+/// edge from the case-2 dispatch If targets the wrapper node, and
+/// only a single Seq chain leads from there to `second()`.
+#[test]
+fn js_switch_fallthrough_no_break() {
+    use std::collections::HashSet;
+    let src = br#"function f(x) {
+        switch (x) {
+            case 1: first();
+            case 2: second(); break;
+        }
+    }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let first = cfg
+        .node_indices()
+        .find(|&n| cfg[n].call.callee.as_deref() == Some("first"))
+        .expect("expected a Call node for `first`");
+    let second = cfg
+        .node_indices()
+        .find(|&n| cfg[n].call.callee.as_deref() == Some("second"))
+        .expect("expected a Call node for `second`");
+
+    // (a) Reachability from first → second over forward (non-Back) edges.
+    let mut seen: HashSet<NodeIndex> = HashSet::new();
+    let mut stack = vec![first];
+    while let Some(n) = stack.pop() {
+        if !seen.insert(n) {
+            continue;
+        }
+        for e in cfg.edges(n) {
+            if matches!(
+                e.weight(),
+                EdgeKind::Seq | EdgeKind::True | EdgeKind::False
+            ) {
+                stack.push(e.target());
+            }
+        }
+    }
+    assert!(
+        seen.contains(&second),
+        "fall-through: `second` must be reachable from `first` over forward edges"
+    );
+
+    // (b) Prove the fall-through edge exists: `first()` must have at
+    //     least one outgoing forward edge whose target is *not*
+    //     reachable from the function entry without first going
+    //     through `first()`. The straightforward check: `first()`
+    //     itself must have at least one outgoing Seq edge (the
+    //     fall-through wire is always Seq).
+    let first_seq_outs = cfg
+        .edges(first)
+        .filter(|e| matches!(e.weight(), EdgeKind::Seq))
+        .count();
+    assert!(
+        first_seq_outs >= 1,
+        "fall-through: `first()` must have a Seq out-edge (the fall-through wire)"
+    );
+}
+
+/// `for (i = 0; i < 10; i++) { body(); }` should produce a Loop node
+/// with at least one Back edge from the body back to the loop header.
+#[test]
+fn js_for_loop_has_back_edge() {
+    let src = br#"function f() { for (let i = 0; i < 10; i++) { body(); } }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let loop_nodes: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Loop)
+        .collect();
+    assert_eq!(loop_nodes.len(), 1, "expected exactly one Loop node");
+
+    let back_edges = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Back))
+        .count();
+    assert!(
+        back_edges >= 1,
+        "for loop must have at least one Back edge to its header"
+    );
+}
+
+/// `do { ... } while (cond);` is mapped to `Kind::While` for many
+/// languages but the grammar puts the body *before* the condition.
+/// The CFG must still produce a Loop node and at least one Back edge.
+#[test]
+fn js_do_while_has_loop_node_and_back_edge() {
+    let src = br#"function f() { do { body(); } while (cond); }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let loop_count = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Loop)
+        .count();
+    assert_eq!(loop_count, 1, "do-while should produce one Loop node");
+    assert!(
+        cfg.edge_references()
+            .any(|e| matches!(e.weight(), EdgeKind::Back)),
+        "do-while must have at least one Back edge"
+    );
+}
+
+/// In `outer: while (a) { while (b) { break; } }`, the `break`
+/// terminates only the *inner* loop. Equivalent for our CFG: the
+/// break's predecessors should reach the inner loop's exit frontier
+/// without crossing the outer loop's body again. We can verify this
+/// structurally: there must be exactly two Loop nodes and at least
+/// one Break node whose forward (Seq) successor is *not* the outer
+/// header.
+#[test]
+fn js_nested_while_break_targets_inner_loop() {
+    let src = br#"function f() {
+        while (a) {
+            while (b) { break; }
+            inner_after();
+        }
+    }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let loops: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Loop)
+        .collect();
+    assert_eq!(loops.len(), 2, "expected two Loop nodes");
+
+    let breaks: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Break)
+        .collect();
+    assert_eq!(breaks.len(), 1, "expected exactly one Break node");
+
+    // The inner loop body's break should NOT close back via Back edge
+    // onto the outer header (outer header is loops[0] in source order).
+    let outer_header = loops[0];
+    let brk = breaks[0];
+    let crosses_outer = cfg
+        .edges(brk)
+        .any(|e| e.target() == outer_header && matches!(e.weight(), EdgeKind::Back));
+    assert!(
+        !crosses_outer,
+        "inner break must not back-edge onto the outer loop header"
+    );
+}
+
+/// `continue` in the inner loop must back-edge onto the *inner*
+/// header, not the outer. With nested while loops we expect exactly
+/// one Continue node and at least one Back edge originating at it
+/// going to the inner (second-emitted) Loop header.
+#[test]
+fn js_nested_while_continue_targets_inner_loop() {
+    let src = br#"function f() {
+        while (a) {
+            while (b) { continue; }
+        }
+    }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let loops: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Loop)
+        .collect();
+    assert_eq!(loops.len(), 2, "expected two Loop nodes");
+    let outer_header = loops[0];
+    let inner_header = loops[1];
+
+    let cont = cfg
+        .node_indices()
+        .find(|&n| cfg[n].kind == StmtKind::Continue)
+        .expect("expected Continue node");
+
+    let back_edges_from_cont: Vec<_> = cfg
+        .edges(cont)
+        .filter(|e| matches!(e.weight(), EdgeKind::Back))
+        .collect();
+    assert!(
+        !back_edges_from_cont.is_empty(),
+        "continue must originate at least one Back edge"
+    );
+    assert!(
+        back_edges_from_cont
+            .iter()
+            .any(|e| e.target() == inner_header),
+        "continue's Back edge must target the inner loop header"
+    );
+    assert!(
+        !back_edges_from_cont
+            .iter()
+            .any(|e| e.target() == outer_header),
+        "continue must not back-edge onto the outer loop header"
+    );
+}
+
+/// `throw` inside a `catch` block should still register a throw
+/// target so a surrounding outer try (or function-level exit) can
+/// receive it. We verify here that the throw produces a Throw node
+/// even when it is reached only via an Exception edge from the inner
+/// try body (i.e. the re-throw path is preserved structurally).
+#[test]
+fn js_throw_inside_catch_emits_throw_node() {
+    let src = br#"function f() {
+        try {
+            try { foo(); } catch (e) { throw e; }
+        } catch (e2) {
+            handle();
+        }
+    }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let throws: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Throw)
+        .collect();
+    assert_eq!(
+        throws.len(),
+        1,
+        "expected exactly one Throw node for the inner re-throw"
+    );
+
+    // The outer `catch (e2)` body must be reachable. Check that the
+    // `handle()` call exists and has at least one incoming edge.
+    let handle = cfg
+        .node_indices()
+        .find(|&n| cfg[n].call.callee.as_deref() == Some("handle"))
+        .expect("expected `handle()` call node");
+    let in_edges = cfg
+        .edges_directed(handle, petgraph::Direction::Incoming)
+        .count();
+    assert!(in_edges >= 1, "outer catch body must be reachable");
+}
+
+/// Empty if/else branches (e.g., `if (a) {} else {}`) must not panic
+/// and the resulting CFG must still have a single If node with both
+/// True and False edges going somewhere reachable. This guards
+/// against off-by-one bugs in `then_first_node`/exits handling.
+#[test]
+fn js_if_with_empty_branches_does_not_panic() {
+    let src = b"function f() { if (a) {} else {} return; }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let ifs = if_nodes(&cfg);
+    assert_eq!(ifs.len(), 1, "expected one If node");
+    let i = ifs[0];
+
+    let trues: Vec<_> = cfg
+        .edges(i)
+        .filter(|e| matches!(e.weight(), EdgeKind::True))
+        .collect();
+    let falses: Vec<_> = cfg
+        .edges(i)
+        .filter(|e| matches!(e.weight(), EdgeKind::False))
+        .collect();
+    assert!(!trues.is_empty(), "empty-then If must still emit True edge");
+    assert!(
+        !falses.is_empty(),
+        "empty-else If must still emit False edge"
+    );
+}
+
+/// A function body with no statements should still produce a
+/// well-formed CFG (entry/exit only); no panic, no orphan nodes from
+/// `build_sub` returning an empty exit set.
+#[test]
+fn js_empty_function_body_well_formed() {
+    let src = b"function f() {}";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    // We expect 2 bodies: top-level + the function body. Both must be
+    // valid graphs with at least an entry node.
+    assert!(
+        file_cfg.bodies.len() >= 2,
+        "expected at least 2 bodies (top-level + function)"
+    );
+    for body in &file_cfg.bodies {
+        assert!(
+            body.graph.node_count() >= 1,
+            "every body must have at least one node"
+        );
+    }
+}

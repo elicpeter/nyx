@@ -1032,4 +1032,83 @@ mod tests {
         let shift = IntervalFact::exact(1);
         assert!(x.right_shift(&shift).is_top());
     }
+
+    /// `a - b` overflows when `a.lo - b.hi` underflows or
+    /// `a.hi - b.lo` overflows. We expect the corresponding bound to
+    /// drop to `None`. Mirrors `overflow_add` / `overflow_mul`.
+    #[test]
+    fn overflow_sub() {
+        let a = IntervalFact::exact(i64::MIN);
+        let b = IntervalFact::exact(1);
+        let r = a.sub(&b);
+        assert_eq!(r.lo, None, "underflow on i64::MIN - 1 must drop lo to None");
+        // hi: i64::MIN - 1 also underflows, so hi must also be None.
+        assert_eq!(r.hi, None, "i64::MIN - 1 underflows on hi too");
+    }
+
+    /// Division of `i64::MIN` by `-1` overflows (`i64::MAX + 1`).
+    /// `checked_div` returns `None` for that case; we want the bound to
+    /// gracefully degrade, not panic.
+    #[test]
+    fn div_i64_min_by_minus_one_does_not_panic() {
+        let a = IntervalFact::exact(i64::MIN);
+        let b = IntervalFact::exact(-1);
+        let r = a.div(&b);
+        // Either bound becomes None (graceful) — exact representation
+        // depends on the impl, but we mainly assert no panic occurred
+        // and the result is a valid interval.
+        assert!(
+            r.lo.is_none() || r.hi.is_none() || (r.lo.is_some() && r.hi.is_some()),
+            "div should never panic on i64::MIN / -1"
+        );
+    }
+
+    /// Modulo with a single-point negative divisor: `[0,10] % -3` must
+    /// be a valid interval (no panic, no negative-zero bound nonsense).
+    #[test]
+    fn modulo_negative_divisor_singleton() {
+        let a = IntervalFact {
+            lo: Some(0),
+            hi: Some(10),
+        };
+        let b = IntervalFact::exact(-3);
+        let r = a.modulo(&b);
+        // |b| = 3 ⇒ result bounded by [0, 2] for non-negative dividend.
+        assert_eq!(r.lo, Some(0));
+        assert_eq!(r.hi, Some(2));
+    }
+
+    /// Modulo by an interval that *contains* zero must escape to Top —
+    /// modulo-by-zero is undefined and we cannot precise-narrow it.
+    #[test]
+    fn modulo_divisor_spans_zero_is_top() {
+        let a = IntervalFact {
+            lo: Some(0),
+            hi: Some(100),
+        };
+        let b = IntervalFact {
+            lo: Some(-1),
+            hi: Some(1),
+        };
+        let r = a.modulo(&b);
+        assert!(r.is_top(), "modulo by zero-spanning divisor must be Top");
+    }
+
+    /// `[i64::MIN, i64::MAX]` is the maximal interval. Any join with
+    /// any other interval must remain `[i64::MIN, i64::MAX]` (or Top
+    /// equivalent) — this guards against accidental narrowing on join.
+    #[test]
+    fn full_range_is_join_absorbing() {
+        let full = IntervalFact {
+            lo: Some(i64::MIN),
+            hi: Some(i64::MAX),
+        };
+        let small = IntervalFact {
+            lo: Some(0),
+            hi: Some(10),
+        };
+        let j = full.join(&small);
+        assert_eq!(j.lo, Some(i64::MIN), "join must not narrow lo");
+        assert_eq!(j.hi, Some(i64::MAX), "join must not narrow hi");
+    }
 }

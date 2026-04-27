@@ -510,4 +510,171 @@ mod tests {
         assert_eq!(wl.len(), 3);
         assert_eq!(in_wl.len(), 3);
     }
+
+    // ── CFG-shape robustness ─────────────────────────────────────────────
+    //
+    // The audit flagged that `run_forward` had only linear/diamond test
+    // shapes. These tests exercise edge cases that can trip up the
+    // worklist algorithm: nodes the entry can't reach, a CFG with only
+    // an entry node, irreducible flow with multiple paths into the
+    // same loop body, and a self-loop. Each must terminate without
+    // panicking and produce a sensible converged state.
+
+    /// A node disconnected from the entry must NOT receive any state
+    /// (it's unreachable). The engine processes only nodes reachable
+    /// from the worklist seed; a quiescent unreachable node should
+    /// stay absent from the result map.
+    #[test]
+    fn unreachable_nodes_get_no_state() {
+        use crate::state::domain::ProductState;
+
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let reachable = cfg.add_node(make_node(StmtKind::Seq));
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+        // Unreachable island: no edge from entry leads here.
+        let orphan = cfg.add_node(make_node(StmtKind::Seq));
+        let orphan_exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, reachable, EdgeKind::Seq);
+        cfg.add_edge(reachable, exit, EdgeKind::Seq);
+        cfg.add_edge(orphan, orphan_exit, EdgeKind::Seq);
+
+        let interner = SymbolInterner::from_cfg(&cfg);
+        let transfer = DefaultTransfer {
+            lang: Lang::C,
+            resource_pairs: rules::resource_pairs(Lang::C),
+            interner: &interner,
+            resource_method_summaries: &[],
+            ptr_proxy_hints: None,
+        };
+
+        let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
+        assert!(result.converged);
+        assert!(
+            result.states.contains_key(&entry),
+            "entry must have a state"
+        );
+        assert!(
+            result.states.contains_key(&reachable),
+            "reachable node must have a state"
+        );
+        assert!(
+            !result.states.contains_key(&orphan),
+            "orphan island must NOT receive any state"
+        );
+        assert!(
+            !result.states.contains_key(&orphan_exit),
+            "orphan exit must NOT receive any state"
+        );
+    }
+
+    /// A single-node graph (entry only, no edges) is the minimal case.
+    /// The engine must terminate immediately, mark converged, and leave
+    /// the entry's initial state untouched.
+    #[test]
+    fn single_node_graph_terminates_immediately() {
+        use crate::state::domain::ProductState;
+
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+
+        let interner = SymbolInterner::from_cfg(&cfg);
+        let transfer = DefaultTransfer {
+            lang: Lang::C,
+            resource_pairs: rules::resource_pairs(Lang::C),
+            interner: &interner,
+            resource_method_summaries: &[],
+            ptr_proxy_hints: None,
+        };
+
+        let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
+        assert!(result.converged);
+        assert!(
+            result.states.contains_key(&entry),
+            "single-node graph still seeds the entry state"
+        );
+    }
+
+    /// Self-loop on a single node: `entry → A → A → … → exit`. The
+    /// worklist must not livelock — once A's state is stable, the
+    /// back-edge stops re-enqueueing it.
+    #[test]
+    fn self_loop_terminates() {
+        use crate::state::domain::ProductState;
+
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let a = cfg.add_node(make_node(StmtKind::Seq));
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, a, EdgeKind::Seq);
+        cfg.add_edge(a, a, EdgeKind::Back); // self-loop
+        cfg.add_edge(a, exit, EdgeKind::Seq);
+
+        let interner = SymbolInterner::from_cfg(&cfg);
+        let transfer = DefaultTransfer {
+            lang: Lang::C,
+            resource_pairs: rules::resource_pairs(Lang::C),
+            interner: &interner,
+            resource_method_summaries: &[],
+            ptr_proxy_hints: None,
+        };
+
+        let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
+        assert!(result.converged, "self-loop must converge");
+        assert!(result.states.contains_key(&exit));
+    }
+
+    /// Irreducible CFG: two distinct paths from entry both enter the
+    /// same loop body, so the loop has multiple "entry points". This
+    /// is the classic shape that breaks structured-loop assumptions
+    /// (e.g., "every loop has a unique header"). The forward worklist
+    /// must still terminate.
+    ///
+    /// Shape:
+    ///     entry → a ─┐
+    ///                ├→ loop_body ─→ exit
+    ///     entry → b ─┘     ↑
+    ///                      └─ back-edge from loop_body to itself
+    #[test]
+    fn irreducible_cfg_terminates() {
+        use crate::state::domain::ProductState;
+
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let a = cfg.add_node(make_node(StmtKind::Seq));
+        let b = cfg.add_node(make_node(StmtKind::Seq));
+        let loop_body = cfg.add_node(make_node(StmtKind::Loop));
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, a, EdgeKind::Seq);
+        cfg.add_edge(entry, b, EdgeKind::Seq);
+        cfg.add_edge(a, loop_body, EdgeKind::Seq);
+        cfg.add_edge(b, loop_body, EdgeKind::Seq);
+        cfg.add_edge(loop_body, loop_body, EdgeKind::Back);
+        cfg.add_edge(loop_body, exit, EdgeKind::Seq);
+
+        let interner = SymbolInterner::from_cfg(&cfg);
+        let transfer = DefaultTransfer {
+            lang: Lang::C,
+            resource_pairs: rules::resource_pairs(Lang::C),
+            interner: &interner,
+            resource_method_summaries: &[],
+            ptr_proxy_hints: None,
+        };
+
+        let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
+        assert!(
+            result.converged,
+            "irreducible CFG must still converge under run_forward"
+        );
+        // Every reachable node must have a state.
+        for n in [entry, a, b, loop_body, exit] {
+            assert!(
+                result.states.contains_key(&n),
+                "node {n:?} must be visited"
+            );
+        }
+    }
 }

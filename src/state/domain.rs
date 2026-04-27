@@ -379,4 +379,184 @@ mod tests {
         let s2 = s;
         assert_eq!(s, s2);
     }
+
+    // ── Lattice law checks on the real domains ─────────────────────
+    //
+    // The trait-level `lattice.rs` tests use a synthetic `Three` lattice;
+    // the laws also need to hold on the *actual* impls used by the
+    // engine. A change to ResourceLifecycle's bitset semantics or to
+    // AuthLevel's ordering could quietly break commutativity /
+    // associativity / idempotence — these tests pin those properties.
+
+    #[test]
+    fn resource_lifecycle_join_laws() {
+        let vals = [
+            ResourceLifecycle::empty(),
+            ResourceLifecycle::UNINIT,
+            ResourceLifecycle::OPEN,
+            ResourceLifecycle::CLOSED,
+            ResourceLifecycle::MOVED,
+            ResourceLifecycle::OPEN | ResourceLifecycle::CLOSED,
+            ResourceLifecycle::all(),
+        ];
+        for a in &vals {
+            // Idempotence: a ⊔ a = a
+            assert_eq!(a.join(a), *a, "idempotence broken on {a:?}");
+            // Bot identity: a ⊔ ⊥ = a
+            assert_eq!(a.join(&ResourceLifecycle::bot()), *a);
+            for b in &vals {
+                // Commutativity: a ⊔ b = b ⊔ a
+                assert_eq!(a.join(b), b.join(a), "commutativity broken ({a:?},{b:?})");
+                // leq consistent with join: a ⊑ b iff a ⊔ b = b
+                let consistent = a.leq(b) == (a.join(b) == *b);
+                assert!(
+                    consistent,
+                    "leq/join consistency broken ({a:?} ⊑ {b:?})"
+                );
+                for c in &vals {
+                    // Associativity
+                    assert_eq!(
+                        a.join(b).join(c),
+                        a.join(&b.join(c)),
+                        "associativity broken ({a:?},{b:?},{c:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// `AuthLevel` satisfies idempotence, commutativity, and associativity
+    /// of `join` (which is `min` of the privilege ordering). It does NOT
+    /// satisfy the `Lattice` trait's bot-identity law — see the explicit
+    /// `auth_level_bot_is_absorbing_not_identity` test below for a
+    /// rationale and a regression guard.
+    #[test]
+    fn auth_level_join_associative_commutative_idempotent() {
+        let vals = [AuthLevel::Unauthed, AuthLevel::Authed, AuthLevel::Admin];
+        for a in &vals {
+            assert_eq!(a.join(a), *a, "AuthLevel idempotence broken on {a:?}");
+            for b in &vals {
+                assert_eq!(a.join(b), b.join(a), "AuthLevel commutativity ({a:?},{b:?})");
+                for c in &vals {
+                    assert_eq!(
+                        a.join(b).join(c),
+                        a.join(&b.join(c)),
+                        "AuthLevel associativity ({a:?},{b:?},{c:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// **Audit finding pinned as a regression guard.**
+    ///
+    /// `AuthLevel` deliberately violates the `Lattice` trait's bot-identity
+    /// law (`a ⊔ ⊥ = a`). The trait says `bot()` is the join identity, but:
+    ///
+    ///   * `bot()` returns `Unauthed`
+    ///   * `join` is `min` over the ordering `Unauthed < Authed < Admin`
+    ///   * therefore `Admin.join(Unauthed) == Unauthed`, not `Admin`
+    ///
+    /// In other words, `Unauthed` is the *absorbing* element of the join,
+    /// not the identity — the algebraic dual of what the trait expects.
+    ///
+    /// This is intentional for security: if any incoming path is unauthed,
+    /// the merged state must be unauthed (the conservative baseline). The
+    /// trait contract violation matters only if the dataflow engine ever
+    /// joins `bot()` with a non-bot reachable state from a different path
+    /// (e.g. for an unreachable predecessor); in the current engine such
+    /// nodes are skipped, so the violation is observably benign — but
+    /// documenting it here prevents an accidental "fix" that flips
+    /// `bot()` to `Admin` and silently elevates auth across all merges.
+    #[test]
+    fn auth_level_bot_is_absorbing_not_identity() {
+        assert_eq!(AuthLevel::bot(), AuthLevel::Unauthed);
+        // Absorbing: Admin ⊔ Unauthed = Unauthed (conservative).
+        assert_eq!(
+            AuthLevel::Admin.join(&AuthLevel::Unauthed),
+            AuthLevel::Unauthed,
+            "Unauthed must absorb Admin under min-join (conservative security)"
+        );
+        // NOT identity: Admin ⊔ bot ≠ Admin (would be the trait law).
+        assert_ne!(
+            AuthLevel::Admin.join(&AuthLevel::bot()),
+            AuthLevel::Admin,
+            "if this passes, AuthLevel::bot() was changed — re-audit security implications"
+        );
+    }
+
+    /// `leq` for AuthLevel is "at least as privileged": Admin ⊑ Authed ⊑
+    /// Unauthed in the privilege ordering. The trait law `a.leq(b) iff
+    /// a.join(b) == b` therefore must read `b absorbs a`, since join is
+    /// min. Verify the consistency on every pair.
+    #[test]
+    fn auth_level_leq_consistent_with_join() {
+        let vals = [AuthLevel::Unauthed, AuthLevel::Authed, AuthLevel::Admin];
+        for a in &vals {
+            for b in &vals {
+                assert_eq!(
+                    a.leq(b),
+                    a.join(b) == *b,
+                    "leq/join inconsistent on ({a:?}, {b:?})"
+                );
+            }
+        }
+    }
+
+    /// `AuthDomainState::join` keeps a variable as `validated` only if
+    /// it was validated on *every* incoming path. A variable validated
+    /// on one branch but not the other must be dropped — otherwise an
+    /// auth bypass on one path silently authorises sinks on the merge
+    /// path.
+    #[test]
+    fn auth_domain_join_drops_partially_validated() {
+        let sym_only_a = SymbolId(10);
+        let sym_only_b = SymbolId(11);
+
+        let a = AuthDomainState {
+            auth_level: AuthLevel::Authed,
+            validated: [sym_only_a].into_iter().collect(),
+        };
+        let b = AuthDomainState {
+            auth_level: AuthLevel::Authed,
+            validated: [sym_only_b].into_iter().collect(),
+        };
+        let j = a.join(&b);
+        assert!(
+            j.validated.is_empty(),
+            "validated set must drop vars not validated on all paths"
+        );
+    }
+
+    /// ProductState join must combine resource OPEN | CLOSED across
+    /// branches (may-leak), keep min-auth, and union the proxy maps.
+    /// This exercises the non-trivial join (the existing test only
+    /// joins two identical initial states).
+    #[test]
+    fn product_state_join_non_trivial() {
+        let sym_x = SymbolId(20);
+        let sym_y = SymbolId(21);
+
+        let mut a = ProductState::initial();
+        a.resource.set(sym_x, ResourceLifecycle::OPEN);
+        a.auth.auth_level = AuthLevel::Admin;
+        a.auth.validated.insert(sym_y);
+
+        let mut b = ProductState::initial();
+        b.resource.set(sym_x, ResourceLifecycle::CLOSED);
+        b.auth.auth_level = AuthLevel::Authed;
+        b.auth.validated.insert(sym_y);
+
+        let j = a.join(&b);
+        assert_eq!(
+            j.resource.get(sym_x),
+            ResourceLifecycle::OPEN | ResourceLifecycle::CLOSED,
+            "may-leak: OPEN on one path, CLOSED on the other"
+        );
+        assert_eq!(j.auth.auth_level, AuthLevel::Authed, "join takes min auth");
+        assert!(
+            j.auth.validated.contains(&sym_y),
+            "var validated on both paths must survive"
+        );
+    }
 }

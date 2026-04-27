@@ -675,4 +675,67 @@ mod tests {
             !StringFact::finite_set(vec!["ls".into(), "rm;reboot".into()]).is_finite_shell_safe()
         );
     }
+
+    /// `concat("", x)` and `concat(x, "")` must round-trip the
+    /// non-empty operand's prefix/suffix. The current `concat` keeps
+    /// LHS prefix and RHS suffix verbatim, which means concat with
+    /// an exact empty LHS must zero out the prefix while preserving
+    /// the RHS suffix.
+    #[test]
+    fn concat_empty_string_lhs_preserves_rhs_suffix() {
+        let empty = StringFact::exact("");
+        let rhs = StringFact::exact("x");
+        let r = empty.concat(&rhs);
+        // LHS prefix is Some("") (exact), RHS suffix is Some("x").
+        assert_eq!(r.prefix.as_deref(), Some(""));
+        assert_eq!(r.suffix.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn concat_empty_string_rhs_preserves_lhs_prefix() {
+        let lhs = StringFact::exact("x");
+        let empty = StringFact::exact("");
+        let r = lhs.concat(&empty);
+        assert_eq!(r.prefix.as_deref(), Some("x"));
+        assert_eq!(r.suffix.as_deref(), Some(""));
+    }
+
+    /// Bottom is concat-absorbing: concat with bottom in either
+    /// position yields bottom (no flow can reach the call site).
+    #[test]
+    fn concat_with_bottom_is_bottom() {
+        let bot = StringFact::bottom();
+        let any = StringFact::exact("anything");
+        assert!(bot.concat(&any).is_bottom());
+        assert!(any.concat(&bot).is_bottom());
+    }
+
+    /// Joining two distinct URL prefixes must reduce to their LCP, not
+    /// fall through to `None`. This is the property SSRF prefix-lock
+    /// suppression depends on at phi nodes.
+    #[test]
+    fn join_distinct_urls_reduces_to_lcp() {
+        let a = StringFact::from_prefix("https://api.example.com/");
+        let b = StringFact::from_prefix("https://db.example.com/");
+        let r = a.join(&b);
+        // Common prefix is "https://" — anything past that diverges.
+        assert_eq!(
+            r.prefix.as_deref(),
+            Some("https://"),
+            "join must compute LCP, not drop the prefix entirely"
+        );
+    }
+
+    /// Meet of two prefix-locks with no overlap must collapse to
+    /// bottom (it represents an unsatisfiable conjunction).
+    #[test]
+    fn meet_disjoint_prefixes_is_bottom() {
+        let a = StringFact::from_prefix("/var/");
+        let b = StringFact::from_prefix("/etc/");
+        let r = a.meet(&b);
+        assert!(
+            r.is_bottom(),
+            "meet of disjoint prefix-locks must be bottom"
+        );
+    }
 }

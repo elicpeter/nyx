@@ -227,4 +227,85 @@ mod tests {
         assert!(matches!(body.blocks[0].body[1].op, SsaOp::Nop));
         assert!(matches!(body.blocks[0].body[2].op, SsaOp::Nop));
     }
+
+    /// `resolve_root` has a 1000-iteration safety cap to avoid livelock if
+    /// a malformed copy map ever contains a cycle (SSA itself is acyclic,
+    /// but defensively we want this guarantee on the helper). Confirm the
+    /// cap actually fires by feeding a hand-crafted cycle a → b → a.
+    #[test]
+    fn resolve_root_terminates_on_cyclic_copy_map() {
+        let mut map: std::collections::HashMap<SsaValue, SsaValue> =
+            std::collections::HashMap::new();
+        map.insert(SsaValue(0), SsaValue(1));
+        map.insert(SsaValue(1), SsaValue(0));
+        // Must terminate; the exact returned value isn't a correctness
+        // guarantee under malformed input, but no infinite loop is.
+        let _root = resolve_root(SsaValue(0), &map);
+    }
+
+    /// A four-deep copy chain v3 = v2 = v1 = v0 must collapse to v0
+    /// in a single `copy_propagate` pass — the resolved replacement
+    /// map drives downstream alias recovery, so the *transitive*
+    /// closure must be exposed, not just the immediate parent.
+    #[test]
+    fn deep_copy_chain_collapses_to_root() {
+        let mut cfg: Cfg = Graph::new();
+        let nodes: Vec<_> = (0..4)
+            .map(|_| cfg.add_node(make_cfg_node(StmtKind::Seq)))
+            .collect();
+
+        let mut block_body = vec![SsaInst {
+            value: SsaValue(0),
+            op: SsaOp::Const(Some("\"x\"".into())),
+            cfg_node: nodes[0],
+            var_name: Some("a".into()),
+            span: (0, 1),
+        }];
+        for i in 1..4 {
+            block_body.push(SsaInst {
+                value: SsaValue(i as u32),
+                op: SsaOp::Assign(SmallVec::from_elem(SsaValue((i - 1) as u32), 1)),
+                cfg_node: nodes[i],
+                var_name: Some(format!("v{i}")),
+                span: (i, i + 1),
+            });
+        }
+
+        let mut body = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: block_body,
+                terminator: Terminator::Return(None),
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs: (0..4)
+                .map(|i| ValueDef {
+                    var_name: Some(format!("v{i}")),
+                    cfg_node: nodes[i],
+                    block: BlockId(0),
+                })
+                .collect(),
+            cfg_node_map: nodes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (*n, SsaValue(i as u32)))
+                .collect(),
+            exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
+        };
+
+        let (eliminated, copy_map) = copy_propagate(&mut body, &cfg);
+        assert_eq!(eliminated, 3, "v1, v2, v3 must all be eliminated");
+        for i in 1..4 {
+            assert_eq!(
+                copy_map.get(&SsaValue(i)),
+                Some(&SsaValue(0)),
+                "v{i} must resolve transitively to v0"
+            );
+        }
+    }
 }

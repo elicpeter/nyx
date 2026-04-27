@@ -589,4 +589,227 @@ mod tests {
         assert_eq!(removed, 2);
         assert_eq!(body.blocks[0].body.len(), 0);
     }
+
+    /// DCE must NEVER remove a Call instruction even when its result has
+    /// zero uses — calls have side effects (I/O, throws, mutations) that
+    /// cannot be modeled as SSA-value uses. This is the conservative
+    /// invariant `is_dead()` enforces; regressing it would silently drop
+    /// real-world code from analysis (sinks, sanitizers expressed as
+    /// expression-statements, etc.).
+    #[test]
+    fn dead_call_with_unused_result_preserved() {
+        let mut cfg: Cfg = Graph::new();
+        let n0 = cfg.add_node(make_cfg_node(StmtKind::Call));
+
+        let mut body = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![SsaInst {
+                    value: SsaValue(0),
+                    op: SsaOp::Call {
+                        callee: "side_effect".into(),
+                        callee_text: None,
+                        args: Vec::new(),
+                        receiver: None,
+                    },
+                    cfg_node: n0,
+                    var_name: None,
+                    span: (0, 12),
+                }],
+                terminator: Terminator::Return(None),
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs: vec![ValueDef {
+                var_name: None,
+                cfg_node: n0,
+                block: BlockId(0),
+            }],
+            cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
+            exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
+        };
+
+        let removed = eliminate_dead_defs(&mut body, &cfg);
+        assert_eq!(
+            removed, 0,
+            "Call with unused result must be preserved (side effects)"
+        );
+        assert_eq!(body.blocks[0].body.len(), 1);
+        assert!(matches!(body.blocks[0].body[0].op, SsaOp::Call { .. }));
+    }
+
+    /// A dead phi must be eliminated. We construct an entry block whose
+    /// successor has a phi merging two unused constants and a Return(None).
+    /// All defs are dead; DCE should strip every body and phi instruction.
+    #[test]
+    fn dead_phi_in_otherwise_dead_block_removed() {
+        let mut cfg: Cfg = Graph::new();
+        let n0 = cfg.add_node(make_cfg_node(StmtKind::Seq));
+        let n1 = cfg.add_node(make_cfg_node(StmtKind::Seq));
+        let n2 = cfg.add_node(make_cfg_node(StmtKind::Seq));
+
+        let entry_block = SsaBlock {
+            id: BlockId(0),
+            phis: vec![],
+            body: vec![
+                SsaInst {
+                    value: SsaValue(0),
+                    op: SsaOp::Const(Some("1".into())),
+                    cfg_node: n0,
+                    var_name: Some("a".into()),
+                    span: (0, 1),
+                },
+                SsaInst {
+                    value: SsaValue(1),
+                    op: SsaOp::Const(Some("2".into())),
+                    cfg_node: n1,
+                    var_name: Some("b".into()),
+                    span: (1, 2),
+                },
+            ],
+            terminator: Terminator::Goto(BlockId(1)),
+            preds: SmallVec::new(),
+            succs: SmallVec::from_elem(BlockId(1), 1),
+        };
+        let join_block = SsaBlock {
+            id: BlockId(1),
+            phis: vec![SsaInst {
+                value: SsaValue(2),
+                op: SsaOp::Phi(smallvec::smallvec![
+                    (BlockId(0), SsaValue(0)),
+                    (BlockId(0), SsaValue(1)),
+                ]),
+                cfg_node: n2,
+                var_name: Some("phi".into()),
+                span: (2, 3),
+            }],
+            body: vec![],
+            terminator: Terminator::Return(None),
+            preds: SmallVec::from_elem(BlockId(0), 1),
+            succs: SmallVec::new(),
+        };
+        let mut body = SsaBody {
+            blocks: vec![entry_block, join_block],
+            entry: BlockId(0),
+            value_defs: vec![
+                ValueDef {
+                    var_name: Some("a".into()),
+                    cfg_node: n0,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("b".into()),
+                    cfg_node: n1,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("phi".into()),
+                    cfg_node: n2,
+                    block: BlockId(1),
+                },
+            ],
+            cfg_node_map: [
+                (n0, SsaValue(0)),
+                (n1, SsaValue(1)),
+                (n2, SsaValue(2)),
+            ]
+            .into_iter()
+            .collect(),
+            exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
+        };
+
+        let removed = eliminate_dead_defs(&mut body, &cfg);
+        // Pass 1: the phi (no uses) goes; that drops the use-counts on v0/v1.
+        // Pass 2: v0 and v1 (now unused) go.
+        assert_eq!(removed, 3, "dead phi + two operands should be removed");
+        assert!(
+            body.blocks[1].phis.is_empty(),
+            "dead phi must be eliminated"
+        );
+        assert!(body.blocks[0].body.is_empty());
+    }
+
+    /// DCE iteration: removing v1 should make v0 dead on the next pass.
+    /// Mirrors `used_def_preserved` but explicit about the chain.
+    #[test]
+    fn dce_iterates_until_fixpoint() {
+        let mut cfg: Cfg = Graph::new();
+        let n0 = cfg.add_node(make_cfg_node(StmtKind::Seq));
+        let n1 = cfg.add_node(make_cfg_node(StmtKind::Seq));
+        let n2 = cfg.add_node(make_cfg_node(StmtKind::Seq));
+
+        let mut body = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![
+                    SsaInst {
+                        value: SsaValue(0),
+                        op: SsaOp::Const(Some("1".into())),
+                        cfg_node: n0,
+                        var_name: Some("a".into()),
+                        span: (0, 1),
+                    },
+                    SsaInst {
+                        value: SsaValue(1),
+                        op: SsaOp::Assign(SmallVec::from_elem(SsaValue(0), 1)),
+                        cfg_node: n1,
+                        var_name: Some("b".into()),
+                        span: (1, 2),
+                    },
+                    SsaInst {
+                        value: SsaValue(2),
+                        op: SsaOp::Assign(SmallVec::from_elem(SsaValue(1), 1)),
+                        cfg_node: n2,
+                        var_name: Some("c".into()),
+                        span: (2, 3),
+                    },
+                ],
+                terminator: Terminator::Return(None),
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs: vec![
+                ValueDef {
+                    var_name: Some("a".into()),
+                    cfg_node: n0,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("b".into()),
+                    cfg_node: n1,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("c".into()),
+                    cfg_node: n2,
+                    block: BlockId(0),
+                },
+            ],
+            cfg_node_map: [
+                (n0, SsaValue(0)),
+                (n1, SsaValue(1)),
+                (n2, SsaValue(2)),
+            ]
+            .into_iter()
+            .collect(),
+            exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
+        };
+
+        let removed = eliminate_dead_defs(&mut body, &cfg);
+        assert_eq!(
+            removed, 3,
+            "DCE must reach fixpoint and remove all 3 dead defs in the chain"
+        );
+        assert!(body.blocks[0].body.is_empty());
+    }
 }
