@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 396
+    "corpus_size": 399
   },
   "cases": [
     {
@@ -10394,6 +10394,94 @@
       ],
       "disabled": false,
       "notes": "Phase A4 regression guard: row fetched by user-supplied id without any authorization function naming the resulting row \u2014 the row-fetch exemption must NOT fire"
+    },
+    {
+      "case_id": "rs-auth-realrepo-006",
+      "file": "rust/auth/safe_row_population_reverse_walk.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-27",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "Row-population reverse-walk: lemmy `community/transfer.rs` shape \u2014 `let community = Community::read(pool, data.community_id); check_community_user_action(&user, &community, ..); CommunityActions::delete_mods_for_community(pool, data.community_id);` \u2014 the auth check on the fetched row must materially cover downstream re-uses of the request id"
+    },
+    {
+      "case_id": "rs-auth-realrepo-007",
+      "file": "rust/auth/safe_row_fetch_multiline_let.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-27",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "Multi-line `let X =\\n    CALL(..)?;` \u2014 `row_population_data` records the call's start line so `op.line` matches and the row-fetch exemption fires (lemmy `comment/lock.rs:31`)"
+    },
+    {
+      "case_id": "rs-auth-realrepo-008",
+      "file": "rust/auth/unsafe_row_population_no_check.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-285",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "High",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          37,
+          43
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "positive",
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Negative counterpart for the row-population reverse-walk: same fetch-then-mutate shape but no auth check on the fetched row \u2014 the reverse-walk has nothing to anchor to and the mutation by id must still flag"
     },
     {
       "case_id": "rs-safe-014",

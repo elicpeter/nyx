@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-27T15:22:54Z",
+  "timestamp": "2026-04-27T15:57:46Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:0279886764bb5412501cdb125178888e34642a73d112a2af2e7cc47920cce2db",
-  "corpus_size": 396,
-  "cases_run": 395,
+  "ground_truth_hash": "sha256:2919caa13fc75b5abc1c42e09dafcba22354d981cfa4b1ee01039d338c95d1a3",
+  "corpus_size": 399,
+  "cases_run": 398,
   "cases_skipped": 1,
   "outcomes": [
     {
@@ -5103,6 +5103,63 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "rs-auth-realrepo-006",
+      "file": "rust/auth/safe_row_population_reverse_walk.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.todo",
+        "rs.quality.todo"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 2
+    },
+    {
+      "case_id": "rs-auth-realrepo-007",
+      "file": "rust/auth/safe_row_fetch_multiline_let.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.todo"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "rs-auth-realrepo-008",
+      "file": "rust/auth/unsafe_row_population_no_check.rs",
+      "language": "rust",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "rs.auth.missing_ownership_check",
+        "rs.auth.missing_ownership_check"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.todo",
+        "rs.auth.missing_ownership_check",
+        "rs.auth.missing_ownership_check"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 1
+    },
+    {
       "case_id": "rs-auth-typed-extractors-001",
       "file": "rust/auth/safe_typed_path_int_extractor.rs",
       "language": "rust",
@@ -7122,22 +7179,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 198,
+    "tp": 199,
     "fp": 1,
     "fn_": 0,
-    "tn": 196,
-    "precision": 0.9949748743718593,
+    "tn": 198,
+    "precision": 0.995,
     "recall": 1.0,
-    "f1": 0.9974811083123425
+    "f1": 0.9974937343358395
   },
   "aggregate_rule_level": {
-    "tp": 198,
+    "tp": 199,
     "fp": 1,
     "fn_": 0,
-    "tn": 196,
-    "precision": 0.9949748743718593,
+    "tn": 198,
+    "precision": 0.995,
     "recall": 1.0,
-    "f1": 0.9974811083123425
+    "f1": 0.9974937343358395
   },
   "by_language": {
     "c": {
@@ -7213,10 +7270,10 @@
       "f1": 1.0
     },
     "rust": {
-      "tp": 31,
+      "tp": 32,
       "fp": 0,
       "fn_": 0,
-      "tn": 34,
+      "tn": 36,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -7233,7 +7290,7 @@
   },
   "by_vuln_class": {
     "auth": {
-      "tp": 10,
+      "tp": 11,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -7353,7 +7410,7 @@
       "tp": 0,
       "fp": 1,
       "fn_": 0,
-      "tn": 196,
+      "tn": 198,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -7397,31 +7454,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 84,
+      "tp": 82,
       "fp": 87,
-      "fn_": 114,
-      "tn": 110,
-      "precision": 0.49122807017543857,
-      "recall": 0.42424242424242425,
-      "f1": 0.4552845528455284
+      "fn_": 117,
+      "tn": 112,
+      "precision": 0.48520710059171596,
+      "recall": 0.4120603015075377,
+      "f1": 0.4456521739130434
     },
     ">=Low": {
-      "tp": 86,
-      "fp": 99,
-      "fn_": 112,
-      "tn": 98,
-      "precision": 0.4648648648648649,
-      "recall": 0.43434343434343436,
-      "f1": 0.44908616187989553
+      "tp": 84,
+      "fp": 100,
+      "fn_": 115,
+      "tn": 99,
+      "precision": 0.45652173913043476,
+      "recall": 0.4221105527638191,
+      "f1": 0.4386422976501306
     },
     ">=Medium": {
-      "tp": 86,
-      "fp": 99,
-      "fn_": 112,
-      "tn": 98,
-      "precision": 0.4648648648648649,
-      "recall": 0.43434343434343436,
-      "f1": 0.44908616187989553
+      "tp": 84,
+      "fp": 100,
+      "fn_": 115,
+      "tn": 99,
+      "precision": 0.45652173913043476,
+      "recall": 0.4221105527638191,
+      "f1": 0.4386422976501306
     }
   }
 }

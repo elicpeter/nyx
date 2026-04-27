@@ -436,6 +436,34 @@ fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef, unit: &Analy
         .iter()
         .any(|name| unit.authorized_sql_vars.contains(name));
 
+    // **Row-population reverse-walk** (lemmy fetch-then-check pattern).
+    //
+    // `row_population_data[R]` records the value-refs of every arg
+    // passed to a `let R = CALL(args)` row fetch.  When a later auth
+    // check authorizes the resulting row (e.g. `check_community_user_action(
+    // &user, &community, ..)` after `let community = Community::read(
+    // pool, data.community_id)`), the check materially covers
+    // `data.community_id` too — it gated access to the row that was
+    // fetched using that id, so any subsequent operation re-using the
+    // same id (read of a related view, mutation on the row itself) is
+    // within the scope of that authorization.
+    //
+    // Match by canonical subject name so `data.community_id`,
+    // `community_id`, `data.comment_id`, etc. all resolve uniformly
+    // regardless of whether the route handler aliased the request
+    // field into a local before passing it on.
+    let subject_populates: Vec<&str> = unit
+        .row_population_data
+        .iter()
+        .filter_map(|(row_var, (_line, args))| {
+            if args.iter().any(|arg| canonical_subject_name(arg) == subject_key) {
+                Some(row_var.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+
     check.subjects.iter().any(|check_subject| {
         let check_key = canonical_subject_name(check_subject);
         let check_related_base = related_subject_base(check_subject);
@@ -448,6 +476,14 @@ fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef, unit: &Analy
         }
         for row in &subject_row_chain {
             if check_key == *row || check_related_base.as_deref() == Some(row.as_str()) {
+                return true;
+            }
+        }
+        // Row-population reverse-walk: subject was passed to a row
+        // fetch, and the check covers that row (chain root match on
+        // the row var).
+        for row in &subject_populates {
+            if chain_root(check_subject) == *row {
                 return true;
             }
         }
@@ -828,8 +864,8 @@ fn is_batch_collection(subject: &ValueRef) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_actor_context_subject, is_external_input_param_name, is_relevant_target_subject,
-        unit_has_user_input_evidence,
+        auth_check_covers_subject, is_actor_context_subject, is_external_input_param_name,
+        is_relevant_target_subject, unit_has_user_input_evidence,
     };
     use crate::auth_analysis::model::{AnalysisUnit, AnalysisUnitKind, ValueRef, ValueSourceKind};
     use std::collections::{HashMap, HashSet};
@@ -1201,5 +1237,83 @@ mod tests {
             text: String::new(),
         };
         assert!(!has_row_fetch_exemption(&unit, &fetch_op));
+    }
+
+    /// Row-population reverse-walk (lemmy fetch-then-check pattern).
+    ///
+    /// `let community = Community::read(pool, data.community_id)` at
+    /// line 10 records `community → [data.community_id]`.  An auth
+    /// check on `community` at line 20 must materially cover any
+    /// downstream operation that re-uses `data.community_id` (e.g. a
+    /// later `delete_mods_for_community(pool, community_id)`),
+    /// because the check authorised access to the row that was
+    /// fetched using that id.
+    #[test]
+    fn auth_check_covers_subject_via_row_population_reverse_walk() {
+        use crate::auth_analysis::model::{AuthCheck, AuthCheckKind};
+
+        let mut unit = empty_unit();
+        unit.row_population_data
+            .insert("community".to_string(), (10, vec![member("data", "community_id")]));
+        let check = AuthCheck {
+            kind: AuthCheckKind::Membership,
+            callee: "check_community_user_action".into(),
+            subjects: vec![member("community", "id")],
+            span: (0, 0),
+            line: 20,
+            args: Vec::new(),
+            condition_text: None,
+        };
+
+        // Direct member subject `data.community_id` (the original
+        // request field) — covered via reverse-walk.
+        assert!(auth_check_covers_subject(
+            &check,
+            &member("data", "community_id"),
+            &unit
+        ));
+
+        // A later op that re-passed the *same* id-bearing argument
+        // (`Community::read(pool, data.community_id)`) gets covered
+        // even though the check's subject names the row, not the id.
+        // Before the fix, this fired as
+        // `rs.auth.missing_ownership_check` on lemmy
+        // `community/transfer.rs:88` and similar.
+
+        // Negative: an unrelated id (different request field that
+        // never populated this row) must NOT be covered.
+        assert!(!auth_check_covers_subject(
+            &check,
+            &member("data", "post_id"),
+            &unit
+        ));
+    }
+
+    /// Subject as plain identifier copied from the request
+    /// (`let community_id = data.community_id; let community =
+    /// Community::read(pool, community_id);`) must also benefit from
+    /// the reverse-walk — `row_population_data["community"]` then
+    /// records `[community_id]` (a plain identifier, not the
+    /// member-access shape).
+    #[test]
+    fn auth_check_covers_subject_via_row_population_reverse_walk_plain_arg() {
+        use crate::auth_analysis::model::{AuthCheck, AuthCheckKind};
+
+        let mut unit = empty_unit();
+        unit.row_population_data
+            .insert("community".to_string(), (10, vec![plain("community_id")]));
+        let check = AuthCheck {
+            kind: AuthCheckKind::Membership,
+            callee: "check_community_mod_action".into(),
+            subjects: vec![member("community", "id")],
+            span: (0, 0),
+            line: 20,
+            args: Vec::new(),
+            condition_text: None,
+        };
+
+        assert!(auth_check_covers_subject(&check, &plain("community_id"), &unit));
+        // Different plain id is not covered.
+        assert!(!auth_check_covers_subject(&check, &plain("post_id"), &unit));
     }
 }

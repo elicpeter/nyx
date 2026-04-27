@@ -837,6 +837,21 @@ fn collect_row_field_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitState
 /// When A2 synthesises an `AuthCheck` on `ROW` later, we back-date the
 /// check to this line and merge the args into its subjects so the
 /// original fetch (e.g. `db.query_one(.., &[doc_id])`) is also covered.
+///
+/// The recorded line is the **call**'s start line, not the
+/// `let_declaration`'s.  These differ for multi-line bindings such as
+///
+/// ```ignore
+/// let orig =                         // let_declaration starts here
+///     CommentView::read(&mut pool, comment_id, ..).await?;  // call starts here
+/// ```
+///
+/// `has_row_fetch_exemption` looks for a row var "declared at this
+/// op's line", where `op.line` is the call site.  Recording the
+/// let-line caused the multi-line shape to fall through the exemption
+/// — surfaced on lemmy's `comment/lock.rs:31`, where every fetch-then-
+/// check route handler that wraps the read across two lines was
+/// flagged despite a textual auth check on the resulting row.
 fn collect_row_population(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
     let Some(pattern) = node.child_by_field_name("pattern") else {
         return;
@@ -865,8 +880,8 @@ fn collect_row_population(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
     for arg in args {
         arg_refs.extend(extract_value_refs(arg, bytes));
     }
-    let line = node.start_position().row + 1;
-    state.row_population_data.insert(var_name, (line, arg_refs));
+    let call_line = call_node.start_position().row + 1;
+    state.row_population_data.insert(var_name, (call_line, arg_refs));
 }
 
 /// A3: record `let V = CALL(..)` (or `.await?` / `?` / reference
