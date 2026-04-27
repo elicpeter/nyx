@@ -14,6 +14,92 @@ Machine-readable per-run data lives in `tests/benchmark/results/` (`latest.json`
 
 ---
 
+## CVE Hunt Session 1 — JS chained-method inner-gate fix (2026-04-27)
+
+### Motivation
+
+CVE-2025-64430 (Parse Server SSRF via `http.get(uri, cb).on('error', cb)` in
+`src/Routers/FilesRouter.js`'s `downloadFileFromURI`) surfaced a
+classifier-level gap: chained method calls hide their inner gated sink
+from `push_node`'s gate-classification block. The outer `.on(...)` (or
+`.then(...)`, `.catch(...)`, `.finally(...)`) callee swallows
+classification because (a) it doesn't classify itself, (b)
+`find_call_node` returns the OUTER call, and (c) `find_classifiable_inner_call`
+only follows `classify()` matchers (label rules), not `classify_gated_sink()`
+matchers (gated sinks). Pre-fix, every Node SSRF flow whose handler is
+chained off an event emitter — `http.get(u, cb).on('error', cb)`,
+`axios.get(url).then(handler).catch(handler)` — was invisible.
+
+### What changed
+
+- **New helper `find_chained_inner_call`** in `src/cfg/literals.rs`:
+  walks the receiver chain (`function.object`) recursively and returns
+  the innermost `call_expression` together with its callee text. Bounded
+  by the recursion shape — each step requires a `Kind::CallFn` /
+  `Kind::CallMethod` parent whose function field's object is itself a
+  call, so non-chained calls return `None` immediately.
+- **Rebinding in `push_node`** (`src/cfg/mod.rs`): when `labels.is_empty()`
+  AND `find_chained_inner_call` finds an inner call AND that inner
+  callee actually matches a gate matcher, rebind `call_ast`, `text`,
+  `outer_callee`, and `inner_callee_span` to the inner call. Downstream
+  gate classification, `arg_uses` extraction, kwargs extraction and
+  `extract_arg_string_literals` then operate on the inner call rather
+  than the outer chain wrapper. Strictly additive: only fires when the
+  outer doesn't classify and an inner gate exists.
+- **Gated SSRF sinks for `http.get` / `https.get`** in
+  `src/labels/javascript.rs`: sibling entries to the existing
+  `http.request` / `https.request` gates with the same destination-field
+  set (`host`, `hostname`, `path`, `protocol`, `port`, `origin`).
+  Pre-existing recall gap independently from the chained-call issue.
+- **Synthetic regression pair** under
+  `tests/benchmark/corpus/javascript/ssrf/`:
+  `ssrf_http_get_chained.js` (positive — `http.get(req.query.url, cb).on(...)`)
+  and `safe_http_get_hardcoded_chained.js` (negative — same chain shape
+  with literal URL). Wired to ground_truth as `js-ssrf-003` and
+  `js-ssrf-safe-002`.
+- **Real-CVE pair landed but DEFERRED**: `cve_corpus/javascript/CVE-2025-64430/`
+  (vulnerable + patched). Both ground_truth entries marked
+  `disabled: true` with `disabled_reason` pointing to the deeper
+  follow-up: cross-function gated-sink `param_to_sink` propagation is
+  missing (verified: a bare `helper(uri) { http.get(uri, cb) }` doesn't
+  fire taint when called from a route with `req.body.uri`), and JS SSA
+  doesn't model closure capture into `Promise` executor arrows. Tracked
+  in `tests/benchmark/cve_corpus/CVE_DEFERRED.md`.
+
+### Real-CVE Corpus
+
+| CVE              | Language   | Project                      | License              | Vuln class       | Vulnerable outcome | Patched outcome |
+|------------------|------------|------------------------------|----------------------|------------------|--------------------|-----------------|
+| CVE-2023-48022   | Python     | Ray                          | Apache-2.0           | CMDI             | TP (rule + line)   | TN              |
+| CVE-2017-18342   | Python     | PyYAML                       | MIT                  | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2019-14939   | JavaScript | mongo-express                | MIT                  | code_exec        | TP (rule + line)   | TN              |
+| CVE-2025-64430   | JavaScript | Parse Server                 | Apache-2.0           | SSRF             | DEFERRED           | DEFERRED        |
+| CVE-2023-26159   | TypeScript | follow-redirects             | MIT                  | SSRF             | TP (rule + line)   | TN              |
+| CVE-2022-30323   | Go         | hashicorp/go-getter          | MPL-2.0              | CMDI             | TP (rule + line)   | TN              |
+| CVE-2015-7501    | Java       | Apache Commons Collections   | Apache-2.0           | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2013-0156    | Ruby       | Ruby on Rails                | MIT                  | Deserialization  | TP (rule)          | TN              |
+| CVE-2017-9841    | PHP        | PHPUnit                      | BSD-3-Clause         | code_exec        | TP (rule + line)   | TN              |
+| CVE-2018-15133   | PHP        | Laravel                      | MIT                  | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2016-3714    | C          | ImageMagick (ImageTragick)   | ImageMagick License  | CMDI             | TP (rule + line)   | TN              |
+| CVE-2019-18634   | C          | sudo (pwfeedback)            | ISC                  | memory_safety    | TP (rule + line)   | TN              |
+| CVE-2019-13132   | C++        | ZeroMQ libzmq                | MPL-2.0              | memory_safety    | TP (rule + line)   | TN              |
+| CVE-2022-1941    | C++        | Protocol Buffers             | BSD-3-Clause         | memory_safety    | TP (rule + line)   | TN              |
+| CVE-2017-12629   | Java       | Apache Solr                  | Apache-2.0           | CMDI             | TP (rule + line)   | TN              |
+
+### Notes on selection
+
+CVE-2025-64430 followed the criteria but surfaced a deeper engine gap
+mid-session. Per the prompt's Fix-Depth rule, the shallow option
+(adding `downloadFileFromURI` to a hand-crafted SSRF allowlist) was
+rejected; the deep prerequisite work (cross-function `param_to_sink`
+for gated sinks, JS Promise-executor closure capture) is too large to
+land in a single hunt. The chained-call CFG fix landed standalone is a
+real engine improvement that generalizes to every Node chained-handler
+SSRF shape and is independently regression-guarded by the synthetic
+fixture pair.
+
+---
+
 ## Auth Rule FP Remediation — Phase B5 (2026-04-23)
 
 ### Motivation

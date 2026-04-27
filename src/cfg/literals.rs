@@ -314,6 +314,59 @@ fn subtree_has_interpolation(n: Node) -> bool {
         .any(subtree_has_interpolation)
 }
 
+/// For a chained method call (`a.b().c().d()`), walk down the receiver
+/// chain (`function.object`) and return the innermost call_expression
+/// alongside its callee text (e.g. `"http.get"`).
+///
+/// Returns `None` when:
+/// * `outer` is not itself a CallFn / CallMethod node, or
+/// * its `function`/`method` field is not a member-style expression whose
+///   `object` field is itself a call (i.e. there is no chained receiver).
+///
+/// Motivated by CVE-2025-64430 (Parse Server SSRF via
+/// `http.get(uri, cb).on('error', e => ...)`).  Without this, the outer
+/// `.on(...)` call swallows classification of the inner gated sink.
+pub(super) fn find_chained_inner_call<'a>(
+    outer: Node<'a>,
+    lang: &str,
+    code: &[u8],
+) -> Option<(Node<'a>, String)> {
+    if !matches!(
+        lookup(lang, outer.kind()),
+        Kind::CallFn | Kind::CallMethod
+    ) {
+        return None;
+    }
+    let function = outer
+        .child_by_field_name("function")
+        .or_else(|| outer.child_by_field_name("method"))?;
+    // The function/method field for a chained call is a member_expression
+    // (JS/TS) or attribute (Python) etc.; its `object` field is the
+    // receiver expression.  Only proceed when that receiver is itself a
+    // call.
+    let object = function.child_by_field_name("object")?;
+    if !matches!(
+        lookup(lang, object.kind()),
+        Kind::CallFn | Kind::CallMethod
+    ) {
+        return None;
+    }
+    // Recurse: the inner call may itself be chained
+    // (`axios.get(u).then(h).catch(h)` — innermost is `axios.get`).
+    if let Some(inner) = find_chained_inner_call(object, lang, code) {
+        return Some(inner);
+    }
+    // `object` is the innermost call_expression in the chain.  Extract
+    // its callee identifier the same way `first_call_ident_with_span`
+    // does for a CallFn (member_expression text → "http.get").
+    let inner_func = object
+        .child_by_field_name("function")
+        .or_else(|| object.child_by_field_name("method"))
+        .or_else(|| object.child_by_field_name("name"))?;
+    let inner_text = text_of(inner_func, code)?;
+    Some((object, inner_text))
+}
+
 /// Recursively find a call-expression node within an AST subtree (up to
 /// 4 levels deep).  Unlike `find_call_node` which only checks 2 levels,
 /// this handles `await`-wrapped calls inside declarations.

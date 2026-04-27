@@ -52,8 +52,9 @@ use literals::{
     arg0_kind_and_interpolation, call_ident_of, def_use, detect_rust_replace_chain_sanitizer,
     extract_arg_callees, extract_arg_string_literals, extract_arg_uses, extract_const_keyword_arg,
     extract_const_string_arg, extract_destination_field_idents, extract_kwargs,
-    extract_literal_rhs, find_call_node, find_call_node_deep, has_keyword_arg,
-    has_only_literal_args, is_parameterized_query_call, ruby_chain_arg0_for_method,
+    extract_literal_rhs, find_call_node, find_call_node_deep, find_chained_inner_call,
+    has_keyword_arg, has_only_literal_args, is_parameterized_query_call,
+    ruby_chain_arg0_for_method,
 };
 use params::{
     compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
@@ -1663,7 +1664,39 @@ pub(super) fn push_node<'a>(
     }
 
     // Hoist call-node lookup: reused for gated sinks and arg_uses.
-    let call_ast = find_call_node(ast, lang);
+    let mut call_ast = find_call_node(ast, lang);
+
+    // Chained-call inner-gate rebinding.  When the outer call is a method-
+    // chain wrapper whose receiver is itself a call to a known gated sink
+    // (e.g. `http.get(uri, cb).on('error', e => ...)` or
+    // `axios.get(url).then(handler).catch(handler)`), the outer callee
+    // (`.on`, `.catch`) doesn't classify and the inner sink is invisible to
+    // gate classification + arg-use extraction.  Rebind to the inner call
+    // so its sink fires and its args are checked.
+    //
+    // Only fires when:
+    //   * `labels.is_empty()` (the outer call is non-classified)
+    //   * the chain has a real inner call_expression
+    //   * that inner callee actually matches a gate matcher for this lang
+    //
+    // Motivated by CVE-2025-64430 (Parse Server SSRF).
+    if labels.is_empty()
+        && let Some(outer) = call_ast
+        && let Some((inner, inner_callee_text)) = find_chained_inner_call(outer, lang, code)
+        && classify_gated_sink(
+            lang,
+            &inner_callee_text,
+            |_| None,
+            |_| None,
+            |_| false,
+        )
+        .is_some()
+    {
+        call_ast = Some(inner);
+        outer_callee = Some(text.clone());
+        text = inner_callee_text;
+        inner_callee_span = Some((inner.start_byte(), inner.end_byte()));
+    }
 
     // Gated sinks: argument-sensitive classification (e.g., setAttribute).
     // Runs for any node containing a classifiable call, regardless of StmtKind.

@@ -2842,3 +2842,49 @@ fn loop_with_continue_back_edge_to_header() {
         "expected at least one Back edge from a Continue node to the loop header"
     );
 }
+
+/// Regression guard for the 2026-04-27 chained-method-call inner-gate
+/// rebinding (CVE-2025-64430 hunt session).  Without the fix, the outer
+/// `.on('error', cb)` call swallows classification of the inner
+/// `http.get(uri, cb)` so neither the gate label nor `sink_payload_args`
+/// are populated for this CFG node.
+#[test]
+fn chained_method_call_rebinds_to_inner_gated_sink() {
+    // Use `https.get` (a gated SSRF sink) so the gate fires only when
+    // the inner-call rebinding works.  The outer `.on(...)` is a plain
+    // method call that does not classify on its own.
+    let src = b"function f(uri) { https.get(uri, r => {}).on('error', e => {}); }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+
+    // Find a Call node whose `text` was rebound to the inner gated callee.
+    let mut found = false;
+    for n in cfg.node_indices() {
+        let info = &cfg[n];
+        if info.kind != StmtKind::Call {
+            continue;
+        }
+        let Some(callee) = info.call.callee.as_deref() else {
+            continue;
+        };
+        // The inner callee is `https.get`; the outer chained `.on` should
+        // no longer be the recorded callee for this node.
+        if callee.ends_with("https.get") {
+            // The inner-gate path must have populated sink_payload_args
+            // (the gate's payload arg is position 0 — the URL string).
+            assert!(
+                info.call.sink_payload_args.is_some(),
+                "expected sink_payload_args to be populated for chained \
+                 inner-gate https.get; got None on call node with callee {callee:?}"
+            );
+            found = true;
+            break;
+        }
+    }
+    assert!(
+        found,
+        "expected at least one Call node whose callee was rebound from \
+         the outer `.on(...)` to the inner `https.get` after the chained- \
+         call inner-gate rebinding fired"
+    );
+}

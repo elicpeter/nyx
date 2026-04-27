@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 406
+    "corpus_size": 410
   },
   "cases": [
     {
@@ -3170,6 +3170,73 @@
       ],
       "disabled": false,
       "notes": "SSRF via bare axios() call with user-controlled URL"
+    },
+    {
+      "case_id": "js-ssrf-003",
+      "file": "javascript/ssrf/ssrf_http_get_chained.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "http",
+        "ssrf",
+        "chained-call"
+      ],
+      "disabled": false,
+      "notes": "Regression guard for the chained-method-call inner-gate fix (2026-04-27): http.get(url, cb).on('error', cb) must classify as SSRF on the inner http.get even though the outer .on swallows classification."
+    },
+    {
+      "case_id": "js-ssrf-safe-002",
+      "file": "javascript/ssrf/safe_http_get_hardcoded_chained.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "http",
+        "ssrf-safe",
+        "chained-call",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "Precision guard: chained-call inner-gate fix must NOT fire on http.get('http://internal-health.localhost/...').on(...) with a hardcoded literal URL."
     },
     {
       "case_id": "py-ssrf-002",
@@ -9191,6 +9258,65 @@
       ],
       "disabled": false,
       "notes": "CVE-2019-14939 patched counterpart: EJSON.parse replaces eval; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-js-2025-64430-vulnerable",
+      "file": "cve_corpus/javascript/CVE-2025-64430/vulnerable.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "parse-server",
+        "ssrf",
+        "express",
+        "http-get"
+      ],
+      "disabled": true,
+      "disabled_reason": "Detection requires (1) cross-function `param_to_sink` propagation for gated SSRF sinks (`http.get` inside helper) so the caller's `addFileDataIfNeeded(file)` summary firing is observed, AND (2) closure capture of caller-scope variables into a `Promise` executor arrow function so the seeded `uri` param survives into `http.get(uri, cb).on(...)`. The 2026-04-27 chained-call CFG fix made `http.get(...).on(...)` gate-classify (necessary), but the Promise-executor closure boundary still drops the param-to-sink edge. Tracked in CVE_DEFERRED.md.",
+      "notes": "CVE-2025-64430: Parse Server file router fetched user-supplied Parse.File _source.uri via http.get, allowing SSRF. Apache-2.0"
+    },
+    {
+      "case_id": "cve-js-2025-64430-patched",
+      "file": "cve_corpus/javascript/CVE-2025-64430/patched.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "parse-server",
+        "patched",
+        "negative"
+      ],
+      "disabled": true,
+      "disabled_reason": "Paired with cve-js-2025-64430-vulnerable; both deferred until the cross-function gated-sink propagation + Promise-executor closure capture lands. Tracked in CVE_DEFERRED.md.",
+      "notes": "CVE-2025-64430 patched counterpart: URI-backed file upload removed entirely; no http.get on user input"
     },
     {
       "case_id": "cve-ts-2023-26159-vulnerable",
