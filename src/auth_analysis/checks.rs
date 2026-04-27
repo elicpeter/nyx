@@ -452,11 +452,33 @@ fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef, unit: &Analy
     // `community_id`, `data.comment_id`, etc. all resolve uniformly
     // regardless of whether the route handler aliased the request
     // field into a local before passing it on.
+    //
+    // **Local-alias chain.**  When the subject is a plain identifier
+    // (no base/field), also consult `unit.var_alias_chain`: a sink
+    // that uses `community_id` after `let community_id =
+    // req.community_id` should see the population args recorded as
+    // `req.community_id` matched, not just the bare name.
+    let subject_alias_chain: Option<&str> = if subject.base.is_none() && subject.field.is_none() {
+        unit.var_alias_chain.get(&subject.name).map(|s| s.as_str())
+    } else {
+        None
+    };
     let subject_populates: Vec<&str> = unit
         .row_population_data
         .iter()
         .filter_map(|(row_var, (_line, args))| {
-            if args.iter().any(|arg| canonical_subject_name(arg) == subject_key) {
+            let matches_arg = args.iter().any(|arg| {
+                if canonical_subject_name(arg) == subject_key {
+                    return true;
+                }
+                if let Some(chain) = subject_alias_chain
+                    && arg.name == chain
+                {
+                    return true;
+                }
+                false
+            });
+            if matches_arg {
                 Some(row_var.as_str())
             } else {
                 None
@@ -884,6 +906,7 @@ mod tests {
             condition_texts: Vec::new(),
             line: 1,
             row_field_vars: HashMap::new(),
+            var_alias_chain: HashMap::new(),
             row_population_data: HashMap::new(),
             self_actor_vars: HashSet::new(),
             self_actor_id_vars: HashSet::new(),
@@ -1314,6 +1337,50 @@ mod tests {
 
         assert!(auth_check_covers_subject(&check, &plain("community_id"), &unit));
         // Different plain id is not covered.
+        assert!(!auth_check_covers_subject(&check, &plain("post_id"), &unit));
+    }
+
+    /// Local-alias chain coverage (lemmy `community/transfer.rs` shape).
+    ///
+    /// `let community = Community::read(pool, req.community_id)` at
+    /// line 10 records `community → [req.community_id]`.  After the
+    /// auth check on the row, the handler aliases the request field
+    /// into a local: `let community_id = req.community_id;` then
+    /// reuses the bare `community_id` in a downstream sink.
+    /// `var_alias_chain["community_id"] = "req.community_id"` lets
+    /// the reverse-walk match the population args (which still
+    /// contain the original member chain) against the plain subject.
+    #[test]
+    fn auth_check_covers_subject_via_row_population_alias_chain() {
+        use crate::auth_analysis::model::{AuthCheck, AuthCheckKind};
+
+        let mut unit = empty_unit();
+        unit.row_population_data
+            .insert("community".to_string(), (10, vec![member("req", "community_id")]));
+        unit.var_alias_chain
+            .insert("community_id".to_string(), "req.community_id".to_string());
+        let check = AuthCheck {
+            kind: AuthCheckKind::Membership,
+            callee: "check_community_user_action".into(),
+            subjects: vec![member("community", "id")],
+            span: (0, 0),
+            line: 20,
+            args: Vec::new(),
+            condition_text: None,
+        };
+
+        // Sink subject is the bare alias — covered via the chain.
+        assert!(auth_check_covers_subject(&check, &plain("community_id"), &unit));
+
+        // The original member-access subject is still covered (no
+        // regression in the existing reverse-walk path).
+        assert!(auth_check_covers_subject(
+            &check,
+            &member("req", "community_id"),
+            &unit
+        ));
+
+        // Plain identifier with no alias entry must NOT be covered.
         assert!(!auth_check_covers_subject(&check, &plain("post_id"), &unit));
     }
 }

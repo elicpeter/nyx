@@ -84,10 +84,16 @@ pub async fn transfer_community(
     // the row that was fetched with this id).
     CommunityActions::delete_mods_for_community(pool, req.community_id)?;
 
-    // Same field re-used to fetch a related view.
+    // Local alias of the same request field — `var_alias_chain`
+    // records `community_id → "req.community_id"` so the reverse-walk
+    // also covers downstream sinks that pass the bare alias.  Before
+    // the alias-chain fix, the next read fired
+    // `rs.auth.missing_ownership_check` despite the textual auth
+    // check on `community` above.
+    let community_id = req.community_id;
     let _community_view = CommunityView::read(
         pool,
-        req.community_id,
+        community_id,
         Some(&local_user_view.local_user),
         false,
     )?;

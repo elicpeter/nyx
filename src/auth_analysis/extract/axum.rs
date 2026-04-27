@@ -378,6 +378,19 @@ fn classify_rocket_param(
     }
 }
 
+/// Classify a route-handler parameter type as a route-level auth
+/// guard.  Used to tag the route as gated by a login or admin check
+/// when one of its parameters is a typed auth extractor.
+///
+/// **Looser than [`super::common::is_self_actor_type_text`] by
+/// design.**  This recogniser runs only on the type of a route-bound
+/// parameter — appearing in a route handler signature is itself a
+/// strong signal — and a false positive here just over-credits the
+/// route with a login guard, which is conservative w.r.t. flagging.
+/// `is_self_actor_type_text` runs on every parameter, including in
+/// non-route functions, and a false positive there suppresses
+/// downstream `V.id` flagging entirely; that path uses a structural
+/// recogniser keyed on the `<PREFIX>User<SUFFIX>?` shape.
 fn classify_guard_type(type_text: &str) -> Option<AuthCheckKind> {
     let lower = type_text.to_ascii_lowercase();
     if is_extractor_wrapper(&lower) {

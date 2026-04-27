@@ -168,6 +168,15 @@ pub struct AnalysisUnit {
     /// row-level ownership-equality check on the row implicitly covers
     /// downstream uses of fields read from the same row.
     pub row_field_vars: HashMap<String, String>,
+    /// Map from local variable name to the full member-chain expression
+    /// it was bound from (`let community_id = req.community_id` →
+    /// `community_id → "req.community_id"`).  Distinct from
+    /// `row_field_vars`, which records only the receiver (loses the
+    /// field name).  Powers the row-population reverse-walk's local-
+    /// alias case: when a sink subject is a plain identifier, the
+    /// reverse walk consults this map to also accept rows whose
+    /// population args contain the aliased chain.
+    pub var_alias_chain: HashMap<String, String>,
     /// Per row-binding metadata: the `let ROW = CALL(..)` declaration
     /// line and the value-refs appearing in the call's arguments.
     /// Populated for every `let V = call(..)` shape.  Powers the

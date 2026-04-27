@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 399
+    "corpus_size": 401
   },
   "cases": [
     {
@@ -12626,6 +12626,61 @@
       ],
       "disabled": false,
       "notes": "Regression guard: same TRPC handler shape as ts-auth-realrepo-004 but the SQL parameter is `input.targetUserId` (request body field), not `ctx.user.id`.  The TRPC ctx self-actor exemption must apply ONLY to ctx.user.<id-like> subjects, never to other paths in the same param."
+    },
+    {
+      "case_id": "rs-auth-realrepo-009",
+      "file": "rust/auth/safe_local_user_view_extractor.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-27",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "Lemmy `LocalUserView` extractor: `is_self_actor_type_text`'s structural <PREFIX>User<SUFFIX?> recogniser accepts the type, so `local_user_view.person.id` reads of the actor's own id pass `is_actor_context_subject` and the missing-ownership rule does not fire."
+    },
+    {
+      "case_id": "rs-auth-realrepo-010",
+      "file": "rust/auth/unsafe_local_user_view_extractor.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-285",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "High",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "positive",
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Negative counterpart for the LocalUserView recogniser: handler takes the typed extractor but mutates a row by `req.target_user_id` (foreign id) without any ownership check — must still flag.  Guards against an over-broad recogniser that would treat any handler with a self-actor extractor as authorised by default."
     }
   ]
 }

@@ -719,6 +719,7 @@ mod tests {
             condition_texts: Vec::new(),
             line: 1,
             row_field_vars: HashMap::new(),
+            var_alias_chain: HashMap::new(),
             row_population_data: HashMap::new(),
             self_actor_vars: HashSet::new(),
             self_actor_id_vars: HashSet::new(),

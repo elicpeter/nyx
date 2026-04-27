@@ -410,6 +410,7 @@ pub fn build_function_unit_with_meta(
         condition_texts: state.condition_texts,
         line,
         row_field_vars: state.row_field_vars,
+        var_alias_chain: state.var_alias_chain,
         row_population_data: state.row_population_data,
         self_actor_vars: state.self_actor_vars,
         self_actor_id_vars: state.self_actor_id_vars,
@@ -441,6 +442,14 @@ struct UnitState {
     /// downstream uses of fields from the same row are implicitly
     /// covered by a check on the row's owner column.
     row_field_vars: HashMap<String, String>,
+    /// Full chain text for `let X = BASE.FIELD` shapes (or
+    /// transitively through method calls / try / await wrappers when
+    /// the value resolves to a member access). Stored alongside
+    /// `row_field_vars` so the row-population reverse-walk can match
+    /// plain-identifier sink subjects against population args by
+    /// their original chain text. See
+    /// [`crate::auth_analysis::model::AnalysisUnit::var_alias_chain`].
+    var_alias_chain: HashMap<String, String>,
     /// Per row-binding metadata from the `let ROW = CALL(...)` site:
     /// the declaration line and the set of `ValueRef`s appearing in
     /// the call's arguments. When an A2 AuthCheck fires against
@@ -525,6 +534,7 @@ fn collect_unit_state(
         "let_declaration" => {
             collect_non_sink_binding(node, bytes, rules, state);
             collect_row_field_binding(node, bytes, state);
+            collect_member_alias_binding(node, bytes, state);
             collect_row_population(node, bytes, state);
             collect_self_actor_binding(node, bytes, rules, state);
             collect_self_actor_id_binding(node, bytes, state);
@@ -831,6 +841,49 @@ fn collect_row_field_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitState
         return;
     };
     state.row_field_vars.insert(var_name, row_name);
+}
+
+/// Track `let X = BASE.FIELD` (or `BASE.FIELD?` / `(BASE.FIELD).await`)
+/// so a downstream sink whose subject is the bare identifier `X` can be
+/// matched against row-population args that recorded the original
+/// chain text.  Distinct from `collect_row_field_binding`, which only
+/// records the receiver name (loses the field).
+///
+/// Only fires when the value resolves to a member-access node and the
+/// resulting chain has at least two segments (`req.community_id`,
+/// `data.user.id`, …) — single-ident receivers are uninteresting and a
+/// chain of length one would just duplicate the binding's own name.
+///
+/// Defensive: never overwrites an existing entry — first writer wins.
+/// Re-binding the same local name (rare in idiomatic Rust) is treated
+/// as a separate variable scope; the rest of the analysis already
+/// works on the first binding seen during a top-down walk.
+fn collect_member_alias_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(var_name) = first_identifier_name(pattern, bytes) else {
+        return;
+    };
+    if var_name.is_empty() {
+        return;
+    }
+    let Some(value) = node.child_by_field_name("value") else {
+        return;
+    };
+    let target = unwrap_try_like(value);
+    if !matches!(
+        target.kind(),
+        "member_expression" | "attribute" | "selector_expression" | "field_expression" | "field_access"
+    ) {
+        return;
+    }
+    let chain = member_chain(target, bytes);
+    if chain.len() < 2 {
+        return;
+    }
+    let chain_text = chain.join(".");
+    state.var_alias_chain.entry(var_name).or_insert(chain_text);
 }
 
 /// Record the line and argument value-refs of a `let ROW = CALL(..)`.
@@ -2115,6 +2168,39 @@ fn propagate_sql_authorized_through_field_read(
     }
 }
 
+/// Recognise type names that semantically mean "the authenticated
+/// actor" as the type of a function parameter.  Used by
+/// `collect_typed_extractor_self_actor` to seed `self_actor_vars` so
+/// that downstream `V.id`-shaped subjects on a parameter of one of
+/// these types count as actor context, not foreign scoped IDs.
+///
+/// The recogniser is intentionally type-only — no name heuristic on
+/// the variable.  A handler signature
+/// `pub async fn handler(.., local_user_view: LocalUserView)` is
+/// recognised because the type name matches, not because the
+/// parameter is conventionally named `local_user_view`.
+///
+/// **Two acceptance forms:**
+///
+/// 1. *Tight exact set* — names whose entire identity is "auth
+///    subject": `Authenticated`, `Identity`, `Principal`.  Adding new
+///    bare names to this set should be done sparingly; framework
+///    types that include `User` should go through the structural
+///    form instead.
+///
+/// 2. *Structural form* — a CamelCase identifier of the shape
+///    `<PREFIX>User<SUFFIX>?` where `PREFIX` is one of `Local`,
+///    `Current`, `Session`, `Auth`, `Authenticated`, `LoggedIn`,
+///    `Admin`, and `SUFFIX` (optional) is one of `View`, `Info`,
+///    `Context`, `Session`, `Token`.  Catches `LocalUserView`
+///    (lemmy), `LocalUser`, `CurrentUser`, `LoggedInUser`,
+///    `AuthenticatedUserContext`, etc.
+///
+/// **Deliberately *not* matched:**
+/// * Bare `User` — too loose; `User` parameters are very often
+///   deserialised payloads, not actor extractors.
+/// * `UserView`, `UserPreferences` — same reason; the prefix is what
+///   carries the auth signal, not the bare `User` segment.
 fn is_self_actor_type_text(ty: &str) -> bool {
     let trimmed = ty
         .trim()
@@ -2127,17 +2213,48 @@ fn is_self_actor_type_text(ty: &str) -> bool {
         .next()
         .unwrap_or(after_colons)
         .trim();
-    matches!(
-        base,
-        "CurrentUser"
-            | "SessionUser"
-            | "AuthUser"
-            | "AdminUser"
-            | "AuthenticatedUser"
-            | "RequireAuth"
-            | "RequireLogin"
-            | "Authenticated"
-    )
+    if matches!(base, "Authenticated" | "Identity" | "Principal") {
+        return true;
+    }
+    matches_self_actor_user_form(base)
+}
+
+/// Structural form: `<PREFIX>User<SUFFIX>?` where PREFIX is in the
+/// authority-prefix vocabulary and SUFFIX is in the
+/// auth-context-suffix vocabulary (or absent).
+///
+/// Implementation: strip a leading PREFIX, require the remainder to
+/// start with `User`, and accept either an exact `User` match or a
+/// `User`+SUFFIX match.  Case-sensitive on the segment boundaries
+/// because we want CamelCase types only — `localuser` wouldn't be a
+/// real Rust type name and matching it would create ambiguity with
+/// payload identifiers.
+fn matches_self_actor_user_form(base: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "Local",
+        "Current",
+        "Session",
+        "Authenticated",
+        "Auth",
+        "LoggedIn",
+        "Admin",
+    ];
+    const SUFFIXES: &[&str] = &["View", "Info", "Context", "Session", "Token"];
+    for prefix in PREFIXES {
+        let Some(rest) = base.strip_prefix(prefix) else {
+            continue;
+        };
+        let Some(after_user) = rest.strip_prefix("User") else {
+            continue;
+        };
+        if after_user.is_empty() {
+            return true;
+        }
+        if SUFFIXES.iter().any(|sfx| *sfx == after_user) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Extract a single-segment receiver name for a value node of the shape
@@ -3495,25 +3612,57 @@ mod tests {
 
     #[test]
     fn is_self_actor_type_text_matches_known_wrappers() {
+        // Tight exact set: bare names whose entire identity is "auth subject".
+        assert!(is_self_actor_type_text("Authenticated"));
+        assert!(is_self_actor_type_text("Identity"));
+        assert!(is_self_actor_type_text("Principal"));
+
+        // Structural form: <PREFIX>User<SUFFIX?>.
         assert!(is_self_actor_type_text("CurrentUser"));
         assert!(is_self_actor_type_text("SessionUser"));
         assert!(is_self_actor_type_text("AuthUser"));
         assert!(is_self_actor_type_text("AdminUser"));
         assert!(is_self_actor_type_text("AuthenticatedUser"));
-        assert!(is_self_actor_type_text("RequireAuth"));
-        assert!(is_self_actor_type_text("RequireLogin"));
-        assert!(is_self_actor_type_text("Authenticated"));
+        // Lemmy: LocalUserView (the real-repo motivation for the
+        // structural recogniser).
+        assert!(is_self_actor_type_text("LocalUserView"));
+        assert!(is_self_actor_type_text("LocalUser"));
+        assert!(is_self_actor_type_text("LoggedInUser"));
+        assert!(is_self_actor_type_text("CurrentUserContext"));
+        assert!(is_self_actor_type_text("AuthenticatedUserSession"));
+        assert!(is_self_actor_type_text("SessionUserToken"));
+        assert!(is_self_actor_type_text("AdminUserInfo"));
         // Qualified paths resolve to last segment.
         assert!(is_self_actor_type_text("crate::auth::CurrentUser"));
+        assert!(is_self_actor_type_text("crate::user::LocalUserView"));
         assert!(is_self_actor_type_text("&CurrentUser"));
         assert!(is_self_actor_type_text("&mut AuthUser"));
         // Generic wrappers: match on the base segment.
         assert!(is_self_actor_type_text("CurrentUser<Admin>"));
+        assert!(is_self_actor_type_text("LocalUserView<Admin>"));
+
         // Non-matches.
+        // Bare `User` — too loose; commonly a deserialised payload type.
+        assert!(!is_self_actor_type_text("User"));
+        assert!(!is_self_actor_type_text("UserPreferences"));
+        // `UserView` lacks an authority-prefix segment and stays a
+        // payload-shaped name.
+        assert!(!is_self_actor_type_text("UserView"));
+        // No prefix vocabulary match — still rejected.
+        assert!(!is_self_actor_type_text("PaymentUser"));
+        // Wrong suffix vocabulary.
+        assert!(!is_self_actor_type_text("CurrentUserPreferences"));
+        // Framework extractors / unrelated types.
         assert!(!is_self_actor_type_text("Db"));
         assert!(!is_self_actor_type_text("Path<(i64,)>"));
-        assert!(!is_self_actor_type_text("User"));
         assert!(!is_self_actor_type_text("Json<Body>"));
+        // `RequireAuth` / `RequireLogin` were dropped from the exact
+        // set: they aren't `User`-bearing types and aren't
+        // semantically the auth subject — they're guard markers.  The
+        // route-aware `axum::classify_guard_type` still treats them
+        // as a login guard via the looser substring match.
+        assert!(!is_self_actor_type_text("RequireAuth"));
+        assert!(!is_self_actor_type_text("RequireLogin"));
     }
 
     fn ident(name: &str) -> ValueRef {
