@@ -2592,3 +2592,253 @@ fn js_empty_function_body_well_formed() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+//  Loop CFG structure: every loop variant must produce a Loop header
+//  with at least one Back edge that targets that header. Without these
+//  invariants the SSA loop-induction-variable phi placement is wrong
+//  and the abstract-interp widening points are missed.
+// ─────────────────────────────────────────────────────────────────────
+
+fn loop_headers(cfg: &Cfg) -> Vec<NodeIndex> {
+    cfg.node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Loop)
+        .collect()
+}
+
+fn back_edges(cfg: &Cfg) -> Vec<(NodeIndex, NodeIndex)> {
+    cfg.edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Back))
+        .map(|e| (e.source(), e.target()))
+        .collect()
+}
+
+fn assert_loop_with_back_edge(cfg: &Cfg, label: &str) {
+    let headers = loop_headers(cfg);
+    assert!(
+        !headers.is_empty(),
+        "{label}: expected at least one Loop header, found none"
+    );
+    let backs = back_edges(cfg);
+    assert!(!backs.is_empty(), "{label}: expected at least one Back edge");
+    for (_, dst) in &backs {
+        assert!(
+            headers.contains(dst),
+            "{label}: Back edge target {:?} is not a Loop header (headers={:?})",
+            dst,
+            headers
+        );
+    }
+}
+
+#[test]
+fn js_for_loop_back_edge() {
+    let src = b"function f() { for (let i = 0; i < 10; i++) { body(i); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    assert_loop_with_back_edge(&cfg, "js classic for");
+}
+
+#[test]
+fn js_do_while_back_edge() {
+    let src = b"function f() { do { body(); } while (cond()); }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    assert_loop_with_back_edge(&cfg, "js do-while");
+}
+
+#[test]
+fn js_for_in_back_edge() {
+    let src = b"function f() { for (let k in obj) { use(k); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    assert_loop_with_back_edge(&cfg, "js for-in");
+}
+
+#[test]
+fn js_for_of_back_edge() {
+    let src = b"function f() { for (const x of items) { use(x); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    // for-of is usually classified the same as for-in / for via
+    // for_in_statement. Still, body-with-back-edge invariant must hold.
+    assert_loop_with_back_edge(&cfg, "js for-of");
+}
+
+#[test]
+fn python_for_loop_back_edge() {
+    let src = b"def f():\n    for x in items:\n        use(x)\n";
+    let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "python", ts_lang);
+    assert_loop_with_back_edge(&cfg, "python for");
+}
+
+#[test]
+fn python_while_loop_back_edge() {
+    let src = b"def f():\n    while cond():\n        use(x)\n";
+    let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "python", ts_lang);
+    assert_loop_with_back_edge(&cfg, "python while");
+}
+
+#[test]
+fn java_enhanced_for_back_edge() {
+    let src = b"class A { void f(int[] xs) { for (int x : xs) { use(x); } } }";
+    let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "java", ts_lang);
+    assert_loop_with_back_edge(&cfg, "java enhanced-for");
+}
+
+#[test]
+fn java_do_while_back_edge() {
+    let src = b"class A { void f() { do { body(); } while (cond()); } }";
+    let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "java", ts_lang);
+    assert_loop_with_back_edge(&cfg, "java do-while");
+}
+
+#[test]
+fn cpp_range_for_back_edge() {
+    let src = b"void f(int* xs) { for (int x : range) { use(x); } }";
+    let ts_lang = Language::from(tree_sitter_cpp::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "cpp", ts_lang);
+    assert_loop_with_back_edge(&cfg, "cpp range-for");
+}
+
+#[test]
+fn c_do_while_back_edge() {
+    let src = b"void f() { do { body(); } while (cond()); }";
+    let ts_lang = Language::from(tree_sitter_c::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "c", ts_lang);
+    assert_loop_with_back_edge(&cfg, "c do-while");
+}
+
+#[test]
+fn go_for_loop_back_edge() {
+    let src = b"package p\nfunc f() { for i := 0; i < 10; i++ { body(i) } }";
+    let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "go", ts_lang);
+    assert_loop_with_back_edge(&cfg, "go for");
+}
+
+#[test]
+fn ruby_while_back_edge() {
+    let src = b"def f\n  while cond\n    body\n  end\nend\n";
+    let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "ruby", ts_lang);
+    assert_loop_with_back_edge(&cfg, "ruby while");
+}
+
+#[test]
+fn ruby_until_back_edge() {
+    // `until cond` is `while not cond`; should still produce a loop.
+    let src = b"def f\n  until done\n    body\n  end\nend\n";
+    let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "ruby", ts_lang);
+    assert_loop_with_back_edge(&cfg, "ruby until");
+}
+
+#[test]
+fn php_foreach_back_edge() {
+    let src = b"<?php function f($items) { foreach ($items as $x) { use($x); } }";
+    let ts_lang = Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let (cfg, _) = parse_and_build(src, "php", ts_lang);
+    assert_loop_with_back_edge(&cfg, "php foreach");
+}
+
+#[test]
+fn rust_for_loop_back_edge() {
+    let src = b"fn f() { for x in 0..10 { use_fn(x); } }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "rust", ts_lang);
+    assert_loop_with_back_edge(&cfg, "rust for");
+}
+
+#[test]
+fn rust_while_loop_back_edge() {
+    let src = b"fn f() { while cond() { body(); } }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "rust", ts_lang);
+    assert_loop_with_back_edge(&cfg, "rust while");
+}
+
+#[test]
+fn nested_loops_two_headers_two_back_edges() {
+    // Nested loops must produce two distinct loop headers and a back
+    // edge for each. This guards against headers being collapsed and
+    // back edges being mis-routed to the outer header.
+    let src = b"function f() { for (let i = 0; i < 10; i++) { for (let j = 0; j < 10; j++) { use(i, j); } } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    let headers = loop_headers(&cfg);
+    assert_eq!(headers.len(), 2, "expected 2 loop headers in nested loops");
+    let backs = back_edges(&cfg);
+    assert!(
+        backs.len() >= 2,
+        "expected ≥2 back edges in nested loops, got {}",
+        backs.len()
+    );
+    // Every back edge must target one of the two headers.
+    for (_, dst) in &backs {
+        assert!(headers.contains(dst), "back edge target not a loop header");
+    }
+    // Each header should be the target of at least one back edge.
+    let mut hit = std::collections::HashSet::new();
+    for (_, dst) in &backs {
+        hit.insert(*dst);
+    }
+    assert_eq!(hit.len(), 2, "each header must receive at least one back edge");
+}
+
+#[test]
+fn loop_with_break_no_back_edge_from_break() {
+    // A `break` short-circuits the loop body — its edge must NOT be a
+    // back edge to the header (it leaves the loop entirely).
+    let src = b"function f() { while (cond()) { if (done()) break; body(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    let headers = loop_headers(&cfg);
+    assert_eq!(headers.len(), 1, "expected 1 loop header");
+    let header = headers[0];
+
+    // Find any Break node and verify none of its outgoing edges are
+    // Back edges to the header.
+    for n in cfg.node_indices() {
+        if cfg[n].kind != StmtKind::Break {
+            continue;
+        }
+        for e in cfg.edges(n) {
+            assert!(
+                !(matches!(e.weight(), EdgeKind::Back) && e.target() == header),
+                "break must not produce a back edge to the loop header"
+            );
+        }
+    }
+}
+
+#[test]
+fn loop_with_continue_back_edge_to_header() {
+    // `continue` must produce a Back edge to the loop header.
+    let src = b"function f() { while (cond()) { if (skip()) continue; body(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    let headers = loop_headers(&cfg);
+    assert_eq!(headers.len(), 1);
+    let header = headers[0];
+
+    let mut found = false;
+    for n in cfg.node_indices() {
+        if cfg[n].kind != StmtKind::Continue {
+            continue;
+        }
+        for e in cfg.edges(n) {
+            if matches!(e.weight(), EdgeKind::Back) && e.target() == header {
+                found = true;
+            }
+        }
+    }
+    assert!(
+        found,
+        "expected at least one Back edge from a Continue node to the loop header"
+    );
+}
