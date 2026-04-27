@@ -439,6 +439,7 @@ mod tests {
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
         let cfg: Cfg = Graph::new();
         let const_values = HashMap::new();

@@ -181,6 +181,16 @@ pub struct SsaTaintTransfer<'a> {
     /// non-cross-file behaviour for unit tests and non-cross-file
     /// construction sites.
     pub cross_file_bodies: Option<&'a HashMap<FuncKey, CalleeSsaBody>>,
+    /// Pointer-Phase 3: per-body field-sensitive points-to facts.
+    /// Populated only when [`crate::pointer::is_enabled()`].  When
+    /// present, [`SsaOp::FieldProj`] reads consult
+    /// [`SsaTaintState::field_taint`] for each `loc ∈ pt(receiver)`,
+    /// unioning the field-cell taint into the projected value.  Field
+    /// writes (synthetic base-update [`SsaOp::Assign`] instructions
+    /// emitted by SSA lowering) likewise record argument taint into
+    /// the matching cells.  Strict-additive: `None` reproduces today's
+    /// pointer-unaware behaviour.
+    pub pointer_facts: Option<&'a crate::pointer::PointsToFacts>,
 }
 
 /// Per-predecessor state tracking for path-sensitive phi evaluation.
@@ -1626,6 +1636,11 @@ fn inline_analyse_callee(
         static_map: None, // static-map seeding is caller-body local, not propagated to inlined callees
         auto_seed_handler_params: transfer.auto_seed_handler_params,
         cross_file_bodies: transfer.cross_file_bodies,
+        // Inline analysis re-lowers the callee in its own body-local
+        // location space; pointer facts are body-relative, so we don't
+        // forward the caller's facts.  Phase 5's `PointsToSummary` is
+        // the cross-call substitute.
+        pointer_facts: None,
     };
 
     // Use the callee's own body graph for inline analysis (per-body CFGs
@@ -2335,6 +2350,109 @@ fn apply_cached_shape(
     }
 }
 
+/// Pointer-Phase 5 / W3: apply a callee's [`FieldPointsToSummary`] field
+/// writes at a caller call site.
+///
+/// For each `(param_idx, field_names)` in
+/// [`FieldPointsToSummary::param_field_writes`], substitute the callee
+/// `Param(callee, i)` with the caller's `pt(arg_i)` and union the
+/// argument's taint into each `(loc, field_id)` cell on the caller's
+/// `field_taint`.
+///
+/// * `param_idx == u32::MAX` is the receiver sentinel — resolve via
+///   the call's `receiver` SsaValue rather than positional args.
+/// * `field_name == "<elem>"` translates to [`FieldId::ELEM`] without
+///   going through the caller's interner — matches the wire-format
+///   convention from
+///   [`crate::pointer::extract_field_points_to`].
+/// * Any other field name is *looked up* (read-only) in the caller's
+///   [`FieldInterner`].  Names the caller never referenced are skipped
+///   — no FieldProj read in the caller could observe such a cell.
+/// * `pt(arg)` saturated to `{Top}` is conservatively skipped (matches
+///   the W1/W2 hooks' over-approximation policy).
+///
+/// Strict-additive: when [`FieldPointsToSummary::overflow`] is `true`
+/// the helper does nothing — the conservative interpretation is "every
+/// param touches every field on every other param", which would
+/// require a body-wide field cell flood the lattice cannot
+/// efficiently represent.  The bit is informational; consumers
+/// already fall back to today's pre-W3 behaviour.
+fn apply_field_points_to_writes(
+    summary: &crate::summary::points_to::FieldPointsToSummary,
+    args: &[SmallVec<[SsaValue; 2]>],
+    receiver: &Option<SsaValue>,
+    state: &mut SsaTaintState,
+    ssa: &SsaBody,
+    pf: &crate::pointer::PointsToFacts,
+) {
+    if summary.is_empty() || summary.overflow {
+        return;
+    }
+    for (param_idx, field_names) in &summary.param_field_writes {
+        // Resolve the caller-side SSA values for the arg position.
+        let caller_vals: SmallVec<[SsaValue; 2]> = if *param_idx == u32::MAX {
+            match receiver {
+                Some(rv) => smallvec::smallvec![*rv],
+                None => continue,
+            }
+        } else {
+            let idx = *param_idx as usize;
+            match args.get(idx) {
+                Some(group) if !group.is_empty() => group.clone(),
+                _ => continue,
+            }
+        };
+
+        // Compute combined arg taint from every contributing SSA value.
+        let mut combined_caps = crate::labels::Cap::empty();
+        let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+        let mut combined_summary = false;
+        for &v in &caller_vals {
+            if let Some(t) = state.get(v) {
+                combined_caps |= t.caps;
+                combined_summary |= t.uses_summary;
+                for o in &t.origins {
+                    push_origin_bounded(&mut combined_origins, *o);
+                }
+            }
+        }
+        if combined_caps.is_empty() {
+            continue;
+        }
+        let cell_taint = VarTaint {
+            caps: combined_caps,
+            origins: combined_origins,
+            uses_summary: combined_summary,
+        };
+
+        // For each field name, intern through the caller's FieldInterner
+        // (read-only) and apply to every caller pt(arg_v) loc.
+        for name in field_names {
+            let fid = if name == "<elem>" {
+                crate::ssa::ir::FieldId::ELEM
+            } else {
+                match ssa.field_interner.lookup(name) {
+                    Some(id) => id,
+                    None => continue,
+                }
+            };
+            for &v in &caller_vals {
+                let pt = pf.pt(v);
+                if pt.is_empty() || pt.is_top() {
+                    continue;
+                }
+                for loc in pt.iter() {
+                    let key = crate::taint::ssa_transfer::state::FieldTaintKey {
+                        loc,
+                        field: fid,
+                    };
+                    state.add_field(key, cell_taint.clone());
+                }
+            }
+        }
+    }
+}
+
 /// Transfer a single SSA instruction.
 pub(super) fn transfer_inst(
     inst: &SsaInst,
@@ -2404,6 +2522,50 @@ pub(super) fn transfer_inst(
             // not data-flow operations.
             if crate::labels::is_excluded(transfer.lang.as_str(), callee.as_bytes()) {
                 return;
+            }
+
+            // Pointer-Phase 4 / W2: container element-write hook.
+            //
+            // Run before any other Call-arm processing so the existing
+            // `try_container_propagation` early-return path (which fires on
+            // recognised container ops and `return`s once handled) cannot
+            // bypass us.  Strict-additive: the hook only writes into the
+            // `(loc, ELEM)` cells on `SsaTaintState.field_taint`, never
+            // touches the existing per-SSA-value taint or the call result.
+            if let (Some(pf), Some(rcv)) = (transfer.pointer_facts, *receiver) {
+                if crate::pointer::is_container_write_callee(callee) {
+                    let pt = pf.pt(rcv);
+                    if !pt.is_empty() && !pt.is_top() {
+                        let mut elem_caps = Cap::empty();
+                        let mut elem_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+                        let mut elem_summary = false;
+                        for arg_group in args {
+                            for &arg_v in arg_group {
+                                if let Some(t) = state.get(arg_v) {
+                                    elem_caps |= t.caps;
+                                    elem_summary |= t.uses_summary;
+                                    for o in &t.origins {
+                                        push_origin_bounded(&mut elem_origins, *o);
+                                    }
+                                }
+                            }
+                        }
+                        if !elem_caps.is_empty() {
+                            let cell = VarTaint {
+                                caps: elem_caps,
+                                origins: elem_origins,
+                                uses_summary: elem_summary,
+                            };
+                            for loc in pt.iter() {
+                                let key = crate::taint::ssa_transfer::state::FieldTaintKey {
+                                    loc,
+                                    field: crate::ssa::ir::FieldId::ELEM,
+                                };
+                                state.add_field(key, cell.clone());
+                            }
+                        }
+                    }
+                }
             }
 
             // Check for source labels first
@@ -2626,6 +2788,36 @@ pub(super) fn transfer_inst(
                 resolved_container_to_return = resolved.param_container_to_return.clone();
                 resolved_container_store = resolved.param_to_container_store.clone();
                 resolved_points_to = resolved.points_to.clone();
+
+                // Pointer-Phase 5 / W3: cross-call field-points-to
+                // application.  Walk the callee's
+                // `field_points_to.param_field_writes`; for each
+                // `(param_idx, field_names)`, substitute `Param(callee, i)`
+                // with the caller's `pt(arg_i)` and union the caller's
+                // argument taint into each `(loc, field_id)` cell on the
+                // caller's `SsaTaintState.field_taint`.
+                //
+                // Receiver flow uses sentinel `param_idx == u32::MAX`;
+                // resolve via the call's receiver SsaValue instead of
+                // positional args.  Field names are looked up against the
+                // *caller's* `field_interner`; names the caller never
+                // referenced are skipped — no FieldProj read in the caller
+                // could observe such a cell, so writing it is wasteful.
+                //
+                // The container-element sentinel `"<elem>"` translates
+                // to [`FieldId::ELEM`] without going through interner
+                // lookup, mirroring the wire-format convention
+                // established in `summary::points_to::FieldPointsToSummary`.
+                if let Some(pf) = transfer.pointer_facts {
+                    apply_field_points_to_writes(
+                        &resolved.field_points_to,
+                        args,
+                        receiver,
+                        state,
+                        ssa,
+                        pf,
+                    );
+                }
 
                 // Capture abstract return for post-transfer injection
                 callee_return_abstract = resolved.return_abstract.clone();
@@ -3426,10 +3618,38 @@ pub(super) fn transfer_inst(
                     inst.value,
                     VarTaint {
                         caps: combined_caps,
-                        origins: combined_origins,
+                        origins: combined_origins.clone(),
                         uses_summary: inherited_summary,
                     },
                 );
+            }
+
+            // Pointer-Phase 3 / W1: synthetic base-update Assign emitted by
+            // SSA lowering for `obj.f = rhs`.  The side-table on the body
+            // maps this synth assign's value → (prior_receiver, FieldId) so
+            // we can lift the assign into a structural field WRITE: union
+            // the rhs taint into every `(loc, field)` cell for `loc ∈
+            // pt(prior_receiver)` that isn't `Top`.  Skip when the receiver
+            // pt set saturates to `Top` — over-approximating every field
+            // cell would amplify rather than localise the taint.
+            if let Some(pf) = transfer.pointer_facts {
+                if let Some((receiver, fid)) = ssa.field_writes.get(&inst.value).copied() {
+                    let pt = pf.pt(receiver);
+                    if !pt.is_empty() && !pt.is_top() && !combined_caps.is_empty() {
+                        let rhs_taint = VarTaint {
+                            caps: combined_caps,
+                            origins: combined_origins.clone(),
+                            uses_summary: inherited_summary,
+                        };
+                        for loc in pt.iter() {
+                            let key = crate::taint::ssa_transfer::state::FieldTaintKey {
+                                loc,
+                                field: fid,
+                            };
+                            state.add_field(key, rhs_taint.clone());
+                        }
+                    }
+                }
             }
         }
 
@@ -3587,7 +3807,7 @@ pub(super) fn transfer_inst(
             // predecessors whose incoming edge carries no definition.
         }
 
-        SsaOp::FieldProj { receiver, .. } => {
+        SsaOp::FieldProj { receiver, field, .. } => {
             // Field projection: propagate the receiver's full taint
             // record to the projected value.  Phase 1 keeps the simple
             // pass-through behaviour — `obj.f` carries `obj`'s caps and
@@ -3596,7 +3816,68 @@ pub(super) fn transfer_inst(
             // Strict pass-through: if the receiver is untainted, the
             // projection stays untainted (no entry inserted), preserving
             // the existing block-state semantics.
-            if let Some(t) = state.get(*receiver).cloned() {
+            let mut combined: Option<VarTaint> = state.get(*receiver).cloned();
+
+            // Pointer-Phase 3 read: when per-body PointsToFacts are
+            // available, also union taint from each `(loc, field)` cell
+            // for `loc ∈ pt(receiver)`.  This carries cross-method field
+            // flow within a single body — method A writes `this.cache =
+            // req.body` (recorded into the field cell), method B's
+            // `this.cache` projection picks the taint up here.
+            if let Some(pf) = transfer.pointer_facts {
+                let pt = pf.pt(*receiver);
+                if !pt.is_empty() && !pt.is_top() {
+                    for loc in pt.iter() {
+                        let key = crate::taint::ssa_transfer::state::FieldTaintKey {
+                            loc,
+                            field: *field,
+                        };
+                        if let Some(cell) = state.get_field(key) {
+                            let t = cell.clone();
+                            combined = Some(match combined {
+                                Some(mut acc) => {
+                                    acc.caps |= t.caps;
+                                    acc.uses_summary |= t.uses_summary;
+                                    // A7 audit: route the cell's origins
+                                    // through `push_origin_bounded` so the
+                                    // cap-driven survivor selection (sorted
+                                    // by `origin_sort_key`, deterministic
+                                    // truncation when over cap, observability
+                                    // counter increments) applies the same
+                                    // way as the per-SSA-value lattice.  The
+                                    // pre-A7 inline walk only deduped by
+                                    // node and silently grew past
+                                    // `effective_max_origins` when the cell
+                                    // had a wider origin set than the cap.
+                                    for o in &t.origins {
+                                        push_origin_bounded(&mut acc.origins, *o);
+                                    }
+                                    acc
+                                }
+                                None => {
+                                    // First contribution: still apply the
+                                    // bounded-push so a cell built up
+                                    // above-cap upstream gets re-bounded
+                                    // here at read time.  `push_origin_bounded`
+                                    // dedups by node, sorts deterministically.
+                                    let mut bounded: SmallVec<[TaintOrigin; 2]> =
+                                        SmallVec::new();
+                                    for o in &t.origins {
+                                        push_origin_bounded(&mut bounded, *o);
+                                    }
+                                    VarTaint {
+                                        caps: t.caps,
+                                        origins: bounded,
+                                        uses_summary: t.uses_summary,
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+
+            if let Some(t) = combined {
                 state.set(inst.value, t);
             }
         }
@@ -6865,6 +7146,14 @@ struct ResolvedSummary {
     /// already captures" — the caller treats the call as a pure
     /// taint-through-signature edge.
     points_to: crate::summary::points_to::PointsToSummary,
+    /// Pointer-Phase 5 / W3: field-granularity per-parameter points-to
+    /// summary.  Populated only via `convert_ssa_to_resolved` when the
+    /// underlying SSA summary carries `field_points_to` records; other
+    /// resolution paths leave it empty.  Applied at the caller-side
+    /// call site by `apply_field_points_to_writes` to spread argument
+    /// taint into matching `(loc, field)` cells when
+    /// [`crate::pointer::is_enabled()`] is set.
+    field_points_to: crate::summary::points_to::FieldPointsToSummary,
 }
 
 fn resolve_callee(
@@ -7012,6 +7301,7 @@ fn resolve_callee_full(
                     abstract_transfer: vec![],
                     param_return_paths: vec![],
                     points_to: Default::default(),
+                    field_points_to: Default::default(),
                 });
             }
             // Try label classification for the bound function (by leaf name)
@@ -7052,6 +7342,7 @@ fn resolve_callee_full(
                     abstract_transfer: vec![],
                     param_return_paths: vec![],
                     points_to: Default::default(),
+                    field_points_to: Default::default(),
                 });
             }
         }
@@ -7177,6 +7468,7 @@ fn resolve_callee_full(
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
             });
         }
     } else {
@@ -7225,6 +7517,7 @@ fn resolve_callee_full(
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            field_points_to: Default::default(),
         };
         match widened.len() {
             0 => {}
@@ -7294,6 +7587,7 @@ fn resolve_callee_full(
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
             });
         }
     }
@@ -7474,6 +7768,7 @@ fn convert_ssa_to_resolved_for_caller(
         abstract_transfer: ssa_sum.abstract_transfer.clone(),
         param_return_paths: ssa_sum.param_return_paths.clone(),
         points_to: ssa_sum.points_to.clone(),
+        field_points_to: ssa_sum.field_points_to.clone(),
     }
 }
 

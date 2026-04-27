@@ -634,6 +634,7 @@ mod tests {
             cfg_node_map,
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         }
     }
 

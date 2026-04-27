@@ -216,6 +216,7 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
@@ -263,6 +264,7 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
@@ -311,6 +313,7 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
@@ -355,6 +358,7 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
@@ -391,6 +395,7 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
@@ -454,6 +459,7 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: interner,
+            field_writes: std::collections::HashMap::new(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
@@ -517,6 +523,7 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: interner,
+            field_writes: std::collections::HashMap::new(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
@@ -573,6 +580,7 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);

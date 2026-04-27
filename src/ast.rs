@@ -1129,6 +1129,20 @@ impl<'a> ParsedFile<'a> {
                 state::build_resource_method_summaries(&self.file_cfg.bodies, caller_lang);
             let mut all_state_findings = Vec::new();
             for body in &self.file_cfg.bodies {
+                // Phase 2 of the pointer-analysis rollout: when
+                // `NYX_POINTER_ANALYSIS=1` is set, derive a `var_name →
+                // PtrProxyHint` map from the body's points-to facts so
+                // the proxy-acquire transfer can suppress SymbolId
+                // attribution on field-aliased receivers (e.g. `m :=
+                // c.mu; m.Lock()`).  Strict-additive — `None` when the
+                // env-var is unset and behaviour matches today exactly.
+                let body_pointer_hints = cfg_analysis::build_body_const_facts(body, caller_lang)
+                    .as_ref()
+                    .and_then(|f| {
+                        f.pointer_facts
+                            .as_ref()
+                            .map(|pf| pf.name_proxy_hints(&f.ssa))
+                    });
                 let state_findings = state::run_state_analysis(
                     &body.graph,
                     body.entry,
@@ -1140,6 +1154,7 @@ impl<'a> ParsedFile<'a> {
                     &resource_method_summaries,
                     &body.meta.auth_decorators,
                     &path_safe_suppressed_spans,
+                    body_pointer_hints.as_ref(),
                 );
 
                 for sf in &state_findings {

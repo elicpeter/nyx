@@ -2,7 +2,7 @@ use crate::abstract_interp::{AbstractTransfer, AbstractValue, PathFact};
 use crate::labels::Cap;
 use crate::ssa::type_facts::TypeKind;
 use crate::summary::SinkSite;
-use crate::summary::points_to::PointsToSummary;
+use crate::summary::points_to::{FieldPointsToSummary, PointsToSummary};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
@@ -268,6 +268,20 @@ pub struct SsaFuncSummary {
     /// each other or the return value.
     #[serde(default, skip_serializing_if = "PointsToSummary::is_empty")]
     pub points_to: PointsToSummary,
+    /// Pointer-Phase 5: field-granularity per-parameter points-to
+    /// summary.  Records which fields the callee reads from / writes
+    /// to on each parameter, so cross-file resolution can spread
+    /// taint through field-level mutations the callee performs on
+    /// caller-supplied objects.
+    ///
+    /// Default-empty (most functions don't field-mutate their params)
+    /// and elided from serialised output via `skip_serializing_if` so
+    /// pre-Phase-5 summaries deserialise cleanly without migration.
+    /// Built by extraction in `summary_extract.rs` when the per-body
+    /// [`crate::pointer::PointsToFacts`] are available
+    /// (`NYX_POINTER_ANALYSIS=1`); empty otherwise.
+    #[serde(default, skip_serializing_if = "FieldPointsToSummary::is_empty")]
+    pub field_points_to: FieldPointsToSummary,
     /// Per-return-path abstract [`PathFact`] decomposition.
     ///
     /// When non-empty, supplies per-predicate-gate facts finer than the

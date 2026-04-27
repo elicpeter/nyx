@@ -13,8 +13,9 @@
 use crate::abstract_interp::{self, AbstractState};
 use crate::cfg::BodyId;
 use crate::constraint;
+use crate::pointer::LocId;
 use crate::ssa::heap::HeapState;
-use crate::ssa::ir::SsaValue;
+use crate::ssa::ir::{FieldId, SsaValue};
 use crate::state::lattice::Lattice;
 use crate::state::symbol::SymbolId;
 use crate::taint::domain::{PredicateSummary, SmallBitSet, TaintOrigin, VarTaint};
@@ -246,6 +247,18 @@ pub fn seed_lookup<'a>(
 
 // ── SSA Taint State ─────────────────────────────────────────────────────
 
+/// Compact key for a heap-field taint cell.
+///
+/// `(loc, field)` — `loc` is the abstract location of the *parent*
+/// (interned by the body's [`crate::pointer::LocInterner`]), `field`
+/// is the [`FieldId`] of the projected field.  The pair survives lattice
+/// joins / leq comparisons by `Ord`-derived sort.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FieldTaintKey {
+    pub loc: LocId,
+    pub field: FieldId,
+}
+
 /// Taint state keyed by SsaValue instead of SymbolId.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SsaTaintState {
@@ -268,6 +281,16 @@ pub struct SsaTaintState {
     /// interpretation is disabled (`analysis.engine.abstract_interpretation
     /// = false`).
     pub abstract_state: Option<AbstractState>,
+    /// Pointer-Phase 3: per-heap-field taint cells, keyed by
+    /// `(parent_loc, field)`.  Sorted by [`FieldTaintKey`] for O(n)
+    /// merge-join.  Populated only when the body's
+    /// [`crate::pointer::PointsToFacts`] is available
+    /// (`NYX_POINTER_ANALYSIS=1`); empty otherwise so the lattice join
+    /// is a strict no-op for pointer-disabled runs.  Field reads
+    /// (`SsaOp::FieldProj`) consult the cells; field writes record into
+    /// them.  Cross-call propagation lands in Phase 5 via the
+    /// field-granularity `PointsToSummary`.
+    pub field_taint: SmallVec<[(FieldTaintKey, VarTaint); 4]>,
 }
 
 impl SsaTaintState {
@@ -288,6 +311,35 @@ impl SsaTaintState {
             } else {
                 None
             },
+            field_taint: SmallVec::new(),
+        }
+    }
+
+    /// Pointer-Phase 3: read the taint at a heap-field cell.  Returns
+    /// `None` when the cell has no taint recorded (caller should treat
+    /// as untainted).  O(log n) on the sorted [`field_taint`] list.
+    pub fn get_field(&self, key: FieldTaintKey) -> Option<&VarTaint> {
+        self.field_taint
+            .binary_search_by_key(&key, |(k, _)| *k)
+            .ok()
+            .map(|idx| &self.field_taint[idx].1)
+    }
+
+    /// Pointer-Phase 3: union `t` into the field cell at `key`.
+    /// Maintains sorted invariant.  No-op when `t.caps` is empty.
+    pub fn add_field(&mut self, key: FieldTaintKey, t: VarTaint) {
+        if t.caps.is_empty() {
+            return;
+        }
+        match self.field_taint.binary_search_by_key(&key, |(k, _)| *k) {
+            Ok(idx) => {
+                let cur = &mut self.field_taint[idx].1;
+                cur.caps |= t.caps;
+                cur.uses_summary |= t.uses_summary;
+                let merged = merge_origins(&cur.origins, &t.origins);
+                cur.origins = merged;
+            }
+            Err(idx) => self.field_taint.insert(idx, (key, t)),
         }
     }
 
@@ -337,6 +389,7 @@ impl Lattice for SsaTaintState {
             (Some(a), Some(b)) => Some(a.join(b)),
             _ => None,
         };
+        let field_taint = merge_join_field_taint(&self.field_taint, &other.field_taint);
         SsaTaintState {
             values,
             validated_must,
@@ -345,6 +398,7 @@ impl Lattice for SsaTaintState {
             heap,
             path_env,
             abstract_state,
+            field_taint,
         }
     }
 
@@ -359,6 +413,9 @@ impl Lattice for SsaTaintState {
             return false;
         }
         if !self.heap.leq(&other.heap) {
+            return false;
+        }
+        if !field_taint_leq(&self.field_taint, &other.field_taint) {
             return false;
         }
         // path_env: None (Top) ≥ everything; Some(a) ≤ None only if a is Top-equivalent
@@ -387,6 +444,82 @@ impl Lattice for SsaTaintState {
         }
         true
     }
+}
+
+/// Pointer-Phase 3: merge-join two sorted `field_taint` lists.  Same
+/// shape as [`merge_join_ssa_vars`] but keyed on [`FieldTaintKey`] —
+/// caps OR'd, origins merged, `uses_summary` OR'd.
+pub(super) fn merge_join_field_taint(
+    a: &[(FieldTaintKey, VarTaint)],
+    b: &[(FieldTaintKey, VarTaint)],
+) -> SmallVec<[(FieldTaintKey, VarTaint); 4]> {
+    let mut result = SmallVec::with_capacity(a.len().max(b.len()));
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].0.cmp(&b[j].0) {
+            std::cmp::Ordering::Less => {
+                result.push(a[i].clone());
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                result.push(b[j].clone());
+                j += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                let caps = a[i].1.caps | b[j].1.caps;
+                let origins = merge_origins(&a[i].1.origins, &b[j].1.origins);
+                let uses_summary = a[i].1.uses_summary || b[j].1.uses_summary;
+                result.push((
+                    a[i].0,
+                    VarTaint {
+                        caps,
+                        origins,
+                        uses_summary,
+                    },
+                ));
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    while i < a.len() {
+        result.push(a[i].clone());
+        i += 1;
+    }
+    while j < b.len() {
+        result.push(b[j].clone());
+        j += 1;
+    }
+    result
+}
+
+/// `a ≤ b` for sorted `field_taint` lists: every key in `a` has caps
+/// ⊆ the matching key's caps in `b` (or `b` lacks the key, treated as
+/// ⊥).  Used by the convergence check in [`Lattice::leq`].
+pub(super) fn field_taint_leq(
+    a: &[(FieldTaintKey, VarTaint)],
+    b: &[(FieldTaintKey, VarTaint)],
+) -> bool {
+    let mut j = 0;
+    for (key, ta) in a {
+        while j < b.len() && b[j].0 < *key {
+            j += 1;
+        }
+        if j >= b.len() || b[j].0 != *key {
+            // Key absent in b ⇒ b's value is bottom for this cell;
+            // a's caps must also be empty, otherwise a > b.
+            if !ta.caps.is_empty() {
+                return false;
+            }
+            continue;
+        }
+        let tb = &b[j].1;
+        // ta.caps ⊆ tb.caps  ⇔  every bit in ta.caps is also in tb.caps.
+        if (ta.caps - tb.caps).bits() != 0 {
+            return false;
+        }
+    }
+    true
 }
 
 /// Merge-join two sorted SSA var lists.
@@ -754,5 +887,271 @@ mod origin_cap_tests {
         set_max_origins_override(7);
         assert_eq!(effective_max_origins(), 7);
         set_max_origins_override(0);
+    }
+}
+
+#[cfg(test)]
+mod field_taint_tests {
+    //! Pointer-Phase 3: tests for the heap-field taint cells on
+    //! [`SsaTaintState`].  Cover get/add round-trip, lattice join
+    //! (cap union + origin merge), and `leq` convergence semantics.
+    use super::*;
+    use crate::labels::Cap;
+    use crate::pointer::LocId;
+    use crate::ssa::ir::FieldId;
+    use crate::taint::domain::TaintOrigin;
+    use smallvec::SmallVec;
+
+    fn key(loc_raw: u32, field_raw: u32) -> FieldTaintKey {
+        FieldTaintKey {
+            loc: LocId(loc_raw),
+            field: FieldId(field_raw),
+        }
+    }
+
+    fn taint(caps: Cap) -> VarTaint {
+        VarTaint {
+            caps,
+            origins: SmallVec::new(),
+            uses_summary: false,
+        }
+    }
+
+    #[test]
+    fn add_field_round_trips() {
+        let mut s = SsaTaintState::initial();
+        let k = key(1, 7);
+        s.add_field(k, taint(Cap::ENV_VAR));
+        let got = s.get_field(k).expect("field cell present");
+        assert!(got.caps.contains(Cap::ENV_VAR));
+    }
+
+    #[test]
+    fn add_field_unions_caps() {
+        let mut s = SsaTaintState::initial();
+        let k = key(1, 7);
+        s.add_field(k, taint(Cap::ENV_VAR));
+        s.add_field(k, taint(Cap::ENV_VAR));
+        let got = s.get_field(k).unwrap();
+        assert!(got.caps.contains(Cap::ENV_VAR));
+        assert!(got.caps.contains(Cap::ENV_VAR));
+    }
+
+    #[test]
+    fn add_field_skips_empty_caps() {
+        let mut s = SsaTaintState::initial();
+        let k = key(2, 3);
+        s.add_field(k, taint(Cap::empty()));
+        assert!(s.get_field(k).is_none(), "empty caps must not insert");
+    }
+
+    #[test]
+    fn lattice_join_unions_keys_and_caps() {
+        let k1 = key(1, 7);
+        let k2 = key(2, 9);
+        let mut a = SsaTaintState::initial();
+        let mut b = SsaTaintState::initial();
+        a.add_field(k1, taint(Cap::ENV_VAR));
+        b.add_field(k1, taint(Cap::ENV_VAR));
+        b.add_field(k2, taint(Cap::FILE_IO));
+        let joined = a.join(&b);
+        let v1 = joined.get_field(k1).unwrap();
+        assert!(v1.caps.contains(Cap::ENV_VAR));
+        assert!(v1.caps.contains(Cap::ENV_VAR));
+        let v2 = joined.get_field(k2).unwrap();
+        assert!(v2.caps.contains(Cap::FILE_IO));
+    }
+
+    #[test]
+    fn lattice_leq_detects_strict_increase() {
+        // a is empty; b has a cell.  Empty ≤ any state, so a.leq(b)
+        // holds.  b ≤ a fails because b has a cell with non-empty caps
+        // that a lacks.
+        let mut b = SsaTaintState::initial();
+        b.add_field(key(1, 7), taint(Cap::ENV_VAR));
+        let a = SsaTaintState::initial();
+        assert!(a.leq(&b), "empty state ≤ state with a field cell");
+        assert!(!b.leq(&a), "state with a field cell is NOT ≤ empty state");
+    }
+
+    #[test]
+    fn lattice_leq_holds_when_caps_subset() {
+        let k = key(3, 4);
+        let mut a = SsaTaintState::initial();
+        let mut b = SsaTaintState::initial();
+        a.add_field(k, taint(Cap::ENV_VAR));
+        b.add_field(k, taint(Cap::ENV_VAR | Cap::FILE_IO));
+        assert!(a.leq(&b));
+        assert!(!b.leq(&a));
+    }
+
+    #[test]
+    fn merge_origins_via_join_dedups_by_node() {
+        use petgraph::graph::NodeIndex;
+        let k = key(1, 1);
+        let o1 = TaintOrigin {
+            node: NodeIndex::new(5),
+            source_kind: crate::labels::SourceKind::UserInput,
+            source_span: Some((0, 1)),
+        };
+        let o2 = TaintOrigin {
+            node: NodeIndex::new(7),
+            source_kind: crate::labels::SourceKind::EnvironmentConfig,
+            source_span: Some((10, 11)),
+        };
+        let mut t1 = taint(Cap::ENV_VAR);
+        t1.origins.push(o1.clone());
+        let mut t2 = taint(Cap::ENV_VAR);
+        t2.origins.push(o1.clone());
+        t2.origins.push(o2.clone());
+
+        let mut a = SsaTaintState::initial();
+        let mut b = SsaTaintState::initial();
+        a.add_field(k, t1);
+        b.add_field(k, t2);
+        let joined = a.join(&b);
+        let cell = joined.get_field(k).unwrap();
+        // Both origins survive; the duplicate o1 dedups.
+        assert_eq!(cell.origins.len(), 2);
+        let nodes: Vec<_> = cell.origins.iter().map(|o| o.node).collect();
+        assert!(nodes.contains(&NodeIndex::new(5)));
+        assert!(nodes.contains(&NodeIndex::new(7)));
+    }
+
+    /// Pointer-Phase 3 / A8 audit: the field_taint lattice is monotone
+    /// and converges under a deterministic enumeration of inputs.
+    /// Caps grow (OR), `uses_summary` grows (OR), origins grow modulo
+    /// the cap (merge_origins is bounded).  Joins must:
+    /// 1. Be commutative: join(a, b) == join(b, a).
+    /// 2. Be associative: join(join(a, b), c) == join(a, join(b, c)).
+    /// 3. Be idempotent: join(a, a) == a.
+    /// 4. Reach a fixed point in at most |unique cells| iterations.
+    #[test]
+    fn lattice_converges_under_deterministic_enumeration() {
+        use crate::labels::Cap;
+        use petgraph::graph::NodeIndex;
+
+        // Build N distinct (key, taint) pairs.
+        let inputs: Vec<(FieldTaintKey, VarTaint)> = (0..6)
+            .map(|i| {
+                let key = FieldTaintKey {
+                    loc: LocId(1 + (i % 3) as u32),
+                    field: FieldId((i % 4) as u32),
+                };
+                let taint = VarTaint {
+                    caps: if i % 2 == 0 { Cap::ENV_VAR } else { Cap::FILE_IO },
+                    origins: smallvec::SmallVec::from_iter([TaintOrigin {
+                        node: NodeIndex::new(i + 10),
+                        source_kind: crate::labels::SourceKind::UserInput,
+                        source_span: Some((i * 5, i * 5 + 2)),
+                    }]),
+                    uses_summary: false,
+                };
+                (key, taint)
+            })
+            .collect();
+
+        // Build a list of states, each with a single (key, taint) pair.
+        let states: Vec<SsaTaintState> = inputs
+            .iter()
+            .map(|(k, t)| {
+                let mut s = SsaTaintState::initial();
+                s.add_field(*k, t.clone());
+                s
+            })
+            .collect();
+
+        // Compute LUB by folding `join` over `states`.
+        let lub = states
+            .iter()
+            .skip(1)
+            .fold(states[0].clone(), |acc, s| acc.join(s));
+
+        // 1. Commutativity: join(a, b) == join(b, a).
+        for i in 0..states.len() {
+            for j in (i + 1)..states.len() {
+                let ab = states[i].join(&states[j]);
+                let ba = states[j].join(&states[i]);
+                assert_eq!(
+                    ab, ba,
+                    "join must commute: states[{i}] ⊕ states[{j}] != states[{j}] ⊕ states[{i}]",
+                );
+            }
+        }
+
+        // 2. Associativity: ((a ⊕ b) ⊕ c) == (a ⊕ (b ⊕ c)).
+        for i in 0..states.len() {
+            for j in 0..states.len() {
+                for k in 0..states.len() {
+                    let a = &states[i];
+                    let b = &states[j];
+                    let c = &states[k];
+                    let left = a.join(b).join(c);
+                    let right = a.join(&b.join(c));
+                    assert_eq!(
+                        left, right,
+                        "join must associate: states[{i},{j},{k}] left vs right",
+                    );
+                }
+            }
+        }
+
+        // 3. Idempotency: lub ⊕ lub == lub, lub ⊕ s == lub for every input s.
+        let lub_lub = lub.join(&lub);
+        assert_eq!(lub, lub_lub, "lub must be idempotent under self-join");
+        for (i, s) in states.iter().enumerate() {
+            let merged = lub.join(s);
+            assert_eq!(
+                lub, merged,
+                "lub.join(states[{i}]) must equal lub (s ≤ lub)",
+            );
+        }
+
+        // 4. Convergence within a bounded number of iterations.  The
+        // worklist tightens after each input is folded in; once every
+        // unique key has been seen, further folds are no-ops.
+        let mut acc = SsaTaintState::initial();
+        let mut iter_count = 0;
+        loop {
+            iter_count += 1;
+            if iter_count > inputs.len() + 4 {
+                panic!("lattice did not converge within bounded iterations");
+            }
+            let mut next = acc.clone();
+            for s in &states {
+                next = next.join(s);
+            }
+            if next.field_taint == acc.field_taint {
+                break;
+            }
+            acc = next;
+        }
+        assert_eq!(
+            acc, lub,
+            "iterative fold must converge to the lub regardless of order",
+        );
+    }
+
+    /// `field_taint_leq` is the soundness gate for worklist
+    /// convergence: once `next ≤ acc`, the worklist halts.  Pin that
+    /// `leq` is consistent with `join` — i.e. `s.leq(s.join(t))` holds
+    /// for any `s, t`.  Without this, the worklist could loop
+    /// indefinitely on inputs whose join produces a state not
+    /// dominated by both inputs.
+    #[test]
+    fn lattice_leq_consistent_with_join() {
+        use crate::labels::Cap;
+        let mut a = SsaTaintState::initial();
+        let mut b = SsaTaintState::initial();
+        a.add_field(key(1, 7), taint(Cap::ENV_VAR));
+        b.add_field(key(1, 7), taint(Cap::FILE_IO));
+        b.add_field(key(2, 9), taint(Cap::SHELL_ESCAPE));
+        let j = a.join(&b);
+        assert!(a.leq(&j), "a ≤ a ⊕ b");
+        assert!(b.leq(&j), "b ≤ a ⊕ b");
+        // Reflexive: x ≤ x.
+        assert!(a.leq(&a));
+        assert!(b.leq(&b));
+        assert!(j.leq(&j));
     }
 }

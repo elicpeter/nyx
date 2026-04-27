@@ -624,6 +624,17 @@ fn analyse_body_with_seed(
             } else {
                 Some(static_map)
             };
+            // Pointer-Phase 3 / W1+W2+W3: per-body field-sensitive points-to
+            // facts.  Computed only when `NYX_POINTER_ANALYSIS=1`; the
+            // per-body `analyse_body` cost is amortised across the three
+            // hooks (W1 field-write read-back, W2 container ELEM cells,
+            // W3 cross-call resolver).  Strict-additive: `None` keeps
+            // pointer-disabled behaviour bit-identical.
+            let pointer_facts = if crate::pointer::is_enabled() {
+                Some(crate::pointer::analyse_body(&ssa_body, body.meta.id))
+            } else {
+                None
+            };
             let transfer = ssa_transfer::SsaTaintTransfer {
                 lang,
                 namespace,
@@ -659,6 +670,7 @@ fn analyse_body_with_seed(
                     || (lang == Lang::Java
                         && body.meta.kind == crate::cfg::BodyKind::AnonymousFunction),
                 cross_file_bodies,
+                pointer_facts: pointer_facts.as_ref(),
             };
             let (events, block_states) =
                 ssa_transfer::run_ssa_taint_full(&ssa_body, cfg, &transfer);
@@ -1476,6 +1488,23 @@ fn lower_all_functions_from_bodies(
             // for any method invoked inside a parameterless caller.
             let entry = summaries.entry(key.clone()).or_default();
             entry.typed_call_receivers = typed_receivers;
+        }
+
+        // Pointer-Phase 5 / W3: populate `field_points_to` from the
+        // body's pointer facts when the analysis is enabled.  Strict
+        // opt-in via `NYX_POINTER_ANALYSIS=1`; off-by-default keeps
+        // bit-for-bit identity with the pre-W3 behaviour.
+        //
+        // `extract_field_points_to` covers both reads (via
+        // `SsaOp::FieldProj` walks) and writes (via the W1
+        // `field_writes` side-table on the body) in a single pass.
+        if crate::pointer::is_enabled() {
+            let facts = crate::pointer::analyse_body(&func_ssa, body.meta.id);
+            let fpt = crate::pointer::extract_field_points_to(&func_ssa, &facts);
+            if !fpt.is_empty() {
+                let entry = summaries.entry(key.clone()).or_default();
+                entry.field_points_to = fpt;
+            }
         }
 
         bodies.insert(

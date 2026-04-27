@@ -239,17 +239,18 @@ fn lower_to_ssa_inner(
 
     // 6. Rename variables (dominator tree preorder walk)
     let dom_tree_children = build_dom_tree_children(num_blocks, &doms, &block_graph);
-    let (mut ssa_blocks, mut value_defs, cfg_node_map, field_interner) = rename_variables(
-        cfg,
-        &blocks_nodes,
-        &block_succs,
-        &block_preds,
-        &phi_placements,
-        &dom_tree_children,
-        &filtered_edges,
-        &external_vars,
-        &nop_nodes,
-    );
+    let (mut ssa_blocks, mut value_defs, cfg_node_map, field_interner, field_writes) =
+        rename_variables(
+            cfg,
+            &blocks_nodes,
+            &block_succs,
+            &block_preds,
+            &phi_placements,
+            &dom_tree_children,
+            &filtered_edges,
+            &external_vars,
+            &nop_nodes,
+        );
 
     // 6b. Fill any missing phi operands with a shared Undef sentinel so
     // every phi has exactly one operand per predecessor. See
@@ -304,6 +305,7 @@ fn lower_to_ssa_inner(
         cfg_node_map,
         exception_edges,
         field_interner,
+        field_writes,
     };
 
     // 9. Catch-block reachability invariant.
@@ -920,6 +922,7 @@ fn rename_variables(
     Vec<ValueDef>,
     HashMap<NodeIndex, SsaValue>,
     crate::ssa::ir::FieldInterner,
+    HashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
 ) {
     let num_blocks = blocks_nodes.len();
     let mut next_value: u32 = 0;
@@ -931,6 +934,11 @@ fn rename_variables(
     // empty otherwise so existing per-statement Call lowering is
     // bit-for-bit unchanged.
     let mut field_interner = crate::ssa::ir::FieldInterner::new();
+    // Pointer-Phase 3 / W1: side-table mapping each synthetic base-update
+    // [`SsaOp::Assign`]'s defined value to its `(receiver, field)` pair.
+    // Populated below at the synthetic-Assign emission site.  Read by
+    // the taint engine to lift the assign into a structural field WRITE.
+    let mut field_writes: HashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)> = HashMap::new();
 
     // Per-variable rename stacks
     let mut var_stacks: HashMap<String, Vec<SsaValue>> = HashMap::new();
@@ -998,6 +1006,7 @@ fn rename_variables(
         next_value: &mut u32,
         nop_nodes: &HashSet<NodeIndex>,
         field_interner: &mut crate::ssa::ir::FieldInterner,
+        field_writes: &mut HashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
     ) {
         let block_id = BlockId(block_idx as u32);
 
@@ -1325,12 +1334,29 @@ fn rename_variables(
             // Only includes the new field value (not the old base) so that field
             // overwrites properly kill taint: if obj.data is re-assigned to a
             // constant, the base `obj` no longer carries that field's taint.
+            //
+            // Pointer-Phase 3 / W1: each synthetic Assign also records its
+            // structural identity into `field_writes` — `(receiver_old_value,
+            // FieldId(field_name))` — so the taint engine can recognise the
+            // synthetic assign as a field WRITE and mirror the rhs taint
+            // into the matching `(loc, field)` cell on `SsaTaintState`.
+            // The "old" parent value is the reaching def of `parent` BEFORE
+            // we push the new `synth_v`; when no prior def exists (the
+            // parent is undefined at this point), we skip the side-table
+            // entry so the consumer's `pt(receiver)` walk produces no work.
             if !nop_nodes.contains(&node) {
                 if let Some(ref d) = info.taint.defines {
                     let mut current = d.as_str();
                     let mut child_value = v;
                     while let Some(dot_pos) = current.rfind('.') {
                         let parent = &current[..dot_pos];
+                        let field_name = &current[dot_pos + 1..];
+                        // Snapshot prior reaching def of `parent` BEFORE we
+                        // push the new synth_v.  Used by the field-write
+                        // side-table as the receiver SsaValue.
+                        let prior_parent_value: Option<SsaValue> = var_stacks
+                            .get(parent)
+                            .and_then(|s| s.last().copied());
                         let synth_v = SsaValue(*next_value);
                         *next_value += 1;
                         let synth_uses: SmallVec<[SsaValue; 4]> =
@@ -1351,6 +1377,15 @@ fn rename_variables(
                             var_name: Some(parent.to_string()),
                             span: info.ast.span,
                         });
+                        // Record `(synth_v -> (prior_parent, field_id))` so
+                        // the taint engine can lift the synthetic assign
+                        // into a field-write hook.  The field name is
+                        // interned through the per-body `FieldInterner` so
+                        // FieldProj reads downstream resolve to the same id.
+                        if let Some(rcv) = prior_parent_value {
+                            let fid = field_interner.intern(field_name);
+                            field_writes.insert(synth_v, (rcv, fid));
+                        }
                         child_value = synth_v;
                         current = parent;
                     }
@@ -1620,6 +1655,7 @@ fn rename_variables(
                 next_value,
                 nop_nodes,
                 field_interner,
+                field_writes,
             );
         }
 
@@ -1689,6 +1725,7 @@ fn rename_variables(
         &mut next_value,
         nop_nodes,
         &mut field_interner,
+        &mut field_writes,
     );
 
     // Process orphan blocks (e.g. catch blocks disconnected after exception edge removal).
@@ -1729,12 +1766,19 @@ fn rename_variables(
                     &mut next_value,
                     nop_nodes,
                     &mut field_interner,
+                    &mut field_writes,
                 );
             }
         }
     }
 
-    (ssa_blocks, value_defs, cfg_node_map, field_interner)
+    (
+        ssa_blocks,
+        value_defs,
+        cfg_node_map,
+        field_interner,
+        field_writes,
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3722,6 +3766,61 @@ mod tests {
         assert_eq!(
             r_second, v_first,
             "second FieldProj must chain off the first's value"
+        );
+    }
+
+    /// Pointer-Phase 3 / W1 end-to-end: lowering an `obj.f = rhs`
+    /// statement populates `SsaBody.field_writes` with the synthetic
+    /// base-update Assign's `(receiver, FieldId)` mapping.
+    ///
+    /// The exact shape depends on per-language lowering: synth
+    /// Assigns only record into `field_writes` when the parent name
+    /// has a *prior reaching def* — i.e. the parent is a parameter,
+    /// receiver, or earlier-assigned local.  Languages whose first
+    /// def of `obj` is the synth assign itself (no Param op for the
+    /// formal) don't populate the side-table for the very first
+    /// `obj.f = rhs` statement; subsequent writes do.
+    #[test]
+    fn w1_end_to_end_field_write_records_side_table_when_parent_has_prior_def() {
+        // Two writes to `obj.cache`: the second has a prior reaching def
+        // of `obj` (from the first write's synth Assign), so the
+        // second's field_writes entry must be populated.
+        let src = b"function f(obj) { obj.cache = 1; obj.cache = 2; }";
+        let body = parse_to_first_body(
+            src,
+            "javascript",
+            tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE),
+            "test.js",
+        );
+        assert!(
+            !body.field_writes.is_empty(),
+            "second `obj.cache = 2` must populate field_writes after the \
+             first write seeds var_stacks['obj']; body.field_writes={:?}\n\
+             body:\n{body}",
+            body.field_writes,
+        );
+        // Every recorded field name resolves to "cache".
+        for (_synth_v, (_rcv, fid)) in &body.field_writes {
+            assert_eq!(body.field_interner.resolve(*fid), "cache");
+        }
+    }
+
+    /// W1: a plain non-dotted assignment (`x = 1`) records nothing
+    /// in `field_writes`.  Strict-additive: existing behaviour is
+    /// unchanged for non-field-write shapes.
+    #[test]
+    fn w1_end_to_end_plain_assign_records_no_field_write() {
+        let src = b"function f() { let x = 1; x = 2; }";
+        let body = parse_to_first_body(
+            src,
+            "javascript",
+            tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE),
+            "test.js",
+        );
+        assert!(
+            body.field_writes.is_empty(),
+            "plain assign must not populate field_writes; got {:?}",
+            body.field_writes,
         );
     }
 }

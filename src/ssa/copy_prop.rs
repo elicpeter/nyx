@@ -214,6 +214,7 @@ mod tests {
                 .collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let (eliminated, copy_map) = copy_propagate(&mut body, &cfg);

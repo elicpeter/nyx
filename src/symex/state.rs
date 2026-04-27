@@ -351,6 +351,7 @@ mod tests {
             cfg_node_map: [(node, SsaValue(5))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let witness = state.get_sink_witness(&finding, &ssa);
@@ -389,6 +390,7 @@ mod tests {
             cfg_node_map: [(node, SsaValue(5))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         assert_eq!(state.get_sink_witness(&finding, &ssa), None);
@@ -424,6 +426,7 @@ mod tests {
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         assert_eq!(state.get_sink_witness(&finding, &ssa), None);
@@ -463,6 +466,7 @@ mod tests {
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         state.widen_at_loop_head(BlockId(0), &ssa);
@@ -505,6 +509,7 @@ mod tests {
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         state.widen_at_loop_head(BlockId(0), &ssa);
@@ -547,6 +552,7 @@ mod tests {
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         state.widen_at_loop_head(BlockId(0), &ssa);

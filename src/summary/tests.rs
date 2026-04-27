@@ -438,6 +438,7 @@ fn ssa_summary_serde_round_trip_identity() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     };
@@ -469,6 +470,7 @@ fn ssa_summary_serde_round_trip_strip_bits() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     };
@@ -497,6 +499,7 @@ fn ssa_summary_serde_round_trip_add_bits() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     };
@@ -532,6 +535,7 @@ fn ssa_summary_serde_round_trip_all_variants() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     };
@@ -569,6 +573,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     };
@@ -594,6 +599,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     };
@@ -639,6 +645,7 @@ fn global_summaries_merge_with_ssa_entries() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     };
@@ -660,6 +667,7 @@ fn global_summaries_merge_with_ssa_entries() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     };
@@ -705,6 +713,7 @@ fn global_summaries_is_empty_considers_ssa() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            field_points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
             typed_call_receivers: vec![],
         },
@@ -733,6 +742,7 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     };
@@ -776,6 +786,7 @@ fn ssa_summary_serde_round_trip_container_fields() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     };
@@ -829,6 +840,7 @@ fn ssa_summary_serde_round_trip_return_abstract() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     };
@@ -903,6 +915,7 @@ fn make_callee_body(
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         },
         opt: crate::ssa::OptimizeResult {
             const_values: std::collections::HashMap::new(),
@@ -1345,6 +1358,7 @@ fn global_summaries_resolve_body_requires_body_present() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            field_points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
             typed_call_receivers: vec![],
         },
@@ -3490,6 +3504,7 @@ fn cf4_return_path_transform_serde_round_trip() {
             ],
         )],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     };

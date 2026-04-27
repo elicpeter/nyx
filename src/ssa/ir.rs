@@ -23,6 +23,22 @@ pub struct BlockId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FieldId(pub u32);
 
+impl FieldId {
+    /// Pointer-Phase 4 sentinel for the abstract "any element of a
+    /// container" field.  Steensgaard-grade precision: every numeric
+    /// or dynamic index access (`arr[i]`, `arr.shift()`, `map[k]`)
+    /// projects through the same `Field(pt(container), ELEM)` cell so
+    /// per-element taint propagation is independent of the SSA value
+    /// referencing the container.
+    ///
+    /// `u32::MAX` is reserved by convention; the per-body
+    /// [`FieldInterner`] never assigns it because interning is
+    /// monotone-ascending from `0` and bodies don't approach 4 billion
+    /// fields.  Consumers should compare with `==` rather than reach
+    /// into the wrapped `u32`.
+    pub const ELEM: FieldId = FieldId(u32::MAX);
+}
+
 /// Per-body interner for field names referenced by [`SsaOp::FieldProj`].
 ///
 /// Names are deduped within a single SSA body: every distinct field-name
@@ -55,6 +71,33 @@ impl FieldInterner {
         self.names.push(name.to_string());
         self.lookup.insert(name.to_string(), id);
         FieldId(id)
+    }
+
+    /// Read-only lookup: returns the [`FieldId`] for `name` if it has
+    /// already been interned, or `None` otherwise.
+    ///
+    /// Used by cross-call resolvers (Pointer-Phase 5 / W3) to avoid
+    /// growing the caller's interner with field names introduced
+    /// solely by the callee summary — such IDs would never be referenced
+    /// by any other instruction in the caller's body, so the cells
+    /// would be write-only and consume space without contributing
+    /// to taint flow.
+    pub fn lookup(&self, name: &str) -> Option<FieldId> {
+        // Walk `names` directly so we don't require the post-deserialise
+        // `ensure_lookup()` rebuild before this method is callable.
+        // Callers usually own `&SsaBody` — interning was either done at
+        // lowering time or via `ensure_lookup` post-deserialise — so the
+        // hot path goes through the `lookup` table; the linear walk is
+        // a fallback for the (small) deserialised-but-not-rebuilt case.
+        if let Some(&id) = self.lookup.get(name) {
+            return Some(FieldId(id));
+        }
+        for (idx, n) in self.names.iter().enumerate() {
+            if n == name {
+                return Some(FieldId(idx as u32));
+            }
+        }
+        None
     }
 
     /// Resolve a [`FieldId`] back to its interned name.
@@ -290,6 +333,23 @@ pub struct SsaBody {
     /// this interner before transporting field references to other bodies.
     #[serde(default)]
     pub field_interner: FieldInterner,
+    /// Pointer-Phase 3 / W1: side-table mapping a synthetic base-update
+    /// [`SsaOp::Assign`]'s defined value back to the `(receiver, field)`
+    /// pair it represents.  Populated by SSA lowering at the
+    /// `obj.f = rhs` synthesis point so the taint engine can recognise
+    /// the synthetic assign as a structural field WRITE — the assigned
+    /// value is the new "obj" value, the use is the rhs, and the side-
+    /// table records `(prior_obj_value, FieldId("f"))`.
+    ///
+    /// Empty by default; only synthetic assigns whose enclosing source
+    /// statement was a dotted-path assignment (`a.b.c = …`) appear here.
+    /// Lookup is `O(log n)` worst case (`HashMap`), but the per-body
+    /// table is small (one entry per synthetic chain link).
+    ///
+    /// Serialized via `#[serde(default)]` so pre-W1 SSA blobs decode
+    /// cleanly with an empty map (no migration needed).
+    #[serde(default)]
+    pub field_writes: HashMap<SsaValue, (SsaValue, FieldId)>,
 }
 
 impl SsaBody {
@@ -430,6 +490,49 @@ mod tests {
         assert_eq!(uses, vec![SsaValue(1)]);
     }
 
+    /// Pointer-Phase 4 / A6 audit: the [`FieldId::ELEM`] sentinel is
+    /// reserved for "any element of a container".  The interner assigns
+    /// IDs monotonically from `0`, so the sentinel `u32::MAX` can only
+    /// collide if the body declares ~4 billion fields — a corner case
+    /// no realistic codebase reaches.  Pin the contract with a stress
+    /// loop so future implementation drift can't silently shift IDs to
+    /// the sentinel value.
+    #[test]
+    fn field_interner_never_assigns_elem_sentinel() {
+        let mut interner = FieldInterner::new();
+        for i in 0..1024 {
+            let id = interner.intern(&format!("f{i}"));
+            assert_ne!(
+                id,
+                FieldId::ELEM,
+                "intern('f{i}') yielded the ELEM sentinel — invariant broken",
+            );
+        }
+        // Lookup of the sentinel name (used by W3 to round-trip
+        // container-element flow through summary) must NOT match a
+        // real interned name even when the same name is interned.
+        // The wire-format keeps `<elem>` as a *string marker* — it
+        // never goes through `intern`.  Instead, callers compare
+        // explicitly against `FieldId::ELEM`.
+        assert_ne!(interner.intern("<elem>"), FieldId::ELEM);
+    }
+
+    /// A6: the `<elem>` marker round-trips through extraction →
+    /// SQLite → caller-side translation without colliding with a
+    /// caller-interned `<elem>` field.  When a caller's body has its
+    /// own `<elem>` field, that gets a regular FieldId, distinct from
+    /// the sentinel.
+    #[test]
+    fn elem_marker_distinct_from_interner_assigned_id() {
+        let mut interner = FieldInterner::new();
+        let lit_elem = interner.intern("<elem>");
+        // Sentinel still compares equal to itself only.
+        assert_eq!(FieldId::ELEM, FieldId(u32::MAX));
+        assert_ne!(lit_elem, FieldId::ELEM);
+        // Resolve the literal-string id back to its interned name.
+        assert_eq!(interner.resolve(lit_elem), "<elem>");
+    }
+
     #[test]
     fn field_proj_serde_roundtrip_with_field_name() {
         // Build a tiny body with one FieldProj op and check that the
@@ -453,6 +556,7 @@ mod tests {
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
             field_interner: FieldInterner::new(),
+            field_writes: HashMap::new(),
         };
         let fid = body.intern_field("mu");
         body.blocks[0].body.push(SsaInst {

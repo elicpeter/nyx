@@ -158,6 +158,7 @@ pub fn extract_ssa_func_summary(
             static_map: None,
             auto_seed_handler_params: false,
             cross_file_bodies: None,
+            pointer_facts: None,
         };
 
         let (events, block_states) = run_ssa_taint_full(ssa, cfg, &transfer);
@@ -508,6 +509,7 @@ pub fn extract_ssa_func_summary(
             static_map: None,
             auto_seed_handler_params: false,
             cross_file_bodies: None,
+            pointer_facts: None,
         };
         detect_source_to_callback_from_states(
             ssa,
@@ -551,6 +553,10 @@ pub fn extract_ssa_func_summary(
         param_return_paths,
         return_path_facts,
         points_to,
+        // Pointer-Phase 5 extension — empty until the field-granularity
+        // extractor is wired (`NYX_POINTER_ANALYSIS=1` only).  Default
+        // path stays bit-identical to today.
+        field_points_to: crate::summary::points_to::FieldPointsToSummary::empty(),
         // Populated post-extraction in
         // `taint::lower_all_functions_from_bodies` once SSA optimisation
         // has computed `opt.type_facts`.  Empty here means the

@@ -28,6 +28,15 @@ pub struct BodyConstFacts {
     pub ssa: SsaBody,
     pub const_values: HashMap<SsaValue, ConstLattice>,
     pub type_facts: TypeFactResult,
+    /// Field-sensitive Steensgaard points-to facts.
+    ///
+    /// Computed only when [`crate::pointer::is_enabled()`] (i.e. the
+    /// `NYX_POINTER_ANALYSIS=1` env var is set).  Phase 2 of the
+    /// pointer-analysis rollout consumes this in `state::transfer.rs`
+    /// to suppress proxy-acquire mis-attribution on field-aliased
+    /// locals like `m := c.mu`.  When `None`, every consumer must fall
+    /// back to its existing pointer-unaware behaviour.
+    pub pointer_facts: Option<crate::pointer::PointsToFacts>,
 }
 
 /// Lower a body to SSA and run constant propagation.  Returns `None` when
@@ -48,10 +57,16 @@ pub fn build_body_const_facts(body: &crate::cfg::BodyCfg, lang: Lang) -> Option<
         Some(lang),
         &body.meta.param_types,
     );
+    let pointer_facts = if crate::pointer::is_enabled() {
+        Some(crate::pointer::analyse_body(&ssa, body.meta.id))
+    } else {
+        None
+    };
     Some(BodyConstFacts {
         ssa,
         const_values: opt.const_values,
         type_facts: opt.type_facts,
+        pointer_facts,
     })
 }
 

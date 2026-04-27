@@ -2175,6 +2175,7 @@ fn ssa_summaries_round_trip() {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
             },
@@ -2208,6 +2209,7 @@ fn ssa_summaries_round_trip() {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
             },
@@ -2379,6 +2381,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            field_points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
             typed_call_receivers: vec![],
         },
@@ -2414,6 +2417,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            field_points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
             typed_call_receivers: vec![],
         },
@@ -2470,6 +2474,7 @@ fn clear_drops_ssa_summaries_table() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            field_points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
             typed_call_receivers: vec![],
         },
@@ -2527,6 +2532,7 @@ fn make_test_callee_body(
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::new(),
+            field_writes: std::collections::HashMap::new(),
         },
         opt: crate::ssa::OptimizeResult {
             const_values: std::collections::HashMap::new(),
@@ -2739,6 +2745,7 @@ fn make_test_ssa_summary() -> crate::summary::ssa_summary::SsaFuncSummary {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
     }
@@ -3388,4 +3395,116 @@ fn metadata_table_survives_clear() {
     // Metadata should survive clear (clear only drops analysis tables)
     let stored = index::Indexer::get_stored_engine_version(&pool).unwrap();
     assert_eq!(stored.as_deref(), Some(index::ENGINE_VERSION));
+}
+
+/// Pointer-Phase 5 / A3 audit: field_points_to round-trips through
+/// the SsaFuncSummary SQLite blob.  Pin that the new field_points_to
+/// records preserve param_field_reads, param_field_writes, the
+/// receiver sentinel (`u32::MAX`), the container-element marker
+/// (`<elem>`), and the `overflow` flag across serialise → store →
+/// load → deserialise.  This is the strict-additive contract for
+/// pre-Phase-5 blobs (default-empty deserialises cleanly) and the
+/// completeness check for the W3 cross-call resolver.
+#[test]
+fn ssa_summaries_round_trip_preserves_field_points_to() {
+    use crate::summary::points_to::FieldPointsToSummary;
+    use crate::summary::ssa_summary::SsaFuncSummary;
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("store.rs");
+    std::fs::write(&f, "// helper that writes obj.cache").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    let hash = index::Indexer::digest_bytes(b"// helper that writes obj.cache");
+
+    // Build a summary with one read on param 0 ("name"), one write on
+    // param 1 ("cache"), one read on the receiver sentinel ("kind"),
+    // and an ELEM marker on param 0.  Round-trip must preserve all
+    // four channels.
+    let mut fpt = FieldPointsToSummary::empty();
+    fpt.add_read(0, "name");
+    fpt.add_write(1, "cache");
+    fpt.add_read(u32::MAX, "kind");
+    fpt.add_write(0, "<elem>");
+
+    let summary = SsaFuncSummary {
+        field_points_to: fpt.clone(),
+        ..Default::default()
+    };
+    let row = (
+        "store".to_string(),
+        2_usize,
+        "rust".to_string(),
+        "store.rs".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        summary,
+    );
+    idx.replace_ssa_summaries_for_file(&f, &hash, &[row]).unwrap();
+
+    let loaded = idx.load_all_ssa_summaries().unwrap();
+    assert_eq!(loaded.len(), 1, "single summary stored, single returned");
+    let (_, name, _, _, _, _, _, _, sum) = &loaded[0];
+    assert_eq!(name, "store");
+    assert_eq!(
+        sum.field_points_to, fpt,
+        "field_points_to must round-trip byte-equal",
+    );
+
+    // Spot-check sentinel + ELEM marker channels.
+    let recv_read = sum
+        .field_points_to
+        .param_field_reads
+        .iter()
+        .find(|(p, _)| *p == u32::MAX)
+        .expect("receiver read at u32::MAX sentinel");
+    assert!(recv_read.1.iter().any(|s| s == "kind"));
+
+    let elem_write = sum
+        .field_points_to
+        .param_field_writes
+        .iter()
+        .find(|(p, _)| *p == 0)
+        .expect("param 0 writes recorded");
+    assert!(
+        elem_write.1.iter().any(|s| s == "<elem>"),
+        "<elem> marker must survive round-trip without conversion",
+    );
+    assert!(!sum.field_points_to.overflow);
+}
+
+/// Pre-Phase-5 blob compatibility: a summary serialised without
+/// `field_points_to` deserialises with the empty default — no
+/// migration needed because the field is `#[serde(default)]`.
+#[test]
+fn ssa_summaries_pre_phase5_blob_decodes_with_empty_field_points_to() {
+    use crate::summary::ssa_summary::SsaFuncSummary;
+
+    // Hand-craft JSON without the `field_points_to` key.
+    let pre_phase5_json = r#"{
+        "param_to_return": [],
+        "param_to_sink": [],
+        "source_caps": 0,
+        "param_to_sink_param": [],
+        "param_container_to_return": [],
+        "param_to_container_store": [],
+        "return_type": null,
+        "return_abstract": null,
+        "source_to_callback": [],
+        "receiver_to_return": null,
+        "receiver_to_sink": 0,
+        "abstract_transfer": [],
+        "param_return_paths": [],
+        "return_path_facts": [],
+        "typed_call_receivers": []
+    }"#;
+    let sum: SsaFuncSummary = serde_json::from_str(pre_phase5_json).unwrap();
+    assert!(
+        sum.field_points_to.is_empty(),
+        "missing field_points_to must default to empty",
+    );
 }

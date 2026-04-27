@@ -336,3 +336,210 @@ mod tests {
         assert_eq!(s, back);
     }
 }
+
+// ── Pointer-Phase 5: field-granularity points-to summary ──────────────
+
+/// Maximum field names retained per parameter in [`FieldPointsToSummary`].
+///
+/// Mirror of [`MAX_ALIAS_EDGES`].  Bounds on-disk + cross-file work
+/// while leaving room for typical helpers (a handful of fields each).
+pub const MAX_FIELDS_PER_PARAM: usize = 8;
+
+/// Pointer-Phase 5: field-granularity per-parameter points-to summary.
+///
+/// Records, for each positional parameter index, the set of field
+/// **names** read from and written to inside the callee body.  Names
+/// (not [`crate::ssa::ir::FieldId`]) are persisted because field IDs
+/// are body-local — the per-body [`crate::ssa::ir::FieldInterner`]
+/// reassigns IDs across files.  Callers re-intern through their own
+/// body's interner before consulting `field_taint` cells.
+///
+/// The receiver (`self` / `this`) uses sentinel index [`usize::MAX`]
+/// in the outer `Vec` so positional params and the receiver share the
+/// same indexing convention as `SsaFuncSummary::receiver_to_*`
+/// (separate channel).
+///
+/// Empty by default — functions that don't read or write any field on
+/// their parameters carry no entries and cost nothing on disk.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldPointsToSummary {
+    /// `(param_index, field_names_read)` — the callee projected each
+    /// listed field on a value derived from `param_index` somewhere
+    /// in its body.  Sorted, deduped per-entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_field_reads: Vec<(u32, SmallVec<[String; 2]>)>,
+    /// `(param_index, field_names_written)` — the callee assigned to
+    /// each listed field on a value derived from `param_index`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_field_writes: Vec<(u32, SmallVec<[String; 2]>)>,
+    /// Set when the read/write graph hit
+    /// [`MAX_FIELDS_PER_PARAM`] for any parameter.  Callers seeing
+    /// `overflow=true` treat each parameter as reading/writing every
+    /// field on every other parameter — the conservative greatest
+    /// lower bound that preserves soundness.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub overflow: bool,
+}
+
+impl FieldPointsToSummary {
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.param_field_reads.is_empty()
+            && self.param_field_writes.is_empty()
+            && !self.overflow
+    }
+
+    fn insert_into(
+        list: &mut Vec<(u32, SmallVec<[String; 2]>)>,
+        param: u32,
+        field: &str,
+        overflow: &mut bool,
+    ) {
+        let entry = match list.iter_mut().find(|(p, _)| *p == param) {
+            Some(e) => &mut e.1,
+            None => {
+                list.push((param, SmallVec::new()));
+                &mut list.last_mut().unwrap().1
+            }
+        };
+        if entry.iter().any(|s| s == field) {
+            return;
+        }
+        if entry.len() >= MAX_FIELDS_PER_PARAM {
+            *overflow = true;
+            return;
+        }
+        entry.push(field.to_string());
+        entry.sort();
+    }
+
+    /// Record a field READ on parameter `param`.  Bounded by
+    /// [`MAX_FIELDS_PER_PARAM`] per parameter; over-cap inserts trip
+    /// `overflow`.
+    pub fn add_read(&mut self, param: u32, field: &str) {
+        if self.overflow {
+            return;
+        }
+        let mut overflow = false;
+        Self::insert_into(&mut self.param_field_reads, param, field, &mut overflow);
+        if overflow {
+            self.overflow = true;
+        }
+    }
+
+    /// Record a field WRITE on parameter `param`.  Mirror of [`Self::add_read`].
+    pub fn add_write(&mut self, param: u32, field: &str) {
+        if self.overflow {
+            return;
+        }
+        let mut overflow = false;
+        Self::insert_into(&mut self.param_field_writes, param, field, &mut overflow);
+        if overflow {
+            self.overflow = true;
+        }
+    }
+
+    /// Union with `other`.  Overflow propagates per
+    /// [`PointsToSummary::merge`]'s semantics — once a callee is
+    /// "any field on any parameter", merging cannot recover precision.
+    pub fn merge(&mut self, other: &Self) {
+        if other.overflow {
+            self.overflow = true;
+            return;
+        }
+        for (p, fields) in &other.param_field_reads {
+            for f in fields {
+                self.add_read(*p, f);
+            }
+        }
+        for (p, fields) in &other.param_field_writes {
+            for f in fields {
+                self.add_write(*p, f);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod field_summary_tests {
+    use super::*;
+
+    #[test]
+    fn empty_summary_round_trips() {
+        let s = FieldPointsToSummary::empty();
+        assert!(s.is_empty());
+        let json = serde_json::to_string(&s).unwrap();
+        let back: FieldPointsToSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn add_read_dedupes_and_sorts() {
+        let mut s = FieldPointsToSummary::empty();
+        s.add_read(0, "name");
+        s.add_read(0, "id");
+        s.add_read(0, "name"); // duplicate
+        let entry = s.param_field_reads.iter().find(|(p, _)| *p == 0).unwrap();
+        assert_eq!(entry.1.as_slice(), &["id".to_string(), "name".to_string()]);
+    }
+
+    #[test]
+    fn distinct_params_get_distinct_entries() {
+        let mut s = FieldPointsToSummary::empty();
+        s.add_write(0, "cache");
+        s.add_write(1, "log");
+        assert_eq!(s.param_field_writes.len(), 2);
+    }
+
+    #[test]
+    fn overflow_trips_at_cap() {
+        let mut s = FieldPointsToSummary::empty();
+        for i in 0..(MAX_FIELDS_PER_PARAM + 4) {
+            s.add_read(0, &format!("field{i}"));
+        }
+        assert!(s.overflow);
+    }
+
+    #[test]
+    fn merge_unions_disjoint_keys() {
+        let mut a = FieldPointsToSummary::empty();
+        let mut b = FieldPointsToSummary::empty();
+        a.add_read(0, "alpha");
+        b.add_read(1, "beta");
+        a.merge(&b);
+        assert!(a.param_field_reads.iter().any(|(p, _)| *p == 0));
+        assert!(a.param_field_reads.iter().any(|(p, _)| *p == 1));
+    }
+
+    #[test]
+    fn merge_propagates_overflow() {
+        let mut a = FieldPointsToSummary::empty();
+        let mut b = FieldPointsToSummary::empty();
+        b.overflow = true;
+        a.merge(&b);
+        assert!(a.overflow);
+    }
+
+    #[test]
+    fn round_trip_preserves_entries() {
+        let mut s = FieldPointsToSummary::empty();
+        s.add_read(0, "name");
+        s.add_write(1, "cache");
+        s.add_write(1, "log");
+        let json = serde_json::to_string(&s).unwrap();
+        let back: FieldPointsToSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn empty_serializes_as_empty_object() {
+        let s = FieldPointsToSummary::empty();
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(json, "{}");
+        let back: FieldPointsToSummary = serde_json::from_str("{}").unwrap();
+        assert!(back.is_empty());
+    }
+}
