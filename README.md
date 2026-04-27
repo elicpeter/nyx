@@ -115,13 +115,13 @@ Requires stable Rust 1.88+. The frontend is compiled and embedded in the binary 
 
 ## Languages
 
-All 10 languages parse via tree-sitter and run through the full pipeline, but rule depth and engine coverage are uneven. Benchmark F1 on the 368-case corpus at [`tests/benchmark/ground_truth.json`](tests/benchmark/ground_truth.json) is now ≥96% for every language and 100% for nine of ten — so F1 alone no longer separates the tiers. Tiering reflects rule depth, gated-sink coverage, and structural idioms the synthetic corpus does not fully stress:
+All 10 languages parse via tree-sitter and run through the full pipeline, but rule depth and engine coverage are uneven. Benchmark F1 on the 378-case corpus at [`tests/benchmark/ground_truth.json`](tests/benchmark/ground_truth.json) is now ≥96% for every language and 100% for nine of ten, so F1 alone no longer separates the tiers. Tiering reflects rule depth, gated-sink coverage, and structural idioms the synthetic corpus does not fully stress:
 
 | Tier | Languages | F1 | Use as a CI gate? |
 |---|---|---|---|
 | **Stable** | Python, JavaScript, TypeScript | 100% | Yes |
 | **Beta** | Go, Java, PHP, Ruby, Rust | 96.3% to 100% | Yes, with light FP triage |
-| **Preview** | C, C++ | 100% on synthetic corpus | No. Engine does not model pointer aliasing, function pointers, or STL containers — pair with clang-tidy or Clang Static Analyzer |
+| **Preview** | C, C++ | 100% on synthetic corpus | No. STL container flow, builder chains, and inline class member functions are tracked, but deep pointer aliasing and function pointers are not. Pair with clang-tidy or Clang Static Analyzer |
 
 Aggregate rule-level F1: 99.7% (P=1.000, R=0.995). The lone FN is one Ruby interprocedural SQLi case (`rb-interproc-001`). Per-dimension detail and known blind spots live on the [Language maturity page](https://elicpeter.github.io/nyx/language-maturity.html).
 
@@ -190,7 +190,7 @@ Or add rules interactively: `nyx config add-rule --lang javascript --matcher esc
 
 ## Status
 
-Under active development. APIs, detector behavior, and configuration options may change between releases. Rule-level F1 on the 368-case corpus is the CI regression floor; per-language detail lives in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
+Under active development. APIs, detector behavior, and configuration options may change between releases. Rule-level F1 on the 378-case corpus is the CI regression floor; per-language detail lives in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
 
 Taint analysis is interprocedural. Persisted per-function SSA summaries carry per-return-path transforms and parameter-granularity points-to, and call-graph SCCs (including SCCs that span files) iterate to a joint fixed-point. The default `balanced` profile also runs k=1 context-sensitive inlining for intra-file callees. Symex (with cross-file and interprocedural frames) and the demand-driven backwards walk are opt-in. Enable them individually with `--symex` and `--backwards-analysis`, or together with `--engine-profile deep`.
 
@@ -198,7 +198,7 @@ Limitations:
 - Interprocedural precision is bounded rather than unlimited. Context-sensitive inlining is k=1 with a callee body-size cap, and SCC fixed-point has an iteration cap. When the engine hits a bound it falls back to summaries and records an `engine_note` on the finding.
 - Cross-language calls (FFI, subprocess, WASM) are not traversed. Each language is analysed independently.
 - Several language features are not modeled: macros, most dynamic dispatch, aliased imports, reflection.
-- C/C++ are preview tier — the engine does not model pointer aliasing, function pointers, or STL containers, so a clean report should not be read as a clean audit. Pair them with a clang-based tool before using as a hard CI gate.
+- C/C++ are preview tier. STL container flow, builder chains, and inline class member functions are tracked now; deep pointer aliasing and function pointers are not. A clean report should not be read as a clean audit. Pair with a clang-based tool before using as a hard CI gate.
 - Results may contain false positives or false negatives; manual review is expected.
 
 ---

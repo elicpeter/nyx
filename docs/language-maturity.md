@@ -9,21 +9,21 @@ The classifications here are grounded in three concrete signals:
 1. **Rule depth**: how many distinct source / sanitizer / sink matchers exist
    for the language in `src/labels/<lang>.rs`, and how many vulnerability
    classes (Cap bits) those matchers cover.
-2. **Benchmark results**: rule-level precision / recall / F1 on the 368-case
+2. **Benchmark results**: rule-level precision / recall / F1 on the 378-case
    corpus in
    [`tests/benchmark/RESULTS.md`](https://github.com/elicpeter/nyx/blob/master/tests/benchmark/RESULTS.md),
-   last measured 2026-04-25 with scanner version 0.5.0.
+   last measured 2026-04-26 with scanner version 0.5.0.
 3. **Known weak spots**: FPs and FNs the maintainers have deliberately left
    in the benchmark rather than suppressed, plus structural engine
    limitations the corpus does not stress, documented release-by-release in
    [`RESULTS.md`](https://github.com/elicpeter/nyx/blob/master/tests/benchmark/RESULTS.md).
 
-As of 2026-04-25 the synthetic corpus has effectively saturated: nine of ten
+As of 2026-04-27 the synthetic corpus has effectively saturated: nine of ten
 languages report rule-level F1 = 100.0% and Ruby reports 96.3% (one FN on an
 interprocedural SQLi case). Aggregate rule-level P=1.000, R=0.995, F1=0.997.
-That means F1 alone no longer differentiates tiers — the differentiators are
-**rule depth**, **gated-sink coverage**, and **structural idioms the corpus
-does not fully stress** (pointer aliasing in C/C++, dynamic dispatch,
+That means F1 alone no longer differentiates tiers, so the differentiators
+are **rule depth**, **gated-sink coverage**, and **structural idioms the
+corpus does not fully stress** (deep pointer aliasing in C/C++,
 framework-specific context). All parser integrations use tree-sitter and are
 stable; parsing is not a differentiator.
 
@@ -35,7 +35,7 @@ stable; parsing is not a differentiator.
 |------|-----------|----|----------------|
 | **Stable** | Python, JavaScript, TypeScript | 100% | Deep rule sets, gated sinks (argument-role-aware), framework detection, extensive fixtures, and the bulk of advanced-analysis (SSA two-level solve, context-sensitivity, symbolic execution, abstract interpretation) coverage. Safe to depend on in CI gates. |
 | **Beta** | Go, Java, PHP, Ruby, Rust | 96.3% – 100% | Solid mid-depth rule sets with narrower cap coverage and **no gated sinks**. Cross-file flows work; some idioms (variable-typed method receivers, framework context, string interpolation, match-arm guards) are partially modeled. Usable in CI; review FP/FN lists before tightening gates. |
-| **Preview** | C, C++ | 100% on synthetic corpus | The engine **structurally cannot model** pointer aliasing, function pointer / callback dispatch, array-element taint, or (C++) STL container flows. Rule-level scores against a corpus of obvious unsafe-API uses look perfect; that is not the same as a clean audit. Pair with clang-tidy, Clang Static Analyzer, or Infer. |
+| **Preview** | C, C++ | 100% on synthetic corpus | Recent work taught the engine to follow taint through `std::vector` / `std::string` / map containers (including `c_str()`), through fluent builder chains like `Socket::builder().host(h).connect()`, and through inline class member functions. Function pointers and deeper pointer aliasing through `*p` / `p->field` are still not tracked. Rule-level scores against a corpus of obvious unsafe-API uses look perfect, but that is not the same as a clean audit on a real codebase. Pair with clang-tidy, Clang Static Analyzer, or Infer. |
 
 ---
 
@@ -168,41 +168,74 @@ landings closed every previously-open `rs-safe-*` regression.
 ### Preview tier
 
 C and C++ remain **Preview** despite reporting 100% rule-level F1 on the
-synthetic corpus. The corpus exercises obvious unsafe-API uses
-(`system`, `sprintf`, `strcpy`, `getenv` → exec); it does not stress the
-constructs the engine **structurally cannot model**. A clean report on a
-real C or C++ codebase should not be read as a clean audit. Pair Nyx with
-clang-tidy, the Clang Static Analyzer, or Infer for production use.
+synthetic corpus. A run of additions in late April taught the engine to
+follow taint through several constructs that used to be hard cutoffs (STL
+containers, builder chains, inline member functions, the wider `std::sto*`
+family), so the gap between "passes the synthetic corpus" and "would catch
+the same flow on a real codebase" is narrower than it used to be. It is not
+zero. The biggest remaining gaps are deep pointer aliasing and function
+pointers, both of which are pervasive in real C/C++ code. Treat a clean
+report as a starting point, not an audit. Pair Nyx with clang-tidy, the
+Clang Static Analyzer, or Infer for production use.
 
-**Not modeled** (common to both C and C++):
+**What now works** (added in late April):
 
-- Pointer aliasing. Taint through `*p`, `p->field`, arbitrary pointer
-  arithmetic, and aliased writes are not tracked.
-- Function pointers and callback dispatch. Indirect calls through
-  `void (*fn)(char *)` resolve to no callee.
-- Array-element taint. Writes to `buf[i]` do not propagate taint to `buf`
-  in the general case.
-- STL container operations (C++ only). `std::vector`, `std::map`,
-  `std::string` methods are not taint-aware; `c_str()` breaks taint chains.
-- Lambdas and nested classes (C++ only).
-- Complex socket setup (C++ only): `connect()` builder chains are not
-  detected.
+- STL container flow. `vec.push_back(tainted)` followed by
+  `vec.front().c_str()` carries taint into a downstream `system()` sink.
+  `std::map::insert_or_assign`, `find`, `count`, `at`, and `data` all
+  participate in the container store/load model.
+- Inline class member functions. `class C { void run(...) { ... } };`
+  bodies are now extracted as their own functions, so an intra-file call
+  like `inner.run(input)` resolves to the body summary. Same fix covers
+  `struct_specifier`, `union_specifier`, `enum_specifier`,
+  `template_declaration`, and `extern "C"` blocks.
+- Lambda passthrough. `auto echo = [](const char* s) { return s; };` carries
+  argument taint into the result via the engine's default call-argument
+  propagation.
+- Builder chains. `Socket::builder().host(user).port(8080).connect()`
+  resolves the chained returns and fires on `.connect()` when `user` is
+  tainted; the safe variant with a hardcoded host stays quiet.
+- Wider numeric sanitizer family. The full `std::sto*` set (including
+  `stoll`, `stoull`, `stold`) and the C-stdlib forms (`atoi`, `atof`,
+  `strtol`, etc.) clear all caps when they're called.
+- More header / source extensions. `.cc`, `.cxx`, `.hpp`, `.hxx`, `.hh`,
+  and `.h++` are recognized as C++ on top of `.cpp` and `.c++`. `.h` is
+  intentionally still routed to C since it's ambiguous without a build
+  system.
+
+**Still not modeled** (common to both C and C++):
+
+- Deep pointer aliasing. Taint through `*p`, `p->field`, and arbitrary
+  pointer arithmetic is not tracked through arbitrary aliased writes.
+  Field-sensitive points-to (see [Advanced analysis](advanced-analysis.md))
+  handles the "lock on a sub-field" case but is not a general escape
+  analysis.
+- Function pointers and callback dispatch. An indirect call through
+  `void (*fn)(char *)` resolves to no callee, so cross-pointer flows are
+  invisible.
+- Array-element taint by index. Writes to `buf[i]` do not always propagate
+  taint to `buf` as a whole; the recent subscript-handling work helps the
+  general case but doesn't make `buf` an alias for every element.
+- Nested classes beyond one level (C++ only).
 
 #### C: 100% P / 100% R / 100% F1 *(27-case corpus)*
 
-- **Rule depth**: 3 source families, **2** sanitizer families (prefix-based
-  only), 5 sink matchers spanning Shell, File, SSRF, and Format-String.
+- **Rule depth**: 3 source families, **2** sanitizer families (the
+  `sanitize_*` prefix and numeric-parse functions), 5 sink matchers spanning
+  Shell, File, SSRF, and Format-String.
 - **Known gaps**: no framework rules, no gated sinks. The structural
   limitations listed above are the dominant concern; rule additions alone
   will not lift this language out of the Preview tier.
 
-#### C++: 100% P / 100% R / 100% F1 *(27-case corpus)*
+#### C++: 100% P / 100% R / 100% F1 *(27-case corpus, plus 6 new fixtures for STL / builder / inline-method flows)*
 
-- **Rule depth**: Clones the C ruleset (3 sources, 2 sanitizers, 5 sinks) and
-  adds `std::cin` / `std::getline` sources.
-- **Known gaps**: same sanitizer-recognition gaps as C, plus the
-  C++-specific structural gaps (STL containers, `c_str()`, `connect()`,
-  lambdas, nested classes) listed above.
+- **Rule depth**: Builds on the C ruleset with `std::cin` / `std::getline`
+  sources and a wider numeric-sanitizer set covering the full `std::sto*`
+  family (3 sources, 3 sanitizer families, 5 sinks).
+- **Known gaps**: still no framework rules and no gated sinks. The
+  structural blind spots are now narrower than they were a release ago
+  (see "What now works" above), but function pointers and the harder
+  pointer-aliasing patterns still produce false negatives.
 
 ---
 
@@ -226,11 +259,13 @@ but at least one Stable criterion fails — typically the absence of gated
 sinks, or sanitizer rule depth narrow enough that the engine compensates
 structurally rather than via the ruleset.
 
-A language lands in **Preview** when the engine **structurally cannot
-model** constructs that are pervasive in typical codebases for that language
-(pointer aliasing, function pointers, array-element taint, STL containers
-for C/C++). Synthetic-corpus F1 is not a reliable signal for Preview-tier
-languages: a clean report can coexist with large structural blind spots.
+A language lands in **Preview** when the engine has documented structural
+blind spots for constructs that are pervasive in typical codebases for that
+language. For C and C++ that means deep pointer aliasing, function
+pointers, and array-element taint; STL container flow and builder chains
+have moved out of the blind-spot list. Synthetic-corpus F1 is not a
+reliable signal for Preview-tier languages: a clean report can coexist
+with structural gaps.
 
 (The previous **Experimental** tier was retired in the 2026-04-25
 measurement when Rust's adversarial corpus reached 100% F1; no language
@@ -245,9 +280,9 @@ currently sits in that tier.)
   (the synthetic corpus does not cover every framework idiom); the
   weak-spot lists above tell you what to skim for. On Preview-tier, treat
   Nyx findings as a starting point for manual review rather than
-  authoritative — the structural blind spots (pointer aliasing, function
-  pointers, STL flows) mean a clean report does not disclose what the
-  engine cannot see.
+  authoritative. STL container flow and builder chains are tracked now,
+  but deep pointer aliasing and function pointers are not, so a clean
+  report does not tell you what the engine could not see.
 - **Rule contributions**: the shortest path to raising a language's tier is
   contributing sink matchers and gated-sink registrations. Label files live
   at `src/labels/<lang>.rs`; benchmark cases live at

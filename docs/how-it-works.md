@@ -14,6 +14,10 @@ A scan runs in two passes over the file tree, with an optional SQLite index that
 
 Two extra layers tune precision around calls. **Context-sensitive inlining** (k=1) re-runs intra-file callees with the actual argument taint at the call site, so a helper called once with tainted input and once with sanitized input produces the right result for each call. **SCC fixed-point**: when a group of mutually-recursive functions forms a strongly-connected component in the call graph, the engine iterates summaries to a joint fixed-point (capped at 64 iterations). SCCs that span files are also handled.
 
+When a method call has a receiver typed as a super-class, trait, or interface, **hierarchy fan-out** widens the resolved callee set to every concrete implementer the engine has seen. A class diagram extracted in pass 1 (Java extends/implements, Rust impl-for, TS/JS extends, Python bases, Ruby includes, PHP extends/implements, C++ inheritance) feeds an index that the call resolver consults during pass 2. The fan-out is capped at 8 implementers per call site; over-fanning is a precision tax, not a soundness issue.
+
+A separate **field-sensitive points-to** pass tracks abstract locations down to the field level, so `c.mu.Lock()` is a lock on `Field(c, mu)` rather than on `c` as a whole. That distinction is what lets the resource-lifecycle and taint passes tell `obj.field = tainted; sink(obj.other_field)` apart from the conservative whole-variable approximation. Subscript reads and writes (`arr[i]`, `map[k] = v`) lower to synthetic `__index_get__` / `__index_set__` calls so the same container model handles them. Set `NYX_POINTER_ANALYSIS=0` to fall back to the pre-pointer-pass behaviour for one release if you need to compare baselines.
+
 ## Optional analyses on top
 
 These run on top of the forward taint pass. They're independently switchable via `[analysis.engine]` config or matching CLI flags. See [advanced-analysis.md](advanced-analysis.md) for the full description and tradeoffs.
@@ -22,6 +26,8 @@ These run on top of the forward taint pass. They're independently switchable via
 |---|---|---|
 | Abstract interpretation | Carries interval and string prefix/suffix bounds alongside taint. Suppresses findings on proven-bounded integers and locked-prefix URLs | on |
 | Context sensitivity | k=1 inlining for intra-file callees | on |
+| Field-sensitive points-to | Distinguishes `obj.field` from `obj` itself, so a tainted write to one field does not poison reads from another. Also gives the resource-lifecycle pass per-field locks | on |
+| Hierarchy fan-out | When a method call's receiver is typed as a super-class, trait, or interface, widens callee resolution to every concrete implementer the engine has seen | on |
 | Constraint solving | Drops paths whose accumulated branch predicates are unsatisfiable. Optional Z3 backend with `--features smt` | on |
 | Symbolic execution | Builds an expression tree per tainted value. Produces a witness string at the sink. Detects sanitization patterns the taint engine alone would miss | on |
 | Backwards analysis | After the forward pass, walks backwards from each sink to confirm or invalidate the flow. Annotates findings as `backwards-confirmed`, `backwards-infeasible`, or `backwards-budget-exhausted` | off |

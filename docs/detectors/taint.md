@@ -25,8 +25,7 @@ One rule ID, parameterized by the source location. Suppressions can target eithe
 ## What it can't detect
 
 - **Library calls without summaries.** If a callee has no summary (no source, binary-only dependency), Nyx treats it as neither propagating nor sanitizing. This is conservative for sanitization but lossy for propagation.
-- **Taint through struct fields and containers.** Taint attaches to whole variables. `obj.field = tainted; sink(obj.other_field)` can produce a false positive because `obj` itself is tainted.
-- **Aliasing.** `let y = &x; sink(*y)` tracks `y` separately from `x`. Can cause FNs.
+- **Deep pointer aliasing.** `let y = &x; sink(*y)` works through one level, but arbitrary chains of pointer arithmetic and aliased writes (`*p`, `p->field` in C/C++) are not tracked end-to-end. Function pointers and indirect calls resolve to no callee.
 - **Implicit flows.** Taint follows explicit data, not branching signal. `if (secret) x = 1 else x = 0` does not taint `x`.
 - **Globals and statics across functions.** Not tracked across function boundaries.
 
@@ -35,7 +34,7 @@ One rule ID, parameterized by the source location. Suppressions can target eithe
 | Scenario | Why | Mitigation |
 |---|---|---|
 | Custom sanitizer not recognised | Only built-in + configured sanitizers match | Add a custom sanitizer rule in config |
-| Taint through struct fields | Variable-level tracking, not field-level | No fix yet; field-sensitivity is planned |
+| Container holds mixed-typed items the engine cannot tell apart | A `vector<int>` of port numbers and a `vector<string>` of user input share the same store/load model | Sanitize the values on the way in (numeric parse / explicit validator) so the values themselves carry no cap, not just the container |
 | Dead branches | Path-insensitive within a function | Constraint solving catches trivially infeasible combos; path-validated findings are scored lower |
 | Library wrapper re-introduces taint | Wrapper opaque, or summary marks it as propagating | Summarize the wrapper explicitly or add it as a sanitizer |
 

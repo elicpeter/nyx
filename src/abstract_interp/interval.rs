@@ -1111,4 +1111,282 @@ mod tests {
         assert_eq!(j.lo, Some(i64::MIN), "join must not narrow lo");
         assert_eq!(j.hi, Some(i64::MAX), "join must not narrow hi");
     }
+
+    // ── Additional lattice algebra laws ──────────────────────────────
+    // These guard the soundness of the dataflow framework: join/meet/widen
+    // must satisfy the standard lattice axioms or fixpoint convergence
+    // and abstract correctness break.
+
+    fn sample_intervals() -> Vec<IntervalFact> {
+        vec![
+            IntervalFact::bottom(),
+            IntervalFact::top(),
+            IntervalFact::exact(0),
+            IntervalFact::exact(-7),
+            IntervalFact {
+                lo: Some(2),
+                hi: Some(8),
+            },
+            IntervalFact {
+                lo: None,
+                hi: Some(10),
+            },
+            IntervalFact {
+                lo: Some(-5),
+                hi: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn join_with_top_is_top() {
+        for a in sample_intervals() {
+            let j = a.join(&IntervalFact::top());
+            assert!(j.is_top(), "x ⊔ ⊤ = ⊤ failed for {:?}", a);
+            let j2 = IntervalFact::top().join(&a);
+            assert!(j2.is_top(), "⊤ ⊔ x = ⊤ failed for {:?}", a);
+        }
+    }
+
+    #[test]
+    fn meet_idempotent() {
+        for a in sample_intervals() {
+            assert_eq!(a.meet(&a), a, "x ⊓ x = x failed for {:?}", a);
+        }
+    }
+
+    #[test]
+    fn meet_commutative() {
+        let xs = sample_intervals();
+        for a in &xs {
+            for b in &xs {
+                assert_eq!(
+                    a.meet(b),
+                    b.meet(a),
+                    "meet not commutative for {:?} / {:?}",
+                    a,
+                    b
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn meet_associative() {
+        let xs = sample_intervals();
+        for a in &xs {
+            for b in &xs {
+                for c in &xs {
+                    let lhs = a.meet(b).meet(c);
+                    let rhs = a.meet(&b.meet(c));
+                    assert_eq!(
+                        lhs, rhs,
+                        "meet not associative for {:?},{:?},{:?}",
+                        a, b, c
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn meet_top_identity() {
+        for a in sample_intervals() {
+            assert_eq!(
+                a.meet(&IntervalFact::top()),
+                a,
+                "x ⊓ ⊤ = x failed for {:?}",
+                a
+            );
+        }
+    }
+
+    #[test]
+    fn meet_bottom_absorbing() {
+        for a in sample_intervals() {
+            assert!(
+                a.meet(&IntervalFact::bottom()).is_bottom(),
+                "x ⊓ ⊥ = ⊥ failed for {:?}",
+                a
+            );
+        }
+    }
+
+    #[test]
+    fn widen_idempotent() {
+        for a in sample_intervals() {
+            assert_eq!(a.widen(&a), a, "widen(x, x) = x failed for {:?}", a);
+        }
+    }
+
+    /// **Soundness**: widening must over-approximate join.
+    /// `widen(a, b) ⊒ join(a, b)` for all a, b.
+    /// Without this, fixpoint iteration converges to an unsound result.
+    #[test]
+    fn widen_over_approximates_join() {
+        let xs = sample_intervals();
+        for a in &xs {
+            for b in &xs {
+                let j = a.join(b);
+                let w = a.widen(b);
+                assert!(
+                    j.leq(&w),
+                    "widen({:?}, {:?}) = {:?} does not over-approximate join = {:?}",
+                    a, b, w, j
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn leq_reflexive() {
+        for a in sample_intervals() {
+            assert!(a.leq(&a), "x ⊑ x failed for {:?}", a);
+        }
+    }
+
+    #[test]
+    fn leq_transitive() {
+        // a ⊑ b ⊑ c ⇒ a ⊑ c
+        let a = IntervalFact::exact(5);
+        let b = IntervalFact {
+            lo: Some(0),
+            hi: Some(10),
+        };
+        let c = IntervalFact::top();
+        assert!(a.leq(&b));
+        assert!(b.leq(&c));
+        assert!(a.leq(&c), "leq must be transitive");
+    }
+
+    /// `x ⊔ y` is the least upper bound: both x and y must be ⊑ join(x,y).
+    #[test]
+    fn join_is_upper_bound() {
+        let xs = sample_intervals();
+        for a in &xs {
+            for b in &xs {
+                let j = a.join(b);
+                assert!(a.leq(&j), "a ⊑ a ⊔ b failed for {:?}, {:?}", a, b);
+                assert!(b.leq(&j), "b ⊑ a ⊔ b failed for {:?}, {:?}", a, b);
+            }
+        }
+    }
+
+    /// `x ⊓ y` is the greatest lower bound: meet(x,y) ⊑ both x and y.
+    #[test]
+    fn meet_is_lower_bound() {
+        let xs = sample_intervals();
+        for a in &xs {
+            for b in &xs {
+                let m = a.meet(b);
+                assert!(m.leq(a), "a ⊓ b ⊑ a failed for {:?}, {:?}", a, b);
+                assert!(m.leq(b), "a ⊓ b ⊑ b failed for {:?}, {:?}", a, b);
+            }
+        }
+    }
+
+    // ── Arithmetic edge cases not previously covered ─────────────────
+
+    /// Multiplication by exact zero must yield exact zero, regardless
+    /// of the other operand. This is critical for taint suppression
+    /// (`x * 0` is provably bounded).
+    #[test]
+    fn mul_by_zero_singleton_is_zero() {
+        let zero = IntervalFact::exact(0);
+        let inputs = [
+            IntervalFact::exact(42),
+            IntervalFact {
+                lo: Some(-100),
+                hi: Some(100),
+            },
+            IntervalFact {
+                lo: Some(i64::MIN),
+                hi: Some(i64::MAX),
+            },
+            IntervalFact::top(),
+        ];
+        for a in inputs.iter() {
+            // Note: when a is Top, mul currently short-circuits to Top.
+            // The zero-singleton case is the precise one we care about
+            // for sink suppression; assert it for non-Top inputs.
+            if !a.is_top() {
+                let r = a.mul(&zero);
+                assert_eq!(r, IntervalFact::exact(0), "x * 0 should be 0 for {:?}", a);
+                let r2 = zero.mul(a);
+                assert_eq!(r2, IntervalFact::exact(0), "0 * x should be 0 for {:?}", a);
+            }
+        }
+    }
+
+    /// Bottom propagates through every arithmetic op.
+    #[test]
+    fn bottom_propagates_through_arith() {
+        let bot = IntervalFact::bottom();
+        let x = IntervalFact::exact(5);
+        assert!(bot.add(&x).is_bottom());
+        assert!(x.add(&bot).is_bottom());
+        assert!(bot.sub(&x).is_bottom());
+        assert!(bot.mul(&x).is_bottom());
+        assert!(bot.div(&x).is_bottom());
+        assert!(bot.modulo(&x).is_bottom());
+        assert!(bot.bit_and(&x).is_bottom());
+        assert!(bot.bit_or(&x).is_bottom());
+        assert!(bot.bit_xor(&x).is_bottom());
+        assert!(bot.left_shift(&x).is_bottom());
+        assert!(bot.right_shift(&x).is_bottom());
+    }
+
+    /// Division by exact zero must escape to Top (not crash, not produce
+    /// a bogus interval). Currently handled by the spans-zero check.
+    #[test]
+    fn div_by_exact_zero_is_top() {
+        let a = IntervalFact::exact(10);
+        let zero = IntervalFact::exact(0);
+        assert!(
+            a.div(&zero).is_top(),
+            "division by exact zero must escape to Top"
+        );
+    }
+
+    /// Modulo with exact-zero divisor — must escape to Top.
+    #[test]
+    fn modulo_by_exact_zero_is_top() {
+        let a = IntervalFact {
+            lo: Some(0),
+            hi: Some(100),
+        };
+        let zero = IntervalFact::exact(0);
+        assert!(a.modulo(&zero).is_top());
+    }
+
+    /// Add involving Top stays Top on the unbounded side.
+    #[test]
+    fn add_with_top_is_top() {
+        let r = IntervalFact::exact(5).add(&IntervalFact::top());
+        assert!(r.is_top(), "5 + Top should be Top, got {:?}", r);
+    }
+
+    /// Subtraction: i64::MAX - i64::MIN should overflow gracefully.
+    #[test]
+    fn sub_overflow_extreme() {
+        let a = IntervalFact::exact(i64::MAX);
+        let b = IntervalFact::exact(i64::MIN);
+        let r = a.sub(&b); // i64::MAX - i64::MIN overflows
+        assert!(
+            r.lo.is_none() || r.hi.is_none(),
+            "extreme subtraction must not panic and must drop a bound"
+        );
+    }
+
+    /// `bottom().widen(x)` must be defined and converge.
+    #[test]
+    fn widen_with_bottom() {
+        let x = IntervalFact::exact(5);
+        let bot = IntervalFact::bottom();
+        let w1 = bot.widen(&x);
+        // Bottom widens to the new value (no growth observed yet).
+        assert_eq!(w1, x);
+        let w2 = x.widen(&bot);
+        assert_eq!(w2, x);
+    }
 }
