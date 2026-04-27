@@ -761,6 +761,15 @@ pub(crate) fn is_receiver_name(name: &str) -> bool {
 /// present) followed by a contiguous run of [`SsaOp::Param { index }`] values
 /// whose indices 0..N correspond exactly to positional call-site argument
 /// positions — no receiver offset required anywhere downstream.
+///
+/// W1.b: every formal parameter gets a Param op even when the body never
+/// references it directly.  Without this, the *first* `obj.f = rhs` on a
+/// formal `obj` whose body never reads `obj` produces no W1
+/// `field_writes` entry — `var_stacks["obj"]` is empty when the synth
+/// Assign runs because no external-use path interned `obj`.  Subsequent
+/// writes work because the synth Assign itself defines `obj`, so the
+/// gap is exactly the FIRST write.  Always emitting a formal Param at
+/// block 0 closes that gap.
 fn reorder_external_vars(external: Vec<String>, formal_params: &[String]) -> Vec<String> {
     if formal_params.is_empty() {
         return external; // no reordering — preserve existing alphabetical sort
@@ -773,20 +782,22 @@ fn reorder_external_vars(external: Vec<String>, formal_params: &[String]) -> Vec
     // Languages with explicit self (Rust/Python) put it in formal_params;
     // languages with implicit this (JS/TS/Java/PHP) have it only as an
     // external reference.  Either way, SelfParam should be emitted first.
-    if ext_set.contains("self") {
+    if ext_set.contains("self") || formal_set.contains("self") {
         result.push("self".to_string());
-    } else if ext_set.contains("this") {
+    } else if ext_set.contains("this") || formal_set.contains("this") {
         result.push("this".to_string());
     }
     // Formal positional params next (declaration order), skipping any
-    // receiver that was already emitted above.
+    // receiver that was already emitted above.  W1.b: include EVERY
+    // formal regardless of whether the body uses it externally — an
+    // unused formal that gets field-written via `obj.cache = rhs` still
+    // needs a Param op so the synth Assign loop sees its prior reaching
+    // def in `var_stacks`.
     for p in formal_params {
         if is_receiver_name(p) {
             continue;
         }
-        if ext_set.contains(p.as_str()) {
-            result.push(p.clone());
-        }
+        result.push(p.clone());
     }
     // Remaining external vars alphabetically (external is already sorted),
     // excluding anything already placed.
@@ -3773,19 +3784,17 @@ mod tests {
     /// statement populates `SsaBody.field_writes` with the synthetic
     /// base-update Assign's `(receiver, FieldId)` mapping.
     ///
-    /// The exact shape depends on per-language lowering: synth
-    /// Assigns only record into `field_writes` when the parent name
-    /// has a *prior reaching def* — i.e. the parent is a parameter,
-    /// receiver, or earlier-assigned local.  Languages whose first
-    /// def of `obj` is the synth assign itself (no Param op for the
-    /// formal) don't populate the side-table for the very first
-    /// `obj.f = rhs` statement; subsequent writes do.
+    /// W1.b: a SINGLE-write shape — `function f(obj) { obj.cache = 42 }`
+    /// — also populates `field_writes` because every formal gets a
+    /// Param op at block 0 regardless of whether it's read by the
+    /// body.  Pre-W1.b this required two writes (the second's prior
+    /// reaching def came from the first synth Assign); now the first
+    /// write already finds the formal's Param in `var_stacks`.
     #[test]
     fn w1_end_to_end_field_write_records_side_table_when_parent_has_prior_def() {
-        // Two writes to `obj.cache`: the second has a prior reaching def
-        // of `obj` (from the first write's synth Assign), so the
-        // second's field_writes entry must be populated.
-        let src = b"function f(obj) { obj.cache = 1; obj.cache = 2; }";
+        // Single write to `obj.cache`: the formal `obj` provides the
+        // prior reaching def via the synthetic Param at block 0.
+        let src = b"function f(obj) { obj.cache = 42; }";
         let body = parse_to_first_body(
             src,
             "javascript",
@@ -3794,15 +3803,53 @@ mod tests {
         );
         assert!(
             !body.field_writes.is_empty(),
-            "second `obj.cache = 2` must populate field_writes after the \
-             first write seeds var_stacks['obj']; body.field_writes={:?}\n\
-             body:\n{body}",
+            "single `obj.cache = 42` on a JS formal must populate \
+             field_writes via the formal's W1.b synthetic Param; got \
+             body.field_writes={:?}\nbody:\n{body}",
             body.field_writes,
         );
         // Every recorded field name resolves to "cache".
         for (_synth_v, (_rcv, fid)) in &body.field_writes {
             assert_eq!(body.field_interner.resolve(*fid), "cache");
         }
+    }
+
+    /// W1.b: Python — single `obj.cache = 42` on a formal also
+    /// populates `field_writes` thanks to the formal Param op.
+    #[test]
+    fn w1b_single_write_records_field_write_python() {
+        let src = b"def f(obj):\n    obj.cache = 42\n";
+        let body = parse_to_first_body(
+            src,
+            "python",
+            tree_sitter::Language::from(tree_sitter_python::LANGUAGE),
+            "test.py",
+        );
+        assert!(
+            !body.field_writes.is_empty(),
+            "Python single `obj.cache = 42` must populate field_writes; \
+             got body.field_writes={:?}\nbody:\n{body}",
+            body.field_writes,
+        );
+    }
+
+    /// W1.b: Rust — single `obj.cache = 42` on a method-style formal
+    /// (`fn f(obj: &mut O)`) also populates `field_writes`.
+    #[test]
+    fn w1b_single_write_records_field_write_rust() {
+        let src = b"struct O { cache: i32 } fn f(obj: &mut O) { obj.cache = 42; }";
+        let body = parse_to_first_body(
+            src,
+            "rust",
+            tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
+            "test.rs",
+        );
+        assert!(
+            !body.field_writes.is_empty(),
+            "Rust single `obj.cache = 42` must populate field_writes; \
+             got body.field_writes={:?}\nbody:\n{body}",
+            body.field_writes,
+        );
     }
 
     /// W1: a plain non-dotted assignment (`x = 1`) records nothing

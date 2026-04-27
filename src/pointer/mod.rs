@@ -31,13 +31,14 @@ pub use domain::{AbsLoc, LocId, LocInterner, PointsToSet, PtrProxyHint};
 
 /// Returns whether the field-sensitive pointer analysis is enabled at runtime.
 ///
-/// Gated on the `NYX_POINTER_ANALYSIS` env var.  Default: disabled (`0`).
-/// When disabled, callers must skip the analysis entirely so the existing
-/// behaviour is bit-identical to a build without this module.
+/// Default: enabled (post-Phase-6 flip on 2026-04-26).  Set
+/// `NYX_POINTER_ANALYSIS=0` (or `false`) to disable for one release
+/// cycle so customer scans can compare baselines.  The env-var
+/// override is removed entirely in the next release.
 #[inline]
 pub fn is_enabled() -> bool {
-    matches!(
-        std::env::var("NYX_POINTER_ANALYSIS").ok().as_deref(),
-        Some("1") | Some("true") | Some("TRUE")
-    )
+    match std::env::var("NYX_POINTER_ANALYSIS").ok().as_deref() {
+        Some("0") | Some("false") | Some("FALSE") => false,
+        _ => true,
+    }
 }

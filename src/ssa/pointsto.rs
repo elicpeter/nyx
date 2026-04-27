@@ -122,6 +122,10 @@ fn classify_js(method: &str) -> Option<ContainerOp> {
         // map.get(key) — key at 0
         "get" => load_indexed(0),
         "values" | "keys" | "entries" => load(),
+        // Pointer-Phase 6 / W5: synthetic callees emitted by CFG
+        // lowering for subscript reads/writes (`arr[i]`, `arr[i] = v`).
+        "__index_get__" => load_indexed(0),
+        "__index_set__" => store_indexed(1, 0),
         _ => None,
     }
 }
@@ -141,6 +145,10 @@ fn classify_python(method: &str) -> Option<ContainerOp> {
         "get" => load_indexed(0), // dict.get(key) / list index — key/index at 0
         "items" | "values" | "keys" => load(),
         "join" => load(),
+        // Pointer-Phase 6 / W5: synthetic callees emitted by CFG
+        // lowering for subscript reads/writes (`arr[i]`, `arr[i] = v`).
+        "__index_get__" => load_indexed(0),
+        "__index_set__" => store_indexed(1, 0),
         _ => None,
     }
 }
@@ -174,6 +182,11 @@ fn classify_go(method: &str, callee: &str) -> Option<ContainerOp> {
     match method {
         "Add" | "Set" | "Store" | "Put" => store(0),
         "Get" | "Load" | "Pop" => load(),
+        // Pointer-Phase 6 / W5: synthetic callees emitted by CFG
+        // lowering for Go index_expression reads/writes (`arr[i]`,
+        // `m[k] = v`).
+        "__index_get__" => load_indexed(0),
+        "__index_set__" => store_indexed(1, 0),
         _ => None,
     }
 }
@@ -384,6 +397,39 @@ mod tests {
         match classify_container_op("v.at", Lang::Cpp) {
             Some(ContainerOp::Load { index_arg }) => assert_eq!(index_arg, Some(0)),
             other => panic!("expected indexed Load, got {other:?}"),
+        }
+    }
+
+    /// W5: synthetic `__index_get__` is recognised as an indexed load
+    /// in JS/TS, Python, and Go — driving the index_arg=0 path so a
+    /// constant-key subscript read flows through `HeapSlot::Index(n)`.
+    #[test]
+    fn synth_index_get_classified_as_indexed_load_js_py_go() {
+        for lang in [Lang::JavaScript, Lang::TypeScript, Lang::Python, Lang::Go] {
+            match classify_container_op("__index_get__", lang) {
+                Some(ContainerOp::Load { index_arg }) => {
+                    assert_eq!(index_arg, Some(0), "{lang:?} should mark idx arg=0");
+                }
+                other => panic!("{lang:?}: expected indexed Load, got {other:?}"),
+            }
+        }
+    }
+
+    /// W5: synthetic `__index_set__` is recognised as an indexed store
+    /// in JS/TS, Python, and Go — value at arg 1, index at arg 0.
+    #[test]
+    fn synth_index_set_classified_as_indexed_store_js_py_go() {
+        for lang in [Lang::JavaScript, Lang::TypeScript, Lang::Python, Lang::Go] {
+            match classify_container_op("__index_set__", lang) {
+                Some(ContainerOp::Store {
+                    value_args,
+                    index_arg,
+                }) => {
+                    assert_eq!(value_args.as_slice(), &[1], "{lang:?} value arg should be 1");
+                    assert_eq!(index_arg, Some(0), "{lang:?} index arg should be 0");
+                }
+                other => panic!("{lang:?}: expected indexed Store, got {other:?}"),
+            }
         }
     }
 }

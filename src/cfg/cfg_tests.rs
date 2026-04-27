@@ -2042,3 +2042,176 @@ fn numeric_length_access_ignores_method_calls_with_args() {
         "is_numeric_length_access must stay false for arg-bearing calls"
     );
 }
+
+// ── Pointer-Phase 6 / W5: subscript lowering tests ────────────────────────
+
+/// Scope for tests that flip `NYX_POINTER_ANALYSIS=1` so the CFG-side
+/// subscript synthesis activates.  The env-var is restored afterwards
+/// so the rest of the test suite stays bit-identical to the unset
+/// state.  Mirrors the env-var serialisation pattern used elsewhere in
+/// the test suite (see `tests/pointer_disabled_bit_identity.rs`).
+use std::sync::Mutex;
+static POINTER_ENV_GUARD: Mutex<()> = Mutex::new(());
+
+fn with_pointer_env<R>(value: Option<&str>, f: impl FnOnce() -> R) -> R {
+    let _lock = POINTER_ENV_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let prev = std::env::var("NYX_POINTER_ANALYSIS").ok();
+    unsafe {
+        match value {
+            Some(v) => std::env::set_var("NYX_POINTER_ANALYSIS", v),
+            None => std::env::remove_var("NYX_POINTER_ANALYSIS"),
+        }
+    }
+    let r = f();
+    unsafe {
+        match prev {
+            Some(v) => std::env::set_var("NYX_POINTER_ANALYSIS", v),
+            None => std::env::remove_var("NYX_POINTER_ANALYSIS"),
+        }
+    }
+    r
+}
+
+fn with_pointer_on<R>(f: impl FnOnce() -> R) -> R {
+    with_pointer_env(Some("1"), f)
+}
+
+fn count_nodes_with_callee(cfg: &Cfg, callee: &str) -> usize {
+    cfg.node_indices()
+        .filter(|i| cfg[*i].call.callee.as_deref() == Some(callee))
+        .count()
+}
+
+fn find_node_with_callee<'a>(cfg: &'a Cfg, callee: &str) -> Option<&'a NodeInfo> {
+    cfg.node_indices()
+        .map(|i| &cfg[i])
+        .find(|n| n.call.callee.as_deref() == Some(callee))
+}
+
+#[test]
+fn js_subscript_read_lowers_to_index_get_call() {
+    with_pointer_on(|| {
+        // `arr[0]` as a sink call argument should be pre-emitted as a
+        // synth `__index_get__` call before the consuming sink.
+        let src = br#"function f(arr) {
+            sink(arr[0]);
+        }"#;
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+        let node = find_node_with_callee(&cfg, "__index_get__")
+            .expect("__index_get__ node should be present");
+        assert_eq!(node.call.receiver.as_deref(), Some("arr"));
+        assert_eq!(node.call.arg_uses.len(), 1, "expect one arg group (index)");
+        assert_eq!(node.call.arg_uses[0], vec!["0"]);
+        assert!(
+            node.taint.defines.as_deref().is_some_and(|d| d.starts_with("__nyx_idxget_")),
+            "synth defines should use the __nyx_idxget_ prefix"
+        );
+    });
+}
+
+#[test]
+fn js_subscript_write_lowers_to_index_set_call() {
+    with_pointer_on(|| {
+        let src = br#"function f(arr, v) {
+            arr[0] = v;
+        }"#;
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+        let node = find_node_with_callee(&cfg, "__index_set__")
+            .expect("__index_set__ node should be present");
+        assert_eq!(node.call.receiver.as_deref(), Some("arr"));
+        assert_eq!(
+            node.call.arg_uses.len(),
+            2,
+            "expect arg_uses [[idx], [val]]"
+        );
+        assert_eq!(node.call.arg_uses[0], vec!["0"]);
+        assert_eq!(node.call.arg_uses[1], vec!["v"]);
+    });
+}
+
+#[test]
+fn py_subscript_read_lowers_to_index_get_call() {
+    with_pointer_on(|| {
+        let src = br#"def f(arr):
+    sink(arr[0])
+"#;
+        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "python", ts_lang);
+        let node = find_node_with_callee(&cfg, "__index_get__")
+            .expect("python: __index_get__ node should be present");
+        assert_eq!(node.call.receiver.as_deref(), Some("arr"));
+    });
+}
+
+#[test]
+fn py_subscript_write_lowers_to_index_set_call() {
+    with_pointer_on(|| {
+        let src = br#"def f(arr, v):
+    arr[0] = v
+"#;
+        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "python", ts_lang);
+        let node = find_node_with_callee(&cfg, "__index_set__")
+            .expect("python: __index_set__ node should be present");
+        assert_eq!(node.call.receiver.as_deref(), Some("arr"));
+        assert_eq!(node.call.arg_uses.len(), 2);
+        assert_eq!(node.call.arg_uses[1], vec!["v"]);
+    });
+}
+
+#[test]
+fn go_index_expr_read_lowers_to_index_get_call() {
+    with_pointer_on(|| {
+        let src = br#"package main
+func f(arr []string) {
+    sink(arr[0])
+}
+"#;
+        let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "go", ts_lang);
+        let node = find_node_with_callee(&cfg, "__index_get__")
+            .expect("go: __index_get__ node should be present");
+        assert_eq!(node.call.receiver.as_deref(), Some("arr"));
+    });
+}
+
+#[test]
+fn go_index_expr_write_lowers_to_index_set_call() {
+    with_pointer_on(|| {
+        let src = br#"package main
+func f(m map[string]int, k string, v int) {
+    m[k] = v
+}
+"#;
+        let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "go", ts_lang);
+        let node = find_node_with_callee(&cfg, "__index_set__")
+            .expect("go: __index_set__ node should be present");
+        assert_eq!(node.call.receiver.as_deref(), Some("m"));
+        assert_eq!(node.call.arg_uses.len(), 2);
+        assert_eq!(node.call.arg_uses[0], vec!["k"]);
+        assert_eq!(node.call.arg_uses[1], vec!["v"]);
+    });
+}
+
+#[test]
+fn pointer_disabled_skips_subscript_synthesis() {
+    // Strict-additive contract: when NYX_POINTER_ANALYSIS=0 the CFG
+    // must contain zero __index_get__/__index_set__ nodes regardless
+    // of the source shape.  This is the off-by-default invariant the
+    // bit-identity gate relies on.
+    with_pointer_env(Some("0"), || {
+        let src = br#"function f(arr, v) {
+            sink(arr[0]);
+            arr[1] = v;
+        }"#;
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+        assert_eq!(count_nodes_with_callee(&cfg, "__index_get__"), 0);
+        assert_eq!(count_nodes_with_callee(&cfg, "__index_set__"), 0);
+    });
+}

@@ -67,6 +67,10 @@ fn is_container_read_callee(callee: &str) -> bool {
             | "dequeue"
             | "remove"
             | "popleft"
+            // Pointer-Phase 6 / W5: synthetic callee emitted by CFG
+            // lowering for subscript / index-expression reads
+            // (`arr[i]`, `map[k]`, `cmds[0]`).
+            | "__index_get__"
     )
 }
 
@@ -93,6 +97,10 @@ pub fn is_container_write_callee(callee: &str) -> bool {
             | "insert"
             | "enqueue"
             | "unshift"
+            // Pointer-Phase 6 / W5: synthetic callee emitted by CFG
+            // lowering for subscript / index-expression writes
+            // (`arr[i] = v`, `map[k] = v`).
+            | "__index_set__"
     )
 }
 
@@ -1201,6 +1209,33 @@ mod tests {
     /// whose latest SSA def has [`PtrProxyHint::FieldOnly`].  Names that
     /// don't qualify are omitted entirely so the consumer's lookup
     /// stays cheap.
+    /// W5: subscript-read synthetic callee `__index_get__` must be
+    /// recognised by the public container-read predicate so the W2/W4
+    /// taint hooks fire on subscript reads (`arr[i]`, `cmds[0]`).
+    #[test]
+    fn subscript_get_classifies_as_container_read() {
+        assert!(is_container_read_callee_pub("__index_get__"));
+        assert!(is_container_read_callee_pub("arr.__index_get__"));
+    }
+
+    /// W5: subscript-write synthetic callee `__index_set__` must be
+    /// recognised by the public container-write predicate so the W2
+    /// taint hook fires on subscript writes (`arr[i] = v`).
+    #[test]
+    fn subscript_set_classifies_as_container_write() {
+        assert!(is_container_write_callee("__index_set__"));
+        assert!(is_container_write_callee("arr.__index_set__"));
+    }
+
+    /// W5: regression guard — neither synth name should match the
+    /// opposite predicate, otherwise the W2 read/write hooks would
+    /// double-fire on the same call.
+    #[test]
+    fn subscript_synth_callees_do_not_cross_classify() {
+        assert!(!is_container_read_callee_pub("__index_set__"));
+        assert!(!is_container_write_callee("__index_get__"));
+    }
+
     #[test]
     fn name_proxy_hints_collects_field_only_locals() {
         let mut b = BodyBuilder::new();

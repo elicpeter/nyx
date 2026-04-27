@@ -2384,6 +2384,7 @@ fn apply_field_points_to_writes(
     state: &mut SsaTaintState,
     ssa: &SsaBody,
     pf: &crate::pointer::PointsToFacts,
+    interner: &crate::state::symbol::SymbolInterner,
 ) {
     if summary.is_empty() || summary.overflow {
         return;
@@ -2407,6 +2408,12 @@ fn apply_field_points_to_writes(
         let mut combined_caps = crate::labels::Cap::empty();
         let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
         let mut combined_summary = false;
+        // W4: combine validation channels across the caller-side SSA
+        // values for this argument position.  Vacuous AND for empty
+        // values is `true`, but `caller_vals` here is non-empty (we
+        // filtered above), so the AND fold is meaningful.
+        let mut combined_must = true;
+        let mut combined_may = false;
         for &v in &caller_vals {
             if let Some(t) = state.get(v) {
                 combined_caps |= t.caps;
@@ -2415,6 +2422,9 @@ fn apply_field_points_to_writes(
                     push_origin_bounded(&mut combined_origins, *o);
                 }
             }
+            let (am, av) = ssa_value_validated_bits(v, ssa, interner, state);
+            combined_must &= am;
+            combined_may |= av;
         }
         if combined_caps.is_empty() {
             continue;
@@ -2446,10 +2456,122 @@ fn apply_field_points_to_writes(
                         loc,
                         field: fid,
                     };
-                    state.add_field(key, cell_taint.clone());
+                    state.add_field(key, cell_taint.clone(), combined_must, combined_may);
                 }
             }
         }
+    }
+}
+
+/// W4: container ELEM read counterpart.  When the call is a
+/// recognised container read, walks `pt(receiver)`'s `(loc, ELEM)`
+/// cells and:
+///
+/// * Unions their `taint.caps` into the call result's value taint
+///   (additive — preserves any caps already set by upstream
+///   `try_container_propagation` / heap analysis).
+/// * AND-intersects the cells' `validated_must`; OR-unions
+///   `validated_may`; seeds the call result's symbol-level bits
+///   accordingly.
+///
+/// Strict-additive: skips when no cell exists, when `pt(receiver)`
+/// saturates / is empty, or when no contributing cell is found.
+fn apply_container_elem_read_w4(
+    inst: &SsaInst,
+    ssa: &SsaBody,
+    transfer: &SsaTaintTransfer,
+    state: &mut SsaTaintState,
+) {
+    let SsaOp::Call { callee, receiver, .. } = &inst.op else { return };
+    let (Some(pf), Some(rcv)) = (transfer.pointer_facts, *receiver) else { return };
+    if !crate::pointer::is_container_read_callee_pub(callee) {
+        return;
+    }
+    let pt = pf.pt(rcv);
+    if pt.is_empty() || pt.is_top() {
+        return;
+    }
+    let mut elem_caps = Cap::empty();
+    let mut elem_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+    let mut elem_summary = false;
+    let mut cell_must_all: Option<bool> = None;
+    let mut cell_may_any = false;
+    for loc in pt.iter() {
+        let key = crate::taint::ssa_transfer::state::FieldTaintKey {
+            loc,
+            field: crate::ssa::ir::FieldId::ELEM,
+        };
+        if let Some(cell) = state.get_field(key) {
+            elem_caps |= cell.taint.caps;
+            elem_summary |= cell.taint.uses_summary;
+            for o in &cell.taint.origins {
+                push_origin_bounded(&mut elem_origins, *o);
+            }
+            cell_must_all = Some(match cell_must_all {
+                Some(prev) => prev && cell.validated_must,
+                None => cell.validated_must,
+            });
+            cell_may_any |= cell.validated_may;
+        }
+    }
+    if cell_must_all.is_none() {
+        return;
+    }
+    if !elem_caps.is_empty() {
+        let cur = state.get(inst.value).cloned();
+        let merged = match cur {
+            Some(mut acc) => {
+                acc.caps |= elem_caps;
+                acc.uses_summary |= elem_summary;
+                for o in &elem_origins {
+                    push_origin_bounded(&mut acc.origins, *o);
+                }
+                acc
+            }
+            None => VarTaint {
+                caps: elem_caps,
+                origins: elem_origins,
+                uses_summary: elem_summary,
+            },
+        };
+        state.set(inst.value, merged);
+    }
+    if let Some(name) = ssa
+        .value_defs
+        .get(inst.value.0 as usize)
+        .and_then(|vd| vd.var_name.as_deref())
+    {
+        if let Some(sym) = transfer.interner.get(name) {
+            if cell_must_all == Some(true) {
+                state.validated_must.insert(sym);
+            }
+            if cell_may_any {
+                state.validated_may.insert(sym);
+            }
+        }
+    }
+}
+
+/// W4: look up the symbol-keyed `validated_must` / `validated_may`
+/// flags for an SSA value via its `var_name`.  Returns `(false,
+/// false)` when the value has no name, when the name isn't interned,
+/// or when the symbol bits aren't set.
+fn ssa_value_validated_bits(
+    v: SsaValue,
+    ssa: &SsaBody,
+    interner: &crate::state::symbol::SymbolInterner,
+    state: &SsaTaintState,
+) -> (bool, bool) {
+    let name = match ssa.value_defs.get(v.0 as usize).and_then(|vd| vd.var_name.as_deref()) {
+        Some(n) => n,
+        None => return (false, false),
+    };
+    match interner.get(name) {
+        Some(sym) => (
+            state.validated_must.contains(sym),
+            state.validated_may.contains(sym),
+        ),
+        None => (false, false),
     }
 }
 
@@ -2532,6 +2654,15 @@ pub(super) fn transfer_inst(
             // bypass us.  Strict-additive: the hook only writes into the
             // `(loc, ELEM)` cells on `SsaTaintState.field_taint`, never
             // touches the existing per-SSA-value taint or the call result.
+            //
+            // Pointer-Phase 4 / W4: each pushed value's symbol-level
+            // `validated_must` / `validated_may` flow through to the
+            // cell.  The cell records `must = AND` over args (intersect:
+            // every writer must be must-validated), `may = OR` over
+            // args.  When an arg has no var_name (anonymous SSA temp),
+            // it contributes `false / false` and breaks the must
+            // invariant — matching the symbol-keyed lattice's "absent
+            // entry = un-validated" semantics.
             if let (Some(pf), Some(rcv)) = (transfer.pointer_facts, *receiver) {
                 if crate::pointer::is_container_write_callee(callee) {
                     let pt = pf.pt(rcv);
@@ -2539,8 +2670,12 @@ pub(super) fn transfer_inst(
                         let mut elem_caps = Cap::empty();
                         let mut elem_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
                         let mut elem_summary = false;
+                        let mut elem_must_all = true; // AND over args (vacuously true for empty args)
+                        let mut elem_may_any = false; // OR over args
+                        let mut saw_any_arg = false;
                         for arg_group in args {
                             for &arg_v in arg_group {
+                                saw_any_arg = true;
                                 if let Some(t) = state.get(arg_v) {
                                     elem_caps |= t.caps;
                                     elem_summary |= t.uses_summary;
@@ -2548,7 +2683,20 @@ pub(super) fn transfer_inst(
                                         push_origin_bounded(&mut elem_origins, *o);
                                     }
                                 }
+                                let (am, av) = ssa_value_validated_bits(
+                                    arg_v,
+                                    ssa,
+                                    transfer.interner,
+                                    state,
+                                );
+                                elem_must_all &= am;
+                                elem_may_any |= av;
                             }
+                        }
+                        // Vacuous AND: a zero-arg container write supplies
+                        // no validation source, so coerce must to false.
+                        if !saw_any_arg {
+                            elem_must_all = false;
                         }
                         if !elem_caps.is_empty() {
                             let cell = VarTaint {
@@ -2561,7 +2709,12 @@ pub(super) fn transfer_inst(
                                     loc,
                                     field: crate::ssa::ir::FieldId::ELEM,
                                 };
-                                state.add_field(key, cell.clone());
+                                state.add_field(
+                                    key,
+                                    cell.clone(),
+                                    elem_must_all,
+                                    elem_may_any,
+                                );
                             }
                         }
                     }
@@ -2816,6 +2969,7 @@ pub(super) fn transfer_inst(
                         state,
                         ssa,
                         pf,
+                        transfer.interner,
                     );
                 }
 
@@ -3127,6 +3281,15 @@ pub(super) fn transfer_inst(
                     }
                     // Fall through to write return_bits to inst.value if non-empty
                     if return_bits.is_empty() {
+                        // Pointer-Phase 4 / W4: container ELEM read
+                        // counterpart fires here for container_handled
+                        // calls with no source label of their own —
+                        // e.g. `cmd := arr.shift()` — whose taint and
+                        // validation come from the cell rather than
+                        // any inline source.  The post-match hook
+                        // would otherwise be skipped by this early
+                        // return.
+                        apply_container_elem_read_w4(inst, ssa, transfer, state);
                         return;
                     }
                 } else {
@@ -3530,6 +3693,7 @@ pub(super) fn transfer_inst(
                     },
                 );
             }
+
         }
 
         SsaOp::Assign(uses) => {
@@ -3641,12 +3805,43 @@ pub(super) fn transfer_inst(
                             origins: combined_origins.clone(),
                             uses_summary: inherited_summary,
                         };
+                        // W4: validation channels lift from the rhs's
+                        // symbol-level bits.  An anonymous SSA temp on
+                        // the rhs has no name → contributes (false,
+                        // false), matching "no validation".  An Assign
+                        // with multiple operands ANDs `must` (every
+                        // operand must be must-validated for the cell)
+                        // and ORs `may`.
+                        let mut must_all = true;
+                        let mut may_any = false;
+                        let mut saw_use = false;
+                        if let SsaOp::Assign(uses) = &inst.op {
+                            for &u in uses {
+                                saw_use = true;
+                                let (am, av) = ssa_value_validated_bits(
+                                    u,
+                                    ssa,
+                                    transfer.interner,
+                                    state,
+                                );
+                                must_all &= am;
+                                may_any |= av;
+                            }
+                        }
+                        if !saw_use {
+                            must_all = false;
+                        }
                         for loc in pt.iter() {
                             let key = crate::taint::ssa_transfer::state::FieldTaintKey {
                                 loc,
                                 field: fid,
                             };
-                            state.add_field(key, rhs_taint.clone());
+                            state.add_field(
+                                key,
+                                rhs_taint.clone(),
+                                must_all,
+                                may_any,
+                            );
                         }
                     }
                 }
@@ -3818,6 +4013,14 @@ pub(super) fn transfer_inst(
             // the existing block-state semantics.
             let mut combined: Option<VarTaint> = state.get(*receiver).cloned();
 
+            // W4: collect cell validation channels alongside taint.
+            // `must` AND-intersects across the contributing cells; a
+            // single un-validated cell wins because it represents a
+            // path on which the projection isn't validated.  `may`
+            // OR-unions.
+            let mut cell_must_all: Option<bool> = None;
+            let mut cell_may_any = false;
+
             // Pointer-Phase 3 read: when per-body PointsToFacts are
             // available, also union taint from each `(loc, field)` cell
             // for `loc ∈ pt(receiver)`.  This carries cross-method field
@@ -3833,7 +4036,12 @@ pub(super) fn transfer_inst(
                             field: *field,
                         };
                         if let Some(cell) = state.get_field(key) {
-                            let t = cell.clone();
+                            let t = cell.taint.clone();
+                            cell_must_all = Some(match cell_must_all {
+                                Some(prev) => prev && cell.validated_must,
+                                None => cell.validated_must,
+                            });
+                            cell_may_any |= cell.validated_may;
                             combined = Some(match combined {
                                 Some(mut acc) => {
                                     acc.caps |= t.caps;
@@ -3880,7 +4088,45 @@ pub(super) fn transfer_inst(
             if let Some(t) = combined {
                 state.set(inst.value, t);
             }
+
+            // W4: seed the projected value's symbol-level validation
+            // bits from the cells that fed it.  This is the read-side
+            // counterpart to the W1 / W2 / W3 cell-write hooks: if
+            // every cell that contributed to this projection was
+            // must-validated, the projected value is must-validated;
+            // any may-validated cell sets may.  Skipped when no cell
+            // contributed (`cell_must_all == None`).
+            if let Some(must_all) = cell_must_all {
+                if let Some(name) = ssa
+                    .value_defs
+                    .get(inst.value.0 as usize)
+                    .and_then(|vd| vd.var_name.as_deref())
+                {
+                    if let Some(sym) = transfer.interner.get(name) {
+                        if must_all {
+                            state.validated_must.insert(sym);
+                        }
+                        if cell_may_any {
+                            state.validated_may.insert(sym);
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    // Pointer-Phase 4 / W4 read counterpart for container reads.
+    //
+    // Lives outside the SsaOp::Call match arm so it fires after
+    // non-container Calls reach this point.  The container-read path
+    // can also early-return inside the match arm (when
+    // `try_container_propagation` claims the call), so the hook is
+    // *additionally* invoked from inside the arm before those early
+    // returns — see the call to `apply_container_elem_read_w4`
+    // adjacent to the container_handled branch.  This post-match
+    // invocation covers the call-fall-through cases.
+    if matches!(&inst.op, SsaOp::Call { .. }) {
+        apply_container_elem_read_w4(inst, ssa, transfer, state);
     }
 
     // Constraint propagation through instructions

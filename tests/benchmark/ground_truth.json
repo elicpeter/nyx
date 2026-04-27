@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 378
+    "corpus_size": 380
   },
   "cases": [
     {
@@ -2069,6 +2069,47 @@
       "notes": "Command injection via os.Getenv source flowing to exec.Command; language_specific tier because env-var source pattern is Go-specific"
     },
     {
+      "case_id": "go-cmdi-004",
+      "file": "go/cmdi/cmdi_unvalidated_queue_element.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "go.cmdi.exec_command"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-unauthed-access"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          13,
+          13
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "tags": [
+        "container-element",
+        "index-read",
+        "exec-command",
+        "pointer-w5"
+      ],
+      "disabled": false,
+      "notes": "Tainted user input pushed into a slice via append(); unsanitised element re-read with cmds[0] flows to exec.Command. Exercises W5 subscript-read recognition + W2 container ELEM cell flow."
+    },
+    {
       "case_id": "go-xss-001",
       "file": "go/xss/xss_fprintf.go",
       "language": "go",
@@ -2452,6 +2493,35 @@
       ],
       "disabled": false,
       "notes": "Allowlist map validation before exec.Command(); only permitted commands reach sink"
+    },
+    {
+      "case_id": "go-safe-009",
+      "file": "go/safe/safe_validated_queue_element.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "go.cmdi.exec_command",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "validated",
+        "container-element",
+        "index-read",
+        "pointer-w4-w5"
+      ],
+      "disabled": false,
+      "notes": "validate() sanitises before append(); cmds[0] re-read carries the validated_must bit through the W4 ELEM cell + W5 subscript synth, suppressing the cmdi finding."
     },
     {
       "case_id": "php-sqli-001",

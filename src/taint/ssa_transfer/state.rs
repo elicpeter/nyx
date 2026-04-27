@@ -259,6 +259,40 @@ pub struct FieldTaintKey {
     pub field: FieldId,
 }
 
+/// Pointer-Phase 4 / W4: per-field-cell taint record.
+///
+/// Carries the union of writers' taint for the abstract field cell plus
+/// two validation channels:
+/// * `validated_must` — set when *every* writer recorded a value that was
+///   `validated_must` in its own SSA scope.  Lattice join intersects
+///   (`AND`) — matching the symbol-keyed [`SsaTaintState::validated_must`]
+///   semantics for "validated on every path".
+/// * `validated_may` — set when *any* writer recorded a `validated_may`
+///   value.  Lattice join unions (`OR`) — matching the symbol-keyed
+///   [`SsaTaintState::validated_may`] semantics for "validated on some
+///   path".
+///
+/// Cells with `taint.caps == empty()` never get inserted (see
+/// [`SsaTaintState::add_field`]) so the lattice bottom remains `[]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldCell {
+    pub taint: VarTaint,
+    pub validated_must: bool,
+    pub validated_may: bool,
+}
+
+impl FieldCell {
+    /// Construct a cell with no validation bits — convenience for the
+    /// pre-W4 callers that don't propagate symbol-level validation.
+    pub fn unvalidated(taint: VarTaint) -> Self {
+        Self {
+            taint,
+            validated_must: false,
+            validated_may: false,
+        }
+    }
+}
+
 /// Taint state keyed by SsaValue instead of SymbolId.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SsaTaintState {
@@ -290,7 +324,11 @@ pub struct SsaTaintState {
     /// (`SsaOp::FieldProj`) consult the cells; field writes record into
     /// them.  Cross-call propagation lands in Phase 5 via the
     /// field-granularity `PointsToSummary`.
-    pub field_taint: SmallVec<[(FieldTaintKey, VarTaint); 4]>,
+    ///
+    /// Cell shape (Phase 4 / W4): [`FieldCell`] carries `taint` plus
+    /// `validated_must` / `validated_may` flags so validation flows
+    /// through abstract field / element identity.
+    pub field_taint: SmallVec<[(FieldTaintKey, FieldCell); 4]>,
 }
 
 impl SsaTaintState {
@@ -315,31 +353,60 @@ impl SsaTaintState {
         }
     }
 
-    /// Pointer-Phase 3: read the taint at a heap-field cell.  Returns
-    /// `None` when the cell has no taint recorded (caller should treat
-    /// as untainted).  O(log n) on the sorted [`field_taint`] list.
-    pub fn get_field(&self, key: FieldTaintKey) -> Option<&VarTaint> {
+    /// Pointer-Phase 3: read the field cell at `key`.  Returns `None`
+    /// when no cell has been recorded (caller should treat as
+    /// untainted).  O(log n) on the sorted [`field_taint`] list.
+    pub fn get_field(&self, key: FieldTaintKey) -> Option<&FieldCell> {
         self.field_taint
             .binary_search_by_key(&key, |(k, _)| *k)
             .ok()
             .map(|idx| &self.field_taint[idx].1)
     }
 
-    /// Pointer-Phase 3: union `t` into the field cell at `key`.
-    /// Maintains sorted invariant.  No-op when `t.caps` is empty.
-    pub fn add_field(&mut self, key: FieldTaintKey, t: VarTaint) {
+    /// Pointer-Phase 3 / W4: union `t` into the field cell at `key`,
+    /// recording per-write `validated_must` / `validated_may` channels.
+    ///
+    /// Maintains sorted invariant.  No-op when `t.caps` is empty (so the
+    /// lattice bottom stays `[]`).  When the cell already exists, the
+    /// validation channels merge with the lattice-join semantics —
+    /// `must` AND-intersects, `may` OR-unions — matching the symbol-
+    /// keyed [`SsaTaintState::validated_must`] / `validated_may`
+    /// semantics so a write coming through a non-validated path tears
+    /// down `must` while preserving `may` of any earlier validated path.
+    pub fn add_field(
+        &mut self,
+        key: FieldTaintKey,
+        t: VarTaint,
+        validated_must: bool,
+        validated_may: bool,
+    ) {
         if t.caps.is_empty() {
             return;
         }
         match self.field_taint.binary_search_by_key(&key, |(k, _)| *k) {
             Ok(idx) => {
-                let cur = &mut self.field_taint[idx].1;
-                cur.caps |= t.caps;
-                cur.uses_summary |= t.uses_summary;
-                let merged = merge_origins(&cur.origins, &t.origins);
-                cur.origins = merged;
+                let cell = &mut self.field_taint[idx].1;
+                cell.taint.caps |= t.caps;
+                cell.taint.uses_summary |= t.uses_summary;
+                let merged = merge_origins(&cell.taint.origins, &t.origins);
+                cell.taint.origins = merged;
+                // Lattice-join semantics on a fresh write joining an
+                // existing cell: must AND-intersects (a single un-
+                // validated writer breaks the invariant); may OR-unions.
+                cell.validated_must &= validated_must;
+                cell.validated_may |= validated_may;
             }
-            Err(idx) => self.field_taint.insert(idx, (key, t)),
+            Err(idx) => self.field_taint.insert(
+                idx,
+                (
+                    key,
+                    FieldCell {
+                        taint: t,
+                        validated_must,
+                        validated_may,
+                    },
+                ),
+            ),
         }
     }
 
@@ -446,35 +513,55 @@ impl Lattice for SsaTaintState {
     }
 }
 
-/// Pointer-Phase 3: merge-join two sorted `field_taint` lists.  Same
-/// shape as [`merge_join_ssa_vars`] but keyed on [`FieldTaintKey`] —
-/// caps OR'd, origins merged, `uses_summary` OR'd.
+/// Pointer-Phase 3 / W4: merge-join two sorted `field_taint` lists.
+/// Same shape as [`merge_join_ssa_vars`] but keyed on [`FieldTaintKey`]:
+/// * `taint.caps`  — OR-union
+/// * `taint.origins` — merged with cap-respecting de-dup
+/// * `taint.uses_summary` — OR-union
+/// * `validated_must` — AND-intersect (matches the symbol-keyed
+///   `validated_must` lattice: a path that didn't validate this cell
+///   breaks the invariant)
+/// * `validated_may` — OR-union (any path's validation contributes)
 pub(super) fn merge_join_field_taint(
-    a: &[(FieldTaintKey, VarTaint)],
-    b: &[(FieldTaintKey, VarTaint)],
-) -> SmallVec<[(FieldTaintKey, VarTaint); 4]> {
+    a: &[(FieldTaintKey, FieldCell)],
+    b: &[(FieldTaintKey, FieldCell)],
+) -> SmallVec<[(FieldTaintKey, FieldCell); 4]> {
     let mut result = SmallVec::with_capacity(a.len().max(b.len()));
     let (mut i, mut j) = (0, 0);
     while i < a.len() && j < b.len() {
         match a[i].0.cmp(&b[j].0) {
             std::cmp::Ordering::Less => {
-                result.push(a[i].clone());
+                // Cell present only in `a` — counterpart in `b` is the
+                // lattice bottom (no validation, no taint), so:
+                //   must = a.must AND false = false
+                //   may  = a.may  OR  false = a.may
+                let mut cell = a[i].1.clone();
+                cell.validated_must = false;
+                result.push((a[i].0, cell));
                 i += 1;
             }
             std::cmp::Ordering::Greater => {
-                result.push(b[j].clone());
+                let mut cell = b[j].1.clone();
+                cell.validated_must = false;
+                result.push((b[j].0, cell));
                 j += 1;
             }
             std::cmp::Ordering::Equal => {
-                let caps = a[i].1.caps | b[j].1.caps;
-                let origins = merge_origins(&a[i].1.origins, &b[j].1.origins);
-                let uses_summary = a[i].1.uses_summary || b[j].1.uses_summary;
+                let caps = a[i].1.taint.caps | b[j].1.taint.caps;
+                let origins = merge_origins(&a[i].1.taint.origins, &b[j].1.taint.origins);
+                let uses_summary = a[i].1.taint.uses_summary || b[j].1.taint.uses_summary;
+                let validated_must = a[i].1.validated_must && b[j].1.validated_must;
+                let validated_may = a[i].1.validated_may || b[j].1.validated_may;
                 result.push((
                     a[i].0,
-                    VarTaint {
-                        caps,
-                        origins,
-                        uses_summary,
+                    FieldCell {
+                        taint: VarTaint {
+                            caps,
+                            origins,
+                            uses_summary,
+                        },
+                        validated_must,
+                        validated_may,
                     },
                 ));
                 i += 1;
@@ -483,39 +570,63 @@ pub(super) fn merge_join_field_taint(
         }
     }
     while i < a.len() {
-        result.push(a[i].clone());
+        let mut cell = a[i].1.clone();
+        cell.validated_must = false;
+        result.push((a[i].0, cell));
         i += 1;
     }
     while j < b.len() {
-        result.push(b[j].clone());
+        let mut cell = b[j].1.clone();
+        cell.validated_must = false;
+        result.push((b[j].0, cell));
         j += 1;
     }
     result
 }
 
-/// `a ≤ b` for sorted `field_taint` lists: every key in `a` has caps
-/// ⊆ the matching key's caps in `b` (or `b` lacks the key, treated as
-/// ⊥).  Used by the convergence check in [`Lattice::leq`].
+/// `a ≤ b` for sorted `field_taint` lists.  Used by the convergence
+/// check in [`Lattice::leq`].  Per-cell criteria:
+///
+/// * `taint.caps` — `a ⊆ b` (sub-state on caps; matches per-SSA-value
+///   `ssa_vars_leq`).
+/// * `validated_must` — `a.must ⊇ b.must` (super-state on must; same
+///   shape as the symbol-keyed `validated_must` leq).
+/// * `validated_may` — `a.may ⊆ b.may` (sub-state on may).
+///
+/// When `b` lacks a key present in `a`, `b`'s side is the lattice
+/// bottom: no caps, no validation.  `a`'s caps must also be empty
+/// AND `a.validated_must == false` for `a ≤ b` to hold, otherwise `a`
+/// is strictly greater than `b` on that cell.
 pub(super) fn field_taint_leq(
-    a: &[(FieldTaintKey, VarTaint)],
-    b: &[(FieldTaintKey, VarTaint)],
+    a: &[(FieldTaintKey, FieldCell)],
+    b: &[(FieldTaintKey, FieldCell)],
 ) -> bool {
     let mut j = 0;
-    for (key, ta) in a {
+    for (key, ca) in a {
         while j < b.len() && b[j].0 < *key {
             j += 1;
         }
         if j >= b.len() || b[j].0 != *key {
             // Key absent in b ⇒ b's value is bottom for this cell;
-            // a's caps must also be empty, otherwise a > b.
-            if !ta.caps.is_empty() {
+            // a's caps must also be empty AND a.must = false.
+            if !ca.taint.caps.is_empty() || ca.validated_must {
                 return false;
             }
             continue;
         }
-        let tb = &b[j].1;
-        // ta.caps ⊆ tb.caps  ⇔  every bit in ta.caps is also in tb.caps.
-        if (ta.caps - tb.caps).bits() != 0 {
+        let cb = &b[j].1;
+        // Caps: a ⊆ b.
+        if (ca.taint.caps - cb.taint.caps).bits() != 0 {
+            return false;
+        }
+        // Must: a ⊇ b — every must-validated key in b is must-validated
+        // in a.  Equivalently: !cb.must OR ca.must.
+        if cb.validated_must && !ca.validated_must {
+            return false;
+        }
+        // May: a ⊆ b — every may-validated key in a is may-validated
+        // in b.  Equivalently: !ca.may OR cb.may.
+        if ca.validated_may && !cb.validated_may {
             return false;
         }
     }
@@ -917,31 +1028,38 @@ mod field_taint_tests {
         }
     }
 
+    /// Convenience helper: pre-W4 `add_field` calls didn't carry
+    /// validation channels.  The new signature accepts them explicitly;
+    /// pre-W4 tests pass `(false, false)` to preserve the original
+    /// semantics.
+    fn add(s: &mut SsaTaintState, k: FieldTaintKey, t: VarTaint) {
+        s.add_field(k, t, false, false);
+    }
+
     #[test]
     fn add_field_round_trips() {
         let mut s = SsaTaintState::initial();
         let k = key(1, 7);
-        s.add_field(k, taint(Cap::ENV_VAR));
+        add(&mut s, k, taint(Cap::ENV_VAR));
         let got = s.get_field(k).expect("field cell present");
-        assert!(got.caps.contains(Cap::ENV_VAR));
+        assert!(got.taint.caps.contains(Cap::ENV_VAR));
     }
 
     #[test]
     fn add_field_unions_caps() {
         let mut s = SsaTaintState::initial();
         let k = key(1, 7);
-        s.add_field(k, taint(Cap::ENV_VAR));
-        s.add_field(k, taint(Cap::ENV_VAR));
+        add(&mut s, k, taint(Cap::ENV_VAR));
+        add(&mut s, k, taint(Cap::ENV_VAR));
         let got = s.get_field(k).unwrap();
-        assert!(got.caps.contains(Cap::ENV_VAR));
-        assert!(got.caps.contains(Cap::ENV_VAR));
+        assert!(got.taint.caps.contains(Cap::ENV_VAR));
     }
 
     #[test]
     fn add_field_skips_empty_caps() {
         let mut s = SsaTaintState::initial();
         let k = key(2, 3);
-        s.add_field(k, taint(Cap::empty()));
+        add(&mut s, k, taint(Cap::empty()));
         assert!(s.get_field(k).is_none(), "empty caps must not insert");
     }
 
@@ -951,15 +1069,14 @@ mod field_taint_tests {
         let k2 = key(2, 9);
         let mut a = SsaTaintState::initial();
         let mut b = SsaTaintState::initial();
-        a.add_field(k1, taint(Cap::ENV_VAR));
-        b.add_field(k1, taint(Cap::ENV_VAR));
-        b.add_field(k2, taint(Cap::FILE_IO));
+        add(&mut a, k1, taint(Cap::ENV_VAR));
+        add(&mut b, k1, taint(Cap::ENV_VAR));
+        add(&mut b, k2, taint(Cap::FILE_IO));
         let joined = a.join(&b);
         let v1 = joined.get_field(k1).unwrap();
-        assert!(v1.caps.contains(Cap::ENV_VAR));
-        assert!(v1.caps.contains(Cap::ENV_VAR));
+        assert!(v1.taint.caps.contains(Cap::ENV_VAR));
         let v2 = joined.get_field(k2).unwrap();
-        assert!(v2.caps.contains(Cap::FILE_IO));
+        assert!(v2.taint.caps.contains(Cap::FILE_IO));
     }
 
     #[test]
@@ -968,7 +1085,7 @@ mod field_taint_tests {
         // holds.  b ≤ a fails because b has a cell with non-empty caps
         // that a lacks.
         let mut b = SsaTaintState::initial();
-        b.add_field(key(1, 7), taint(Cap::ENV_VAR));
+        add(&mut b, key(1, 7), taint(Cap::ENV_VAR));
         let a = SsaTaintState::initial();
         assert!(a.leq(&b), "empty state ≤ state with a field cell");
         assert!(!b.leq(&a), "state with a field cell is NOT ≤ empty state");
@@ -979,8 +1096,8 @@ mod field_taint_tests {
         let k = key(3, 4);
         let mut a = SsaTaintState::initial();
         let mut b = SsaTaintState::initial();
-        a.add_field(k, taint(Cap::ENV_VAR));
-        b.add_field(k, taint(Cap::ENV_VAR | Cap::FILE_IO));
+        add(&mut a, k, taint(Cap::ENV_VAR));
+        add(&mut b, k, taint(Cap::ENV_VAR | Cap::FILE_IO));
         assert!(a.leq(&b));
         assert!(!b.leq(&a));
     }
@@ -1007,15 +1124,119 @@ mod field_taint_tests {
 
         let mut a = SsaTaintState::initial();
         let mut b = SsaTaintState::initial();
-        a.add_field(k, t1);
-        b.add_field(k, t2);
+        add(&mut a, k, t1);
+        add(&mut b, k, t2);
         let joined = a.join(&b);
         let cell = joined.get_field(k).unwrap();
         // Both origins survive; the duplicate o1 dedups.
-        assert_eq!(cell.origins.len(), 2);
-        let nodes: Vec<_> = cell.origins.iter().map(|o| o.node).collect();
+        assert_eq!(cell.taint.origins.len(), 2);
+        let nodes: Vec<_> = cell.taint.origins.iter().map(|o| o.node).collect();
         assert!(nodes.contains(&NodeIndex::new(5)));
         assert!(nodes.contains(&NodeIndex::new(7)));
+    }
+
+    /// W4 audit: `merge_join_field_taint` AND-intersects
+    /// `validated_must` when joining cells with the same key.  Two
+    /// states whose paths each independently must-validate the cell
+    /// keep `must = true`; if either path doesn't validate, `must`
+    /// drops to false on the join.
+    #[test]
+    fn lattice_validated_must_intersects_on_join() {
+        let k = key(1, 7);
+        let mut a = SsaTaintState::initial();
+        let mut b = SsaTaintState::initial();
+        a.add_field(k, taint(Cap::ENV_VAR), true, true);
+        b.add_field(k, taint(Cap::ENV_VAR), true, true);
+        let joined_aa = a.join(&b);
+        let cell = joined_aa.get_field(k).unwrap();
+        assert!(cell.validated_must, "a.must AND b.must = true");
+        assert!(cell.validated_may);
+
+        // Now make `b`'s validated_must false — must should drop to
+        // false on the join, may stays at OR.
+        let mut c = SsaTaintState::initial();
+        c.add_field(k, taint(Cap::ENV_VAR), false, true);
+        let joined_ac = a.join(&c);
+        let cell2 = joined_ac.get_field(k).unwrap();
+        assert!(!cell2.validated_must, "a.must AND c.must = false");
+        assert!(cell2.validated_may, "a.may OR c.may = true");
+    }
+
+    /// W4 audit: `merge_join_field_taint` OR-unions `validated_may`
+    /// — any path's may-validation contributes to the joined cell.
+    #[test]
+    fn lattice_validated_may_unions_on_join() {
+        let k = key(1, 7);
+        let mut a = SsaTaintState::initial();
+        let mut b = SsaTaintState::initial();
+        a.add_field(k, taint(Cap::ENV_VAR), false, false);
+        b.add_field(k, taint(Cap::ENV_VAR), false, true);
+        let joined = a.join(&b);
+        let cell = joined.get_field(k).unwrap();
+        assert!(!cell.validated_must);
+        assert!(cell.validated_may, "a.may OR b.may = true");
+    }
+
+    /// W4 audit: when one side of the join lacks the key, the
+    /// counterpart's validated_must drops to false (intersection with
+    /// the lattice bottom's `must = false`); validated_may is preserved
+    /// (`OR false = self`).  Caps and origins are preserved.
+    #[test]
+    fn lattice_validated_consistent_with_taint_join() {
+        let k = key(2, 11);
+        let mut a = SsaTaintState::initial();
+        let b = SsaTaintState::initial();
+        a.add_field(k, taint(Cap::ENV_VAR), true, true);
+        let joined = a.join(&b);
+        let cell = joined.get_field(k).unwrap();
+        assert!(
+            !cell.validated_must,
+            "joined with empty side must drop validated_must"
+        );
+        assert!(
+            cell.validated_may,
+            "joined with empty side keeps validated_may"
+        );
+        assert!(cell.taint.caps.contains(Cap::ENV_VAR));
+
+        // Symmetric: empty.join(populated) yields the same cell shape.
+        let joined2 = b.join(&a);
+        let cell2 = joined2.get_field(k).unwrap();
+        assert!(!cell2.validated_must);
+        assert!(cell2.validated_may);
+    }
+
+    /// W4 audit: `field_taint_leq` respects both validation channels.
+    /// `must` is super-state (a.must ⊇ b.must); `may` is sub-state
+    /// (a.may ⊆ b.may).  A state strictly "smaller" on caps but
+    /// strictly "larger" on may must NOT compare ≤.
+    #[test]
+    fn lattice_leq_respects_validated_channels() {
+        let k = key(3, 5);
+
+        // Case 1: a has must=true, b has must=false. a.must ⊇ b.must
+        // holds (true ⊇ false), so a ≤ b on this channel.  But b's
+        // caps must dominate a's for a ≤ b overall.
+        let mut a = SsaTaintState::initial();
+        let mut b = SsaTaintState::initial();
+        a.add_field(k, taint(Cap::ENV_VAR), true, false);
+        b.add_field(k, taint(Cap::ENV_VAR), false, false);
+        assert!(
+            a.leq(&b),
+            "must super-state and equal caps: a ≤ b should hold"
+        );
+        // Reverse: b.must=false, a.must=true — for b ≤ a, we need
+        // b.must ⊇ a.must which is false ⊇ true = false.  So b ≤ a
+        // must fail.
+        assert!(!b.leq(&a), "b lacks the must invariant a holds");
+
+        // Case 2: a has may=true, b has may=false.  a.may ⊆ b.may
+        // requires true ⊆ false = false, so a ≤ b must fail.
+        let mut a2 = SsaTaintState::initial();
+        let mut b2 = SsaTaintState::initial();
+        a2.add_field(k, taint(Cap::ENV_VAR), false, true);
+        b2.add_field(k, taint(Cap::ENV_VAR), false, false);
+        assert!(!a2.leq(&b2), "a.may=true is NOT ⊆ b.may=false");
     }
 
     /// Pointer-Phase 3 / A8 audit: the field_taint lattice is monotone
@@ -1056,7 +1277,7 @@ mod field_taint_tests {
             .iter()
             .map(|(k, t)| {
                 let mut s = SsaTaintState::initial();
-                s.add_field(*k, t.clone());
+                add(&mut s, *k, t.clone());
                 s
             })
             .collect();
@@ -1143,9 +1364,9 @@ mod field_taint_tests {
         use crate::labels::Cap;
         let mut a = SsaTaintState::initial();
         let mut b = SsaTaintState::initial();
-        a.add_field(key(1, 7), taint(Cap::ENV_VAR));
-        b.add_field(key(1, 7), taint(Cap::FILE_IO));
-        b.add_field(key(2, 9), taint(Cap::SHELL_ESCAPE));
+        add(&mut a, key(1, 7), taint(Cap::ENV_VAR));
+        add(&mut b, key(1, 7), taint(Cap::FILE_IO));
+        add(&mut b, key(2, 9), taint(Cap::SHELL_ESCAPE));
         let j = a.join(&b);
         assert!(a.leq(&j), "a ≤ a ⊕ b");
         assert!(b.leq(&j), "b ≤ a ⊕ b");

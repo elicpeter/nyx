@@ -31,7 +31,7 @@ use blocks::{build_begin_rescue, build_switch, build_try};
 use helpers::{
     collect_nested_function_nodes, derive_anon_fn_name_from_context, find_classifiable_inner_call,
     first_call_ident_with_span, first_member_label, first_member_text, is_raii_factory,
-    root_member_receiver,
+    is_subscript_kind, root_member_receiver, subscript_components, subscript_lhs_node,
 };
 // Re-exports so sibling submodules can keep using `super::name` for
 // helpers that physically live in `helpers.rs`.
@@ -2083,6 +2083,71 @@ pub(super) fn connect_all(g: &mut Cfg, froms: &[NodeIndex], to: NodeIndex, kind:
 /// the auth-elevation transfer on the True edge and send Unauthed state into
 /// the branch body.
 ///
+/// Pointer-Phase 6 / W5: when `ast` is (or wraps) an assignment whose
+/// LHS is a single subscript / index expression with a plain-identifier
+/// receiver, emit a synthetic `__index_set__` Call node and return its
+/// `NodeIndex`.  Returns `None` for non-subscript LHSs, multi-target
+/// assignments, complex receivers, or when the RHS contains a call
+/// (those still flow through the existing has_call_descendant path).
+///
+/// Gated on `pointer::is_enabled()` by the caller.
+fn try_lower_subscript_write(
+    ast: Node,
+    preds: &[NodeIndex],
+    g: &mut Cfg,
+    lang: &str,
+    code: &[u8],
+    enclosing_func: Option<&str>,
+    call_ordinal: &mut u32,
+) -> Option<NodeIndex> {
+    // Locate the assignment node — `ast` may be the assignment itself
+    // (Go `assignment_statement`) or a wrapper (`expression_statement`
+    // containing JS `assignment_expression` / Python `assignment`).
+    let assign_ast = if matches!(lookup(lang, ast.kind()), Kind::Assignment) {
+        ast
+    } else {
+        let mut cursor = ast.walk();
+        ast.children(&mut cursor)
+            .find(|c| matches!(lookup(lang, c.kind()), Kind::Assignment))?
+    };
+    let lhs = assign_ast.child_by_field_name("left")?;
+    if has_call_descendant(assign_ast, lang) {
+        return None;
+    }
+    let subscript_node = subscript_lhs_node(lhs, lang)?;
+    let (arr_text, idx_text) = subscript_components(subscript_node, code)?;
+    let rhs = assign_ast.child_by_field_name("right")?;
+
+    let mut rhs_uses: Vec<String> = Vec::new();
+    collect_idents(rhs, code, &mut rhs_uses);
+    let span = (ast.start_byte(), ast.end_byte());
+    let ord = *call_ordinal;
+    *call_ordinal += 1;
+    let mut uses_all: Vec<String> = vec![arr_text.clone(), idx_text.clone()];
+    uses_all.extend(rhs_uses.iter().cloned());
+    let n = g.add_node(NodeInfo {
+        kind: StmtKind::Call,
+        call: CallMeta {
+            callee: Some("__index_set__".to_string()),
+            receiver: Some(arr_text.clone()),
+            arg_uses: vec![vec![idx_text.clone()], rhs_uses.clone()],
+            call_ordinal: ord,
+            ..Default::default()
+        },
+        taint: TaintMeta {
+            uses: uses_all,
+            ..Default::default()
+        },
+        ast: AstMeta {
+            span,
+            enclosing_func: enclosing_func.map(|s| s.to_string()),
+        },
+        ..Default::default()
+    });
+    connect_all(g, preds, n, EdgeKind::Seq);
+    Some(n)
+}
+
 /// Step 1 (`pre_emit_arg_source_nodes`): scan the AST, create Source nodes,
 /// wire them to `preds`, and return (effective_preds, synth_bindings).
 ///
@@ -2136,44 +2201,89 @@ fn pre_emit_arg_source_nodes(
         }
     }
 
+    let pointer_on = crate::pointer::is_enabled();
+
     for (pos, child) in children.iter().enumerate() {
         let src_label = first_member_label(*child, lang, code, extra);
-        let Some(DataLabel::Source(caps)) = src_label else {
+        if let Some(DataLabel::Source(caps)) = src_label {
+            // Use the *current* node count as a unique token — it equals the
+            // index the new Source node will receive.
+            let synth_name = format!("__nyx_src_{}_{}", g.node_count(), pos);
+            let member_text = first_member_text(*child, code);
+            let span = (child.start_byte(), child.end_byte());
+
+            let mut src_labels: SmallVec<[DataLabel; 2]> = SmallVec::new();
+            src_labels.push(DataLabel::Source(caps));
+
+            let src_idx = g.add_node(NodeInfo {
+                kind: StmtKind::Seq,
+                call: CallMeta {
+                    callee: member_text,
+                    ..Default::default()
+                },
+                taint: TaintMeta {
+                    labels: src_labels,
+                    defines: Some(synth_name.clone()),
+                    ..Default::default()
+                },
+                ast: AstMeta {
+                    span,
+                    enclosing_func: enclosing_func.map(|s| s.to_string()),
+                },
+                ..Default::default()
+            });
+
+            connect_all(g, &effective_preds, src_idx, EdgeKind::Seq);
+            effective_preds.clear();
+            effective_preds.push(src_idx);
+
+            bindings.push((pos, synth_name));
             continue;
-        };
+        }
 
-        // Use the *current* node count as a unique token — it equals the
-        // index the new Source node will receive.
-        let synth_name = format!("__nyx_src_{}_{}", g.node_count(), pos);
-        let member_text = first_member_text(*child, code);
-        let span = (child.start_byte(), child.end_byte());
+        // Pointer-Phase 6 / W5: pre-emit `__index_get__` Call nodes for
+        // subscript / index-expression args when pointer analysis is
+        // enabled.  This lets the W2/W4 container ELEM read hook fire
+        // on the synth call, propagating must/may/caps from the cell
+        // to the consuming sink call's argument.
+        //
+        // Gated on `pointer::is_enabled()` so the env-var=0 path keeps
+        // CFG shapes bit-identical to today's output.  Only fires when
+        // the array operand resolves to a plain identifier — see
+        // `subscript_components` for the bail conditions.
+        if pointer_on
+            && is_subscript_kind(child.kind())
+            && let Some((arr_text, idx_text)) = subscript_components(*child, code)
+        {
+            let synth_name = format!("__nyx_idxget_{}_{}", g.node_count(), pos);
+            let span = (child.start_byte(), child.end_byte());
 
-        let mut src_labels: SmallVec<[DataLabel; 2]> = SmallVec::new();
-        src_labels.push(DataLabel::Source(caps));
-
-        let src_idx = g.add_node(NodeInfo {
-            kind: StmtKind::Seq,
-            call: CallMeta {
-                callee: member_text,
+            let idx_node = g.add_node(NodeInfo {
+                kind: StmtKind::Call,
+                call: CallMeta {
+                    callee: Some("__index_get__".to_string()),
+                    receiver: Some(arr_text.clone()),
+                    arg_uses: vec![vec![idx_text.clone()]],
+                    ..Default::default()
+                },
+                taint: TaintMeta {
+                    defines: Some(synth_name.clone()),
+                    uses: vec![arr_text, idx_text],
+                    ..Default::default()
+                },
+                ast: AstMeta {
+                    span,
+                    enclosing_func: enclosing_func.map(|s| s.to_string()),
+                },
                 ..Default::default()
-            },
-            taint: TaintMeta {
-                labels: src_labels,
-                defines: Some(synth_name.clone()),
-                ..Default::default()
-            },
-            ast: AstMeta {
-                span,
-                enclosing_func: enclosing_func.map(|s| s.to_string()),
-            },
-            ..Default::default()
-        });
+            });
 
-        connect_all(g, &effective_preds, src_idx, EdgeKind::Seq);
-        effective_preds.clear();
-        effective_preds.push(src_idx);
+            connect_all(g, &effective_preds, idx_node, EdgeKind::Seq);
+            effective_preds.clear();
+            effective_preds.push(idx_node);
 
-        bindings.push((pos, synth_name));
+            bindings.push((pos, synth_name));
+        }
     }
 
     (effective_preds, bindings)
@@ -3255,6 +3365,24 @@ pub(super) fn build_sub<'a>(
                 );
             }
 
+            // Pointer-Phase 6 / W5: subscript-write lowering when the
+            // CallWrapper's inner expression is `arr[i] = v` (JS/TS,
+            // Python).  See `try_lower_subscript_write` for shape +
+            // bail matrix.
+            if crate::pointer::is_enabled()
+                && let Some(n) = try_lower_subscript_write(
+                    ast,
+                    preds,
+                    g,
+                    lang,
+                    code,
+                    enclosing_func,
+                    call_ordinal,
+                )
+            {
+                return vec![n];
+            }
+
             let has_call = has_call_descendant(ast, lang);
 
             let kind = if has_call {
@@ -3458,6 +3586,23 @@ pub(super) fn build_sub<'a>(
                         analysis_rules,
                     );
                 }
+            }
+
+            // Pointer-Phase 6 / W5: subscript-write lowering.  See
+            // `try_lower_subscript_write` for the per-language shape
+            // matrix and bail conditions.
+            if crate::pointer::is_enabled()
+                && let Some(n) = try_lower_subscript_write(
+                    ast,
+                    preds,
+                    g,
+                    lang,
+                    code,
+                    enclosing_func,
+                    call_ordinal,
+                )
+            {
+                return vec![n];
             }
 
             let has_call = has_call_descendant(ast, lang);
