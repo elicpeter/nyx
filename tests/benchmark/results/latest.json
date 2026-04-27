@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-26T21:17:41Z",
+  "timestamp": "2026-04-27T15:22:54Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:27b6c4cee560a2942c65739c74f29c36b8c0331669755b3aa43f1bfcb186bfce",
-  "corpus_size": 378,
-  "cases_run": 377,
+  "ground_truth_hash": "sha256:0279886764bb5412501cdb125178888e34642a73d112a2af2e7cc47920cce2db",
+  "corpus_size": 396,
+  "cases_run": 395,
   "cases_skipped": 1,
   "outcomes": [
     {
@@ -1551,6 +1551,27 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "go-auth-realrepo-001",
+      "file": "go/auth/vuln_repo_findbyid_no_auth.go",
+      "language": "go",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "go.auth.missing_ownership_check",
+        "go.auth.missing_ownership_check"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "go.auth.missing_ownership_check",
+        "go.auth.missing_ownership_check"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "go-cmdi-001",
       "file": "go/cmdi/cmdi_direct.go",
       "language": "go",
@@ -1615,6 +1636,29 @@
         "taint-unsanitised-flow (source 9:9)"
       ],
       "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-cmdi-004",
+      "file": "go/cmdi/cmdi_unvalidated_queue_element.go",
+      "language": "go",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "go.cmdi.exec_command",
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 13:22)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "go.cmdi.exec_command",
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 13:22)"
+      ],
+      "security_finding_count": 3,
       "non_security_finding_count": 0
     },
     {
@@ -1894,6 +1938,29 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "go-safe-009",
+      "file": "go/safe/safe_validated_queue_element.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "go.cmdi.exec_command",
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 17:31)"
+      ],
+      "all_finding_ids": [
+        "go.cmdi.exec_command",
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 17:31)"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "go-safe-014",
       "file": "go/safe/safe_direct_path_sanitizer.go",
       "language": "go",
@@ -2001,6 +2068,36 @@
     {
       "case_id": "go-safe-realrepo-003",
       "file": "go/safe/safe_const_bound_id.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-realrepo-004",
+      "file": "go/safe/safe_chained_call_response_header.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-realrepo-005",
+      "file": "go/safe/safe_self_method_receiver.go",
       "language": "go",
       "vuln_class": "safe",
       "is_vulnerable": false,
@@ -2740,6 +2837,21 @@
     {
       "case_id": "js-allowlist-dispatch-001",
       "file": "javascript/safe/safe_switch_dispatch.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-auth-realrepo-001",
+      "file": "javascript/auth/safe_req_user_id_copy.js",
       "language": "javascript",
       "vuln_class": "safe",
       "is_vulnerable": false,
@@ -3885,6 +3997,70 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "py-auth-realrepo-001",
+      "file": "python/safe/safe_django_migration_token.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-auth-realrepo-002",
+      "file": "python/safe/safe_pytest_conftest_marker.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-auth-realrepo-003",
+      "file": "python/safe/safe_celery_task_no_user_input.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-auth-realrepo-004",
+      "file": "python/auth/vuln_token_override_django_handler.py",
+      "language": "python",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.auth.token_override_without_validation"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "py.auth.token_override_without_validation"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "py-cmdi-001",
       "file": "python/cmdi/cmdi_direct.py",
       "language": "python",
@@ -4553,14 +4729,14 @@
       "vuln_class": "sqli",
       "is_vulnerable": true,
       "outcome_file_level": "TP",
-      "outcome_rule_level": "FN",
-      "outcome_location_level": "FN",
-      "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "cfg-unguarded-sink"
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 8:3)"
       ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "cfg-unguarded-sink"
+        "taint-unsanitised-flow (source 8:3)"
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 0
@@ -4788,6 +4964,64 @@
       "all_finding_ids": [],
       "security_finding_count": 0,
       "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-108",
+      "file": "rust/auth/row_fetch_then_authorize.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.todo",
+        "rs.quality.todo"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 2
+    },
+    {
+      "case_id": "rs-auth-109",
+      "file": "rust/auth/predicate_role_check.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.todo"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "rs-auth-110",
+      "file": "rust/auth/unsafe_row_fetch_no_authz.rs",
+      "language": "rust",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "rs.auth.missing_ownership_check",
+        "rs.auth.missing_ownership_check"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.todo",
+        "rs.quality.todo",
+        "rs.auth.missing_ownership_check",
+        "rs.auth.missing_ownership_check"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 2
     },
     {
       "case_id": "rs-auth-dto-int-field-001",
@@ -6076,6 +6310,91 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "ts-auth-realrepo-001",
+      "file": "typescript/auth/safe_session_user_id_copy.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-auth-realrepo-002",
+      "file": "typescript/auth/vuln_target_user_id_no_check.ts",
+      "language": "typescript",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "js.auth.missing_ownership_check"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "ts.quality.any_annotation",
+        "ts.quality.any_annotation",
+        "js.auth.missing_ownership_check"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 2
+    },
+    {
+      "case_id": "ts-auth-realrepo-003",
+      "file": "typescript/auth/safe_destructured_session_user.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-auth-realrepo-004",
+      "file": "typescript/auth/safe_trpc_ctx_user_options.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-auth-realrepo-005",
+      "file": "typescript/auth/vuln_trpc_ctx_input_id_no_check.ts",
+      "language": "typescript",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "js.auth.missing_ownership_check"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "js.auth.missing_ownership_check"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "ts-cmdi-001",
       "file": "typescript/cmdi/cmdi_exec_template.ts",
       "language": "typescript",
@@ -6803,22 +7122,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 192,
-    "fp": 0,
+    "tp": 198,
+    "fp": 1,
     "fn_": 0,
-    "tn": 185,
-    "precision": 1.0,
+    "tn": 196,
+    "precision": 0.9949748743718593,
     "recall": 1.0,
-    "f1": 1.0
+    "f1": 0.9974811083123425
   },
   "aggregate_rule_level": {
-    "tp": 191,
-    "fp": 0,
-    "fn_": 1,
-    "tn": 185,
-    "precision": 1.0,
-    "recall": 0.9947916666666666,
-    "f1": 0.9973890339425587
+    "tp": 198,
+    "fp": 1,
+    "fn_": 0,
+    "tn": 196,
+    "precision": 0.9949748743718593,
+    "recall": 1.0,
+    "f1": 0.9974811083123425
   },
   "by_language": {
     "c": {
@@ -6840,13 +7159,13 @@
       "f1": 1.0
     },
     "go": {
-      "tp": 18,
-      "fp": 0,
+      "tp": 20,
+      "fp": 1,
       "fn_": 0,
-      "tn": 20,
-      "precision": 1.0,
+      "tn": 22,
+      "precision": 0.9523809523809523,
       "recall": 1.0,
-      "f1": 1.0
+      "f1": 0.975609756097561
     },
     "java": {
       "tp": 16,
@@ -6861,7 +7180,7 @@
       "tp": 17,
       "fp": 0,
       "fn_": 0,
-      "tn": 20,
+      "tn": 21,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -6876,37 +7195,37 @@
       "f1": 1.0
     },
     "python": {
-      "tp": 22,
+      "tp": 23,
       "fp": 0,
       "fn_": 0,
-      "tn": 20,
+      "tn": 23,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
     },
     "ruby": {
-      "tp": 13,
-      "fp": 0,
-      "fn_": 1,
-      "tn": 16,
-      "precision": 1.0,
-      "recall": 0.9285714285714286,
-      "f1": 0.962962962962963
-    },
-    "rust": {
-      "tp": 30,
+      "tp": 14,
       "fp": 0,
       "fn_": 0,
-      "tn": 32,
+      "tn": 16,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "rust": {
+      "tp": 31,
+      "fp": 0,
+      "fn_": 0,
+      "tn": 34,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
     },
     "typescript": {
-      "tp": 27,
+      "tp": 29,
       "fp": 0,
       "fn_": 0,
-      "tn": 15,
+      "tn": 18,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -6914,7 +7233,7 @@
   },
   "by_vuln_class": {
     "auth": {
-      "tp": 5,
+      "tp": 10,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -6932,7 +7251,7 @@
       "f1": 1.0
     },
     "cmdi": {
-      "tp": 54,
+      "tp": 55,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -7032,12 +7351,12 @@
     },
     "safe": {
       "tp": 0,
-      "fp": 0,
+      "fp": 1,
       "fn_": 0,
-      "tn": 185,
-      "precision": 1.0,
+      "tn": 196,
+      "precision": 0.0,
       "recall": 1.0,
-      "f1": 1.0
+      "f1": 0.0
     },
     "secrets": {
       "tp": 1,
@@ -7049,13 +7368,13 @@
       "f1": 1.0
     },
     "sqli": {
-      "tp": 25,
+      "tp": 26,
       "fp": 0,
-      "fn_": 1,
+      "fn_": 0,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.9615384615384616,
-      "f1": 0.9803921568627451
+      "recall": 1.0,
+      "f1": 1.0
     },
     "ssrf": {
       "tp": 22,
@@ -7078,31 +7397,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 81,
-      "fp": 93,
-      "fn_": 111,
-      "tn": 92,
-      "precision": 0.46551724137931033,
-      "recall": 0.421875,
-      "f1": 0.4426229508196722
+      "tp": 84,
+      "fp": 87,
+      "fn_": 114,
+      "tn": 110,
+      "precision": 0.49122807017543857,
+      "recall": 0.42424242424242425,
+      "f1": 0.4552845528455284
     },
     ">=Low": {
-      "tp": 83,
+      "tp": 86,
       "fp": 99,
-      "fn_": 109,
-      "tn": 86,
-      "precision": 0.45604395604395603,
-      "recall": 0.4322916666666667,
-      "f1": 0.44385026737967914
+      "fn_": 112,
+      "tn": 98,
+      "precision": 0.4648648648648649,
+      "recall": 0.43434343434343436,
+      "f1": 0.44908616187989553
     },
     ">=Medium": {
-      "tp": 83,
+      "tp": 86,
       "fp": 99,
-      "fn_": 109,
-      "tn": 86,
-      "precision": 0.45604395604395603,
-      "recall": 0.4322916666666667,
-      "f1": 0.44385026737967914
+      "fn_": 112,
+      "tn": 98,
+      "precision": 0.4648648648648649,
+      "recall": 0.43434343434343436,
+      "f1": 0.44908616187989553
     }
   }
 }

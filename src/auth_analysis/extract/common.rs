@@ -15,11 +15,12 @@ pub fn collect_top_level_units(
     rules: &AuthAnalysisRules,
     model: &mut AuthorizationModel,
 ) {
+    let file_meta = FileMeta::scan(root, bytes);
     for idx in 0..root.named_child_count() {
         let Some(child) = root.named_child(idx as u32) else {
             continue;
         };
-        collect_top_level_from_node(child, bytes, rules, model);
+        collect_top_level_from_node(child, bytes, rules, model, &file_meta);
     }
 }
 
@@ -28,6 +29,7 @@ fn collect_top_level_from_node(
     bytes: &[u8],
     rules: &AuthAnalysisRules,
     model: &mut AuthorizationModel,
+    file_meta: &FileMeta,
 ) {
     match node.kind() {
         "function_declaration"
@@ -36,24 +38,26 @@ fn collect_top_level_from_node(
         | "function_item"
         | "method"
         | "singleton_method" => {
-            model.units.push(build_function_unit(
+            model.units.push(build_function_unit_with_meta(
                 node,
                 AnalysisUnitKind::Function,
                 function_name(node, bytes),
                 bytes,
                 rules,
+                Some(file_meta),
             ));
         }
         "decorated_definition"
             if decorated_definition_child(node)
                 .is_some_and(|definition| definition.kind() == "function_definition") =>
         {
-            model.units.push(build_function_unit(
+            model.units.push(build_function_unit_with_meta(
                 node,
                 AnalysisUnitKind::Function,
                 function_name(node, bytes),
                 bytes,
                 rules,
+                Some(file_meta),
             ));
         }
         "lexical_declaration" | "variable_declaration" => {
@@ -62,7 +66,8 @@ fn collect_top_level_from_node(
                     continue;
                 };
                 if child.kind() == "variable_declarator"
-                    && let Some(unit) = function_unit_from_var_declarator(child, bytes, rules)
+                    && let Some(unit) =
+                        function_unit_from_var_declarator(child, bytes, rules, Some(file_meta))
                 {
                     model.units.push(unit);
                 }
@@ -74,7 +79,7 @@ fn collect_top_level_from_node(
                     continue;
                 };
                 if child.is_named() {
-                    collect_top_level_from_node(child, bytes, rules, model);
+                    collect_top_level_from_node(child, bytes, rules, model, file_meta);
                 }
             }
         }
@@ -84,7 +89,7 @@ fn collect_top_level_from_node(
                 let Some(child) = node.named_child(idx as u32) else {
                     continue;
                 };
-                collect_top_level_from_node(child, bytes, rules, model);
+                collect_top_level_from_node(child, bytes, rules, model, file_meta);
             }
         }
         _ => {}
@@ -95,6 +100,7 @@ fn function_unit_from_var_declarator(
     node: Node<'_>,
     bytes: &[u8],
     rules: &AuthAnalysisRules,
+    file_meta: Option<&FileMeta>,
 ) -> Option<AnalysisUnit> {
     let value = node.child_by_field_name("value")?;
     if !is_function_like(value) {
@@ -104,12 +110,13 @@ fn function_unit_from_var_declarator(
         .child_by_field_name("name")
         .map(|n| text(n, bytes))
         .filter(|s| !s.is_empty());
-    Some(build_function_unit(
+    Some(build_function_unit_with_meta(
         value,
         AnalysisUnitKind::Function,
         name,
         bytes,
         rules,
+        file_meta,
     ))
 }
 
@@ -137,12 +144,18 @@ pub fn attach_route_handler(
 ) -> Option<ResolvedHandler> {
     let handler_node = resolve_handler_node(root, handler_expr, bytes)?;
     let unit_idx = model.units.len();
-    let unit = build_function_unit(
+    // `attach_route_handler` is called by route-aware extractors (express,
+    // koa, fastify, axum, …) which already hold the file root.  Build
+    // the FileMeta once here so the JS/TS TRPC pre-scan only walks the
+    // top-level decl set per file (instead of per route).
+    let file_meta = FileMeta::scan(root, bytes);
+    let unit = build_function_unit_with_meta(
         handler_node,
         AnalysisUnitKind::RouteHandler,
         Some(route_name),
         bytes,
         rules,
+        Some(&file_meta),
     );
     let params = unit.params.clone();
     let line = handler_node.start_position().row + 1;
@@ -154,6 +167,24 @@ pub fn attach_route_handler(
         params,
         line,
     })
+}
+
+/// Per-file metadata gathered once at the top of
+/// [`collect_top_level_units`] / [`attach_route_handler`] and passed
+/// down through unit construction.  Currently carries the set of TS
+/// type-alias names whose body references a TRPC-marker type; future
+/// fields can be added without changing the per-unit signature.
+#[derive(Default, Debug, Clone)]
+pub struct FileMeta {
+    pub trpc_alias_names: HashSet<String>,
+}
+
+impl FileMeta {
+    pub fn scan(root: Node<'_>, bytes: &[u8]) -> Self {
+        let mut trpc_alias_names = HashSet::new();
+        scan_trpc_aliases_visit(root, bytes, &mut trpc_alias_names);
+        Self { trpc_alias_names }
+    }
 }
 
 pub fn push_route_registration(
@@ -311,10 +342,44 @@ pub fn build_function_unit(
     bytes: &[u8],
     rules: &AuthAnalysisRules,
 ) -> AnalysisUnit {
+    build_function_unit_with_meta(node, kind, name, bytes, rules, None)
+}
+
+/// Internal variant of [`build_function_unit`] that accepts a
+/// pre-computed file-level [`FileMeta`].  When `file_meta` is
+/// `Some`, its `trpc_alias_names` set is copied into `UnitState`
+/// once per unit so the per-parameter pre-pass doesn't re-scan the
+/// source-file root.  Pre-built `FileMeta` is required to keep
+/// `tests/hostile_input_tests::many_small_functions_do_not_explode`
+/// inside its 15s budget on N×N files.
+pub fn build_function_unit_with_meta(
+    node: Node<'_>,
+    kind: AnalysisUnitKind,
+    name: Option<String>,
+    bytes: &[u8],
+    rules: &AuthAnalysisRules,
+    file_meta: Option<&FileMeta>,
+) -> AnalysisUnit {
     let definition = function_definition_node(node);
     let params = function_params(definition, bytes);
     let line = node.start_position().row + 1;
     let mut state = UnitState::default();
+    // Seed Go's method-receiver name (`func (c *Cache) ...` → `c`) into
+    // `non_sink_vars` so calls of the form `c.foo(..)` /
+    // `c.field.foo(..)` route through the in-memory-local sink class
+    // and skip the verb-name fallback.  These are intra-struct
+    // dispatches; without type tracking, the auth analyser cannot tell
+    // a `*Cache` field-call from a `*sql.DB` call by name alone, so we
+    // err on the safe side per the deferred memo
+    // (`project_realrepo_hugo.md`).  Only Go's `method_declaration`
+    // exposes a `receiver` field — Rust/Java instance methods route
+    // through `self`/`this` keywords and are unaffected.
+    if let Some(receiver_name) = method_receiver_name(definition, bytes) {
+        state.non_sink_vars.insert(receiver_name);
+    }
+    if let Some(meta) = file_meta {
+        state.trpc_alias_names = meta.trpc_alias_names.clone();
+    }
     collect_unit_state(node, bytes, rules, &mut state);
     dedup_value_refs(&mut state.value_refs);
     let context_inputs: Vec<ValueRef> = state
@@ -345,12 +410,14 @@ pub fn build_function_unit(
         condition_texts: state.condition_texts,
         line,
         row_field_vars: state.row_field_vars,
+        row_population_data: state.row_population_data,
         self_actor_vars: state.self_actor_vars,
         self_actor_id_vars: state.self_actor_id_vars,
         authorized_sql_vars: state.authorized_sql_vars,
         const_bound_vars: state.const_bound_vars,
         typed_bounded_vars: HashSet::new(),
         typed_bounded_dto_fields: std::collections::HashMap::new(),
+        self_scoped_session_bases: state.self_scoped_session_bases,
     }
 }
 
@@ -413,6 +480,22 @@ struct UnitState {
     /// `go.auth.missing_ownership_check` because the local `id`
     /// matched `is_id_like` but had no actor-context exemption.
     const_bound_vars: HashSet<String>,
+    /// Dynamic per-unit session-base set lifted into the
+    /// `AnalysisUnit` of the same name.  Populated by
+    /// [`collect_trpc_ctx_param`] when a TS parameter's type
+    /// references a TRPC-shaped Options alias.  See the field doc on
+    /// [`crate::auth_analysis::model::AnalysisUnit::self_scoped_session_bases`].
+    self_scoped_session_bases: HashSet<String>,
+    /// File-level set of TS type-alias names whose body references a
+    /// TRPC-marker type (`TrpcSessionUser` etc.).  Populated once per
+    /// unit at the top of [`build_function_unit`] by walking up to
+    /// the source-file root and scanning every
+    /// `type_alias_declaration` / `interface_declaration`.  Read by
+    /// [`collect_trpc_ctx_param`] to decide whether a parameter's
+    /// type annotation (often just an alias name like `GetOptions`)
+    /// resolves to a TRPC handler signature.  Empty for non-TS
+    /// languages — the scanner only matches TS-grammar node kinds.
+    trpc_alias_names: HashSet<String>,
 }
 
 fn collect_unit_state(
@@ -449,17 +532,28 @@ fn collect_unit_state(
             propagate_sql_authorized_through_field_read(node, bytes, state);
             collect_const_string_binding(node, bytes, state);
         }
-        // Go `id := "id"` / Python `id = "id"` / JS `const id = "id"` /
-        // Java `String id = "id";` / Ruby `id = "id"` — language-
-        // specific binding nodes that the let_declaration arm above
-        // doesn't catch.  Const-only — never marks self_actor /
-        // row_field / sql vars (those need richer right-hand-side
-        // analysis already provided by the let_declaration arm).
+        // JS/TS `variable_declarator` inside `lexical_declaration`
+        // (`const X = ...`, `let X = ...`) — exposes `name` + `value`
+        // fields. Run the same self-actor / self-actor-id binding
+        // recognition as the Rust `let_declaration` arm above so the
+        // session-self-actor copy chain (`const session = await
+        // getServerSession(...)`; `const userId = session.user.id`)
+        // populates `self_actor_vars` / `self_actor_id_vars`.
+        "variable_declarator" => {
+            collect_self_actor_binding(node, bytes, rules, state);
+            collect_self_actor_id_binding(node, bytes, state);
+            collect_const_string_binding(node, bytes, state);
+        }
+        // Go `id := "id"` / Python `id = "id"` / Java `String id = "id";` /
+        // Ruby `id = "id"` — language-specific binding nodes that the
+        // let_declaration arm above doesn't catch.  Const-only — never
+        // marks self_actor / row_field / sql vars (those need richer
+        // right-hand-side analysis already provided by the
+        // let_declaration arm).
         "short_var_declaration"
         | "const_declaration"
         | "var_declaration"
         | "var_spec"
-        | "variable_declarator"
         | "lexical_declaration"
         | "local_variable_declaration"
         | "assignment"
@@ -473,6 +567,14 @@ fn collect_unit_state(
         }
         "parameter" => {
             collect_typed_extractor_self_actor(node, bytes, state);
+        }
+        // TS `required_parameter` / `optional_parameter` — the analogous
+        // arm to Rust's `parameter`.  Recognise TRPC-shaped Options
+        // params (`{ ctx, input }: GetOptions`) and add the destructured
+        // ctx-base to `self_scoped_session_bases` so downstream
+        // `ctx.user.id` accesses count as actor context.
+        "required_parameter" | "optional_parameter" => {
+            collect_trpc_ctx_param(node, bytes, state);
         }
         _ => {}
     }
@@ -778,20 +880,399 @@ fn collect_self_actor_binding(
     rules: &AuthAnalysisRules,
     state: &mut UnitState,
 ) {
-    let Some(pattern) = node.child_by_field_name("pattern") else {
+    // Rust `let_declaration` exposes `pattern`; JS/TS
+    // `variable_declarator` exposes `name`. Try both so the same
+    // recognition fires across languages.
+    let Some(pattern) = node
+        .child_by_field_name("pattern")
+        .or_else(|| node.child_by_field_name("name"))
+    else {
         return;
     };
+    let Some(value) = node.child_by_field_name("value") else {
+        return;
+    };
+
+    // Destructuring: `const { user } = ctx.session;` /
+    // `const { user } = await getServerSession();` /
+    // `const { id } = req.user;`.  These bind LOCAL variables that are
+    // semantically the actor (or the actor's id), and the existing
+    // single-ident path can't see them because `first_identifier_name`
+    // either picks the wrong key when several are destructured or
+    // misses the session-container RHS shape entirely.
+    if pattern.kind() == "object_pattern" {
+        collect_destructured_self_actor_binding(pattern, value, bytes, rules, state);
+        return;
+    }
+
     let Some(var_name) = first_identifier_name(pattern, bytes) else {
         return;
     };
     if var_name.is_empty() {
         return;
     }
-    let Some(value) = node.child_by_field_name("value") else {
-        return;
-    };
     if value_is_self_actor_call(value, bytes, rules) {
         state.self_actor_vars.insert(var_name);
+    }
+}
+
+/// Pattern is `object_pattern` (JS/TS destructure).  Walk the keys and
+/// classify the RHS to decide what each destructured local should
+/// register as:
+///
+/// * `const { user } = ctx.session` / `const { user } = await
+///   getServerSession()` — RHS is a session container, so a
+///   destructured `user` (or `currentUser`) becomes the unit's
+///   self-actor binding.
+/// * `const { id } = req.user` / `const { userId } = session.user` —
+///   RHS is the canonical authed-user base from
+///   `is_self_scoped_session_base_text`, so a destructured `id` /
+///   `userId` / `user_id` / `uid` becomes a self-actor-id binding.
+/// * `const { user } = await loginGuardCall()` — also accepted
+///   because `value_is_self_actor_call` already covers the
+///   `let user = require_auth(..)` shape; we lift that recognition
+///   into the destructure case so callers can extract the actor in a
+///   single statement.
+///
+/// Each `pair_pattern` entry distinguishes the destructured KEY (the
+/// shape of the RHS source) from the bound LOCAL (what we add to the
+/// state set).  Shorthand patterns reuse the key as the local.
+fn collect_destructured_self_actor_binding(
+    pattern: Node<'_>,
+    value: Node<'_>,
+    bytes: &[u8],
+    rules: &AuthAnalysisRules,
+    state: &mut UnitState,
+) {
+    // Two recognition paths run in sequence:
+    //   1. Static classify_destructure_rhs: hard-coded session-container
+    //      / self-actor-base / self-actor-call shapes.
+    //   2. Dynamic self_scoped_session_bases lookup: if the RHS is a
+    //      chain (or bare identifier) `<X>` and `<X>.user` was added to
+    //      `self_scoped_session_bases` by an earlier TRPC param scan,
+    //      the destructured `user` key is the actor.  Closes the
+    //      cal.com `({ ctx, input }: Options) => { const { user } = ctx; }`
+    //      shape where ctx is the TRPC-typed param.
+    let kind = classify_destructure_rhs(value, bytes, rules);
+    let trpc_ctx_path = lookup_trpc_ctx_destructure_match(value, bytes, state);
+
+    if kind == DestructureRhsKind::None && trpc_ctx_path.is_none() {
+        return;
+    }
+
+    for idx in 0..pattern.named_child_count() {
+        let Some(child) = pattern.named_child(idx as u32) else {
+            continue;
+        };
+        let (key, local) = match child.kind() {
+            // `{ user }` — key and local are the same identifier.
+            "shorthand_property_identifier_pattern" => {
+                let name = text(child, bytes);
+                (name.clone(), name)
+            }
+            // `{ user = default }` — left is the shorthand key/local.
+            "object_assignment_pattern" => {
+                let Some(left) = child.child_by_field_name("left") else {
+                    continue;
+                };
+                let name = if matches!(
+                    left.kind(),
+                    "identifier" | "shorthand_property_identifier_pattern"
+                ) {
+                    text(left, bytes)
+                } else {
+                    first_identifier_name(left, bytes).unwrap_or_default()
+                };
+                (name.clone(), name)
+            }
+            // `{ user: localName }` — `key` and `value` fields are
+            // distinct (key from RHS source, local in our scope).
+            "pair_pattern" => {
+                let key_node = child.child_by_field_name("key");
+                let local_node = child.child_by_field_name("value");
+                let (Some(k), Some(v)) = (key_node, local_node) else {
+                    continue;
+                };
+                let key = text(k, bytes);
+                let local = first_identifier_name(v, bytes).unwrap_or_default();
+                (key, local)
+            }
+            _ => continue,
+        };
+        if kind != DestructureRhsKind::None {
+            process_destructure_entry(&key, &local, kind, state);
+        }
+        // Dynamic-set lift: when the RHS resolves to an `<X>` whose
+        // `<X>.user` was added to `self_scoped_session_bases`, the
+        // destructured `user` key is the actor.  This closes the
+        // chained TRPC shape `({ ctx }: Options) => { const { user }
+        // = ctx; }` where the param-level pre-pass marked `ctx.user`
+        // earlier in the unit.
+        if let Some(rhs_path) = trpc_ctx_path.as_deref()
+            && key.eq_ignore_ascii_case("user")
+            && !local.is_empty()
+        {
+            let _ = rhs_path; // path itself is not stored; presence is the signal
+            state.self_actor_vars.insert(local);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestructureRhsKind {
+    /// RHS is a session container — the destructured `user` field
+    /// resolves to the authenticated actor.  Examples: `ctx.session`,
+    /// `req.session`, `session`, `await getServerSession()`,
+    /// `getSession()`.
+    SessionContainer,
+    /// RHS is the authed-user base itself (`req.user`, `session.user`,
+    /// `ctx.session.user`).  A destructured `id` field is the actor's
+    /// own id.
+    SelfActorBase,
+    /// RHS is not a session/actor source — destructure is irrelevant
+    /// for self-actor recognition.
+    None,
+}
+
+/// When the destructure RHS is `<chain>` (an identifier or member
+/// chain), return `Some(chain_text)` if `<chain_text>.user` was added
+/// to `state.self_scoped_session_bases` by an earlier
+/// `collect_trpc_ctx_param` call.  Used to mark the destructured
+/// `user` shorthand as a self-actor binding when extracting it from a
+/// TRPC ctx param's local — `({ ctx }: Options) => { const { user }
+/// = ctx; }`.
+fn lookup_trpc_ctx_destructure_match(
+    node: Node<'_>,
+    bytes: &[u8],
+    state: &UnitState,
+) -> Option<String> {
+    if state.self_scoped_session_bases.is_empty() {
+        return None;
+    }
+    let chain_text = chain_text_from_value(node, bytes)?;
+    if chain_text.is_empty() {
+        return None;
+    }
+    let candidate = format!("{chain_text}.user");
+    if state.self_scoped_session_bases.contains(&candidate) {
+        Some(chain_text)
+    } else {
+        None
+    }
+}
+
+/// Reduce an RHS expression to its dotted chain text, walking through
+/// `await`/parens/non-null wrappers.  Returns `None` for shapes that
+/// aren't a pure identifier/member-chain (e.g. a call result, a
+/// template literal, an object-literal expression).
+fn chain_text_from_value(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    match node.kind() {
+        "identifier" => {
+            let t = text(node, bytes);
+            if t.is_empty() { None } else { Some(t) }
+        }
+        "field_expression"
+        | "member_expression"
+        | "field_access"
+        | "scoped_identifier" => {
+            let chain = member_chain(node, bytes);
+            if chain.is_empty() {
+                None
+            } else {
+                Some(chain.join("."))
+            }
+        }
+        "type_cast_expression"
+        | "as_expression"
+        | "cast_expression"
+        | "parenthesized_expression"
+        | "non_null_expression"
+        | "await_expression"
+        | "try_expression" => {
+            let inner = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("expression"));
+            if let Some(v) = inner
+                && let Some(t) = chain_text_from_value(v, bytes)
+            {
+                return Some(t);
+            }
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if let Some(t) = chain_text_from_value(child, bytes) {
+                    return Some(t);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn classify_destructure_rhs(
+    node: Node<'_>,
+    bytes: &[u8],
+    rules: &AuthAnalysisRules,
+) -> DestructureRhsKind {
+    if value_is_self_actor_call(node, bytes, rules) {
+        return DestructureRhsKind::SessionContainer;
+    }
+    if value_is_session_provider_chain(node, bytes) {
+        return DestructureRhsKind::SessionContainer;
+    }
+    if value_is_self_actor_base_chain(node, bytes) {
+        return DestructureRhsKind::SelfActorBase;
+    }
+    DestructureRhsKind::None
+}
+
+fn process_destructure_entry(
+    key: &str,
+    local: &str,
+    kind: DestructureRhsKind,
+    state: &mut UnitState,
+) {
+    if key.is_empty() || local.is_empty() {
+        return;
+    }
+    let key_lower = key.to_ascii_lowercase();
+    match kind {
+        DestructureRhsKind::SessionContainer => {
+            if matches!(
+                key_lower.as_str(),
+                "user" | "currentuser" | "current_user"
+            ) {
+                state.self_actor_vars.insert(local.to_string());
+            }
+        }
+        DestructureRhsKind::SelfActorBase => {
+            if matches!(key_lower.as_str(), "id" | "userid" | "user_id" | "uid") {
+                state.self_actor_id_vars.insert(local.to_string());
+            }
+        }
+        DestructureRhsKind::None => {}
+    }
+}
+
+/// True when `node` (after walking through `await`/parens/non-null
+/// wrappers) is a session-container expression — a chain ending in
+/// `.session` / `.state.session` / a bare `session` identifier, or a
+/// call to a known session-getter (`getServerSession()`,
+/// `getSession()`).  Distinct from `value_is_self_actor_call` which
+/// matches login-guard / authorization-check callees configured per
+/// language.
+fn value_is_session_provider_chain(node: Node<'_>, bytes: &[u8]) -> bool {
+    match node.kind() {
+        "field_expression" | "member_expression" | "field_access" | "scoped_identifier" => {
+            let chain = member_chain(node, bytes);
+            if chain.is_empty() {
+                return false;
+            }
+            let joined = chain.join(".");
+            // Bare session containers — `ctx.session`, `req.session`,
+            // `request.session`, plus the Koa `ctx.state` shape.
+            matches!(
+                joined.as_str(),
+                "ctx.session"
+                    | "ctx.state"
+                    | "req.session"
+                    | "request.session"
+                    | "session"
+            )
+        }
+        "identifier" => {
+            let name = text(node, bytes);
+            matches!(name.as_str(), "session")
+        }
+        // Known session-getter calls.  Conservative list — only
+        // recogniser shapes that are unambiguously session-providing
+        // in the JS/TS ecosystem (NextAuth's `getServerSession` is the
+        // dominant one).  `auth()` and `useSession()` are deliberately
+        // omitted because their meaning is ambiguous outside of a
+        // server-component context and adding them risks
+        // over-suppression in non-NextAuth code.
+        "call_expression" | "call" => {
+            let callee = call_name(node, bytes);
+            let last = bare_method_name(&callee);
+            matches!(
+                last,
+                "getServerSession"
+                    | "getSession"
+                    | "getServerSideSession"
+                    | "unstable_getServerSession"
+            )
+        }
+        "type_cast_expression"
+        | "as_expression"
+        | "cast_expression"
+        | "parenthesized_expression"
+        | "non_null_expression"
+        | "await_expression"
+        | "try_expression" => {
+            let inner = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("expression"));
+            if let Some(v) = inner
+                && value_is_session_provider_chain(v, bytes)
+            {
+                return true;
+            }
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if value_is_session_provider_chain(child, bytes) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// True when `node` is the canonical authed-user base from
+/// `is_self_scoped_session_base_text` (e.g. `req.user`, `session.user`,
+/// `ctx.session.user`).  Used to recognise `const { id } = req.user`
+/// so the destructured `id` becomes a self-actor-id.
+fn value_is_self_actor_base_chain(node: Node<'_>, bytes: &[u8]) -> bool {
+    match node.kind() {
+        "field_expression" | "member_expression" | "field_access" | "scoped_identifier" => {
+            let chain = member_chain(node, bytes);
+            if chain.is_empty() {
+                return false;
+            }
+            let joined = chain.join(".");
+            is_self_scoped_session_base_text(&joined)
+        }
+        "type_cast_expression"
+        | "as_expression"
+        | "cast_expression"
+        | "parenthesized_expression"
+        | "non_null_expression"
+        | "await_expression"
+        | "try_expression" => {
+            let inner = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("expression"));
+            if let Some(v) = inner
+                && value_is_self_actor_base_chain(v, bytes)
+            {
+                return true;
+            }
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if value_is_self_actor_base_chain(child, bytes) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
     }
 }
 
@@ -1031,7 +1512,12 @@ fn collect_lhs_idents(node: Node<'_>, bytes: &[u8]) -> Vec<String> {
 /// The original `V.id`-shape recognition only covered direct subject
 /// expressions; this captures the common copy-and-pass shape.
 fn collect_self_actor_id_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
-    let Some(pattern) = node.child_by_field_name("pattern") else {
+    // Rust `let_declaration` exposes `pattern`; JS/TS
+    // `variable_declarator` exposes `name`.
+    let Some(pattern) = node
+        .child_by_field_name("pattern")
+        .or_else(|| node.child_by_field_name("name"))
+    else {
         return;
     };
     let Some(var_name) = first_identifier_name(pattern, bytes) else {
@@ -1043,7 +1529,9 @@ fn collect_self_actor_id_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitS
     let Some(value) = node.child_by_field_name("value") else {
         return;
     };
-    if value_is_self_actor_id_field(value, bytes, &state.self_actor_vars) {
+    if value_is_self_actor_id_field(value, bytes, &state.self_actor_vars)
+        || value_is_self_scoped_session_id_chain(value, bytes)
+    {
         state.self_actor_id_vars.insert(var_name);
     }
 }
@@ -1134,6 +1622,111 @@ fn is_self_actor_id_field_name(field: &str) -> bool {
     matches!(
         lower.as_str(),
         "id" | "user_id" | "userid" | "uid" | "email" | "username" | "handle"
+    )
+}
+
+/// Recognise `let X = session.user.id` (or
+/// `req.session.user.id` / `ctx.session.user.id` / `req.user.id` /
+/// `request.user.id`, etc.) — a copy of the authenticated actor's
+/// own id field through one of the canonical session-context chains
+/// (the same set `is_self_scoped_session_subject` accepts at use
+/// time). Walks through wrappers (`await`, `?.`, parens, casts,
+/// trivial method chains like `.toString()`).
+///
+/// Closes a real-repo FP cluster (cal.com Next.js handlers): the
+/// idiomatic shape is `if (session?.user?.id) { const userId =
+/// session.user.id; await repo.get(userId); }`. The use site sees
+/// a plain `userId` subject, so without binding-time recognition the
+/// classifier can't tell it's actor context.
+fn value_is_self_scoped_session_id_chain(node: Node<'_>, bytes: &[u8]) -> bool {
+    match node.kind() {
+        "field_expression" | "member_expression" | "field_access" | "scoped_identifier" => {
+            // Build the dotted chain and reuse the same predicate the
+            // subject classifier uses (`matches_session_context` +
+            // self-scoped-base check). Doing it via the chain avoids
+            // re-implementing the session-context grammar here.
+            let chain = member_chain(node, bytes);
+            if chain.len() < 2 {
+                return false;
+            }
+            let field = chain.last().expect("len >= 2");
+            if !is_self_actor_id_field_name(field) {
+                return false;
+            }
+            let base_chain = &chain[..chain.len() - 1];
+            let base = base_chain.join(".");
+            classify_member_chain(base_chain) == ValueSourceKind::Session
+                && is_self_scoped_session_base_text(&base)
+        }
+        "type_cast_expression"
+        | "as_expression"
+        | "cast_expression"
+        | "parenthesized_expression"
+        | "try_expression"
+        | "await_expression"
+        | "reference_expression"
+        | "non_null_expression" => {
+            let value = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("expression"));
+            if let Some(v) = value
+                && value_is_self_scoped_session_id_chain(v, bytes)
+            {
+                return true;
+            }
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if value_is_self_scoped_session_id_chain(child, bytes) {
+                    return true;
+                }
+            }
+            false
+        }
+        // `(req.user.id as number).toString()` / `session.user.id.toString()`
+        "call_expression" | "call" | "method_invocation" | "method_call_expression" => {
+            let receiver = node
+                .child_by_field_name("function")
+                .or_else(|| node.child_by_field_name("object"));
+            if let Some(r) = receiver {
+                if value_is_self_scoped_session_id_chain(r, bytes) {
+                    return true;
+                }
+                if let Some(inner) = r
+                    .child_by_field_name("value")
+                    .or_else(|| r.child_by_field_name("object"))
+                    && value_is_self_scoped_session_id_chain(inner, bytes)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// String-level analogue of `is_self_scoped_session_base` from
+/// `checks.rs`. Kept here in the extract layer to avoid a layer
+/// dependency; the two lists must stay in sync.
+fn is_self_scoped_session_base_text(base: &str) -> bool {
+    matches!(
+        base,
+        "req.session.user"
+            | "request.session.user"
+            | "session.user"
+            | "req.session.currentUser"
+            | "request.session.currentUser"
+            | "session.currentUser"
+            | "req.user"
+            | "request.user"
+            | "req.currentUser"
+            | "request.currentUser"
+            | "ctx.session.user"
+            | "ctx.session.currentUser"
+            | "ctx.state.user"
+            | "ctx.state.currentUser"
     )
 }
 
@@ -1910,6 +2503,238 @@ fn function_params(node: Node<'_>, bytes: &[u8]) -> Vec<String> {
     let mut params = Vec::new();
     collect_param_names(params_node, bytes, &mut params);
     params
+}
+
+/// Walk the tree starting at `node` and gather TS type-alias /
+/// interface names whose body references a TRPC-marker type
+/// (`TrpcSessionUser`, `TRPCContext`, …).  Recurses only through
+/// container kinds that legitimately host top-level type aliases
+/// (`program` / `module` / `export_statement` / namespace bodies);
+/// stops at function or class bodies to avoid an O(units × tree)
+/// blowup on files with many small functions.
+///
+/// No-op for non-TS files — the matched node kinds only exist in
+/// the TS grammar.  Used by [`FileMeta::scan`] (called once per file
+/// in `collect_top_level_units` / `attach_route_handler`) to amortise
+/// the alias scan across all units in the same source file.
+fn scan_trpc_aliases_visit(node: Node<'_>, bytes: &[u8], out: &mut HashSet<String>) {
+    match node.kind() {
+        "type_alias_declaration" | "interface_declaration" => {
+            let body = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("body"));
+            if let Some(body) = body {
+                let body_text = text(body, bytes);
+                if body_text_references_trpc_marker(&body_text)
+                    && let Some(name_node) = node.child_by_field_name("name")
+                {
+                    let name = text(name_node, bytes);
+                    if !name.is_empty() {
+                        out.insert(name);
+                    }
+                }
+            }
+            return;
+        }
+        // Recurse only through container kinds that legitimately host
+        // top-level type aliases.  Skipping into function bodies /
+        // class bodies / call arguments avoids an O(unit × tree)
+        // blowup when `build_function_unit` triggers this scan once
+        // per unit on files with thousands of small functions
+        // (`tests/hostile_input_tests::many_small_functions_do_not_explode`).
+        "program"
+        | "source_file"
+        | "module"
+        | "export_statement"
+        | "namespace_declaration"
+        | "module_declaration"
+        | "internal_module"
+        | "ambient_declaration"
+        | "lexical_declaration"
+        | "variable_declaration"
+        | "statement_block" => {}
+        _ => return,
+    }
+    for idx in 0..node.named_child_count() {
+        let Some(child) = node.named_child(idx as u32) else {
+            continue;
+        };
+        scan_trpc_aliases_visit(child, bytes, out);
+    }
+}
+
+fn body_text_references_trpc_marker(body_text: &str) -> bool {
+    body_text.contains("TrpcSessionUser")
+        || body_text.contains("TRPCContext")
+        || body_text.contains("ProtectedTRPCContext")
+        || body_text.contains("TrpcContext")
+}
+
+/// Recognise a TS `required_parameter` / `optional_parameter` whose
+/// type annotation refers to a TRPC-shaped Options alias (or
+/// inlines `TrpcSessionUser` directly), and add the destructured /
+/// declared `ctx`-base to `self_scoped_session_bases` so subjects
+/// rooted at `ctx.user.<id-like>` count as actor context downstream.
+///
+/// Three pattern shapes are handled:
+///   1. Destructured shorthand: `({ ctx, input }: GetOptions)` →
+///      add `"ctx.user"`.
+///   2. Destructured rename: `({ ctx: c, input }: GetOptions)` →
+///      add `"c.user"`.
+///   3. Plain identifier: `(opts: GetOptions)` → add `"opts.ctx.user"`.
+///
+/// The rule is principled: we only fire when the param's type either
+/// IS one of the file-level TRPC aliases (`state.trpc_alias_names`,
+/// populated by [`scan_trpc_aliases_from_node_root`]) or its annotation
+/// text inlines `TrpcSessionUser` directly.  Bare `ctx.user` is never
+/// added to the static session-base list — that would over-suppress
+/// in non-TRPC code.  Instead, the dynamic per-unit set
+/// `self_scoped_session_bases` carries the lift.
+fn collect_trpc_ctx_param(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(ty_node) = node.child_by_field_name("type") else {
+        return;
+    };
+    let ty_text = text(ty_node, bytes);
+    if !type_text_is_trpc_options(&ty_text, &state.trpc_alias_names) {
+        return;
+    }
+
+    if pattern.kind() == "object_pattern" {
+        for idx in 0..pattern.named_child_count() {
+            let Some(child) = pattern.named_child(idx as u32) else {
+                continue;
+            };
+            match child.kind() {
+                "shorthand_property_identifier_pattern" => {
+                    let name = text(child, bytes);
+                    if name.eq_ignore_ascii_case("ctx") {
+                        state
+                            .self_scoped_session_bases
+                            .insert(format!("{name}.user"));
+                    }
+                }
+                "object_assignment_pattern" => {
+                    if let Some(left) = child.child_by_field_name("left") {
+                        let name = if matches!(
+                            left.kind(),
+                            "identifier" | "shorthand_property_identifier_pattern"
+                        ) {
+                            text(left, bytes)
+                        } else {
+                            first_identifier_name(left, bytes).unwrap_or_default()
+                        };
+                        if name.eq_ignore_ascii_case("ctx") {
+                            state
+                                .self_scoped_session_bases
+                                .insert(format!("{name}.user"));
+                        }
+                    }
+                }
+                "pair_pattern" => {
+                    let key_node = child.child_by_field_name("key");
+                    let local_node = child.child_by_field_name("value");
+                    if let (Some(k), Some(v)) = (key_node, local_node) {
+                        let key = text(k, bytes);
+                        let local = first_identifier_name(v, bytes).unwrap_or_default();
+                        if !local.is_empty() && key.eq_ignore_ascii_case("ctx") {
+                            state
+                                .self_scoped_session_bases
+                                .insert(format!("{local}.user"));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        return;
+    }
+
+    if let Some(name) = first_identifier_name(pattern, bytes)
+        && !name.is_empty()
+    {
+        state
+            .self_scoped_session_bases
+            .insert(format!("{name}.ctx.user"));
+    }
+}
+
+/// True when the type-annotation text identifies a TRPC-shaped Options
+/// type: it contains `TrpcSessionUser` directly (inline object type
+/// literal), or it references one of the file-level TRPC alias names
+/// from the pre-scan.
+fn type_text_is_trpc_options(ty_text: &str, trpc_alias_names: &HashSet<String>) -> bool {
+    if body_text_references_trpc_marker(ty_text) {
+        return true;
+    }
+    let trimmed = ty_text.trim_start_matches(':').trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Match the leading identifier of the type (dropping any generic
+    // suffix `<...>`).  This covers `GetOptions` and
+    // `NonNullable<GetOptions>` shapes alike.
+    let head = trimmed.split('<').next().unwrap_or(trimmed).trim();
+    if trpc_alias_names.contains(head) {
+        return true;
+    }
+    // Also accept the bare alias name appearing anywhere in the
+    // annotation text — handles `Promise<GetOptions>` and other
+    // wrappers without enumerating every shape.  Word-boundary check
+    // avoids matching aliases that are substrings of longer
+    // identifiers.
+    for alias in trpc_alias_names {
+        if alias.is_empty() {
+            continue;
+        }
+        if let Some(idx) = ty_text.find(alias.as_str()) {
+            let before_ok = idx == 0
+                || !ty_text.as_bytes()[idx - 1].is_ascii_alphanumeric()
+                    && ty_text.as_bytes()[idx - 1] != b'_';
+            let end = idx + alias.len();
+            let after_ok = end >= ty_text.len()
+                || !ty_text.as_bytes()[end].is_ascii_alphanumeric()
+                    && ty_text.as_bytes()[end] != b'_';
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Extract the receiver-variable name from a Go `method_declaration`
+/// (`func (c *Cache) ...` → `Some("c")`).  Returns `None` for any node
+/// that doesn't expose a `receiver` field (Rust `function_item`,
+/// Java `method_declaration`, JS arrow-functions, …).
+///
+/// Tree-sitter-go shape: `method_declaration` has a `receiver` field
+/// whose value is a `parameter_list` containing a single
+/// `parameter_declaration` with a `name` field (identifier) and a
+/// `type` field (often `pointer_type`).  We only need the name.
+pub fn method_receiver_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    let receiver = node.child_by_field_name("receiver")?;
+    extract_receiver_param_name(receiver, bytes)
+}
+
+fn extract_receiver_param_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    if let Some(name_node) = node.child_by_field_name("name") {
+        let name = text(name_node, bytes);
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    for idx in 0..node.named_child_count() {
+        let Some(child) = node.named_child(idx as u32) else {
+            continue;
+        };
+        if let Some(found) = extract_receiver_param_name(child, bytes) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn collect_param_names(node: Node<'_>, bytes: &[u8], out: &mut Vec<String>) {
@@ -2733,5 +3558,88 @@ mod tests {
         assert!(!is_self_actor_subject(&member("target", "id")));
         // Plain identifier, no base.
         assert!(!is_self_actor_subject(&ident("user_id")));
+    }
+
+    #[test]
+    fn type_text_is_trpc_options_matches_alias_and_inline_marker() {
+        use super::type_text_is_trpc_options;
+        use std::collections::HashSet;
+        let mut aliases = HashSet::new();
+        aliases.insert("GetOptions".to_string());
+        aliases.insert("UpdateOptions".to_string());
+
+        // Inline `TrpcSessionUser` marker — accepted regardless of alias set.
+        assert!(type_text_is_trpc_options(
+            ": { ctx: { user: NonNullable<TrpcSessionUser> } }",
+            &aliases
+        ));
+        assert!(type_text_is_trpc_options(
+            ": { user: TrpcSessionUser }",
+            &HashSet::new()
+        ));
+
+        // Plain alias name match.
+        assert!(type_text_is_trpc_options(": GetOptions", &aliases));
+        assert!(type_text_is_trpc_options("GetOptions", &aliases));
+
+        // Generic-wrapped alias.
+        assert!(type_text_is_trpc_options(
+            ": Promise<GetOptions>",
+            &aliases
+        ));
+        assert!(type_text_is_trpc_options(
+            ": NonNullable<UpdateOptions>",
+            &aliases
+        ));
+
+        // Negatives: alias not in set, no inline marker.
+        assert!(!type_text_is_trpc_options(": OtherOptions", &aliases));
+        assert!(!type_text_is_trpc_options(": Promise<Foo>", &aliases));
+        assert!(!type_text_is_trpc_options(": SomeRandomType", &aliases));
+        // Substring of a longer identifier must NOT match.
+        assert!(!type_text_is_trpc_options(
+            ": MyGetOptionsX",
+            &aliases
+        ));
+    }
+
+    #[test]
+    fn body_text_references_trpc_marker_recognises_known_markers() {
+        use super::body_text_references_trpc_marker as bm;
+        assert!(bm("type X = { user: NonNullable<TrpcSessionUser> }"));
+        assert!(bm("interface Ctx extends TRPCContext { ... }"));
+        assert!(bm("type Ctx = ProtectedTRPCContext"));
+        assert!(bm("export type Y = { ctx: TrpcContext }"));
+        // Negatives.
+        assert!(!bm("type X = { user: User }"));
+        assert!(!bm("type X = SessionContext"));
+        assert!(!bm("type X = { foo: SomeContext }"));
+    }
+
+    /// Pin the string-level analogue used by
+    /// `value_is_self_scoped_session_id_chain`: it must accept the
+    /// same set of session-scoped bases that `checks.rs::
+    /// is_self_scoped_session_base` accepts.  When you add a new base
+    /// to one, add it to the other and update both tests.
+    #[test]
+    fn is_self_scoped_session_base_text_matches_known_session_bases() {
+        use super::is_self_scoped_session_base_text as bt;
+        // Express / passport idioms.
+        assert!(bt("req.user"));
+        assert!(bt("request.user"));
+        assert!(bt("req.session.user"));
+        assert!(bt("req.session.currentUser"));
+        // Bare session.user (Next.js / NextAuth idiom).
+        assert!(bt("session.user"));
+        assert!(bt("session.currentUser"));
+        // Koa ctx.state / ctx.session.
+        assert!(bt("ctx.session.user"));
+        assert!(bt("ctx.state.user"));
+        // Negatives — bases that are NOT canonical authed-user roots.
+        assert!(!bt("req.body"));
+        assert!(!bt("req.params"));
+        assert!(!bt("ctx.user"));
+        assert!(!bt("data.user"));
+        assert!(!bt("user"));
     }
 }

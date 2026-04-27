@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 380
+    "corpus_size": 396
   },
   "cases": [
     {
@@ -10305,6 +10305,97 @@
       "notes": "Phase B4: `validate_target` helper internally calls `require_membership(group_id, user.id)` \u2014 handler-level call lifts the auth check transparently"
     },
     {
+      "case_id": "rs-auth-108",
+      "file": "rust/auth/row_fetch_then_authorize.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "phase-a4",
+        "real-repo-precision-2026-04-27",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "Phase A4: row-level fetch-then-authorize idiom. `let community = Community::read(pool, req.community_id)?;` followed by `check_community_user_action(&user, &community, ...)?;` \u2014 the structural recogniser admits the `check_<resource>_<role>_action` shape and the row-fetch exemption back-dates coverage of the read"
+    },
+    {
+      "case_id": "rs-auth-109",
+      "file": "rust/auth/predicate_role_check.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "phase-a4",
+        "real-repo-precision-2026-04-27",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "Phase A4: `is_<role>_or_<role>` predicate auth shape (lemmy `is_mod_or_admin`). Structural recogniser admits boolean predicate forms when every conjunct is a known auth role"
+    },
+    {
+      "case_id": "rs-auth-110",
+      "file": "rust/auth/unsafe_row_fetch_no_authz.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-285",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "Medium",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          24,
+          25
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "positive",
+        "phase-a4",
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Phase A4 regression guard: row fetched by user-supplied id without any authorization function naming the resulting row \u2014 the row-fetch exemption must NOT fire"
+    },
+    {
       "case_id": "rs-safe-014",
       "file": "rust/safe/safe_option_sanitizer.rs",
       "language": "rust",
@@ -11725,7 +11816,7 @@
         "real-repo-precision-2026-04-25"
       ],
       "disabled": false,
-      "notes": "`let user = match require_auth() { Ok(u) => u, ... }; let uid = user.id; query(.., &[uid])` — transitive copy of self-actor id (website/handlers/accounts.rs)"
+      "notes": "`let user = match require_auth() { Ok(u) => u, ... }; let uid = user.id; query(.., &[uid])` \u2014 transitive copy of self-actor id (website/handlers/accounts.rs)"
     },
     {
       "case_id": "rs-auth-realrepo-002",
@@ -11779,7 +11870,7 @@
         "real-repo-precision-2026-04-25"
       ],
       "disabled": false,
-      "notes": "`realtime::publish_to_user(&user.email, ..)` — self-channel publish with email as self-identity field (website/handlers/social.rs)"
+      "notes": "`realtime::publish_to_user(&user.email, ..)` \u2014 self-channel publish with email as self-identity field (website/handlers/social.rs)"
     },
     {
       "case_id": "rs-auth-typed-extractors-001",
@@ -11860,7 +11951,7 @@
         "typed-extractors-phase6-2026-04-25"
       ],
       "disabled": false,
-      "notes": "Phase 6 negative-control: DTO whose `doc_id` field is `String` must NOT be exempted — String DTO fields can carry injection payloads, so the auth rule must continue to fire."
+      "notes": "Phase 6 negative-control: DTO whose `doc_id` field is `String` must NOT be exempted \u2014 String DTO fields can carry injection payloads, so the auth rule must continue to fire."
     },
     {
       "case_id": "js-safe-realrepo-001",
@@ -11941,7 +12032,7 @@
         "real-repo-precision-2026-04-25"
       ],
       "disabled": false,
-      "notes": "`if err != nil { log() }` whose if is the LAST statement in the function — no fallthrough sink possible (gin/debug.go:debugPrintError)"
+      "notes": "`if err != nil { log() }` whose if is the LAST statement in the function \u2014 no fallthrough sink possible (gin/debug.go:debugPrintError)"
     },
     {
       "case_id": "go-cmdi-realrepo-001",
@@ -11977,7 +12068,7 @@
         "real-repo-precision-2026-04-25"
       ],
       "disabled": false,
-      "notes": "Vulnerable counterpart: `if err { log() } sink()` — error logged then fallthrough to sink. Pins that the False-edge-only walk does NOT silence the rule for real fallthrough."
+      "notes": "Vulnerable counterpart: `if err { log() } sink()` \u2014 error logged then fallthrough to sink. Pins that the False-edge-only walk does NOT silence the rule for real fallthrough."
     },
     {
       "case_id": "java-safe-realrepo-001",
@@ -12004,7 +12095,7 @@
         "real-repo-precision-2026-04-25"
       ],
       "disabled": false,
-      "notes": "`if (logger.isErrorEnabled()) { print() } more_code()` — `isErrorEnabled` is a logging-state method, not an error variable; rule must reject camelCase names containing `err` (spring-boot/SpringApplication.java:854)"
+      "notes": "`if (logger.isErrorEnabled()) { print() } more_code()` \u2014 `isErrorEnabled` is a logging-state method, not an error variable; rule must reject camelCase names containing `err` (spring-boot/SpringApplication.java:854)"
     },
     {
       "case_id": "go-safe-realrepo-002",
@@ -12033,7 +12124,7 @@
         "real-repo-precision-2026-04-25"
       ],
       "disabled": false,
-      "notes": "Go method receiver `c *Context` with internal `c.mu.Lock`/`defer c.mu.Unlock` is NOT a leakable resource — the proxy-receiver extractor previously took the root identifier of multi-segment callees (`c.writer.header().set` → `c`) and section 2b's exception-path heuristic ran on Go (gin/context.go:Set/Get/MustGet)"
+      "notes": "Go method receiver `c *Context` with internal `c.mu.Lock`/`defer c.mu.Unlock` is NOT a leakable resource \u2014 the proxy-receiver extractor previously took the root identifier of multi-segment callees (`c.writer.header().set` \u2192 `c`) and section 2b's exception-path heuristic ran on Go (gin/context.go:Set/Get/MustGet)"
     },
     {
       "case_id": "go-safe-fieldproj-phase3",
@@ -12089,7 +12180,364 @@
         "real-repo-precision-2026-04-25"
       ],
       "disabled": false,
-      "notes": "`id := \"id\"; c.AddParam(id, value)` — const-bound local must not count as a scoped-identifier subject (gin/context_test.go:TestContextAddParam)"
+      "notes": "`id := \"id\"; c.AddParam(id, value)` \u2014 const-bound local must not count as a scoped-identifier subject (gin/context_test.go:TestContextAddParam)"
+    },
+    {
+      "case_id": "go-safe-realrepo-004",
+      "file": "go/safe/safe_chained_call_response_header.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "go.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "`w.Header().Get(constName)` and `r.URL.Query().Get(name)` \u2014 chained-call receiver returns an opaque value (http.Header / url.Values map); the verb-name fallback (Get matches the read indicator) must not auto-classify these as DbCrossTenantRead.  Closes the minio cmd/api-response.go cluster (~70 hits)."
+    },
+    {
+      "case_id": "go-safe-realrepo-005",
+      "file": "go/safe/safe_self_method_receiver.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "go.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "`func (c *Cache) ...` with `c.foo()` / `c.Fs.Create(...)` intra-struct dispatches \u2014 Go method receivers must seed `non_sink_vars` so the verb-name fallback doesn't fire on bare-receiver internal calls.  Closes the hugo cache/filecache.go cluster (~48 hits)."
+    },
+    {
+      "case_id": "go-auth-realrepo-001",
+      "file": "go/auth/vuln_repo_findbyid_no_auth.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-639",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "go.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "positive",
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Vulnerable counterpart pinning the chained-call suppression: bare-identifier receivers (`repo.Find(id)` / `repo.Save(id, val)`) are still classified as canonical data-layer sinks and must continue firing the ownership check."
+    },
+    {
+      "case_id": "py-auth-realrepo-001",
+      "file": "python/safe/safe_django_migration_token.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.auth.token_override_without_validation"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Distilled from saleor/account/migrations/0021_unique_token.py: Django RunPython callback writes user-token field but has no user reach (params apps, schema_editor)."
+    },
+    {
+      "case_id": "py-auth-realrepo-002",
+      "file": "python/safe/safe_pytest_conftest_marker.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.auth.token_override_without_validation",
+        "py.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Distilled from saleor/conftest.py: pytest collection hook with item.add_marker; no user reach but legacy heuristics flagged it."
+    },
+    {
+      "case_id": "py-auth-realrepo-003",
+      "file": "python/safe/safe_celery_task_no_user_input.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Distilled from saleor/discount/tasks.py:handle_promotion_toggle: zero-arg Celery task; id-shaped subjects come from internal computation, not user input."
+    },
+    {
+      "case_id": "py-auth-realrepo-004",
+      "file": "python/auth/vuln_token_override_django_handler.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-863",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.auth.token_override_without_validation"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          18,
+          18
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          15,
+          15
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Vulnerable counterpart to realrepo-001..003: Django view accepts attacker-supplied token + email, overrides token-bound user.email without validating expiry/recipient."
+    },
+    {
+      "case_id": "ts-auth-realrepo-001",
+      "file": "typescript/auth/safe_session_user_id_copy.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "js.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Distilled from cal.com Next.js handlers (apps/web/app/.../api-keys/page.tsx): `const userId = session.user.id` is a self-actor-id copy through a session-scoped chain. Closes a 10+ FP cluster (fix: src/auth_analysis/extract/common.rs::value_is_self_scoped_session_id_chain + JS variable_declarator dispatch)."
+    },
+    {
+      "case_id": "ts-auth-realrepo-002",
+      "file": "typescript/auth/vuln_target_user_id_no_check.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-639",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "js.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Vulnerable counterpart to ts-auth-realrepo-001: `userId = req.params.targetUserId` is a foreign id (URL param), not a session copy — the rule must still fire."
+    },
+    {
+      "case_id": "js-auth-realrepo-001",
+      "file": "javascript/auth/safe_req_user_id_copy.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "js.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Express handler shape: `const userId = req.user.id` is a self-actor-id copy through the session-scoped `req.user` chain (passport / express-session)."
+    },
+    {
+      "case_id": "ts-auth-realrepo-003",
+      "file": "typescript/auth/safe_destructured_session_user.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "js.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Destructure shapes: `const { user } = ctx.session` / `const { user } = await getServerSession()` / `const { user: me } = ctx.session` / `const { id } = req.user`.  cal.com NextAuth idiom — destructured local IS the actor (or actor's id), not a foreign tenant id."
+    },
+    {
+      "case_id": "ts-auth-realrepo-004",
+      "file": "typescript/auth/safe_trpc_ctx_user_options.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "js.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "TRPC handler Options-typed parameter cluster (~105 cal.com findings).  File-level pre-scan recognises `type GetOptions = { ctx: { user: NonNullable<TrpcSessionUser> } }` aliases; param annotations referencing those aliases populate `self_scoped_session_bases[ctx.user]` per-unit.  Bare `ctx.user` is NOT added to the static session-base list (would over-suppress non-TRPC code)."
+    },
+    {
+      "case_id": "ts-auth-realrepo-005",
+      "file": "typescript/auth/vuln_trpc_ctx_input_id_no_check.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-639",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "js.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "real-repo-precision-2026-04-27"
+      ],
+      "disabled": false,
+      "notes": "Regression guard: same TRPC handler shape as ts-auth-realrepo-004 but the SQL parameter is `input.targetUserId` (request body field), not `ctx.user.id`.  The TRPC ctx self-actor exemption must apply ONLY to ctx.user.<id-like> subjects, never to other paths in the same param."
     }
   ]
 }

@@ -168,6 +168,17 @@ pub struct AnalysisUnit {
     /// row-level ownership-equality check on the row implicitly covers
     /// downstream uses of fields read from the same row.
     pub row_field_vars: HashMap<String, String>,
+    /// Per row-binding metadata: the `let ROW = CALL(..)` declaration
+    /// line and the value-refs appearing in the call's arguments.
+    /// Populated for every `let V = call(..)` shape.  Powers the
+    /// "fetch-then-authorize" exemption in `checks.rs`: if a row-fetch
+    /// operation produces variable `V` and SOME auth check elsewhere
+    /// in the unit names `V`, the row-fetch operation is considered
+    /// authorized — even though the check appears textually after the
+    /// fetch.  This is the standard idiom in row-level authz code:
+    /// fetch the row first to extract the resource id, then call
+    /// `check_<resource>_<role>(&user, &row, ...)` to authorize it.
+    pub row_population_data: HashMap<String, (usize, Vec<ValueRef>)>,
     /// Variables bound to an authenticated-user value. Populated from
     /// `let V = require_auth(..).await?` (or any call matching the
     /// configured login-guard / authorization-check names) and from
@@ -223,6 +234,19 @@ pub struct AnalysisUnit {
     /// matcher — bare parameters with no framework gate never lift
     /// their fields.
     pub typed_bounded_dto_fields: HashMap<String, Vec<String>>,
+    /// Per-unit dynamic session-base text set, supplementing the
+    /// hard-coded list in `is_self_scoped_session_base`.  Populated by
+    /// the extractor when a parameter's static type signals a known
+    /// auth-context shape — e.g. TRPC's `Options { ctx: { user:
+    /// NonNullable<TrpcSessionUser> } }` adds `<localCtx>.user` so
+    /// downstream `ctx.user.id` accesses count as actor context.  Each
+    /// entry is the dotted base text (e.g. `"ctx.user"`,
+    /// `"opts.ctx.user"`) that should match a subject's `base` when
+    /// the subject's `field` is an id-like field name.  Distinct from
+    /// `self_actor_vars` (single-segment locals) because TRPC
+    /// destructures route through a base chain, not a top-level
+    /// binding.
+    pub self_scoped_session_bases: HashSet<String>,
 }
 
 /// Per-function summary of which positional parameters are

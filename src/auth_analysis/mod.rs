@@ -719,12 +719,14 @@ mod tests {
             condition_texts: Vec::new(),
             line: 1,
             row_field_vars: HashMap::new(),
+            row_population_data: HashMap::new(),
             self_actor_vars: HashSet::new(),
             self_actor_id_vars: HashSet::new(),
             authorized_sql_vars: HashSet::new(),
             const_bound_vars: HashSet::new(),
             typed_bounded_vars: HashSet::new(),
             typed_bounded_dto_fields: HashMap::new(),
+            self_scoped_session_bases: HashSet::new(),
         }
     }
 
