@@ -4,6 +4,7 @@
 /src/server/assets/dist
 /.nyx
 /docs/plans/
+/logs
 /book
 .DS_Store
 .z3-trace

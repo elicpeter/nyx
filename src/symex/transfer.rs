@@ -305,6 +305,11 @@ pub fn transfer_inst(
                                 }
                                 // Fall through to normal Call
                             }
+                            ContainerOp::Writeback { .. } => {
+                                // Symex doesn't model writeback yet — taint
+                                // engine handles the destination-arg taint
+                                // directly. Fall through to normal Call.
+                            }
                         }
                     }
                 }

@@ -30,6 +30,14 @@ pub enum ContainerOp {
     /// `index_arg`: same semantics as `Store::index_arg` — when present and
     /// provably constant, loads from `HeapSlot::Index(n)`.
     Load { index_arg: Option<usize> },
+    /// Taint flows from the receiver container into the argument at
+    /// `dest_arg` — i.e. the "writeback" pattern where a method writes its
+    /// decoded/loaded value into a caller-supplied destination rather than
+    /// returning it. Used for the Go `*.Decode(&dest)` family
+    /// (`json.Decoder.Decode`, `xml.Decoder.Decode`, `gob.Decoder.Decode`),
+    /// where `r.Body → json.NewDecoder(r.Body).Decode(&dest)` should taint
+    /// `dest` even though `Decode` returns only an `error`.
+    Writeback { dest_arg: usize },
 }
 
 /// Convenience: store with a single value argument, no index tracking.
@@ -182,6 +190,19 @@ fn classify_go(method: &str, callee: &str) -> Option<ContainerOp> {
     match method {
         "Add" | "Set" | "Store" | "Put" => store(0),
         "Get" | "Load" | "Pop" => load(),
+        // Stream-decoder writeback.  In Go, the canonical decode pattern
+        // takes a destination as the sole positional argument and returns
+        // only an `error`:
+        //   decoder := json.NewDecoder(r.Body)
+        //   decoder.Decode(&dest)
+        // The decoder's receiver chain carries the source taint
+        // (`r.Body` → `json.NewDecoder(r.Body)` → `decoder`); without a
+        // writeback rule, the destination stays clean and downstream sinks
+        // miss the flow. `Unmarshal` is the matching sibling pattern on
+        // top-level decoders (e.g. `proto.Unmarshal(buf, &msg)`); the
+        // method-call form has the bytes carried via the receiver, not arg 0,
+        // so it lines up with the writeback contract just like `Decode`.
+        "Decode" | "Unmarshal" => Some(ContainerOp::Writeback { dest_arg: 0 }),
         // Pointer-Phase 6 / W5: synthetic callees emitted by CFG
         // lowering for Go index_expression reads/writes (`arr[i]`,
         // `m[k] = v`).
@@ -280,6 +301,40 @@ mod tests {
     fn go_append_is_store() {
         let op = classify_container_op("append", Lang::Go);
         assert!(matches!(op, Some(ContainerOp::Store { .. })));
+    }
+
+    // CVE Hunt Session 2 (Owncast CVE-2023-3188 / CVE-2024-31450 family):
+    // Go `*.Decode(&dest)` is the canonical streaming-decoder writeback —
+    // `json.NewDecoder(r.Body).Decode(&dest)`, `xml.NewDecoder(r).Decode(&out)`,
+    // `gob.NewDecoder(buf).Decode(&v)`. The decoder receiver carries the
+    // source taint and the destination is arg 0; the writeback rule is the
+    // only way taint reaches `dest` because `Decode` itself returns only
+    // `error`. The same-shape `Unmarshal` pattern (`proto.Unmarshal`,
+    // `tar.Header.Unmarshal`) on a typed receiver follows the same contract.
+    #[test]
+    fn go_decode_is_writeback_dest_arg_zero() {
+        match classify_container_op("decoder.Decode", Lang::Go) {
+            Some(ContainerOp::Writeback { dest_arg }) => assert_eq!(dest_arg, 0),
+            other => panic!("expected Writeback {{ dest_arg: 0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn go_unmarshal_is_writeback_dest_arg_zero() {
+        match classify_container_op("hdr.Unmarshal", Lang::Go) {
+            Some(ContainerOp::Writeback { dest_arg }) => assert_eq!(dest_arg, 0),
+            other => panic!("expected Writeback {{ dest_arg: 0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn js_decode_is_not_writeback() {
+        // The Writeback rule is a Go-specific pattern; JS/TS `decode`
+        // helpers (`Buffer.from(s, 'base64').toString()` etc.) return their
+        // result and don't have a writeback contract.  Make sure we didn't
+        // accidentally widen the rule into other languages.
+        assert!(classify_container_op("decoder.Decode", Lang::JavaScript).is_none());
+        assert!(classify_container_op("decoder.Decode", Lang::Python).is_none());
     }
 
     #[test]

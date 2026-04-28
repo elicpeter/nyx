@@ -1,16 +1,207 @@
 # Nyx Benchmark Results
 
-Current baseline (as of Auth Rule FP-Remediation Phase B5 corpus add, 2026-04-23):
+Current baseline (as of CVE Hunt Session 3 — Ruby `Kernel#open` CMDI exact-match sigil, 2026-04-28):
 
 | Metric                | File-level | Rule-level | CI floor |
 |-----------------------|------------|------------|----------|
-| Precision             | 0.946      | 0.946      | 0.861    |
-| Recall                | 1.000      | 0.994      | 0.944    |
-| F1                    | 0.972      | 0.970      | 0.901    |
+| Precision             | 0.995      | 0.995      | 0.861    |
+| Recall                | 1.000      | 1.000      | 0.944    |
+| F1                    | 0.998      | 0.998      | 0.901    |
 
-Corpus: 305 cases across 10 languages — 267 synthetic + 28 real-CVE cases (14 vulnerable/patched pairs) + 10 auth-rule cases (3 positive + 7 negative). Scanner 0.5.0, full analysis mode. CI floors are unchanged from Phase CF-7; the Auth-B5 delta is within 1 pp and does not warrant tightening.
+Corpus: 428 cases (425 enabled, 3 disabled CVE pairs) across 10 languages. Scanner 0.5.0, full analysis mode. CI floors are unchanged; Session-3 lands a real Ruby CMDI CVE plus 1 synthetic regression pair (2 TP + 2 TN) with no new FP.
 
 Machine-readable per-run data lives in `tests/benchmark/results/` (`latest.json` plus dated snapshots). This file is a narrative changelog — only the two most recent phases are kept in full detail; earlier phases are condensed into the history table at the end.
+
+---
+
+## CVE Hunt Session 3 — Ruby `Kernel#open` CMDI exact-match sigil (2026-04-28)
+
+### Motivation
+
+The Ruby corpus had one real CVE (CVE-2013-0156, Rails YAML
+deserialization) covering one vuln class. CVE-2020-8130 (rake
+`Rake::FileList#egrep`) is a textbook real-world Ruby CMDI: bare
+`Kernel#open(path)` interprets a path beginning with `|` as a shell
+command, so `open("|cmd")` runs `cmd`.  The fix replaced the call
+with `File.open(path)`, which never pipes.  Pre-fix Nyx had no
+matcher for bare `open` because adding it as a flat suffix matcher
+would over-fire on every `X.open` call (`File.open`, `IO.open`,
+`URI.open`) — each of which has its own non-piping semantics and
+carries its own label rule.
+
+### What changed
+
+- **`=` exact-match sigil on label matchers** (`src/labels/mod.rs`):
+  matchers prefixed with `=` (e.g. `"=open"`) only fire when the
+  candidate text equals the matcher exactly.  The boundary-`.`-or-`:`
+  allowance that lets `puts` match `Logger.puts` is suppressed for
+  these matchers.  Routed through `unpack_matcher()` in both
+  `match_suffix_cs` and `starts_with_cs` so `classify` and
+  `classify_all` honour it consistently.  Strict-additive: existing
+  matchers (no sigil) keep their suffix-with-boundary behaviour.
+- **Ruby `=open` SHELL_ESCAPE sink** (`src/labels/ruby.rs`): adds
+  bare `Kernel#open(path)` as a CMDI sink without affecting the
+  existing `File.open` (FILE_IO), `URI.open` (SSRF), or `IO.open`
+  semantics.  Distinguishes the dangerous bare-callee form from the
+  three namespaced forms via the new sigil.
+- **Real-CVE pair landed**: `cve_corpus/ruby/CVE-2020-8130/`
+  (rake CMDI).  Vulnerable detects via `taint-unsanitised-flow`
+  with `sink_caps: SHELL_ESCAPE` at the bare `open(fn, "r")` call;
+  patched (`File.open(fn, "r")`) is silent.  The patched fixture
+  hardcodes the filename and grep pattern as a patched-fix
+  simplification (documented in the fixture header) so it's a clean
+  rule-class regression guard — CVE-2020-8130 is a CMDI bug, not a
+  path-traversal bug, and the regression target is the CMDI vector
+  specifically.
+- **Synthetic regression pair** under
+  `tests/benchmark/corpus/ruby/`:
+  - `cmdi/cmdi_kernel_open.rb` (positive — bare
+    `open(params[:file], "r")`)
+  - `safe/safe_kernel_open_file_namespaced.rb` (negative — hardcoded
+    `File.open(filename, "r")`)
+  Wired to ground_truth as `ruby-cmdi-003` / `ruby-safe-009`.
+- **Unit-test coverage**: `src/labels/mod.rs` adds five tests pinning
+  the sigil's behaviour: bare-`open` classifies as SHELL_ESCAPE;
+  `File.open` does NOT (multi-label classify_all keeps FILE_IO);
+  `IO.open` does NOT match SHELL_ESCAPE; `URI.open` keeps its SSRF
+  classification; `unpack_matcher` strips the sigil correctly.
+
+### Real-CVE Corpus
+
+| CVE              | Language   | Project                      | License              | Vuln class       | Vulnerable outcome | Patched outcome |
+|------------------|------------|------------------------------|----------------------|------------------|--------------------|-----------------|
+| CVE-2023-48022   | Python     | Ray                          | Apache-2.0           | CMDI             | TP (rule + line)   | TN              |
+| CVE-2017-18342   | Python     | PyYAML                       | MIT                  | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2019-14939   | JavaScript | mongo-express                | MIT                  | code_exec        | TP (rule + line)   | TN              |
+| CVE-2025-64430   | JavaScript | Parse Server                 | Apache-2.0           | SSRF             | TP (rule + line)   | TN              |
+| CVE-2023-26159   | TypeScript | follow-redirects             | MIT                  | SSRF             | TP (rule + line)   | TN              |
+| CVE-2022-30323   | Go         | hashicorp/go-getter          | MPL-2.0              | CMDI             | TP (rule + line)   | TN              |
+| CVE-2023-3188    | Go         | owncast                      | MIT                  | SSRF             | TP (rule + line)   | TN              |
+| CVE-2024-31450   | Go         | owncast                      | MIT                  | path_traversal   | DEFERRED           | DEFERRED        |
+| CVE-2015-7501    | Java       | Apache Commons Collections   | Apache-2.0           | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2013-0156    | Ruby       | Ruby on Rails                | MIT                  | Deserialization  | TP (rule)          | TN              |
+| CVE-2020-8130    | Ruby       | Rake                         | MIT                  | CMDI             | TP (rule + line)   | TN              |
+| CVE-2017-9841    | PHP        | PHPUnit                      | BSD-3-Clause         | code_exec        | TP (rule + line)   | TN              |
+| CVE-2018-15133   | PHP        | Laravel                      | MIT                  | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2016-3714    | C          | ImageMagick (ImageTragick)   | ImageMagick License  | CMDI             | TP (rule + line)   | TN              |
+| CVE-2019-18634   | C          | sudo (pwfeedback)            | ISC                  | memory_safety    | TP (rule + line)   | TN              |
+| CVE-2019-13132   | C++        | ZeroMQ libzmq                | MPL-2.0              | memory_safety    | TP (rule + line)   | TN              |
+| CVE-2022-1941    | C++        | Protocol Buffers             | BSD-3-Clause         | memory_safety    | TP (rule + line)   | TN              |
+| CVE-2017-12629   | Java       | Apache Solr                  | Apache-2.0           | CMDI             | TP (rule + line)   | TN              |
+
+### Notes on selection
+
+CVE-2020-8130 hit the rotation criteria cleanly — Ruby was the
+least-recently-touched language slice (sole CVE since Phase 13's
+CVE-2013-0156, never touched in `CVE_SESSION_LOG.md`), the
+disclosed flow is single-method (`Rake::FileList#egrep`'s body is
+~20 lines), and the bug is a missing-classifier shape Nyx had no
+sibling rules for.  The fix at the engine layer (a `=` exact-match
+sigil) is reusable: any future case where bare-callee semantics
+differ from a namespaced method of the same name (Python `open` vs
+`io.open`, Go `print` vs `fmt.Print`, etc.) can opt in by prefixing
+the matcher.  No regression in existing rule classification — the
+sigil is strict-additive and falls back to the prior suffix-with-
+boundary behaviour for every existing matcher.
+
+---
+
+## CVE Hunt Session 2 — Go FILE_IO/SSRF sink expansion + Decode writeback (2026-04-28)
+
+### Motivation
+
+The Go corpus had one real CVE (CVE-2022-30323, hashicorp/go-getter
+CMDI) covering one vuln class. Go has well-documented CVEs in SSRF,
+path-traversal, and SQLi classes that were invisible to Nyx because
+the label rules and container model didn't recognize three idiomatic
+shapes: (1) `http.DefaultClient.Get(url)` SSRF sinks (the
+package-level shared client, used by Owncast CVE-2023-3188's
+webfinger handler and most Go fediverse projects), (2) mutating-fs
+`os.Remove(path)` / `os.WriteFile(path, …)` / `os.RemoveAll(path)`
+path-traversal sinks (Owncast CVE-2024-31450 emoji delete,
+gin-vue-admin CVE-2024-31457, gogs CVE-2024-55947 update API), and
+(3) the `obj.Decode(&dest)` / `hdr.Unmarshal(&dest)` writeback
+contract (every Go HTTP handler that reads JSON from
+`r.Body` via `json.NewDecoder(r.Body).Decode(&request)`).
+
+### What changed
+
+- **Go FILE_IO sinks** (`src/labels/go.rs`): added `os.Remove`,
+  `os.RemoveAll`, `os.WriteFile`, `ioutil.WriteFile` next to the
+  existing read-side `os.Open` / `os.ReadFile` set.
+- **Go SSRF sinks** (`src/labels/go.rs`): added `http.Head`,
+  `http.DefaultClient.{Get,Post,Head,Do,PostForm}` next to the
+  existing `http.Get` / `http.Post` / `http.NewRequest` set. Bare
+  `Client.Get` is intentionally excluded — type-aware resolution is
+  the path to a broader rule, not a name match.
+- **`ContainerOp::Writeback { dest_arg }` lattice variant**
+  (`src/ssa/pointsto.rs`, `src/taint/ssa_transfer/mod.rs`,
+  `src/symex/transfer.rs`): models the receiver-to-arg taint-flow
+  contract for streaming-decoder writeback APIs. `Decode` and
+  `Unmarshal` now classify as Writeback for Go, where the receiver's
+  taint flows into the destination argument (arg 0). Resolves the
+  receiver by walking the dotted callee prefix because Go method
+  calls lower to `Kind::CallFn` (no explicit receiver channel).
+  Symex transfer falls through (no symex modeling yet).
+- **Real-CVE pair landed**: `cve_corpus/go/CVE-2023-3188/` (Owncast
+  webfinger SSRF). Vulnerable detects via cross-function
+  `taint-unsanitised-flow` (handler param → `GetWebfingerLinks` →
+  `http.DefaultClient.Get` SSRF sink). Patched silent (validator
+  added; the sink shifts to a local `client.Get` which today's
+  matchers correctly don't fire on).
+- **Real-CVE pair landed but DEFERRED**: `cve_corpus/go/CVE-2024-31450/`
+  (Owncast emoji-delete path traversal). The verbatim flow uses
+  `json.NewDecoder(r.Body).Decode(emoji)` then `os.Remove(filepath.Join(_, emoji.Name))`.
+  The Writeback rule taints the destination's SSA value but the
+  engine's `FieldProj` reader walks `pointer_facts.pt(receiver)` +
+  `state.get_field` (the field-cell channel) which the writeback
+  doesn't yet populate. Both ground_truth entries marked
+  `disabled: true` with `disabled_reason` pointing to
+  `CVE_DEFERRED.md`.
+- **Synthetic regression pairs** under
+  `tests/benchmark/corpus/go/`:
+  - `ssrf/ssrf_default_client_get.go` (positive — `http.DefaultClient.Get(req.URL.Query().Get("url"))`)
+    + `ssrf/safe_ssrf_default_client_get.go` (negative — hard-coded URL).
+  - `path_traversal/path_traversal_remove.go` (positive — `os.Remove(filepath.Join(_, req.URL.Query().Get("name")))`)
+    + `path_traversal/safe_path_traversal_remove.go` (negative — `filepath.Base` cleanse).
+  Wired to ground_truth as `go-ssrf-004` / `go-ssrf-safe-002` /
+  `go-path-002` / `go-path-safe-002`.
+
+### Real-CVE Corpus
+
+| CVE              | Language   | Project                      | License              | Vuln class       | Vulnerable outcome | Patched outcome |
+|------------------|------------|------------------------------|----------------------|------------------|--------------------|-----------------|
+| CVE-2023-48022   | Python     | Ray                          | Apache-2.0           | CMDI             | TP (rule + line)   | TN              |
+| CVE-2017-18342   | Python     | PyYAML                       | MIT                  | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2019-14939   | JavaScript | mongo-express                | MIT                  | code_exec        | TP (rule + line)   | TN              |
+| CVE-2025-64430   | JavaScript | Parse Server                 | Apache-2.0           | SSRF             | TP (rule + line)   | TN              |
+| CVE-2023-26159   | TypeScript | follow-redirects             | MIT                  | SSRF             | TP (rule + line)   | TN              |
+| CVE-2022-30323   | Go         | hashicorp/go-getter          | MPL-2.0              | CMDI             | TP (rule + line)   | TN              |
+| CVE-2023-3188    | Go         | owncast                      | MIT                  | SSRF             | TP (rule + line)   | TN              |
+| CVE-2024-31450   | Go         | owncast                      | MIT                  | path_traversal   | DEFERRED           | DEFERRED        |
+| CVE-2015-7501    | Java       | Apache Commons Collections   | Apache-2.0           | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2013-0156    | Ruby       | Ruby on Rails                | MIT                  | Deserialization  | TP (rule)          | TN              |
+| CVE-2017-9841    | PHP        | PHPUnit                      | BSD-3-Clause         | code_exec        | TP (rule + line)   | TN              |
+| CVE-2018-15133   | PHP        | Laravel                      | MIT                  | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2016-3714    | C          | ImageMagick (ImageTragick)   | ImageMagick License  | CMDI             | TP (rule + line)   | TN              |
+| CVE-2019-18634   | C          | sudo (pwfeedback)            | ISC                  | memory_safety    | TP (rule + line)   | TN              |
+| CVE-2019-13132   | C++        | ZeroMQ libzmq                | MPL-2.0              | memory_safety    | TP (rule + line)   | TN              |
+| CVE-2022-1941    | C++        | Protocol Buffers             | BSD-3-Clause         | memory_safety    | TP (rule + line)   | TN              |
+| CVE-2017-12629   | Java       | Apache Solr                  | Apache-2.0           | CMDI             | TP (rule + line)   | TN              |
+
+### Notes on selection
+
+CVE-2023-3188 followed the criteria cleanly — production Go project
+(Owncast, MIT), recent disclosure (2023), single-function flow, and
+the disclosed sink (`http.DefaultClient.Get`) is exactly the type of
+gap the new Go SSRF matcher closes. The handler-side scaffolding
+uses `r.URL.Query().Get("account")` rather than the upstream
+`json.NewDecoder(r.Body).Decode(&request)` because the JSON-decoder
+writeback to field-cell channel is the deeper engine gap CVE-2024-31450
+runs into; the disclosed `GetWebfingerLinks` body is verbatim from
+upstream v0.0.13. CVE-2024-31450 was added to the corpus as a
+documentation entry pending the Decode-writeback-into-field-cell deep
+fix tracked in `CVE_DEFERRED.md`.
 
 ---
 

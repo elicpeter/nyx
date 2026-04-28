@@ -10,7 +10,7 @@
 [![Docs](https://img.shields.io/badge/docs-elicpeter.github.io%2Fnyx-blue)](https://elicpeter.github.io/nyx/)
 </div>
 
-<p align="center"><img src="assets/screenshots/demo.gif" alt="Nyx UI walkthrough: scan, browse findings, inspect flow path, triage" width="900"/></p>
+<p align="center"><img src="assets/screenshots/demo.gif" alt="Nyx UI walkthrough: empty Welcome state, kicking off a scan, the populated overview with Health Score, drilling into a HIGH finding's flow visualizer, then the triage flow" width="900"/></p>
 
 ---
 
@@ -26,7 +26,7 @@ nyx serve          # opens http://localhost:9700 in your browser
 
 Everything stays on your machine: loopback-only bind, host-header enforcement, CSRF on every mutation, no telemetry, no login.
 
-<p align="center"><img src="assets/screenshots/overview.png" alt="Overview dashboard after two scans: 2 findings remaining (down from 5), 3 fixed, a findings-over-time line trending down, plus severity/language/category breakdowns and top affected files" width="900"/></p>
+<p align="center"><img src="assets/screenshots/overview.png" alt="Overview dashboard for a small JS app: Health Score C 78 with the five-component breakdown (Severity pressure, Confidence quality, Trend, Triage coverage, Regression resistance), 3 findings detected, OWASP A03 and A02 buckets, confidence distribution and issue category bars, top affected files" width="900"/></p>
 
 ---
 

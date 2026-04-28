@@ -54,7 +54,7 @@ use literals::{
     extract_const_string_arg, extract_destination_field_idents, extract_kwargs,
     extract_literal_rhs, find_call_node, find_call_node_deep, find_chained_inner_call,
     has_keyword_arg, has_only_literal_args, is_parameterized_query_call,
-    ruby_chain_arg0_for_method,
+    java_chain_arg0_kind_for_method, ruby_chain_arg0_for_method,
 };
 use params::{
     compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
@@ -1839,6 +1839,67 @@ pub(super) fn push_node<'a>(
         }
     }
 
+    // Shape-based sanitizer synthesis for Java JPA / JDBC parameterised
+    // execute calls.  `executeUpdate` and `executeQuery` are labelled
+    // `Sink(SQL_QUERY)` because the JDBC `Statement.executeUpdate(String)`
+    // and `Statement.executeQuery(String)` overloads are real injection
+    // sinks when given a concatenated SQL string.  But the same method
+    // names on JPA `javax.persistence.Query` and JDBC `PreparedStatement`
+    // are zero-arg — they execute SQL that was bound upstream by
+    // `entityManager.createQuery(LITERAL)` / `connection.prepareStatement(LITERAL)`,
+    // and any bind values went through `setParameter` / `setString`
+    // (which the JDBC/JPA driver escapes).  Walk the receiver chain to
+    // find the SQL-binding call and verify its arg 0 is a string literal;
+    // if so, synthesise a same-node `Sanitizer(SQL_QUERY)` which
+    // reflexively dominates the sink, suppressing both
+    // `cfg-unguarded-sink` and `taint-unsanitised-flow` for the safe
+    // chain shape while leaving `Statement.executeUpdate(concat)` and
+    // `createQuery(concat)` to fire as real findings.
+    if lang == "java"
+        && labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(Cap::SQL_QUERY)))
+        && !labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Sanitizer(c) if c.contains(Cap::SQL_QUERY)))
+    {
+        let leaf = text.rsplit('.').next().unwrap_or(&text);
+        if matches!(leaf, "executeUpdate" | "executeQuery") {
+            // Outer call must be zero-arg (the prepared/parameterised
+            // execute shape).  The N-arg overload `Statement.executeUpdate(SQL)`
+            // is a real sink and must continue to fire.
+            let outer_zero_arg = call_ast
+                .and_then(|cn| cn.child_by_field_name("arguments"))
+                .map(|args| {
+                    let mut c = args.walk();
+                    args.named_children(&mut c).count() == 0
+                })
+                .unwrap_or(false);
+            if outer_zero_arg {
+                // Walk the receiver chain to find a SQL-binding call
+                // (`createQuery` / `createNativeQuery` / `prepareStatement`)
+                // and require its arg 0 to be a string literal.  Anything
+                // else (binary concat, identifier, method call) leaves
+                // the sink in place — we cannot prove the SQL is
+                // parameterised, so the structural finding stands.
+                const JPA_BIND_METHODS: &[&str] = &[
+                    "createQuery",
+                    "createNativeQuery",
+                    "createNamedQuery",
+                    "prepareStatement",
+                    "prepareCall",
+                ];
+                if let Some(call_node) = call_ast
+                    && let Some(arg0_kind) =
+                        java_chain_arg0_kind_for_method(call_node, JPA_BIND_METHODS, code)
+                    && arg0_kind == "string_literal"
+                {
+                    labels.push(DataLabel::Sanitizer(Cap::SQL_QUERY));
+                }
+            }
+        }
+    }
+
     let span = (ast.start_byte(), ast.end_byte());
 
     /* ── 3.  GRAPH INSERTION + DEBUG ──────────────────────────────────── */
@@ -2414,6 +2475,42 @@ pub(super) fn build_sub<'a>(
         //  IF‑/ELSE: two branches that re‑merge afterwards
         // ─────────────────────────────────────────────────────────────────
         Kind::If => {
+            // Some grammars (Go `if init; cond {}`, sibling C-style forms)
+            // attach an init / "initializer" subtree that runs before the
+            // condition.  Tree-sitter exposes it under the `initializer`
+            // field.  Without lowering it, side-effecting calls in the
+            // init (e.g. Owncast CVE-2024-31450's
+            // `if err := json.NewDecoder(r.Body).Decode(emoji); err != nil`)
+            // disappear from the CFG and downstream taint never sees the
+            // call.  Languages that don't expose `initializer` here return
+            // None and the post-init `preds` is bit-identical to the
+            // pre-fix behaviour.  The init's exits become the predecessors
+            // for the condition so its side effects are visible to both
+            // branches.
+            let init_exits_owned = ast.child_by_field_name("initializer").map(|init| {
+                build_sub(
+                    init,
+                    preds,
+                    g,
+                    lang,
+                    code,
+                    summaries,
+                    file_path,
+                    enclosing_func,
+                    call_ordinal,
+                    analysis_rules,
+                    break_targets,
+                    continue_targets,
+                    throw_targets,
+                    bodies,
+                    next_body_id,
+                    current_body_id,
+                )
+            });
+            let preds: &[NodeIndex] = match &init_exits_owned {
+                Some(exits) => exits.as_slice(),
+                None => preds,
+            };
             // Check if condition contains a boolean operator for short-circuit decomposition.
             let cond_subtree = ast.child_by_field_name("condition").or_else(|| {
                 // Rust `if_expression` uses positional children

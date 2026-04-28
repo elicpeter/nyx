@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 410
+    "corpus_size": 433
   },
   "cases": [
     {
@@ -2825,6 +2825,86 @@
       "notes": "Path traversal via copy() with user-controlled source path"
     },
     {
+      "case_id": "php-deser-002",
+      "file": "php/deser/deser_unserialize_allowed_true.php",
+      "language": "php",
+      "is_vulnerable": true,
+      "vuln_class": "deser",
+      "cwe": "CWE-502",
+      "provenance": "real-repo-precision-2026-04-28",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "php.deser.unserialize"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-04-28",
+        "unserialize",
+        "allowed_classes",
+        "true-default"
+      ],
+      "disabled": false,
+      "notes": "Vulnerable counterpart to php-safe-017: allowed_classes => true is the unsafe default. Pattern must still fire."
+    },
+    {
+      "case_id": "php-path_traversal-003",
+      "file": "php/path_traversal/path_traversal_concat.php",
+      "language": "php",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-98",
+      "provenance": "real-repo-precision-2026-04-28",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "php.path.include_variable"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-04-28",
+        "include",
+        "concat",
+        "user-input"
+      ],
+      "disabled": false,
+      "notes": "Vulnerable counterpart to php-safe-018: included variable is built from concatenation of $_GET inside the function — not a parameter pass-through. Pattern must still fire."
+    },
+    {
       "case_id": "php-deser-001",
       "file": "php/deser/deser_unserialize.php",
       "language": "php",
@@ -3655,6 +3735,34 @@
       "notes": "Allowlist validation before system() call"
     },
     {
+      "case_id": "ruby-safe-009",
+      "file": "ruby/safe/safe_kernel_open_file_namespaced.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "kernel-open",
+        "file-open",
+        "regression",
+        "no-source"
+      ],
+      "disabled": false,
+      "notes": "Negative regression for Ruby =open exact-matcher: File.open with a hardcoded path must not fire the bare-open CMDI rule (or any taint rule); pairs with ruby-cmdi-003"
+    },
+    {
       "case_id": "ruby-ssrf-safe-001",
       "file": "ruby/ssrf/safe_ssrf_hardcoded.rb",
       "language": "ruby",
@@ -3756,6 +3864,43 @@
       ],
       "disabled": false,
       "notes": "Command injection via backtick interpolation with user-controlled data"
+    },
+    {
+      "case_id": "ruby-cmdi-003",
+      "file": "ruby/cmdi/cmdi_kernel_open.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "tags": [
+        "kernel-open",
+        "cmdi",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "CVE-2020-8130 regression: bare Kernel#open(path) interprets a leading | as a shell pipe; the =open exact-matcher distinguishes it from File.open / IO.open / URI.open"
     },
     {
       "case_id": "ruby-code_injection-001",
@@ -5213,6 +5358,40 @@
       ],
       "disabled": false,
       "notes": "Direct flow from getenv to strcat()"
+    },
+    {
+      "case_id": "c-buf-005",
+      "file": "c/buffer_overflow/buffer_strcpy_user_arg.c",
+      "language": "c",
+      "is_vulnerable": true,
+      "vuln_class": "buffer_overflow",
+      "cwe": "CWE-120",
+      "provenance": "real-repo-precision-2026-04-28",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "c.memory.strcpy"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": null,
+      "tags": [
+        "direct",
+        "argv",
+        "real-repo-precision-2026-04-28"
+      ],
+      "disabled": false,
+      "notes": "Vulnerable counterpart to c-safe-017: argv[1] is a non-literal source so Layer D does not suppress; pattern rule fires."
     },
     {
       "case_id": "c-safe-001",
@@ -9655,6 +9834,67 @@
       "notes": "CVE-2013-0156 patched counterpart: params decoded as JSON, no YAML loader on untrusted input; regression guard that Nyx does not refire on the fix"
     },
     {
+      "case_id": "cve-rb-2020-8130-vulnerable",
+      "file": "cve_corpus/ruby/CVE-2020-8130/vulnerable.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          39,
+          39
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "rake",
+        "cmdi",
+        "kernel-open"
+      ],
+      "disabled": false,
+      "notes": "CVE-2020-8130: Rake::FileList#egrep opened each filename via Kernel#open, which interprets a leading | as a shell command. Attacker-supplied filenames (build-config / job-runner inputs) thereby achieved arbitrary command execution. Fixed in v12.3.3 by switching to File.open. MIT"
+    },
+    {
+      "case_id": "cve-rb-2020-8130-patched",
+      "file": "cve_corpus/ruby/CVE-2020-8130/patched.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "rake",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2020-8130 patched counterpart: open(fn, ...) replaced with File.open(fn, ...); File.open never pipes a leading |. Fixture additionally hardcodes the filename + pattern (patched-fix simplification) so the regression guard is class-clean — see vulnerable.rb header for rationale."
+    },
+    {
       "case_id": "cve-java-2015-7501-vulnerable",
       "file": "cve_corpus/java/CVE-2015-7501/vulnerable.java",
       "language": "java",
@@ -9791,6 +10031,337 @@
       ],
       "disabled": false,
       "notes": "CVE-2022-30323 patched counterpart: scheme allowlist + in-process go-git clone removes the exec.Command path; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-go-2023-3188-vulnerable",
+      "file": "cve_corpus/go/CVE-2023-3188/vulnerable.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          85,
+          85
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          84,
+          84
+        ]
+      ],
+      "tags": [
+        "cve",
+        "owncast",
+        "ssrf",
+        "fediverse"
+      ],
+      "disabled": false,
+      "notes": "CVE-2023-3188: Owncast 0.0.x webfinger SSRF — `account` parsed off the @-delimited handle reaches `http.DefaultClient.Get(requestURL.String())` with no host validation. Engine detects via cross-function taint flow (handler → GetWebfingerLinks param 0 → http.DefaultClient.Get SSRF sink). MIT."
+    },
+    {
+      "case_id": "cve-go-2023-3188-patched",
+      "file": "cve_corpus/go/CVE-2023-3188/patched.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "owncast",
+        "ssrf",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2023-3188 patched counterpart: `IsHostnameInternal` early-return + redirect-blocked `*http.Client`. Regression guard that Nyx does not refire on the fix; the local-client sink (`client.Get`) is intentionally not on the SSRF matcher list."
+    },
+    {
+      "case_id": "cve-go-2024-31450-vulnerable",
+      "file": "cve_corpus/go/CVE-2024-31450/vulnerable.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          69,
+          69
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          59,
+          59
+        ]
+      ],
+      "tags": [
+        "cve",
+        "owncast",
+        "path_traversal",
+        "emoji"
+      ],
+      "disabled": true,
+      "disabled_reason": "Engine gap: Go `json.NewDecoder(r.Body).Decode(&dest)` taint propagation requires (a) the new `ContainerOp::Writeback` rule (landed this session) AND (b) bridging the writeback into `dest`'s heap-field cells so subsequent `dest.Field` access inherits taint via the FieldProj path. Today's writeback only taints the destination SSA value, which fails for `body.Name` reads. Adding a hardcoded `os.Remove` recognizer would be a bandaid — the real fix is making the writeback drive the field-cell store the FieldProj reader consults. Tracked in CVE_DEFERRED.md.",
+      "notes": "CVE-2024-31450: Owncast 0.1.2 emoji-delete API joined a body-supplied filename to the emoji directory and called `os.Remove` without `filepath.Base`. Fixed in 0.1.3 with `filepath.IsLocal(targetPath)` early return."
+    },
+    {
+      "case_id": "cve-go-2024-31450-patched",
+      "file": "cve_corpus/go/CVE-2024-31450/patched.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "owncast",
+        "path_traversal",
+        "patched",
+        "negative"
+      ],
+      "disabled": true,
+      "disabled_reason": "Paired with cve-go-2024-31450-vulnerable; re-enable both when Decode-writeback-to-field-cell propagation lands.",
+      "notes": "CVE-2024-31450 patched counterpart: `filepath.IsLocal(targetPath)` early-return. Regression guard."
+    },
+    {
+      "case_id": "go-ssrf-004",
+      "file": "go/ssrf/ssrf_default_client_get.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          13,
+          13
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "tags": [
+        "ssrf",
+        "default-client",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "CVE-Hunt session 2 regression: `http.DefaultClient.Get` was not on the Go SSRF matcher list; pin so a future revert can't quietly drop the matcher."
+    },
+    {
+      "case_id": "go-ssrf-safe-002",
+      "file": "go/ssrf/safe_ssrf_default_client_get.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "ssrf",
+        "default-client",
+        "safe",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-Hunt session 2 negative pair: hard-coded URL handed to `http.DefaultClient.Get`; new matcher must not over-fire on constant-URL calls."
+    },
+    {
+      "case_id": "go-path-002",
+      "file": "go/path_traversal/path_traversal_remove.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          19,
+          19
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          17,
+          17
+        ]
+      ],
+      "tags": [
+        "path-traversal",
+        "os-remove",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "CVE-Hunt session 2 regression: `os.Remove` and the rest of the mutating-fs family (`os.WriteFile`, `os.RemoveAll`) were missing from the Go FILE_IO matcher list; pin against a future revert."
+    },
+    {
+      "case_id": "go-path-safe-002",
+      "file": "go/path_traversal/safe_path_traversal_remove.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "path-traversal",
+        "os-remove",
+        "safe",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-Hunt session 2 negative pair: `filepath.Base` cleanses traversal segments before the join; new os.Remove matcher must not over-fire on cleansed flows."
+    },
+    {
+      "case_id": "go-path-003",
+      "file": "go/path_traversal/path_traversal_ifinit.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          29,
+          29
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          27,
+          27
+        ]
+      ],
+      "tags": [
+        "path-traversal",
+        "if-init",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "CVE-Hunt session 4 regression: tree-sitter `if_statement.initializer` was skipped by the Kind::If CFG arm; side-effecting calls inside `if x := f(); x != 0 { }` were invisible to taint. Pins the lowering fix that maps Owncast CVE-2024-31450's exact init shape."
+    },
+    {
+      "case_id": "go-path-safe-003",
+      "file": "go/path_traversal/safe_path_traversal_ifinit.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "path-traversal",
+        "if-init",
+        "safe",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-Hunt session 4 negative pair: same if-init shape as go-path-003, but `filepath.Base` sanitizes the user-controlled name before the os.Remove sink. Verifies the new init lowering doesn't over-fire when the sanitizer dominates."
     },
     {
       "case_id": "cve-c-2016-3714-vulnerable",
@@ -11230,6 +11801,63 @@
       "notes": "PHP equivalent of rs-safe-016: cross-function bool-returning validator."
     },
     {
+      "case_id": "php-safe-017",
+      "file": "php/safe/safe_unserialize_allowed_classes.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-502",
+      "provenance": "real-repo-precision-2026-04-28",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "php.deser.unserialize",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "real-repo-precision-2026-04-28",
+        "unserialize",
+        "allowed_classes"
+      ],
+      "disabled": false,
+      "notes": "PHP 7+ structural mitigation against object injection — unserialize($x, ['allowed_classes' => ...]) with false / array literal / class constant must not fire php.deser.unserialize. Distilled from nextcloud lib/private/Profiler/FileProfilerStorage.php and apps/dav CustomPropertiesBackend."
+    },
+    {
+      "case_id": "php-safe-018",
+      "file": "php/safe/safe_include_param_passthrough.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-98",
+      "provenance": "real-repo-precision-2026-04-28",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "php.path.include_variable",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "real-repo-precision-2026-04-28",
+        "include",
+        "param-passthrough",
+        "autoloader"
+      ],
+      "disabled": false,
+      "notes": "Composer-style autoloader: closure / method takes a file path parameter and `include`s it. Pattern rule is heuristic without taint and over-fires; suppress when included variable is a formal parameter of the immediately enclosing function with no reassignment. Distilled from nextcloud composer/ClassLoader.php (32 copies), Router.php, Installer.php, Template/Base.php."
+    },
+    {
       "case_id": "c-safe-014",
       "file": "c/safe/safe_direct_path_sanitizer.c",
       "language": "c",
@@ -11309,6 +11937,60 @@
       ],
       "disabled": false,
       "notes": "C cross-function validator.  Standalone scan clean; benchmark harness reports FP.  Disabled."
+    },
+    {
+      "case_id": "c-safe-017",
+      "file": "c/safe/safe_strcpy_literal_src.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-120",
+      "provenance": "real-repo-precision-2026-04-28",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "c.memory.strcpy",
+        "c.memory.strcat"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "literal-source",
+        "ternary-literal",
+        "real-repo-precision-2026-04-28"
+      ],
+      "disabled": false,
+      "notes": "Postgres `pg_prewarm/autoprewarm.c` + `formatting.c::DCH_a_m` shape — strcpy/strcat with string-literal or ternary-of-literals source.  Layer D suppression (src/ast.rs::is_c_buffer_call_literal_safe)."
+    },
+    {
+      "case_id": "c-safe-018",
+      "file": "c/safe/safe_sprintf_bounded_format.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-120",
+      "provenance": "real-repo-precision-2026-04-28",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "c.memory.sprintf"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "bounded-format",
+        "real-repo-precision-2026-04-28"
+      ],
+      "disabled": false,
+      "notes": "Postgres `datetime.c::EncodeDateTime` shape — sprintf with literal format string containing only width/precision-bounded specifiers.  Layer D suppression."
     },
     {
       "case_id": "cpp-safe-014",
@@ -12973,6 +13655,68 @@
       ],
       "disabled": false,
       "notes": "Counterpart to safe_post_fetch_ownership_check \u2014 same controller shape but the per-record permission check is omitted, so the row-fetch exemption does not fire. Engine must keep flagging this even though the safe-shape fixtures train the exemption on the same Issue.find(params[:id]) pattern."
+    },
+    {
+      "case_id": "java-safe-realrepo-keycloak-001",
+      "file": "java/safe/SafeJpaParameterizedExecute.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo-precision-2026-04-28",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "jpa",
+        "parameterized-execute",
+        "real-repo-precision-2026-04-28"
+      ],
+      "disabled": false,
+      "notes": "JPA executeUpdate()/executeQuery() with zero args after createQuery(LITERAL) is parameterised; engine synthesises same-node Sanitizer(SQL_QUERY) so reflexive dominance suppresses cfg-unguarded-sink. Distilled from keycloak/JpaEventStoreProvider.java."
+    },
+    {
+      "case_id": "java-sqli-realrepo-keycloak-001",
+      "file": "java/sqli/SqliJpaCreateQueryConcat.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "real-repo-precision-2026-04-28",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          18,
+          18
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "jpa",
+        "concat",
+        "real-repo-precision-2026-04-28"
+      ],
+      "disabled": false,
+      "notes": "Concatenated SQL passed to em.createQuery(...) \u2014 receiver-chain walk sees binary_expression at arg 0, refuses to synthesise sanitizer, structural sink fires. Regression guard for the JPA parameterised-execute fix."
     }
   ]
 }

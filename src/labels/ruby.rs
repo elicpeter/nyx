@@ -73,6 +73,19 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
     },
+    // Bare `Kernel#open(path)` interprets a path beginning with `|` as a
+    // shell command (`open("|cmd")` runs `cmd`).  `=open` exact-matcher
+    // syntax limits this rule to the bare call — `File.open`, `IO.open`,
+    // `URI.open` etc. each have their own non-pipe semantics and are
+    // covered by their own labels (or intentionally not labeled as CMDI).
+    // CVE-2020-8130 (rake `Rake::FileList#egrep`) was the canonical
+    // exploit: an attacker-supplied filename starting with `|` ran through
+    // `open(fn, "r")`.  The fix replaced the call with `File.open(fn, "r")`.
+    LabelRule {
+        matchers: &["=open"],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
+    },
     // Backtick shell execution: tree-sitter-ruby represents `` `cmd` `` as a
     // `subshell` node with no callee field. push_node normalises the synthetic
     // callee name to "subshell" and extract_arg_uses lifts interpolation

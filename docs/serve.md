@@ -46,6 +46,44 @@ If you forward the port over SSH or expose it through a reverse proxy, the host-
 
 The numeric `:id` for finding URLs is the position index in the current scan, not a stable fingerprint. Bookmarks across scans aren't reliable; rely on file path + line.
 
+### Overview and Health Score
+
+The overview is the landing page after a scan. Severity counts, top affected files, OWASP coverage, and a 0 to 100 Health Score with a letter grade.
+
+#### How the Health Score is calculated
+
+Two things drive the score. The density of risk in the codebase, and hard guardrails that decide what the grade can mean.
+
+Each finding contributes weight = `severity_base × confidence_factor × verdict_factor × context_factor`:
+
+- Severity base: HIGH 10, MEDIUM 3, LOW (security) 0.5
+- Confidence: High 1.0, Medium 0.6, Low 0.3
+- Symex verdict: Confirmed 1.2, NotAttempted 1.0, Inconclusive 0.7, Infeasible 0.1
+- Context: cross-file taint flow 1.15, intra-file flow 1.0, AST-only or no flow 0.75, test path 0.3
+
+Quality lints (rule IDs containing `.quality.`) skip the per-finding weight and instead apply a saturating drag, capped at 15 points (so 1000 unwrap lints don't grade worse than 300 do). Total weight gets divided by `sqrt(files / 100)`, clamped between 1 and roughly 22, so a 100-file repo and a 50000-file repo see different denominators but a monorepo can't dilute its way out of a real HIGH.
+
+The result feeds a log curve into a 0 to 100 base, minus the quality drag. Then HIGH guardrails apply, keyed on the *credibility-adjusted* HIGH count rather than the raw count:
+
+| effective HIGH | ceiling |
+|---|---|
+| 0 | 100 |
+| 1 | 85 |
+| 2 | 78 |
+| 3 to 5 | 68 |
+| 6 to 10 | 58 |
+| 11+ | 45 |
+
+A repo with zero effective HIGHs never grades below C 70. That floor is the structural promise that the score isn't an automated F-machine for projects that have lots of LOW noise but no critical issues.
+
+Modifiers in the ±5 range nudge the result for trend (only after the second scan), triage coverage (only when total findings ≥ 20), reintroduced findings, and stale HIGHs more than 30 days old.
+
+#### What the score doesn't measure
+
+It's a Nyx-finding-pressure metric, not a security audit. Score 100 means Nyx didn't find anything under its current rules and language coverage; it doesn't certify the absence of vulnerabilities. The score doesn't see runtime config, IAM, secret stores, dependency CVEs, or anything outside the source tree being scanned. A repo of mostly Kotlin (where Nyx coverage is thin) will score artificially well because most of the code never gets evaluated.
+
+The current ceilings are calibrated for v0.5 scanner false-positive rates. As symex coverage and rule precision improve, the ceilings tighten. Calibration data and the rationale behind each tunable lives in [health-score-audit.md](health-score-audit.md).
+
 ### Findings and Finding detail
 
 The findings list is filterable by severity, confidence, category, language, rule ID, and triage state.

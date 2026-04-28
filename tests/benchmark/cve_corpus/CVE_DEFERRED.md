@@ -25,8 +25,89 @@ deep fix), resolve it before adding new CVEs.
 
 ## Open
 
-(none — CVE-2025-64430 is now resolved end-to-end; see Resolved
-section below.)
+### CVE-2024-31450 — Owncast emoji-delete path traversal (Go)
+
+- **Language / class**: go / path_traversal
+- **Deferred**: 2026-04-28 by Go hunt session 2; reduced 2026-04-28 by
+  session 4 (two of three sub-gaps landed; chained-call lowering
+  remains).
+- **Engine gap (session 4 update)**: The deferred entry was
+  diagnosed as a single bridge problem (writeback writes Heap-Elements
+  but FieldProj reads field-cells). Session 4 found the chain has
+  three independent gaps that all conspire to suppress this CVE; two
+  are now fixed in-tree, one remains.
+  1. **(LANDED 2026-04-28)** Field-cell wildcard bridge.
+     `ContainerOp::Writeback` now writes
+     `(loc, FieldId::ANY_FIELD)` cells for every `loc ∈
+     pointer_facts.pt(dest_arg)`. `SsaOp::FieldProj` reads the
+     `(loc, *field)` cell first and falls back to
+     `(loc, ANY_FIELD)` when the specific cell is absent. ANY_FIELD
+     is a new sentinel (`FieldId(u32::MAX - 1)`), distinct from
+     `ELEM`, so container-element writes don't pollute struct
+     reads. Verified end-to-end via the test_decode2 split form
+     (`dec := json.NewDecoder(r.Body); dec.Decode(body); …
+     body.Field`) when the body is parseable as separate Calls and
+     Go emits FieldProj for the access. (Currently a dead path for
+     Owncast because of gap (3), but covered by lib tests and a
+     forward-looking improvement.)
+  2. **(LANDED 2026-04-28)** Go `if init; cond { }` CFG lowering.
+     Tree-sitter exposes the init under the `initializer` field of
+     `if_statement`, but `Kind::If` in `src/cfg/mod.rs` ignored it,
+     so calls inside `if err := f(); err != nil` disappeared from
+     the CFG. Now lowers the init via `build_sub` against the
+     incoming `preds` and uses its exits as the condition's
+     predecessors. Verified by `tests/benchmark/corpus/go/
+     path_traversal/path_traversal_ifinit.go` (vulnerable +
+     patched). Pre-fix this fixture had 0 taint findings; post-fix
+     `taint-unsanitised-flow` fires on the vulnerable, patched
+     stays clean (sanitized via `filepath.Base`).
+  3. **(STILL DEFERRED — chained method-call lowering)**
+     `json.NewDecoder(r.Body).Decode(emoji)` lowers as a single
+     `SsaOp::Call` with callee text
+     `"json.NewDecoder(r.Body).Decode"` rather than two separate
+     calls (an inner `json.NewDecoder` whose result is the
+     receiver of an outer `.Decode`). The inner call's source-flow
+     never gets its own SSA value, so the outer `.Decode` has no
+     receiver SSA to reference and the writeback's
+     `recv_val` resolution fails ("writeback: no receiver SSA
+     value for callee `json.NewDecoder(r.Body).Decode`"). This
+     is the same chain shape JS handles via
+     `find_chained_inner_call` for inner-gate label classification
+     — but that helper rebinds the *callee text* of the outer
+     call, it does not split the chain into separate SSA Call ops.
+     For taint to flow through `inner.result → outer.receiver`,
+     the SSA needs each call as a distinct SsaOp::Call.
+- **Deep fix sketch (remaining gap 3)**:
+  1. In `Kind::CallFn / Kind::CallMethod / Kind::CallMacro` of
+     `build_sub`, before pushing the outer call's CFG node, walk
+     the function/method receiver. If the receiver is itself a
+     CallFn/CallMethod, recursively lower it first (push its own
+     CFG node connected to `preds`), then use its exits as the
+     outer call's `preds`. The outer call's receiver-SSA channel
+     should reference the inner call's return value — which would
+     also fix the writeback receiver-resolution path, since the
+     receiver SSA value would now exist.
+  2. Repeat for Go's `for init; cond; post { }` loops where init
+     might also have side effects (`for k, v := range f()` and
+     similar).
+  3. Audit existing JS/TS tests that depend on chained calls
+     resolving as a single Call op (the
+     `find_chained_inner_call`-using paths). The SSA split is
+     additive only when receiver-resolution works; if it breaks
+     existing label classification, gate the split per-language
+     and start with Go.
+- **Why shallow fix is unacceptable**: A bandaid recognizer that
+  hardcodes `os.Remove(filepath.Join(_, dest.Field))` would not help
+  the next CVE in this shape, and Go HTTP CRUD handlers overwhelmingly
+  use the `json.NewDecoder(r.Body).Decode(&dest)` source pattern.
+  Three of the five Go CVE candidates surveyed in session 2 sit on
+  the same chained-call lowering gap.
+- **Tracking**: ground_truth case_ids `cve-go-2024-31450-vulnerable`,
+  `cve-go-2024-31450-patched`; fixture
+  `cve_corpus/go/CVE-2024-31450/`; regression fixtures
+  `tests/benchmark/corpus/go/path_traversal/path_traversal_ifinit.go`
+  and `safe_path_traversal_ifinit.go` (gap 2 verifier);
+  `FieldId::ANY_FIELD` sentinel in `src/ssa/ir.rs` (gap 1).
 
 ### Historical sub-gaps for CVE-2025-64430 (resolved)
 

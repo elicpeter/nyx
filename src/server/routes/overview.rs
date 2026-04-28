@@ -132,6 +132,11 @@ async fn overview(State(state): State<AppState>) -> Json<OverviewResponse> {
             // Trend is meaningless without ≥2 completed scans —
             // matches the first-scan check `compare_to_current` uses.
             has_history: history.scans.len() >= 2,
+            // Suppression-hygiene modifier — populated when the
+            // suppression panel was computable for this scan.
+            blanket_suppression_rate: suppression_hygiene
+                .as_ref()
+                .map(|s| s.blanket_rate),
         },
     ));
 

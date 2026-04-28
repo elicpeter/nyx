@@ -723,6 +723,63 @@ impl<'a> ParsedSource<'a> {
                     {
                         continue;
                     }
+                    // Layer B: PHP `include $var` where $var is a formal parameter
+                    // of the immediately enclosing function/method/closure and is
+                    // not reassigned before the include.  This is the canonical
+                    // PHP autoloader / scope-isolated-include shape (composer's
+                    // ClassLoader, PSR-4 loaders, route-file loaders); the
+                    // pattern rule is heuristic without taint and over-fires
+                    // here.  A taint-aware sink check (the engine's
+                    // taint-unsanitised-flow rule) still catches the case where
+                    // a tainted value reaches the parameter at the call site.
+                    if cq.meta.id == "php.path.include_variable"
+                        && self.lang_slug == "php"
+                        && is_php_include_param_passthrough(cap.node, self.bytes)
+                    {
+                        continue;
+                    }
+                    // Layer C: PHP `unserialize($x, ['allowed_classes' => [...]])`
+                    // or `unserialize($x, ['allowed_classes' => false])` —
+                    // PHP 7+ structural mitigation against object injection.
+                    // When the call passes an `allowed_classes` option set to
+                    // either `false` (no class instantiation) or an array
+                    // literal of explicit class names, the deserialised data
+                    // cannot construct arbitrary user classes.  Skip
+                    // `allowed_classes => true` (the unsafe default) and
+                    // dynamic / variable values (let those fire).
+                    if cq.meta.id == "php.deser.unserialize"
+                        && self.lang_slug == "php"
+                        && is_php_unserialize_allowed_classes_restricted(
+                            cap.node,
+                            self.bytes,
+                        )
+                    {
+                        continue;
+                    }
+                    // Layer D: C/C++ buffer-overflow pattern rules
+                    // (`{c,cpp}.memory.strcpy`, `strcat`, `sprintf`) fire
+                    // syntactically on every call regardless of argument
+                    // bounds.  The pattern's stated danger ("no bounds
+                    // checking on destination buffer" / "no length limit on
+                    // output buffer") is only realisable when the source /
+                    // format-string contributes attacker-controlled length.
+                    // When the source argument is a string literal (or a
+                    // ternary of two string literals), the contributed length
+                    // is statically bounded — there is no overflow vector
+                    // for an attacker even if the destination buffer is
+                    // mis-sized.  Same principle for `sprintf` when the
+                    // format string is a literal containing no bare `%s`
+                    // (only width-bounded numeric / char specifiers, or
+                    // precision-bounded `%.<N>s` / `%.*s`).
+                    if (self.lang_slug == "c" || self.lang_slug == "cpp")
+                        && is_c_buffer_call_literal_safe(
+                            cq.meta.id,
+                            cap.node,
+                            self.bytes,
+                        )
+                    {
+                        continue;
+                    }
                     let point = cap.node.start_position();
                     out.push(Diag {
                         path: self.path.to_string_lossy().into_owned(),
@@ -1780,6 +1837,590 @@ fn is_literal_node(node: tree_sitter::Node, bytes: &[u8]) -> bool {
     }
 }
 
+/// PHP-only: returns `true` when the captured `include_expression` node is
+/// `include $var` (or `require $var`, etc.) and `$var` is a formal parameter
+/// of the immediately enclosing function / method / closure / arrow function,
+/// with no assignment to `$var` between the function body start and the
+/// include site.  This is the canonical PHP autoloader / scope-isolated
+/// `Closure::bind(static function ($file) { include $file; }, ...)` shape;
+/// composer's `ClassLoader::initializeIncludeClosure`, PSR-4 loaders, and
+/// route-file loaders all match this.  The pattern rule is intentionally
+/// heuristic (no taint), so a parameter pass-through is the broadest
+/// safe-suppression boundary; if the caller passes a tainted value, the
+/// engine's separate taint-unsanitised-flow rule still fires.
+fn is_php_include_param_passthrough(include_node: tree_sitter::Node, bytes: &[u8]) -> bool {
+    // tree-sitter-php shape:
+    //   include_expression
+    //     variable_name
+    //       name "<param>"
+    let var_node = include_node.named_child(0);
+    let Some(var_node) = var_node else {
+        return false;
+    };
+    if var_node.kind() != "variable_name" {
+        return false;
+    }
+    let name_node = var_node.named_child(0);
+    let Some(name_node) = name_node else {
+        return false;
+    };
+    let var_name = match std::str::from_utf8(&bytes[name_node.byte_range()]) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    // Walk up to the enclosing function/method/closure.
+    let mut cur = include_node;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "method_declaration"
+            | "function_definition"
+            | "anonymous_function"
+            | "anonymous_function_creation_expression"
+            | "arrow_function" => {
+                let params = parent
+                    .child_by_field_name("parameters")
+                    .or_else(|| find_named_child_of_kind(parent, "formal_parameters"));
+                let Some(params) = params else {
+                    return false;
+                };
+                if !param_list_contains_name(params, var_name, bytes) {
+                    return false;
+                }
+                // Reassignment guard: if the variable is reassigned inside the
+                // function body before the include, the parameter-pass-through
+                // assumption breaks down.
+                let body = parent
+                    .child_by_field_name("body")
+                    .or_else(|| find_named_child_of_kind(parent, "compound_statement"));
+                let body_start = body.map(|b| b.start_byte()).unwrap_or(parent.start_byte());
+                if is_var_reassigned_before(
+                    body.unwrap_or(parent),
+                    var_name,
+                    include_node.start_byte(),
+                    body_start,
+                    bytes,
+                ) {
+                    return false;
+                }
+                return true;
+            }
+            // Stop at class/program scope without a matching function — bare
+            // top-level `include $var` does not benefit from this guard.
+            "program" | "class_declaration" | "trait_declaration" | "interface_declaration" => {
+                return false;
+            }
+            _ => {}
+        }
+        cur = parent;
+    }
+    false
+}
+
+fn find_named_child_of_kind<'a>(
+    parent: tree_sitter::Node<'a>,
+    kind: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    for i in 0..parent.named_child_count() as u32 {
+        if let Some(child) = parent.named_child(i) {
+            if child.kind() == kind {
+                return Some(child);
+            }
+        }
+    }
+    None
+}
+
+fn param_list_contains_name(
+    params: tree_sitter::Node,
+    target_name: &str,
+    bytes: &[u8],
+) -> bool {
+    for i in 0..params.named_child_count() as u32 {
+        let Some(param) = params.named_child(i) else {
+            continue;
+        };
+        if !matches!(
+            param.kind(),
+            "simple_parameter"
+                | "variadic_parameter"
+                | "property_promotion_parameter"
+                | "promoted_constructor_parameter"
+        ) {
+            continue;
+        }
+        // simple_parameter has a `variable_name` child whose `name` child is the bare ident.
+        let var_node = param
+            .child_by_field_name("name")
+            .or_else(|| find_named_child_of_kind(param, "variable_name"));
+        let Some(var_node) = var_node else {
+            continue;
+        };
+        let name_node = if var_node.kind() == "variable_name" {
+            var_node.named_child(0)
+        } else {
+            Some(var_node)
+        };
+        let Some(name_node) = name_node else {
+            continue;
+        };
+        if let Ok(name) = std::str::from_utf8(&bytes[name_node.byte_range()]) {
+            if name == target_name {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Walk the function body looking for any `assignment_expression` whose LHS
+/// names `target_name`, between `body_start` (inclusive) and `before_byte`
+/// (exclusive).  Crosses nested scopes (closures inside the function are
+/// rare in this idiom, and reassignment inside them wouldn't shadow the
+/// outer parameter).
+fn is_var_reassigned_before(
+    root: tree_sitter::Node,
+    target_name: &str,
+    before_byte: usize,
+    body_start: usize,
+    bytes: &[u8],
+) -> bool {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.start_byte() >= before_byte {
+            continue;
+        }
+        if node.end_byte() <= body_start {
+            continue;
+        }
+        if node.kind() == "assignment_expression" {
+            // LHS is the first named child (or the `left` field in newer grammars).
+            let lhs = node
+                .child_by_field_name("left")
+                .or_else(|| node.named_child(0));
+            if let Some(lhs) = lhs {
+                if lhs.kind() == "variable_name" {
+                    if let Some(n) = lhs.named_child(0) {
+                        if let Ok(s) = std::str::from_utf8(&bytes[n.byte_range()]) {
+                            if s == target_name {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for i in 0..node.named_child_count() as u32 {
+            if let Some(c) = node.named_child(i) {
+                stack.push(c);
+            }
+        }
+    }
+    false
+}
+
+/// PHP-only: returns `true` when the captured `function_call_expression`
+/// node is `unserialize($x, [..., 'allowed_classes' => <ARRAY|false>, ...])`.
+/// This is the canonical PHP 7+ structural mitigation against object
+/// injection — explicitly restricting which classes the deserialiser may
+/// instantiate.  Only suppress when the option is either:
+///
+///   - `'allowed_classes' => false`           (no class instantiation), or
+///   - `'allowed_classes' => [Foo::class]`    (an array literal allow-list).
+///
+/// `'allowed_classes' => true` (the unsafe default) and dynamic values
+/// (`'allowed_classes' => $opts`) leave the finding in place.
+fn is_php_unserialize_allowed_classes_restricted(
+    cap_node: tree_sitter::Node,
+    bytes: &[u8],
+) -> bool {
+    // The pattern captures `@n` (the function name) at index 0, so walk up
+    // to the enclosing function_call_expression.
+    let call_node = if cap_node.kind() == "function_call_expression" {
+        cap_node
+    } else {
+        let mut cur = cap_node;
+        let mut found = None;
+        for _ in 0..4 {
+            if cur.kind() == "function_call_expression" {
+                found = Some(cur);
+                break;
+            }
+            match cur.parent() {
+                Some(p) => cur = p,
+                None => break,
+            }
+        }
+        match found {
+            Some(c) => c,
+            None => return false,
+        }
+    };
+    let arg_list = find_named_child_of_kind(call_node, "arguments");
+    let Some(arg_list) = arg_list else {
+        return false;
+    };
+    // arg 0 is the data; arg 1 is the options array.
+    let mut args = Vec::new();
+    for i in 0..arg_list.named_child_count() as u32 {
+        if let Some(c) = arg_list.named_child(i) {
+            if c.kind() == "argument" {
+                args.push(c);
+            }
+        }
+    }
+    if args.len() < 2 {
+        return false;
+    }
+    // Unwrap the `argument` wrapper to its inner expression.
+    let opts = args[1].named_child(0);
+    let Some(opts) = opts else { return false };
+    if opts.kind() != "array_creation_expression" {
+        return false;
+    }
+    // Walk array_element_initializer children looking for the
+    // 'allowed_classes' key.
+    for i in 0..opts.named_child_count() as u32 {
+        let Some(elem) = opts.named_child(i) else {
+            continue;
+        };
+        if elem.kind() != "array_element_initializer" {
+            continue;
+        }
+        // Two named children: key, value.
+        if elem.named_child_count() < 2 {
+            continue;
+        }
+        let key = elem.named_child(0);
+        let value = elem.named_child(1);
+        let (Some(key), Some(value)) = (key, value) else {
+            continue;
+        };
+        if !is_string_literal_with_text(key, "allowed_classes", bytes) {
+            continue;
+        }
+        // Accept structural mitigation forms.  The intent signal is
+        // "developer explicitly set allowed_classes to something other than
+        // `true`":
+        //   - boolean `false`             — no class instantiation at all
+        //   - array literal               — explicit allow-list
+        //   - class-constant reference    — `self::ALLOWED_CLASSES` /
+        //                                    `Foo::CONSTANTS` resolved to
+        //                                    a const array; engine cannot
+        //                                    statically inspect, but the
+        //                                    explicit option already
+        //                                    distinguishes safe usage from
+        //                                    the unsafe default.
+        match value.kind() {
+            "boolean" => {
+                if let Ok(s) = std::str::from_utf8(&bytes[value.byte_range()]) {
+                    if s.eq_ignore_ascii_case("false") {
+                        return true;
+                    }
+                }
+            }
+            "array_creation_expression"
+            | "class_constant_access_expression"
+            | "scoped_property_access_expression" => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// C/C++-only Layer D: structural suppression of buffer-overflow pattern
+/// rules when the source / format-string argument is a literal whose
+/// contributed length is statically bounded.
+///
+/// Pattern rules `c.memory.strcpy` / `c.memory.strcat` / `c.memory.sprintf`
+/// (and the `cpp.memory.*` mirrors) flag the call syntactically; their
+/// stated danger is "no bounds checking on destination buffer" / "no length
+/// limit on output buffer".  That danger is realised only when the source
+/// argument can carry attacker-controlled length.  When the source is a
+/// string literal the bound is fixed at compile time, so the call cannot
+/// overflow due to attacker input (a too-small destination is a fixed
+/// developer bug, not an exploitable channel).
+///
+/// Shapes recognised:
+///   - `strcpy(dst, "literal")`            → suppress
+///   - `strcpy(dst, COND ? "a" : "b")`     → suppress (ternary of two
+///                                            string-literal branches; the
+///                                            postgres `formatting.c` shape)
+///   - `strcat(dst, "literal")`            → same
+///   - `sprintf(dst, "format")` where the format string is a literal
+///     containing no bare `%s` (only width/precision-bounded specifiers
+///     like `%d`, `%lld`, `%c`, `%.*s`, `%.5s`)
+///                                          → suppress
+///
+/// Conservative refusals:
+///   - source / format is an identifier (could be tainted, e.g.
+///     `sprintf(buf, fmt, …)`) → keep firing
+///   - format is `concatenated_string` containing identifier macros (e.g.
+///     `"%" PRId64`) — we cannot statically expand the macro, so refuse
+///   - bare `%s` in format → keep firing (could read unbounded length)
+fn is_c_buffer_call_literal_safe(
+    rule_id: &str,
+    cap_node: tree_sitter::Node,
+    bytes: &[u8],
+) -> bool {
+    let kind = match rule_id {
+        "c.memory.strcpy" | "cpp.memory.strcpy" => CBufferRule::StrcpyOrCat,
+        "c.memory.strcat" | "cpp.memory.strcat" => CBufferRule::StrcpyOrCat,
+        "c.memory.sprintf" | "cpp.memory.sprintf" => CBufferRule::Sprintf,
+        _ => return false,
+    };
+    let call = find_enclosing_call(cap_node);
+    let Some(call) = call else { return false };
+    let arg_list = find_arg_list(call);
+    let Some(arg_list) = arg_list else {
+        return false;
+    };
+    let mut args = Vec::new();
+    for i in 0..arg_list.named_child_count() as u32 {
+        if let Some(c) = arg_list.named_child(i) {
+            args.push(c);
+        }
+    }
+    if args.len() < 2 {
+        return false;
+    }
+    let src = args[1];
+    match kind {
+        CBufferRule::StrcpyOrCat => is_c_string_literal_or_lit_ternary(src, bytes),
+        CBufferRule::Sprintf => {
+            // Format must be a single string literal with safe specifiers.
+            // Refuse identifiers and concatenated_string (PRI* macros).
+            if !matches!(
+                src.kind(),
+                "string_literal" | "raw_string_literal" | "string"
+            ) {
+                return false;
+            }
+            let Some(text) = c_string_literal_payload(src, bytes) else {
+                return false;
+            };
+            sprintf_format_is_safe(&text)
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+enum CBufferRule {
+    StrcpyOrCat,
+    Sprintf,
+}
+
+/// True for: a C/C++ string literal, OR a `conditional_expression` whose
+/// consequence + alternative are both either string literals or ALL_CAPS
+/// identifiers (the canonical preprocessor-macro naming convention for
+/// string-constant `#define`s — `P_M_STR`, `A_M_STR`, `BG_NAME`, etc., used
+/// pervasively in postgres' `formatting.c::DCH_a_m`).  Parenthesised forms
+/// are unwrapped.
+///
+/// The ALL_CAPS heuristic recognises identifiers whose every character is
+/// in `[A-Z0-9_]` and which contain at least one alphabetic letter.
+/// Variables in C/C++ are conventionally lower / camelCase; macros are
+/// SHOUTING_SNAKE.  False acceptance of an actual variable is possible but
+/// extraordinarily rare in real codebases.
+fn is_c_string_literal_or_lit_ternary(node: tree_sitter::Node, bytes: &[u8]) -> bool {
+    let n = unwrap_c_paren(node);
+    match n.kind() {
+        "string_literal" | "raw_string_literal" | "string" => true,
+        "conditional_expression" => {
+            // tree-sitter-c shape: condition, consequence, alternative as
+            // named children.  Accept when BOTH branches are string
+            // literals or ALL_CAPS identifiers.
+            let mut branches: Vec<tree_sitter::Node> = Vec::new();
+            for i in 0..n.named_child_count() as u32 {
+                if let Some(c) = n.named_child(i) {
+                    branches.push(c);
+                }
+            }
+            if branches.len() < 3 {
+                return false;
+            }
+            // first child is the condition; the next two are the branches.
+            let conseq = unwrap_c_paren(branches[1]);
+            let alt = unwrap_c_paren(branches[2]);
+            is_c_lit_or_macro_branch(conseq, bytes) && is_c_lit_or_macro_branch(alt, bytes)
+        }
+        _ => false,
+    }
+}
+
+fn is_c_lit_or_macro_branch(node: tree_sitter::Node, bytes: &[u8]) -> bool {
+    match node.kind() {
+        "string_literal" | "raw_string_literal" | "string" => true,
+        "identifier" => {
+            let Ok(name) = std::str::from_utf8(&bytes[node.byte_range()]) else {
+                return false;
+            };
+            is_all_caps_macro_name(name)
+        }
+        _ => false,
+    }
+}
+
+fn is_all_caps_macro_name(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut has_alpha = false;
+    for ch in s.chars() {
+        if ch.is_ascii_uppercase() {
+            has_alpha = true;
+        } else if ch == '_' || ch.is_ascii_digit() {
+            // ok
+        } else {
+            return false;
+        }
+    }
+    has_alpha
+}
+
+fn unwrap_c_paren(mut node: tree_sitter::Node) -> tree_sitter::Node {
+    for _ in 0..4 {
+        if node.kind() == "parenthesized_expression" {
+            if let Some(inner) = node.named_child(0) {
+                node = inner;
+                continue;
+            }
+        }
+        break;
+    }
+    node
+}
+
+/// Extract the textual payload of a C/C++ string literal node, stripping
+/// the surrounding double-quotes and the optional encoding prefix
+/// (`L"..."`, `u8"..."`, `R"(...)"`).  Returns `None` if the bytes are not
+/// valid UTF-8 or the literal cannot be decoded.
+fn c_string_literal_payload(node: tree_sitter::Node, bytes: &[u8]) -> Option<String> {
+    // Prefer a `string_content` child if tree-sitter exposes one.
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(c) = node.named_child(i) {
+            if c.kind() == "string_content" {
+                if let Ok(s) = std::str::from_utf8(&bytes[c.byte_range()]) {
+                    return Some(s.to_string());
+                }
+            }
+        }
+    }
+    // Fall back: strip the surrounding quotes from the full literal text.
+    let raw = std::str::from_utf8(&bytes[node.byte_range()]).ok()?;
+    let trimmed = raw.trim();
+    // Drop optional encoding prefix.
+    let after_prefix = trimmed
+        .trim_start_matches('L')
+        .trim_start_matches("u8")
+        .trim_start_matches('u')
+        .trim_start_matches('U');
+    let s = after_prefix.strip_prefix('"').and_then(|s| s.strip_suffix('"'));
+    s.map(|s| s.to_string())
+}
+
+/// Returns `true` when a `printf`-family format string can never overflow a
+/// destination buffer due to attacker-controlled length.  Walks every `%`
+/// specifier in the format and refuses if any bare `%s` is present.
+/// Width-bounded `%5s` is unbounded (width is a *minimum*), but
+/// precision-bounded `%.5s` / `%.*s` is safe (precision caps the maximum).
+pub(crate) fn sprintf_format_is_safe(fmt: &str) -> bool {
+    let bytes = fmt.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'%' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if i >= bytes.len() {
+            // trailing `%` — malformed, refuse to suppress
+            return false;
+        }
+        if bytes[i] == b'%' {
+            i += 1;
+            continue;
+        }
+        // Skip flags
+        while i < bytes.len() && matches!(bytes[i], b'-' | b'+' | b'#' | b' ' | b'0' | b'\'') {
+            i += 1;
+        }
+        // Skip width (digits or `*`)
+        if i < bytes.len() && bytes[i] == b'*' {
+            i += 1;
+        } else {
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+        }
+        // Optional precision
+        let mut has_precision = false;
+        if i < bytes.len() && bytes[i] == b'.' {
+            has_precision = true;
+            i += 1;
+            if i < bytes.len() && bytes[i] == b'*' {
+                i += 1;
+            } else {
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+            }
+        }
+        // Length modifiers: h hh l ll L q z j t
+        while i < bytes.len() && matches!(bytes[i], b'h' | b'l' | b'L' | b'q' | b'z' | b'j' | b't') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return false;
+        }
+        let conv = bytes[i];
+        i += 1;
+        match conv {
+            // Numeric / char / pointer specifiers — bounded output for any input
+            b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'c' | b'e' | b'E' | b'f' | b'F'
+            | b'g' | b'G' | b'a' | b'A' | b'p' | b'n' => continue,
+            // String specifier: only safe when precision-bounded
+            b's' => {
+                if !has_precision {
+                    return false;
+                }
+            }
+            // Unknown conversion (e.g. `%S` wide-char on Windows is
+            // unbounded) → conservative refuse.
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn is_string_literal_with_text(node: tree_sitter::Node, text: &str, bytes: &[u8]) -> bool {
+    if node.kind() != "string" && node.kind() != "encapsed_string" {
+        return false;
+    }
+    // Look for a single string_content / string_value child.
+    let mut payload = None;
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(c) = node.named_child(i) {
+            if c.kind() == "string_content" || c.kind() == "string_value" {
+                payload = Some(c);
+                break;
+            }
+        }
+    }
+    let Some(payload) = payload else {
+        // Fall back: PHP single-quoted strings sometimes inline the content.
+        if let Ok(s) = std::str::from_utf8(&bytes[node.byte_range()]) {
+            let trimmed = s.trim_matches(|c| c == '\'' || c == '"');
+            return trimmed == text;
+        }
+        return false;
+    };
+    if let Ok(s) = std::str::from_utf8(&bytes[payload.byte_range()]) {
+        return s == text;
+    }
+    false
+}
+
 /// Check if a string node contains interpolation (e.g., PHP `"Hello $name"`).
 fn has_interpolation(node: tree_sitter::Node) -> bool {
     for i in 0..node.child_count() as u32 {
@@ -2314,4 +2955,302 @@ fn constant_arg_suppression_works() {
             "Python os.system(cmd) should NOT have all-literal args"
         );
     }
+}
+
+/// Helper that runs a tree-sitter query against PHP source and returns the
+/// first capture-0 node, panicking if no match is found.  Used by the PHP
+/// suppression tests below.
+#[cfg(test)]
+fn first_php_capture<'tree>(
+    tree: &'tree tree_sitter::Tree,
+    code: &[u8],
+    query_str: &str,
+) -> tree_sitter::Node<'tree> {
+    use tree_sitter::StreamingIterator;
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let query = tree_sitter::Query::new(&lang, query_str).expect("query compiles");
+    let mut cursor = tree_sitter::QueryCursor::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), code);
+    let m = matches.next().expect("query should match");
+    let cap = m
+        .captures
+        .iter()
+        .find(|c| c.index == 0)
+        .expect("capture index 0");
+    cap.node
+}
+
+#[test]
+fn php_include_param_passthrough_recognises_canonical_shapes() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    parser.set_language(&lang).unwrap();
+    let q = r#"(include_expression (variable_name)) @vuln"#;
+
+    // Closure parameter pass-through (composer ClassLoader idiom).
+    let code = b"<?php\nstatic $cb = function ($file) { include $file; };\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_include_param_passthrough(cap, code),
+        "closure param pass-through should be recognised"
+    );
+
+    // Method parameter pass-through.
+    let code = b"<?php\nclass C { function f(string $file): void { include $file; } }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_include_param_passthrough(cap, code),
+        "method param pass-through should be recognised"
+    );
+
+    // Local variable assigned from concat — NOT a pass-through.
+    let code = b"<?php\nclass C { function f(string $base): void { $f = $base . '/x.php'; include $f; } }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_include_param_passthrough(cap, code),
+        "concat-built local should NOT be treated as pass-through"
+    );
+
+    // Param reassigned before include — NOT a pass-through.
+    let code = b"<?php\nfunction f($file) { $file = $_GET['x']; include $file; }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_include_param_passthrough(cap, code),
+        "reassigned param should NOT be treated as pass-through"
+    );
+
+    // Top-level (no enclosing function) — NOT a pass-through.
+    let code = b"<?php\n$file = $_GET['x'];\ninclude $file;\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_include_param_passthrough(cap, code),
+        "top-level include should NOT be treated as pass-through"
+    );
+}
+
+#[test]
+fn php_unserialize_allowed_classes_recognises_safe_forms() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    parser.set_language(&lang).unwrap();
+    let q = r#"(function_call_expression function: (name) @n (#eq? @n "unserialize")) @vuln"#;
+
+    // allowed_classes => false
+    let code = b"<?php\n$x = unserialize($d, ['allowed_classes' => false]);\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_unserialize_allowed_classes_restricted(cap, code),
+        "allowed_classes => false should be recognised as safe"
+    );
+
+    // allowed_classes => [Foo::class, Bar::class]
+    let code = b"<?php\n$x = unserialize($d, ['allowed_classes' => [Foo::class]]);\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_unserialize_allowed_classes_restricted(cap, code),
+        "allowed_classes => [array] should be recognised as safe"
+    );
+
+    // allowed_classes => self::ALLOWED  (class constant reference)
+    let code =
+        b"<?php\nclass C { const A = []; function f($d) { return unserialize($d, ['allowed_classes' => self::A]); } }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_unserialize_allowed_classes_restricted(cap, code),
+        "allowed_classes => self::CONST should be recognised as safe"
+    );
+
+    // allowed_classes => true — unsafe default, must NOT be suppressed
+    let code = b"<?php\n$x = unserialize($d, ['allowed_classes' => true]);\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_unserialize_allowed_classes_restricted(cap, code),
+        "allowed_classes => true is the unsafe default, should NOT be suppressed"
+    );
+
+    // No second arg — must NOT be suppressed
+    let code = b"<?php\n$x = unserialize($d);\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_unserialize_allowed_classes_restricted(cap, code),
+        "single-arg unserialize should NOT be suppressed"
+    );
+
+    // Dynamic options variable — must NOT be suppressed
+    let code = b"<?php\n$x = unserialize($d, $opts);\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_unserialize_allowed_classes_restricted(cap, code),
+        "dynamic options variable should NOT be suppressed"
+    );
+}
+
+#[test]
+fn sprintf_format_safety_classifier() {
+    // Numeric / char / pointer specifiers — bounded by definition.
+    assert!(sprintf_format_is_safe(""));
+    assert!(sprintf_format_is_safe("hello world"));
+    assert!(sprintf_format_is_safe("%d"));
+    assert!(sprintf_format_is_safe("%lld%c"));
+    assert!(sprintf_format_is_safe("fixed=%d/%c"));
+    assert!(sprintf_format_is_safe("%5d %x %llo"));
+    assert!(sprintf_format_is_safe("%%literal-percent"));
+    assert!(sprintf_format_is_safe("%p"));
+    // Precision-bounded `%s` / `%.*s` — output capped at precision.
+    assert!(sprintf_format_is_safe(" %.*s"));
+    assert!(sprintf_format_is_safe("%.5s"));
+    assert!(sprintf_format_is_safe("[%-.10s]"));
+    // Bare `%s` / width-only `%5s` — width is a *minimum*, length is
+    // unbounded.  Must NOT be suppressed.
+    assert!(!sprintf_format_is_safe("%s"));
+    assert!(!sprintf_format_is_safe("hello %s world"));
+    assert!(!sprintf_format_is_safe("%5s"));
+    assert!(!sprintf_format_is_safe("[%-20s]"));
+    // Unknown / non-standard conversions → conservative refuse.
+    assert!(!sprintf_format_is_safe("%S"));
+    assert!(!sprintf_format_is_safe("%"));
+    assert!(!sprintf_format_is_safe("%lZ"));
+}
+
+#[cfg(test)]
+fn first_c_capture<'tree>(
+    tree: &'tree tree_sitter::Tree,
+    code: &[u8],
+    query_str: &str,
+) -> tree_sitter::Node<'tree> {
+    use tree_sitter::StreamingIterator;
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    let query = tree_sitter::Query::new(&lang, query_str).expect("query compiles");
+    let mut cursor = tree_sitter::QueryCursor::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), code);
+    let m = matches.next().expect("query should match");
+    m.captures
+        .iter()
+        .find(|c| c.index == 0)
+        .expect("capture index 0")
+        .node
+}
+
+#[test]
+fn c_buffer_call_literal_safe_recognises_canonical_shapes() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    parser.set_language(&lang).unwrap();
+
+    let q_strcpy = r#"(call_expression function: (identifier) @id (#eq? @id "strcpy")) @vuln"#;
+    let q_strcat = r#"(call_expression function: (identifier) @id (#eq? @id "strcat")) @vuln"#;
+    let q_sprintf = r#"(call_expression function: (identifier) @id (#eq? @id "sprintf")) @vuln"#;
+
+    // strcpy(dst, "literal") — postgres autoprewarm shape.
+    let code = b"void f(char *d) { strcpy(d, \"pg_prewarm\"); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcpy);
+    assert!(
+        is_c_buffer_call_literal_safe("c.memory.strcpy", cap, code),
+        "strcpy with string-literal source must be suppressed"
+    );
+
+    // strcpy(dst, cond ? "a" : "b") — string-literal ternary.
+    let code = b"void f(char *s, int h) { strcpy(s, (h >= 12) ? \"p.m.\" : \"a.m.\"); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcpy);
+    assert!(
+        is_c_buffer_call_literal_safe("c.memory.strcpy", cap, code),
+        "strcpy with ternary-of-literals source must be suppressed"
+    );
+
+    // strcpy(dst, cond ? P_M_STR : A_M_STR) — postgres formatting.c
+    // shape with #define'd ALL_CAPS string-constant macros.
+    let code = b"#define P_M_STR \"p.m.\"\n#define A_M_STR \"a.m.\"\nvoid f(char *s, int h) { strcpy(s, (h >= 12) ? P_M_STR : A_M_STR); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcpy);
+    assert!(
+        is_c_buffer_call_literal_safe("c.memory.strcpy", cap, code),
+        "strcpy with ternary-of-ALL_CAPS-macros must be suppressed"
+    );
+
+    // strcpy(dst, cond ? var_a : var_b) — lowercase variables, NOT a
+    // recognisable preprocessor macro shape.  Must NOT suppress.
+    let code = b"void f(char *s, int h, char *a, char *b) { strcpy(s, (h >= 12) ? a : b); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcpy);
+    assert!(
+        !is_c_buffer_call_literal_safe("c.memory.strcpy", cap, code),
+        "strcpy with ternary-of-lowercase-vars must NOT be suppressed"
+    );
+
+    // strcat(dst, "literal") — same principle as strcpy.
+    let code = b"void f(char *d) { strcat(d, \" (done)\"); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcat);
+    assert!(
+        is_c_buffer_call_literal_safe("c.memory.strcat", cap, code),
+        "strcat with string-literal source must be suppressed"
+    );
+
+    // sprintf(dst, "%lld%c", ...) — numeric format string.
+    let code = b"void f(char *cp, long long v, char u) { sprintf(cp, \"%lld%c\", v, u); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_sprintf);
+    assert!(
+        is_c_buffer_call_literal_safe("c.memory.sprintf", cap, code),
+        "sprintf with numeric-only format must be suppressed"
+    );
+
+    // sprintf(str, " %.*s", N, x) — precision-bounded `%s`.
+    let code = b"void f(char *str, int n, const char *x) { sprintf(str, \" %.*s\", n, x); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_sprintf);
+    assert!(
+        is_c_buffer_call_literal_safe("c.memory.sprintf", cap, code),
+        "sprintf with precision-bounded `%.*s` must be suppressed"
+    );
+
+    // strcpy(dst, src) where src is a non-literal — must NOT suppress.
+    let code = b"void f(char *d, char **a) { strcpy(d, a[1]); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcpy);
+    assert!(
+        !is_c_buffer_call_literal_safe("c.memory.strcpy", cap, code),
+        "strcpy with non-literal source must NOT be suppressed"
+    );
+
+    // sprintf with bare `%s` — must NOT suppress.
+    let code = b"void f(char *b, const char *u) { sprintf(b, \"%s\", u); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_sprintf);
+    assert!(
+        !is_c_buffer_call_literal_safe("c.memory.sprintf", cap, code),
+        "sprintf with bare `%%s` must NOT be suppressed"
+    );
+
+    // sprintf with non-literal format (concatenated_string with PRI* macro)
+    // — must NOT suppress (engine cannot statically expand the macro).
+    let code = b"void f(char *b, long long v) { sprintf(b, \"%\" PRId64, v); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_sprintf);
+    assert!(
+        !is_c_buffer_call_literal_safe("c.memory.sprintf", cap, code),
+        "sprintf with concatenated_string format must NOT be suppressed"
+    );
+
+    // Other rule ids should not be affected.
+    let code = b"void f(char *d) { strcpy(d, \"x\"); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcpy);
+    assert!(
+        !is_c_buffer_call_literal_safe("c.memory.gets", cap, code),
+        "Layer D should only fire for buffer-overflow rule ids"
+    );
 }

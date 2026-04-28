@@ -37,6 +37,21 @@ impl FieldId {
     /// fields.  Consumers should compare with `==` rather than reach
     /// into the wrapped `u32`.
     pub const ELEM: FieldId = FieldId(u32::MAX);
+
+    /// "Tainted at every field" wildcard sentinel — distinct from
+    /// [`Self::ELEM`] (which is container-element semantics: every
+    /// numeric/dynamic index access projects through it).
+    /// `ANY_FIELD` represents the case where a writeback-shaped sink
+    /// (`json.NewDecoder(r.Body).Decode(&dest)`,
+    /// `proto.Unmarshal(buf, &msg)`) taints the destination wholesale
+    /// without a per-field decomposition the caller can enumerate.
+    /// Read by [`SsaOp::FieldProj`] as a fallback when no specific
+    /// `(loc, *field)` cell exists, so subsequent struct-field reads
+    /// pick up the writeback's taint without over-tainting unrelated
+    /// containers' element cells.  `u32::MAX - 1` is reserved
+    /// alongside `ELEM` and is similarly never assigned by the per-
+    /// body interner.
+    pub const ANY_FIELD: FieldId = FieldId(u32::MAX - 1);
 }
 
 /// Per-body interner for field names referenced by [`SsaOp::FieldProj`].

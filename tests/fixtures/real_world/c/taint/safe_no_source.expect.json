@@ -1,5 +1,5 @@
 {
-  "description": "sprintf/strcpy/strcat fed by locally-constructed strings \u2014 no taint source involved.",
+  "description": "sprintf/strcpy/strcat fed by locally-constructed strings — no taint source involved. Layer D suppression (src/ast.rs::is_c_buffer_call_literal_safe) suppresses the strcpy/strcat with literal source; sprintf with bare `%s` continues to fire because precision-bounding is absent.",
   "tags": [
     "taint",
     "negative",
@@ -18,29 +18,7 @@
         10
       ],
       "evidence_contains": [],
-      "notes": "sprintf(buf, ...) is a dangerous function even with local strings \u2014 AST pattern match is correct."
-    },
-    {
-      "rule_id": "c.memory.strcpy",
-      "severity": "HIGH",
-      "must_match": true,
-      "line_range": [
-        8,
-        11
-      ],
-      "evidence_contains": [],
-      "notes": "strcpy(buf, \"reset value\") is a dangerous function even with constant args \u2014 AST pattern match is correct."
-    },
-    {
-      "rule_id": "c.memory.strcat",
-      "severity": "HIGH",
-      "must_match": true,
-      "line_range": [
-        9,
-        12
-      ],
-      "evidence_contains": [],
-      "notes": "strcat(buf, \" done\") is a dangerous function even with constant args \u2014 AST pattern match is correct."
+      "notes": "sprintf format `\"%s, %s!\"` has bare `%s` (no precision) so Layer D refuses to suppress."
     }
   ]
 }

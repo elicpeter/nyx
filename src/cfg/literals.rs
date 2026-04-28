@@ -263,6 +263,43 @@ pub(super) fn arg0_kind_and_interpolation(call_node: Node) -> Option<(String, bo
     Some((kind, has_interp))
 }
 
+/// Walk a Java method-chain receiver looking for an inner `method_invocation`
+/// whose method name matches one of `target_methods` (e.g. `createQuery`,
+/// `prepareStatement`).  Returns the kind of that inner call's arg 0 — used
+/// to verify the SQL-bearing call up-chain was given a string literal rather
+/// than a concatenation / method call.
+///
+/// Conservative: returns `None` when no matching call is found in the chain.
+/// Stops drilling into args of an unrelated call, so the chain walk is
+/// strictly down the receiver spine.
+pub(super) fn java_chain_arg0_kind_for_method(
+    expr: Node,
+    target_methods: &[&str],
+    code: &[u8],
+) -> Option<String> {
+    let n = unwrap_parens(expr);
+    if n.kind() == "method_invocation"
+        && let Some(name_node) = n.child_by_field_name("name")
+        && let Some(name) = text_of(name_node, code)
+        && target_methods.iter().any(|m| *m == name)
+    {
+        let args = n.child_by_field_name("arguments")?;
+        let mut cursor = args.walk();
+        let arg0 = args.named_children(&mut cursor).next()?;
+        let arg0 = unwrap_parens(arg0);
+        return Some(arg0.kind().to_string());
+    }
+    // Drill down the receiver spine.  Java grammar uses `object` for the
+    // receiver of a `method_invocation`.
+    if n.kind() == "method_invocation"
+        && let Some(recv) = n.child_by_field_name("object")
+        && let Some(found) = java_chain_arg0_kind_for_method(recv, target_methods, code)
+    {
+        return Some(found);
+    }
+    None
+}
+
 /// Walk a Ruby method-chain receiver-side looking for the inner call whose
 /// method identifier matches one of `target_methods`, then return that
 /// inner call's [`arg0_kind_and_interpolation`].  Used when the CFG node

@@ -1,5 +1,5 @@
 {
-  "description": "sprintf/strcpy/strcat called with only hardcoded string literals \u2014 no taint source.",
+  "description": "sprintf/strcpy/strcat called with only hardcoded string literals — no taint source. Layer D suppression (src/ast.rs::is_c_buffer_call_literal_safe) correctly recognises strcpy/strcat with string-literal source as bounded-length: only the sprintf with bare `%s` in its format keeps firing.",
   "tags": [
     "taint",
     "negative",
@@ -18,29 +18,7 @@
         8
       ],
       "evidence_contains": [],
-      "notes": "sprintf(buf, ...) is a dangerous function even with constant args \u2014 AST pattern match is correct."
-    },
-    {
-      "rule_id": "c.memory.strcpy",
-      "severity": "HIGH",
-      "must_match": true,
-      "line_range": [
-        6,
-        9
-      ],
-      "evidence_contains": [],
-      "notes": "strcpy(buf, \"constant value\") is a dangerous function even with constant args \u2014 AST pattern match is correct."
-    },
-    {
-      "rule_id": "c.memory.strcat",
-      "severity": "HIGH",
-      "must_match": true,
-      "line_range": [
-        7,
-        10
-      ],
-      "evidence_contains": [],
-      "notes": "strcat(buf, \" appended\") is a dangerous function even with constant args \u2014 AST pattern match is correct."
+      "notes": "sprintf format `\"Hello, %s!\"` has bare `%s` so Layer D refuses to suppress — the pattern rule fires correctly."
     }
   ]
 }

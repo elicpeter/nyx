@@ -4031,55 +4031,92 @@ pub(super) fn transfer_inst(
                 let pt = pf.pt(*receiver);
                 if !pt.is_empty() && !pt.is_top() {
                     for loc in pt.iter() {
-                        let key = crate::taint::ssa_transfer::state::FieldTaintKey {
-                            loc,
-                            field: *field,
-                        };
-                        if let Some(cell) = state.get_field(key) {
-                            let t = cell.taint.clone();
-                            cell_must_all = Some(match cell_must_all {
-                                Some(prev) => prev && cell.validated_must,
-                                None => cell.validated_must,
-                            });
-                            cell_may_any |= cell.validated_may;
-                            combined = Some(match combined {
-                                Some(mut acc) => {
-                                    acc.caps |= t.caps;
-                                    acc.uses_summary |= t.uses_summary;
-                                    // A7 audit: route the cell's origins
-                                    // through `push_origin_bounded` so the
-                                    // cap-driven survivor selection (sorted
-                                    // by `origin_sort_key`, deterministic
-                                    // truncation when over cap, observability
-                                    // counter increments) applies the same
-                                    // way as the per-SSA-value lattice.  The
-                                    // pre-A7 inline walk only deduped by
-                                    // node and silently grew past
-                                    // `effective_max_origins` when the cell
-                                    // had a wider origin set than the cap.
-                                    for o in &t.origins {
-                                        push_origin_bounded(&mut acc.origins, *o);
-                                    }
-                                    acc
+                        // Read the specific `(loc, *field)` cell first
+                        // (per-field-name flow from cross-call writes).
+                        // When it's absent, fall back to the
+                        // `(loc, ANY_FIELD)` wildcard — populated by the
+                        // [`ContainerOp::Writeback`] handler for sinks
+                        // like `json.NewDecoder(r.Body).Decode(&dest)`
+                        // that taint every field of the destination
+                        // wholesale.  The fallback is gated on
+                        // specific-field absence so existing field-cell
+                        // semantics (Pointer-Phase 3 / W3) are
+                        // bit-identical when the writer used a named
+                        // field.  ANY_FIELD is intentionally distinct
+                        // from `ELEM` (container-element wildcard) to
+                        // avoid a struct-with-`length`-field reading
+                        // taint from a sibling array's `push` writes.
+                        let mut hit_specific = false;
+                        for field_id in [
+                            *field,
+                            crate::ssa::ir::FieldId::ANY_FIELD,
+                        ]
+                        .iter()
+                        .copied()
+                        {
+                            if field_id == crate::ssa::ir::FieldId::ANY_FIELD
+                                && hit_specific
+                            {
+                                break;
+                            }
+                            if field_id == crate::ssa::ir::FieldId::ANY_FIELD
+                                && *field == crate::ssa::ir::FieldId::ANY_FIELD
+                            {
+                                continue;
+                            }
+                            let key = crate::taint::ssa_transfer::state::FieldTaintKey {
+                                loc,
+                                field: field_id,
+                            };
+                            if let Some(cell) = state.get_field(key) {
+                                if field_id == *field {
+                                    hit_specific = true;
                                 }
-                                None => {
-                                    // First contribution: still apply the
-                                    // bounded-push so a cell built up
-                                    // above-cap upstream gets re-bounded
-                                    // here at read time.  `push_origin_bounded`
-                                    // dedups by node, sorts deterministically.
-                                    let mut bounded: SmallVec<[TaintOrigin; 2]> =
-                                        SmallVec::new();
-                                    for o in &t.origins {
-                                        push_origin_bounded(&mut bounded, *o);
+                                let t = cell.taint.clone();
+                                cell_must_all = Some(match cell_must_all {
+                                    Some(prev) => prev && cell.validated_must,
+                                    None => cell.validated_must,
+                                });
+                                cell_may_any |= cell.validated_may;
+                                combined = Some(match combined {
+                                    Some(mut acc) => {
+                                        acc.caps |= t.caps;
+                                        acc.uses_summary |= t.uses_summary;
+                                        // A7 audit: route the cell's origins
+                                        // through `push_origin_bounded` so the
+                                        // cap-driven survivor selection (sorted
+                                        // by `origin_sort_key`, deterministic
+                                        // truncation when over cap, observability
+                                        // counter increments) applies the same
+                                        // way as the per-SSA-value lattice.  The
+                                        // pre-A7 inline walk only deduped by
+                                        // node and silently grew past
+                                        // `effective_max_origins` when the cell
+                                        // had a wider origin set than the cap.
+                                        for o in &t.origins {
+                                            push_origin_bounded(&mut acc.origins, *o);
+                                        }
+                                        acc
                                     }
-                                    VarTaint {
-                                        caps: t.caps,
-                                        origins: bounded,
-                                        uses_summary: t.uses_summary,
+                                    None => {
+                                        // First contribution: still apply the
+                                        // bounded-push so a cell built up
+                                        // above-cap upstream gets re-bounded
+                                        // here at read time.  `push_origin_bounded`
+                                        // dedups by node, sorts deterministically.
+                                        let mut bounded: SmallVec<[TaintOrigin; 2]> =
+                                            SmallVec::new();
+                                        for o in &t.origins {
+                                            push_origin_bounded(&mut bounded, *o);
+                                        }
+                                        VarTaint {
+                                            caps: t.caps,
+                                            origins: bounded,
+                                            uses_summary: t.uses_summary,
+                                        }
                                     }
-                                }
-                            });
+                                });
+                            }
                         }
                     }
                 }
@@ -5053,6 +5090,31 @@ fn collect_block_events(
             continue;
         }
 
+        // Same-node Sanitizer subtraction.  When the CFG node carries both
+        // Sink and Sanitizer labels for overlapping caps — the shape-based
+        // synthesis pattern used by Ruby AR safe-arg-0 detection
+        // (`src/cfg/mod.rs`) and the Java JPA parameterised-execute chain —
+        // the sanitizer reflexively dominates the sink and the cap should
+        // not surface as a taint-flow finding.  The SSA Call arm already
+        // applies same-node sanitizer to the *return* value
+        // (`return_bits &= !sanitizer_bits`); without this mirror at the
+        // sink-detection site, the sink still fires on the call's own
+        // arguments / receiver despite the sanitizer label.
+        let same_node_sanitizer_caps =
+            info.taint.labels.iter().fold(Cap::empty(), |acc, lbl| {
+                if let DataLabel::Sanitizer(caps) = lbl {
+                    acc | *caps
+                } else {
+                    acc
+                }
+            });
+        if !same_node_sanitizer_caps.is_empty() {
+            sink_caps &= !same_node_sanitizer_caps;
+            if sink_caps.is_empty() {
+                continue;
+            }
+        }
+
         // Suppress known non-sink callees (e.g., System.out.println in Java)
         if let SsaOp::Call { callee, .. } = &inst.op {
             sink_caps = suppress_known_safe_callees(sink_caps, callee, transfer.lang);
@@ -5766,6 +5828,104 @@ fn try_container_propagation(
             // Fallback: direct SSA value taint
             if let Some(taint) = state.get(container_val) {
                 state.set(inst.value, taint.clone());
+            }
+            true
+        }
+        ContainerOp::Writeback { dest_arg } => {
+            // Receiver carries the source taint (e.g.
+            // `json.NewDecoder(r.Body).Decode(&dest)` — the decoder's
+            // receiver chain is tainted by `r.Body`).  Propagate that taint
+            // into the call's destination argument so downstream sinks see
+            // the flow through the decoded struct.
+            //
+            // Go method calls lower to `Kind::CallFn` with the receiver
+            // implicit in the dotted callee text (`d.Decode`) — there's no
+            // explicit `receiver` channel and no slice-as-arg-0 convention
+            // (unlike Go's `append`), so the existing `resolve_container`
+            // helper either returns the wrong value or `None` here.  Look
+            // up the receiver SSA value by var-name from the callee prefix.
+            let recv_val = if let Some(v) = *receiver {
+                Some(v)
+            } else if let Some(dot_pos) = callee.rfind('.') {
+                let recv_name = &callee[..dot_pos];
+                let mut found = None;
+                'outer: for arg_group in args {
+                    for &v in arg_group {
+                        if let Some(def) = ssa.value_defs.get(v.0 as usize) {
+                            if def.var_name.as_deref() == Some(recv_name) {
+                                found = Some(v);
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+                if found.is_none() {
+                    // Receiver isn't in args (Go CallFn).  Search the SSA
+                    // body for a value whose var_name matches the receiver.
+                    for (idx, def) in ssa.value_defs.iter().enumerate() {
+                        if def.var_name.as_deref() == Some(recv_name) {
+                            found = Some(SsaValue(idx as u32));
+                            break;
+                        }
+                    }
+                }
+                found
+            } else {
+                None
+            };
+            let recv_val = match recv_val {
+                Some(v) => v,
+                None => {
+                    if std::env::var("NYX_DEBUG_WRITEBACK").is_ok() {
+                        eprintln!("  writeback: no receiver SSA value for callee {callee:?}");
+                    }
+                    return false;
+                }
+            };
+            let recv_taint = match state.get(recv_val) {
+                Some(t) => t.clone(),
+                None => return true, // claimed but receiver carries no taint
+            };
+            // For method-call form, the receiver is implicit in the callee
+            // string and `args` holds positional args starting at 0.  Taint
+            // the destination at three layers: (1) the SSA-value level so
+            // downstream uses of the pointer itself see taint; (2) the
+            // heap-Elements slot via the simpler-tier `lookup_pts` channel;
+            // and (3) the field-cell channel via `pointer_facts.pt(v)` with
+            // [`FieldId::ELEM`] as a tainted-at-all-fields wildcard so
+            // subsequent `dest.Field` projections (which read through the
+            // higher-tier `pointer_facts.pt(receiver)` channel — see the
+            // `SsaOp::FieldProj` arm) inherit the taint.  Without (3), CVE
+            // shapes like `json.NewDecoder(r.Body).Decode(&dest)` followed
+            // by `os.Remove(filepath.Join(_, dest.Name))` left the dest
+            // field channel empty even though the heap was tainted; the
+            // [`FieldId::ELEM`] wildcard bridges the two channels and is
+            // read back by the `FieldProj` arm's ELEM fallback.
+            if let Some(arg_vals) = args.get(dest_arg) {
+                for &v in arg_vals {
+                    merge_taint_into(state, v, recv_taint.caps, &recv_taint.origins);
+                    if let Some(pts) = lookup_pts(transfer, v) {
+                        state.heap.store_set(
+                            &pts,
+                            crate::ssa::heap::HeapSlot::Elements,
+                            recv_taint.caps,
+                            &recv_taint.origins,
+                        );
+                    }
+                    if let Some(pf) = transfer.pointer_facts {
+                        let pt_arg = pf.pt(v);
+                        if !pt_arg.is_empty() && !pt_arg.is_top() {
+                            let cell_taint = recv_taint.clone();
+                            for loc in pt_arg.iter() {
+                                let key = crate::taint::ssa_transfer::state::FieldTaintKey {
+                                    loc,
+                                    field: crate::ssa::ir::FieldId::ANY_FIELD,
+                                };
+                                state.add_field(key, cell_taint.clone(), false, false);
+                            }
+                        }
+                    }
+                }
             }
             true
         }

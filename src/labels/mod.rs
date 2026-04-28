@@ -689,9 +689,13 @@ fn ends_with_cs(haystack: &[u8], needle: &[u8], case_sensitive: bool) -> bool {
     }
 }
 
-/// Prefix check with configurable case sensitivity.
+/// Prefix check with configurable case sensitivity.  The `=` exact-match
+/// sigil is meaningless for prefix matchers (which by definition match many
+/// suffixes); it is stripped if present so a malformed matcher like
+/// `=foo_` still behaves predictably.
 #[inline]
 fn starts_with_cs(haystack: &[u8], needle: &[u8], case_sensitive: bool) -> bool {
+    let (needle, _) = unpack_matcher(needle);
     if needle.len() > haystack.len() {
         return false;
     }
@@ -708,11 +712,34 @@ fn starts_with_cs(haystack: &[u8], needle: &[u8], case_sensitive: bool) -> bool 
 /// Word-boundary suffix match with configurable case sensitivity.
 #[inline]
 fn match_suffix_cs(text: &[u8], matcher: &[u8], case_sensitive: bool) -> bool {
-    if ends_with_cs(text, matcher, case_sensitive) {
-        let start = text.len() - matcher.len();
-        start == 0 || matches!(text[start - 1], b'.' | b':')
+    let (m, exact_only) = unpack_matcher(matcher);
+    if ends_with_cs(text, m, case_sensitive) {
+        let start = text.len() - m.len();
+        if exact_only {
+            // `=foo` matchers fire only when `text` IS `foo` (no `Mod.foo`,
+            // `Class::foo`, or any preceding namespace).  Lets a label rule
+            // distinguish bare `Kernel#open` from `File.open` — the former
+            // shells out on `|cmd`, the latter never does (CVE-2020-8130).
+            start == 0
+        } else {
+            start == 0 || matches!(text[start - 1], b'.' | b':')
+        }
     } else {
         false
+    }
+}
+
+/// Strip an optional `=` "exact-match" sigil from the start of a matcher.
+/// Matchers prefixed with `=` (e.g. `"=open"`) only fire when the candidate
+/// text equals the matcher exactly — the boundary-`.`-or-`:` allowance is
+/// suppressed.  Used to distinguish bare-callee Ruby/Python builtins from
+/// methods of the same name on a typed receiver.
+#[inline]
+fn unpack_matcher(matcher: &[u8]) -> (&[u8], bool) {
+    if matcher.first() == Some(&b'=') {
+        (&matcher[1..], true)
+    } else {
+        (matcher, false)
     }
 }
 
@@ -1417,6 +1444,115 @@ mod tests {
         // Wrong case does NOT match
         let result = classify("javascript", "sanitize_input", Some(&extras));
         assert_eq!(result, None);
+    }
+
+    // CVE Hunt Session 2 (Go CVE-2024-31450 Owncast path traversal):
+    // mutating filesystem helpers (`os.Remove`, `os.WriteFile`,
+    // `os.RemoveAll`, `ioutil.WriteFile`) sink path-traversal flows that
+    // the prior Go ruleset only saw on the read side (`os.Open`,
+    // `os.ReadFile`).
+    #[test]
+    fn classify_go_os_remove_is_file_io_sink() {
+        let result = classify("go", "os.Remove", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::FILE_IO)));
+    }
+
+    #[test]
+    fn classify_go_os_write_file_is_file_io_sink() {
+        let result = classify("go", "os.WriteFile", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::FILE_IO)));
+    }
+
+    #[test]
+    fn classify_go_os_remove_all_is_file_io_sink() {
+        let result = classify("go", "os.RemoveAll", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::FILE_IO)));
+    }
+
+    // CVE Hunt Session 2 (Go CVE-2023-3188 Owncast SSRF):
+    // `http.DefaultClient.Get/Post/Head/Do/PostForm` is the idiomatic Go
+    // SSRF sink shape (`http.DefaultClient` is the package-level shared
+    // `*http.Client`). Bare `Get`/`Post` matchers would over-match
+    // unrelated method names; the explicit `http.DefaultClient.*` matcher
+    // restricts the suffix-match to the stdlib helper while leaving
+    // user-defined `myClient.Get` alone (no false positives).
+    #[test]
+    fn classify_go_http_default_client_get_is_ssrf_sink() {
+        let result = classify("go", "http.DefaultClient.Get", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::SSRF)));
+    }
+
+    #[test]
+    fn classify_go_http_default_client_post_is_ssrf_sink() {
+        let result = classify("go", "http.DefaultClient.Post", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::SSRF)));
+    }
+
+    #[test]
+    fn classify_go_http_default_client_do_is_ssrf_sink() {
+        let result = classify("go", "http.DefaultClient.Do", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::SSRF)));
+    }
+
+    #[test]
+    fn classify_go_user_client_get_is_not_ssrf_sink() {
+        // `client.Get` on a user-named *http.Client variable should NOT
+        // match — the Go SSRF set is restricted to the stdlib package
+        // helper `http.DefaultClient`. Type-aware resolution would be the
+        // path to a broader rule, not a bare-name match.
+        let result = classify("go", "client.Get", None);
+        assert_eq!(result, None);
+    }
+
+    // CVE Hunt Session 3 (Ruby CVE-2020-8130 rake `Kernel#open` CMDI):
+    // bare `open(path)` interprets a leading `|` as a shell pipe.  The
+    // `=` exact-match sigil distinguishes the dangerous bare-callee form
+    // from `File.open` / `IO.open` / `URI.open`, each of which has its
+    // own non-piping semantics.  Without the sigil, the suffix-with-
+    // boundary matcher would over-fire on every `X.open` call.
+    #[test]
+    fn classify_ruby_bare_open_is_shell_escape_sink() {
+        let result = classify("ruby", "open", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::SHELL_ESCAPE)));
+    }
+
+    #[test]
+    fn classify_ruby_file_open_is_not_shell_escape_sink() {
+        // The exact-match sigil on `=open` must NOT fire on `File.open`.
+        // `File.open` is a separate FILE_IO sink (existing rule); the
+        // CMDI rule must not double-classify it.
+        let result = classify_all("ruby", "File.open", None);
+        // FILE_IO from the existing `File.open` matcher is allowed.
+        assert!(result.contains(&DataLabel::Sink(Cap::FILE_IO)));
+        // SHELL_ESCAPE from the new bare-`open` matcher must NOT appear.
+        assert!(!result.contains(&DataLabel::Sink(Cap::SHELL_ESCAPE)));
+    }
+
+    #[test]
+    fn classify_ruby_io_open_is_not_shell_escape_sink() {
+        // `IO.open` takes a file descriptor — never pipes.  The bare-
+        // open CMDI rule must leave it alone.
+        let result = classify("ruby", "IO.open", None);
+        assert_ne!(result, Some(DataLabel::Sink(Cap::SHELL_ESCAPE)));
+    }
+
+    #[test]
+    fn classify_ruby_uri_open_remains_ssrf_sink() {
+        // `URI.open` is the existing SSRF sink.  Adding `=open` as a
+        // CMDI rule must not break or shadow it.
+        let result = classify("ruby", "URI.open", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::SSRF)));
+    }
+
+    #[test]
+    fn unpack_matcher_strips_exact_sigil() {
+        let (m, exact) = unpack_matcher(b"=open");
+        assert_eq!(m, b"open");
+        assert!(exact);
+
+        let (m, exact) = unpack_matcher(b"open");
+        assert_eq!(m, b"open");
+        assert!(!exact);
     }
 
     #[test]
