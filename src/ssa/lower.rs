@@ -277,10 +277,10 @@ fn lower_to_ssa_inner(
     }
 
     // 7b. Debug assertions: verify structural invariants.
-    #[cfg(debug_assertions)]
-    {
-        debug_assert_bfs_ordering(&block_preds);
-    }
+    // The helper body is `debug_assert!` only, so it's a no-op in release —
+    // call unconditionally to avoid a dead_code warning when the lib is
+    // built without `--tests`.
+    debug_assert_bfs_ordering(&block_preds);
     // Phi operand counts are a release-level invariant: every phi must
     // have exactly one operand per predecessor. Missing operands are
     // filled with an explicit Undef sentinel in
@@ -1798,7 +1798,6 @@ fn rename_variables(
 
 /// Verify BFS block ordering: every non-entry, non-orphan block must have at
 /// least one predecessor with a smaller block ID.
-#[cfg(debug_assertions)]
 fn debug_assert_bfs_ordering(block_preds: &[Vec<usize>]) {
     for (i, preds) in block_preds.iter().enumerate() {
         if i == 0 {
