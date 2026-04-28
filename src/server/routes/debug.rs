@@ -120,7 +120,7 @@ async fn get_ssa(
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
     let config = state.config.read();
     let analysis = debug::analyse_file(&path, &config)?;
-    let (ssa, _opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
+    let (ssa, _opt, _cfg) = debug::analyse_function_ssa(&analysis, &q.function)?;
     Ok(Json(SsaBodyView::from_ssa(&ssa, &analysis.bytes)))
 }
 
@@ -133,7 +133,7 @@ async fn get_taint(
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
     let config = state.config.read();
     let analysis = debug::analyse_file(&path, &config)?;
-    let (ssa, opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
+    let (ssa, opt, body_cfg) = debug::analyse_function_ssa(&analysis, &q.function)?;
 
     // Try to load global summaries from DB for cross-file context
     let global = load_global_summaries(&state);
@@ -144,7 +144,7 @@ async fn get_taint(
 
     let (events, _entry_states, exit_states) = debug::analyse_function_taint(
         &ssa,
-        analysis.cfg(),
+        body_cfg,
         analysis.lang,
         analysis.summaries(),
         global.as_ref(),
@@ -171,13 +171,13 @@ async fn get_abstract_interp(
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
     let config = state.config.read();
     let analysis = debug::analyse_file(&path, &config)?;
-    let (ssa, opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
+    let (ssa, opt, body_cfg) = debug::analyse_function_ssa(&analysis, &q.function)?;
 
     let global = load_global_summaries(&state);
 
     let (_events, block_states, _exit_states) = debug::analyse_function_taint(
         &ssa,
-        analysis.cfg(),
+        body_cfg,
         analysis.lang,
         analysis.summaries(),
         global.as_ref(),
@@ -265,12 +265,12 @@ async fn get_symex(
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
     let config = state.config.read();
     let analysis = debug::analyse_file(&path, &config)?;
-    let (ssa, opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
+    let (ssa, opt, body_cfg) = debug::analyse_function_ssa(&analysis, &q.function)?;
 
     let global = load_global_summaries(&state);
 
     let sym_state =
-        debug::analyse_function_symex(&ssa, analysis.cfg(), analysis.lang, &opt, global.as_ref());
+        debug::analyse_function_symex(&ssa, body_cfg, analysis.lang, &opt, global.as_ref());
 
     Ok(Json(SymexView::from_symbolic_state(&sym_state, &ssa)))
 }
@@ -297,7 +297,7 @@ async fn get_type_facts(
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
     let config = state.config.read();
     let analysis = debug::analyse_file(&path, &config)?;
-    let (ssa, opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
+    let (ssa, opt, _cfg) = debug::analyse_function_ssa(&analysis, &q.function)?;
     Ok(Json(TypeFactsView::from_optimize(&opt, &ssa, &analysis.bytes)))
 }
 

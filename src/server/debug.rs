@@ -1446,10 +1446,16 @@ pub fn function_list(analysis: &FileAnalysis) -> Vec<FunctionInfo> {
 }
 
 /// Lower a single function to SSA and optimize it.
-pub fn analyse_function_ssa(
-    analysis: &FileAnalysis,
+///
+/// Returns the per-function body graph alongside the SSA. SSA is lowered
+/// against `body.graph`, whose `NodeIndex` space is body-local — the file's
+/// top-level CFG (`analysis.cfg()`) has a different index space, so any
+/// downstream analysis that indexes by `inst.cfg_node` must use the returned
+/// `&Cfg`, not `analysis.cfg()`.
+pub fn analyse_function_ssa<'a>(
+    analysis: &'a FileAnalysis,
     func_name: &str,
-) -> Result<(SsaBody, OptimizeResult), StatusCode> {
+) -> Result<(SsaBody, OptimizeResult, &'a Cfg), StatusCode> {
     // Find the function body by name from the per-body CFGs.
     let body = analysis
         .file_cfg
@@ -1474,7 +1480,7 @@ pub fn analyse_function_ssa(
         &body.meta.param_types,
     );
 
-    Ok((ssa, opt))
+    Ok((ssa, opt, &body.graph))
 }
 
 /// Lower a function and run the field-sensitive Steensgaard pointer
@@ -1737,7 +1743,7 @@ function demo() {
 
         let config = Config::default();
         let analysis = analyse_file(&path, &config).expect("file should analyse");
-        let (ssa, opt) =
+        let (ssa, opt, _cfg) =
             analyse_function_ssa(&analysis, "demo").expect("function should lower to SSA");
         let body = analysis
             .file_cfg
@@ -1792,7 +1798,7 @@ function sink() {
 
         let config = Config::default();
         let analysis = analyse_file(&path, &config).expect("file should analyse");
-        let (ssa, opt) =
+        let (ssa, opt, _cfg) =
             analyse_function_ssa(&analysis, "sink").expect("function should lower to SSA");
         let body = analysis
             .file_cfg
@@ -1836,7 +1842,7 @@ function consume() {
 
         let config = Config::default();
         let analysis = analyse_file(&path, &config).expect("file should analyse");
-        let (ssa, opt) =
+        let (ssa, opt, _cfg) =
             analyse_function_ssa(&analysis, "consume").expect("function should lower to SSA");
         let body = analysis
             .file_cfg
@@ -2054,6 +2060,96 @@ async function recentAuditLogs() {
         );
     }
 
+    /// Regression: `analyse_function_ssa` lowers SSA against `body.graph`
+    /// (per-function NodeIndex space). Routes used to pass `analysis.cfg()`
+    /// (the file's top-level CFG) to `analyse_function_taint`, which made
+    /// every `cfg[inst.cfg_node]` lookup index a foreign graph and panicked
+    /// with `index out of bounds` on any non-toplevel function whose body
+    /// had more nodes than the toplevel. Reproduce: a small Rust file with
+    /// a few top-level items and a `main` whose body branches enough to
+    /// allocate body-local NodeIndex values past the toplevel's count.
+    #[test]
+    fn taint_route_uses_per_function_cfg_for_index_lookups() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("docgen_like.rs");
+        std::fs::write(
+            &path,
+            r#"
+use std::env;
+use std::fs;
+
+const BEGIN_MARKER: &str = "<!-- BEGIN -->";
+const END_MARKER: &str = "<!-- END -->";
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    let target = args.get(1).cloned().unwrap_or_else(|| "x".to_string());
+    let original = match fs::read_to_string(&target) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let begin = match original.find(BEGIN_MARKER) {
+        Some(i) => i,
+        None => return,
+    };
+    let end = match original.find(END_MARKER) {
+        Some(i) => i,
+        None => return,
+    };
+    if end < begin {
+        return;
+    }
+    let _ = fs::write(&target, &original);
+}
+"#,
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let analysis = analyse_file(&path, &config).expect("file should analyse");
+        let (ssa, opt, body_cfg) =
+            analyse_function_ssa(&analysis, "main").expect("function should lower to SSA");
+
+        // Sanity check that this fixture exercises the bug shape: main's body
+        // graph must have more nodes than the file's top-level CFG, so a
+        // mistaken `analysis.cfg()` would panic on `cfg[inst.cfg_node]`.
+        assert!(
+            body_cfg.node_count() > analysis.cfg().node_count(),
+            "fixture must have more body nodes than toplevel nodes to exercise the bug"
+        );
+
+        // Must not panic.  Pre-fix this would `index out of bounds` inside
+        // `transfer_inst` because the SSA was lowered against `body_cfg` but
+        // the engine was given `analysis.cfg()`.
+        let _ = analyse_function_taint(
+            &ssa,
+            body_cfg,
+            analysis.lang,
+            analysis.summaries(),
+            None,
+            &opt,
+        );
+
+        // Belt-and-suspenders: assert that calling with the wrong (top-level)
+        // CFG would have panicked. We can't catch the panic across rayon
+        // worker threads here, but we can confirm at least one `inst.cfg_node`
+        // index lies outside `analysis.cfg()`'s range — that's what triggers
+        // the OOB indexing inside `transfer_inst`.
+        let toplevel_count = analysis.cfg().node_count();
+        let max_inst_idx = ssa
+            .blocks
+            .iter()
+            .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+            .map(|inst| inst.cfg_node.index())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_inst_idx >= toplevel_count,
+            "regression: at least one inst.cfg_node ({max_inst_idx}) must exceed the \
+             toplevel CFG node count ({toplevel_count}) for this test to exercise the bug"
+        );
+    }
+
     #[test]
     fn type_facts_view_groups_security_types() {
         let dir = tempfile::tempdir().unwrap();
@@ -2075,7 +2171,7 @@ public class Demo {
 
         let config = Config::default();
         let analysis = analyse_file(&path, &config).expect("file should analyse");
-        let (ssa, opt) = analyse_function_ssa(&analysis, "run").expect("ssa should lower");
+        let (ssa, opt, _cfg) = analyse_function_ssa(&analysis, "run").expect("ssa should lower");
         let view = TypeFactsView::from_optimize(&opt, &ssa, &analysis.bytes);
         assert!(
             view.facts.iter().any(|f| f.kind == "HttpClient"),
