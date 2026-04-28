@@ -27,7 +27,16 @@ import { LoadingState } from '../components/ui/LoadingState';
 import { ErrorState } from '../components/ui/ErrorState';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../contexts/ToastContext';
+import { useTheme, type ThemePreference } from '../contexts/ThemeContext';
 import type { LabelEntryView, TerminatorView, ProfileView } from '../api/types';
+
+const THEME_OPTIONS: Array<{ value: ThemePreference; label: string }> = [
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'system', label: 'System' },
+  { value: 'hc-light', label: 'High-contrast light' },
+  { value: 'hc-dark', label: 'High-contrast dark' },
+];
 
 const LANG_OPTIONS = [
   'javascript',
@@ -89,6 +98,59 @@ function ConfigSection({
       </div>
       <div className={`config-section-body${collapsed ? ' collapsed' : ''}`}>
         {children}
+      </div>
+    </div>
+  );
+}
+
+// ── Top-of-page settings panel (theme + triage sync) ────────────────────────
+
+function SettingsSection({
+  triageSyncOn,
+  onToggleTriageSync,
+}: {
+  triageSyncOn: boolean;
+  onToggleTriageSync: (enabled: boolean) => void;
+}) {
+  const { preference, setPreference } = useTheme();
+
+  return (
+    <div className="config-section" id="config-settings">
+      <div className="config-section-header config-section-header-static">
+        <strong>Settings</strong>
+      </div>
+      <div className="config-section-body">
+        <div className="settings-row">
+          <label htmlFor="theme-select" className="settings-row-label">
+            Theme
+          </label>
+          <select
+            id="theme-select"
+            className="settings-row-control"
+            value={preference}
+            onChange={(e) =>
+              setPreference(e.target.value as ThemePreference)
+            }
+          >
+            {THEME_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="toggle-inline settings-row-toggle">
+          <input
+            type="checkbox"
+            id="triage-sync-toggle"
+            checked={triageSyncOn}
+            onChange={(e) => onToggleTriageSync(e.target.checked)}
+          />
+          <label htmlFor="triage-sync-toggle">
+            Auto-sync triage decisions to <code>.nyx/triage.json</code> for
+            git-based team sharing
+          </label>
+        </div>
       </div>
     </div>
   );
@@ -568,22 +630,12 @@ export function ConfigPage() {
 
       {tab === 'overview' && (
         <>
-          <ConfigSection title="Triage Sync" id="config-triage-sync">
-            <div className="toggle-inline">
-              <input
-                type="checkbox"
-                id="triage-sync-toggle"
-                checked={triageSyncOn}
-                onChange={(e) =>
-                  toggleTriageSync.mutate({ enabled: e.target.checked })
-                }
-              />
-              <label htmlFor="triage-sync-toggle">
-                Auto-sync triage decisions to <code>.nyx/triage.json</code> for
-                git-based team sharing
-              </label>
-            </div>
-          </ConfigSection>
+          <SettingsSection
+            triageSyncOn={triageSyncOn}
+            onToggleTriageSync={(enabled) =>
+              toggleTriageSync.mutate({ enabled })
+            }
+          />
           <EffectiveOverview cfg={cfg} />
         </>
       )}

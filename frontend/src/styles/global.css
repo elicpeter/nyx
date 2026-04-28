@@ -73,6 +73,7 @@
   /* Layout */
   --sidebar-width: 240px;
   --header-height: 52px;
+  --explorer-header-height: 96px;
 }
 
 /* ── Reset & Base ──────────────────────────────────────────────────── */
@@ -126,7 +127,11 @@ a:hover {
   min-height: 100vh;
 }
 .sidebar-header {
-  padding: 20px 16px 12px;
+  height: var(--header-height);
+  padding: 0 16px;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
   border-bottom: 1px solid var(--border);
 }
 .logo {
@@ -138,7 +143,6 @@ a:hover {
 .version {
   font-size: var(--text-xs);
   color: var(--text-tertiary);
-  margin-left: var(--space-2);
 }
 .nav-list {
   list-style: none;
@@ -3359,6 +3363,12 @@ tr.selected td {
 .config-section-header:hover {
   background: var(--bg-tertiary);
 }
+.config-section-header-static {
+  cursor: default;
+}
+.config-section-header-static:hover {
+  background: var(--bg-secondary);
+}
 .config-collapse-arrow {
   font-size: 10px;
   display: inline-block;
@@ -3653,6 +3663,27 @@ tr.selected td {
 .toggle-inline input[type='checkbox'] {
   width: 16px;
   height: 16px;
+}
+
+/* Settings panel rows (theme picker etc.) */
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-3);
+}
+.settings-row-label {
+  min-width: 80px;
+  font-weight: var(--weight-medium);
+}
+.settings-row-control {
+  min-width: 160px;
+  height: 32px;
+  box-sizing: border-box;
+}
+.settings-row-toggle {
+  margin-top: var(--space-2);
 }
 
 /* ── Code Modal Responsive ────────────────────────────────────────── */
@@ -4393,9 +4424,12 @@ tr.selected td {
   border-bottom: 1px solid var(--border);
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: var(--space-3);
   flex-shrink: 0;
-  background: linear-gradient(180deg, var(--bg), var(--bg-secondary));
+  background: var(--bg);
+  min-height: var(--explorer-header-height);
+  box-sizing: border-box;
 }
 .explorer-file-header-top {
   display: flex;
@@ -4448,33 +4482,32 @@ tr.selected td {
 }
 .explorer-view-tabs {
   display: flex;
-  align-items: center;
-  gap: var(--space-1);
+  align-items: stretch;
+  gap: var(--space-4);
   overflow-x: auto;
+  scrollbar-width: thin;
 }
 .explorer-view-tab {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: var(--bg-secondary);
+  padding: var(--space-2) 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   transition:
-    background 0.12s,
     color 0.12s,
     border-color 0.12s;
 }
 .explorer-view-tab:hover {
-  background: var(--bg-tertiary);
   color: var(--text);
 }
 .explorer-view-tab.active {
-  background: var(--accent-light);
   color: var(--accent);
-  border-color: rgba(88, 86, 214, 0.25);
+  border-bottom-color: var(--accent);
 }
 .explorer-inline-notice {
   padding: var(--space-2) var(--space-3);
@@ -4538,6 +4571,14 @@ tr.selected td {
 .explorer-right-section {
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border-light);
+}
+.explorer-right > .explorer-right-section:first-child {
+  border-bottom-color: var(--border);
+  min-height: var(--explorer-header-height);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-sizing: border-box;
 }
 .explorer-right-section h3 {
   font-size: var(--text-xs);
@@ -5873,6 +5914,99 @@ tr.selected td {
 
 [data-theme='dark'] body {
   background: var(--bg);
+}
+
+/* ── High-Contrast Light Theme ─────────────────────────────────────── */
+[data-theme='hc-light'] {
+  --bg: #ffffff;
+  --bg-secondary: #f2f2f2;
+  --bg-tertiary: #e2e2e2;
+  --text: #000000;
+  --text-secondary: #1a1a1a;
+  --text-tertiary: #2b2b2b;
+  --border: #000000;
+  --border-light: #4a4a4a;
+  --accent: #0000c8;
+  --accent-light: #d8d8ff;
+  --sev-high: #b30000;
+  --sev-high-bg: #ffe0e0;
+  --sev-medium: #8a3b00;
+  --sev-medium-bg: #ffe7d2;
+  --sev-low: #00408a;
+  --sev-low-bg: #d6e8ff;
+  --success: #006e2e;
+  --success-bg: #d6f5dc;
+  --conf-high: #006e2e;
+  --conf-high-bg: #d6f5dc;
+  --conf-medium: #8a3b00;
+  --conf-medium-bg: #ffe7d2;
+  --conf-low: #2b2b2b;
+  --conf-low-bg: #e2e2e2;
+  --shadow: 0 0 0 1px #000000;
+  --shadow-sm: 0 0 0 1px #000000;
+  --shadow-md: 0 0 0 1px #000000;
+  --shadow-lg: 0 0 0 2px #000000;
+  --shadow-xl: 0 0 0 2px #000000;
+  color-scheme: light;
+}
+
+[data-theme='hc-light'] body {
+  background: var(--bg);
+}
+
+/* ── High-Contrast Dark Theme ──────────────────────────────────────── */
+[data-theme='hc-dark'] {
+  --bg: #000000;
+  --bg-secondary: #0d0d0d;
+  --bg-tertiary: #1a1a1a;
+  --text: #ffffff;
+  --text-secondary: #ededed;
+  --text-tertiary: #d4d4d4;
+  --border: #ffffff;
+  --border-light: #b8b8b8;
+  --accent: #8ab4ff;
+  --accent-light: #1a2540;
+  --sev-high: #ff8a80;
+  --sev-high-bg: #3a0000;
+  --sev-medium: #ffc266;
+  --sev-medium-bg: #3a2200;
+  --sev-low: #82c8ff;
+  --sev-low-bg: #00263d;
+  --success: #7cf09a;
+  --success-bg: #002e15;
+  --conf-high: #7cf09a;
+  --conf-high-bg: #002e15;
+  --conf-medium: #ffc266;
+  --conf-medium-bg: #3a2200;
+  --conf-low: #d4d4d4;
+  --conf-low-bg: #1a1a1a;
+  --shadow: 0 0 0 1px #ffffff;
+  --shadow-sm: 0 0 0 1px #ffffff;
+  --shadow-md: 0 0 0 1px #ffffff;
+  --shadow-lg: 0 0 0 2px #ffffff;
+  --shadow-xl: 0 0 0 2px #ffffff;
+  color-scheme: dark;
+}
+
+[data-theme='hc-dark'] body {
+  background: var(--bg);
+}
+
+/* High-contrast: bolder borders and focus rings on common surfaces. */
+[data-theme='hc-light'] .btn,
+[data-theme='hc-dark'] .btn,
+[data-theme='hc-light'] input,
+[data-theme='hc-dark'] input,
+[data-theme='hc-light'] select,
+[data-theme='hc-dark'] select,
+[data-theme='hc-light'] textarea,
+[data-theme='hc-dark'] textarea {
+  border-width: 2px;
+}
+[data-theme='hc-light'] :focus-visible,
+[data-theme='hc-dark'] :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ── Loading Spinner ───────────────────────────────────────────────── */

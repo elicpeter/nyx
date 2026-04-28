@@ -8,8 +8,13 @@ import {
 } from 'react';
 import { usePersistedState } from '../hooks/usePersistedState';
 
-export type ThemePreference = 'light' | 'dark' | 'system';
-export type ResolvedTheme = 'light' | 'dark';
+export type ThemePreference =
+  | 'light'
+  | 'dark'
+  | 'system'
+  | 'hc-light'
+  | 'hc-dark';
+export type ResolvedTheme = 'light' | 'dark' | 'hc-light' | 'hc-dark';
 
 interface ThemeContextValue {
   preference: ThemePreference;
@@ -60,9 +65,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [preference]);
 
   const cycle = useCallback(() => {
-    setPreference((prev) =>
-      prev === 'light' ? 'dark' : prev === 'dark' ? 'system' : 'light',
-    );
+    setPreference((prev) => {
+      if (prev === 'hc-light') return 'hc-dark';
+      if (prev === 'hc-dark') return 'hc-light';
+      if (prev === 'light') return 'dark';
+      if (prev === 'dark') return 'system';
+      return 'light';
+    });
   }, [setPreference]);
 
   const value = useMemo<ThemeContextValue>(

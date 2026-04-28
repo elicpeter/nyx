@@ -499,11 +499,11 @@ export function FindingsPage() {
   // ── Keyboard navigation: j/k row cursor + / search + Enter to open ──
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const [cursor, setCursor] = useState(0);
+  const [cursor, setCursor] = useState(-1);
 
   // Reset cursor whenever the visible page changes.
   useEffect(() => {
-    setCursor(0);
+    setCursor(-1);
   }, [data]);
 
   const shortcuts = useMemo(

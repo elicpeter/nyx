@@ -1,5 +1,4 @@
 import { Link, useLocation } from 'react-router-dom';
-import { ThemeToggle } from '../ui/ThemeToggle';
 import { CommandIcon } from '../icons/Icons';
 
 const SECTION_TITLES: Record<string, string> = {
@@ -106,11 +105,10 @@ export function HeaderBar({ onStartScan, onOpenPalette }: HeaderBarProps) {
             <kbd>{PALETTE_HINT}</kbd>
           </button>
         )}
-        <ThemeToggle />
         {onStartScan && (
           <button
             type="button"
-            className="btn btn-primary btn-sm"
+            className="btn btn-primary"
             onClick={onStartScan}
           >
             Start Scan
