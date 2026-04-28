@@ -5,11 +5,10 @@ use crate::database::index::{Indexer, ScanRecord};
 use crate::evidence::{Confidence, Verdict};
 use crate::server::app::AppState;
 use crate::server::models::{
-    BacklogStats, BaselineInfo, ConfidenceDistribution, HealthComponent, HealthScore, HotSink,
-    Insight, LanguageHealth, NoisyRule, OverviewCount, OverviewResponse, PostureSummary,
-    ScanSummary, ScannerQuality, SuppressionHygiene, TrendPoint, WeightedFile,
-    by_language_from_findings, compute_fingerprint, lang_for_finding_path, summarize_findings,
-    top_directories_from_findings, top_n_from_map,
+    BacklogStats, BaselineInfo, ConfidenceDistribution, HotSink, Insight, LanguageHealth,
+    NoisyRule, OverviewCount, OverviewResponse, PostureSummary, ScanSummary, ScannerQuality,
+    SuppressionHygiene, TrendPoint, WeightedFile, by_language_from_findings, compute_fingerprint,
+    lang_for_finding_path, summarize_findings, top_directories_from_findings, top_n_from_map,
 };
 use crate::server::owasp;
 use axum::extract::{Path as AxPath, State};
@@ -114,15 +113,26 @@ async fn overview(State(state): State<AppState>) -> Json<OverviewResponse> {
         &history,
         summary.total,
     ));
-    let health = Some(compute_health_score(
-        &summary,
-        &findings,
-        triage_coverage,
-        new_since_last,
-        fixed_since_last,
-        reintroduced_count,
-        &history,
-        scanner_quality.as_ref(),
+    let health = Some(crate::server::health::compute(
+        &crate::server::health::HealthInputs {
+            summary: &summary,
+            findings: &findings,
+            triage_coverage,
+            new_since_last,
+            fixed_since_last,
+            reintroduced: reintroduced_count,
+            // Files-scanned proxy for repo size — used for size-aware
+            // severity dampening in `health::compute`.  See
+            // `docs/health-score-audit.md` for calibration data.
+            repo_files: scanner_quality
+                .as_ref()
+                .map(|q| q.files_scanned)
+                .filter(|&f| f > 0),
+            backlog: backlog.as_ref(),
+            // Trend is meaningless without ≥2 completed scans —
+            // matches the first-scan check `compare_to_current` uses.
+            has_history: history.scans.len() >= 2,
+        },
     ));
 
     Json(OverviewResponse {
@@ -1138,165 +1148,7 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
-fn compute_health_score(
-    summary: &crate::server::models::FindingSummary,
-    findings: &[Diag],
-    triage_coverage: f64,
-    new_since_last: usize,
-    fixed_since_last: usize,
-    reintroduced: usize,
-    history: &ScanHistory,
-    _quality: Option<&ScannerQuality>,
-) -> HealthScore {
-    // Component 1: severity pressure.
-    //
-    // Score the *security-relevant* finding pressure with diminishing-returns
-    // weights so a sea of low-severity quality lints can't drag the score to 0:
-    //
-    //   weighted = HIGH*10 + MEDIUM*3 + LOW*0.5 + Quality_LOW*0.2
-    //
-    // Then map weighted → score on a logarithmic curve (100 at 0, ~50 at 50,
-    // ~25 at 200, ~10 at 600). This stays sensitive at the low end where the
-    // first few HIGHs really matter, and degrades gracefully as noise piles up.
-    let high = summary.by_severity.get("HIGH").copied().unwrap_or(0);
-    let med = summary.by_severity.get("MEDIUM").copied().unwrap_or(0);
-    let low = summary.by_severity.get("LOW").copied().unwrap_or(0);
-
-    // Discount findings whose rule lives in a "quality" family — they're code
-    // hygiene, not security pressure.
-    let quality_count = findings
-        .iter()
-        .filter(|f| {
-            f.id.contains(".quality.") || f.id.starts_with("quality.")
-        })
-        .count();
-    let security_low = low.saturating_sub(quality_count.min(low));
-
-    let weighted = (high as f64) * 10.0
-        + (med as f64) * 3.0
-        + (security_low as f64) * 0.5
-        + (quality_count as f64) * 0.2;
-
-    // Logarithmic mapping. score ≈ 100 - 30*log10(1 + weighted/5).
-    let severity_score = {
-        if weighted <= 0.0 {
-            100u8
-        } else {
-            let raw = 100.0 - 30.0 * (1.0 + weighted / 5.0).log10();
-            raw.clamp(0.0, 100.0).round() as u8
-        }
-    };
-
-    // Component 2: confidence quality.
-    let conf_score = if findings.is_empty() {
-        100u8
-    } else {
-        let mut hi = 0usize;
-        let mut me = 0usize;
-        for f in findings {
-            match f.confidence {
-                Some(Confidence::High) => hi += 1,
-                Some(Confidence::Medium) => me += 1,
-                _ => {}
-            }
-        }
-        // High confidence is unambiguous signal — that's good for the scanner's
-        // trust posture, even though the findings themselves are bad.
-        // Score = (high*1.0 + medium*0.5) / total, in 0..=100.
-        let raw = (hi as f64 + me as f64 * 0.5) / findings.len() as f64;
-        (raw * 100.0).round() as u8
-    };
-
-    // Component 3: trend direction.
-    let trend_score = {
-        let net = fixed_since_last as i64 - new_since_last as i64;
-        let baseline = 50i64;
-        // Each net fix +5, each net regression -5. Bounded.
-        let raw = baseline + net * 5;
-        raw.clamp(0, 100) as u8
-    };
-
-    // Component 4: triage coverage (already 0..=1).
-    let triage_score = (triage_coverage * 100.0).round() as u8;
-
-    // Component 5: regression penalty.
-    let regression_score = if reintroduced == 0 {
-        100u8
-    } else {
-        ((100i64 - (reintroduced as i64) * 10).max(0)) as u8
-    };
-
-    // Weighted blend.
-    let components = vec![
-        HealthComponent {
-            label: "Severity pressure".into(),
-            score: severity_score,
-            weight: 0.30,
-            detail: if quality_count > 0 {
-                format!(
-                    "{weighted:.0} weighted points: {high} High, {med} Medium, {security_low} Low (security) + {quality_count} quality lints",
-                )
-            } else {
-                format!(
-                    "{weighted:.0} weighted points across {high} High, {med} Medium, {security_low} Low",
-                )
-            },
-        },
-        HealthComponent {
-            label: "Confidence quality".into(),
-            score: conf_score,
-            weight: 0.15,
-            detail: "Higher confidence = clearer signal from the scanner".into(),
-        },
-        HealthComponent {
-            label: "Trend".into(),
-            score: trend_score,
-            weight: 0.20,
-            detail: format!(
-                "Net {} since last scan ({} fixed, {} new)",
-                fixed_since_last as i64 - new_since_last as i64,
-                fixed_since_last,
-                new_since_last
-            ),
-        },
-        HealthComponent {
-            label: "Triage coverage".into(),
-            score: triage_score,
-            weight: 0.20,
-            detail: format!("{:.0}% of findings have a triage state", triage_coverage * 100.0),
-        },
-        HealthComponent {
-            label: "Regression resistance".into(),
-            score: regression_score,
-            weight: 0.15,
-            detail: if reintroduced == 0 {
-                "No previously-fixed findings have returned".into()
-            } else {
-                format!("{reintroduced} previously-fixed finding{} returned", plural(reintroduced))
-            },
-        },
-    ];
-
-    let blended: f64 = components
-        .iter()
-        .map(|c| c.score as f64 * c.weight)
-        .sum();
-    let weight_sum: f64 = components.iter().map(|c| c.weight).sum();
-    let score = (blended / weight_sum.max(0.0001)).round().clamp(0.0, 100.0) as u8;
-
-    let grade = match score {
-        90..=100 => "A",
-        80..=89 => "B",
-        70..=79 => "C",
-        60..=69 => "D",
-        _ => "F",
-    };
-
-    let _ = history; // reserved for future stability subcomponent
-
-    HealthScore {
-        score,
-        grade: grade.to_string(),
-        components,
-    }
-}
+// `compute_health_score` moved to `crate::server::health::compute`
+// after the v2 audit (2026-04-28).  See `docs/health-score-audit.md`
+// for calibration data and the rationale, and `docs/health-score.md`
+// for the customer-facing methodology.

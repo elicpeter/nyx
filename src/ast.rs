@@ -971,19 +971,35 @@ impl<'a> ParsedFile<'a> {
         (summaries.into_iter().collect(), bodies)
     }
 
-    /// Lower every function body in this file to SSA exactly once, with the
-    /// per-file [`SinkSiteLocator`] attached so summaries carry stable sink
-    /// span info.  Used by [`analyse_file_fused`] to share the result between
-    /// the taint engine ([`run_cfg_analyses_with_lowered`]) and the SSA
-    /// artifact filter ([`build_eligible_bodies_from_lowered`]) — the prior
-    /// code path lowered twice (once inside `analyse_file`, once inside
+    /// Lower every function body in this file to SSA exactly once.  Used by
+    /// [`analyse_file_fused`] to share the result between the taint engine
+    /// ([`run_cfg_analyses_with_lowered`]) and the SSA artifact filter
+    /// ([`build_eligible_bodies_from_lowered`]) — the prior code path lowered
+    /// twice (once inside `analyse_file`, once inside
     /// `extract_ssa_artifacts_from_file_cfg`) and accounted for ~24% of the
     /// pass-2 wall-clock on the bench corpus.
     ///
-    /// Returns the locator-rich (summaries, bodies) pair.  Both consumers
-    /// see exactly the same lowering result so taint behaviour is
-    /// preserved bit-for-bit while the SSA bodies stored cross-file (after
-    /// the eligibility filter) keep their full sink-span data.
+    /// # Locator policy
+    ///
+    /// Lowering does **not** attach a [`crate::summary::SinkSiteLocator`].
+    /// Per the same-file rationale documented on [`crate::taint::analyse_file`]:
+    /// pass-2 intra-file summaries are transient and behavior depends on
+    /// `SinkSite.cap` only, which is always populated.  Attaching a locator
+    /// here populates `param_to_sink` with concrete coordinates that the
+    /// emission path then promotes into `Finding.primary_location`,
+    /// causing the same-file summary-resolved sink to be reported at the
+    /// callee-internal sink line instead of the call site — which both
+    /// duplicates the intraprocedural finding the taint engine already
+    /// emits at that exact line and re-attributes the flow finding away
+    /// from the user-visible call site.  Closure-capture, lambda, and
+    /// helper-with-internal-sink fixtures all expect call-site emission;
+    /// the standalone [`crate::taint::analyse_file`] entry point already
+    /// passes `None` here for the same reason.
+    ///
+    /// Cross-file primary attribution is unaffected: the artifact-extraction
+    /// path that persists summaries to SQLite for cross-file consumption
+    /// runs through [`crate::taint::extract_ssa_artifacts_from_file_cfg`]
+    /// which threads its own locator-equipped lowering separately.
     fn lower_ssa_for_fused(
         &self,
         global_summaries: Option<&GlobalSummaries>,
@@ -1001,18 +1017,13 @@ impl<'a> ParsedFile<'a> {
         let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
         let scan_root_str = scan_root.map(|p| p.to_string_lossy());
         let namespace = normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
-        let locator = crate::summary::SinkSiteLocator {
-            tree: &self.source.tree,
-            bytes: self.source.bytes,
-            file_rel: &namespace,
-        };
         crate::taint::lower_all_functions_from_bodies(
             &self.file_cfg,
             caller_lang,
             &namespace,
             self.local_summaries(),
             global_summaries,
-            Some(&locator),
+            None,
         )
     }
 

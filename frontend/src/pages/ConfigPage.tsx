@@ -26,6 +26,7 @@ import {
 import { LoadingState } from '../components/ui/LoadingState';
 import { ErrorState } from '../components/ui/ErrorState';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { useToast } from '../contexts/ToastContext';
 import type { LabelEntryView, TerminatorView, ProfileView } from '../api/types';
 
 const LANG_OPTIONS = [
@@ -484,6 +485,23 @@ export function ConfigPage() {
   const deleteProfile = useDeleteProfile();
   const activateProfile = useActivateProfile();
   const toggleTriageSync = useToggleTriageSync();
+  const toast = useToast();
+
+  const ruleSummary = (b: { lang: string; matchers: string[]; cap: string }) =>
+    `${b.lang} · ${b.matchers.join(', ')} → ${b.cap}`;
+  const errMsg = (e: unknown) =>
+    e instanceof Error ? e.message : String(e ?? 'Unknown error');
+
+  const addRuleHandlers = (kind: 'source' | 'sink' | 'sanitizer') => ({
+    onSuccess: (_d: unknown, b: { lang: string; matchers: string[]; cap: string }) =>
+      toast.success(ruleSummary(b), `${kind[0].toUpperCase()}${kind.slice(1)} added`),
+    onError: (e: unknown) => toast.error(errMsg(e), `Could not add ${kind}`),
+  });
+  const deleteRuleHandlers = (kind: 'source' | 'sink' | 'sanitizer') => ({
+    onSuccess: (_d: unknown, b: { lang: string; matchers: string[]; cap: string }) =>
+      toast.success(ruleSummary(b), `${kind[0].toUpperCase()}${kind.slice(1)} removed`),
+    onError: (e: unknown) => toast.error(errMsg(e), `Could not remove ${kind}`),
+  });
 
   const [tab, setTab] = useState<Tab>('overview');
   const [termLang, setTermLang] = useState('');
@@ -492,9 +510,20 @@ export function ConfigPage() {
 
   const handleAddTerminator = useCallback(() => {
     if (!termLang || !termName) return;
-    addTerminator.mutate({ lang: termLang, name: termName });
+    addTerminator.mutate(
+      { lang: termLang, name: termName },
+      {
+        onSuccess: (_d, b) =>
+          toast.success(`${b.lang} · ${b.name}`, 'Terminator added'),
+        onError: (e) =>
+          toast.error(
+            e instanceof Error ? e.message : String(e ?? 'Unknown error'),
+            'Could not add terminator',
+          ),
+      },
+    );
     setTermName('');
-  }, [termLang, termName, addTerminator]);
+  }, [termLang, termName, addTerminator, toast]);
 
   const handleSaveProfile = useCallback(() => {
     if (!profileName) return;
@@ -566,13 +595,12 @@ export function ConfigPage() {
             id="config-sources"
             kind="source"
             entries={sources || []}
-            onAdd={(body) => addSource.mutate(body)}
+            onAdd={(body) => addSource.mutate(body, addRuleHandlers('source'))}
             onDelete={(e) =>
-              deleteSource.mutate({
-                lang: e.lang,
-                matchers: e.matchers,
-                cap: e.cap,
-              })
+              deleteSource.mutate(
+                { lang: e.lang, matchers: e.matchers, cap: e.cap },
+                deleteRuleHandlers('source'),
+              )
             }
           />
           <CustomLabelSection
@@ -580,13 +608,12 @@ export function ConfigPage() {
             id="config-sinks"
             kind="sink"
             entries={sinks || []}
-            onAdd={(body) => addSink.mutate(body)}
+            onAdd={(body) => addSink.mutate(body, addRuleHandlers('sink'))}
             onDelete={(e) =>
-              deleteSink.mutate({
-                lang: e.lang,
-                matchers: e.matchers,
-                cap: e.cap,
-              })
+              deleteSink.mutate(
+                { lang: e.lang, matchers: e.matchers, cap: e.cap },
+                deleteRuleHandlers('sink'),
+              )
             }
           />
           <CustomLabelSection
@@ -594,13 +621,14 @@ export function ConfigPage() {
             id="config-sanitizers"
             kind="sanitizer"
             entries={sanitizers || []}
-            onAdd={(body) => addSanitizer.mutate(body)}
+            onAdd={(body) =>
+              addSanitizer.mutate(body, addRuleHandlers('sanitizer'))
+            }
             onDelete={(e) =>
-              deleteSanitizer.mutate({
-                lang: e.lang,
-                matchers: e.matchers,
-                cap: e.cap,
-              })
+              deleteSanitizer.mutate(
+                { lang: e.lang, matchers: e.matchers, cap: e.cap },
+                deleteRuleHandlers('sanitizer'),
+              )
             }
           />
 

@@ -18,6 +18,7 @@ export function useAddSource() {
       apiPost<LabelEntryView>('/config/sources', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sources'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -28,6 +29,7 @@ export function useDeleteSource() {
     mutationFn: (body: AddLabelBody) => apiDelete<void>('/config/sources', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sources'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -41,6 +43,7 @@ export function useAddSink() {
       apiPost<LabelEntryView>('/config/sinks', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sinks'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -51,6 +54,7 @@ export function useDeleteSink() {
     mutationFn: (body: AddLabelBody) => apiDelete<void>('/config/sinks', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sinks'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -64,6 +68,7 @@ export function useAddSanitizer() {
       apiPost<LabelEntryView>('/config/sanitizers', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sanitizers'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -75,6 +80,7 @@ export function useDeleteSanitizer() {
       apiDelete<void>('/config/sanitizers', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sanitizers'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -93,6 +99,7 @@ export function useAddTerminator() {
       apiPost<TerminatorView>('/config/terminators', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'terminators'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -104,6 +111,7 @@ export function useDeleteTerminator() {
       apiDelete<void>('/config/terminators', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'terminators'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
