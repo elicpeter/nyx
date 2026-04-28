@@ -298,6 +298,14 @@ pub fn analyse_file(
     interop_edges: &[InteropEdge],
     extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
 ) -> Vec<Finding> {
+    // Reset BEFORE lowering: per-parameter probes inside
+    // `lower_all_functions_from_bodies` may record path-safe sink spans
+    // (via `record_path_safe_suppressed_span`).  Resetting here keeps the
+    // historical contract that "the span set starts empty for each file"
+    // while letting both the probe phase and the taint flow phase
+    // accumulate into the same set, which is what
+    // `take_path_safe_suppressed_spans` then drains for state analysis.
+    ssa_transfer::reset_path_safe_suppressed_spans();
     // No locator: pass-2 intra-file summaries are transient (not persisted)
     // and behavior depends on SinkSite.cap only, which is always populated.
     let (ssa_summaries, callee_bodies) = lower_all_functions_from_bodies(
@@ -341,11 +349,14 @@ pub(crate) fn analyse_file_with_lowered(
 ) -> Vec<Finding> {
     let _span = tracing::debug_span!("taint_analyse_file").entered();
 
-    // Clear the file-level path-safe-suppressed sink-span set before this
-    // file's analysis.  Populated by `is_path_safe_for_sink` and consumed
-    // by the state-analysis pass via `take_path_safe_suppressed_spans` to
-    // suppress `state-unauthed-access` on sinks already proven path-safe.
-    ssa_transfer::reset_path_safe_suppressed_spans();
+    // NOTE: the path-safe-suppressed span set is reset by the caller, not
+    // here.  Per-parameter probes inside the lowering phase
+    // (`lower_all_functions_from_bodies`) can already publish spans via
+    // `record_path_safe_suppressed_span`; resetting here would wipe them
+    // before `take_path_safe_suppressed_spans` drains the set for state
+    // analysis.  Both `analyse_file` (which lowers internally) and
+    // `analyse_file_fused` (which lowers up-front) reset the set before
+    // their lowering call.
 
     let ssa_sums_ref = if ssa_summaries.is_empty() {
         None

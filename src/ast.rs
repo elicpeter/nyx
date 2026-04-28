@@ -1029,6 +1029,10 @@ impl<'a> ParsedFile<'a> {
         global_summaries: Option<&GlobalSummaries>,
         scan_root: Option<&Path>,
     ) -> Vec<Diag> {
+        // Reset before lowering: probes during lowering may publish
+        // path-safe-suppressed sink spans that state analysis consumes.
+        // See the equivalent reset in `analyse_file_fused`.
+        crate::taint::ssa_transfer::reset_path_safe_suppressed_spans();
         let (ssa_summaries, callee_bodies) =
             self.lower_ssa_for_fused(global_summaries, scan_root);
         self.run_cfg_analyses_with_lowered(
@@ -1971,6 +1975,14 @@ pub fn analyse_file_fused(
         // same `FileCfg` independently — `lower_all_functions_from_bodies`
         // accounted for ~20% of `analyse_file_fused` wall-clock on the
         // bench corpus.
+        //
+        // Reset the path-safe-suppressed span set BEFORE lowering: the
+        // per-parameter probes inside the lowering phase publish spans
+        // (`record_path_safe_suppressed_span`), and the state-analysis
+        // pass downstream relies on those spans surviving until
+        // `take_path_safe_suppressed_spans` drains the set inside
+        // `run_cfg_analyses_with_lowered`.
+        crate::taint::ssa_transfer::reset_path_safe_suppressed_spans();
         let (lowered_summaries, lowered_bodies) =
             parsed.lower_ssa_for_fused(global_summaries, scan_root);
         out.extend(parsed.run_cfg_analyses_with_lowered(
