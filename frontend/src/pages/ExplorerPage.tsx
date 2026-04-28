@@ -23,6 +23,7 @@ import { AbstractInterpAnalysisPanel } from './debug/AbstractInterpPage';
 import { SymexAnalysisPanel } from './debug/SymexPage';
 import { PointerAnalysisPanel } from './debug/PointerViewerPage';
 import { TypeFactsAnalysisPanel } from './debug/TypeFactsPage';
+import { AuthAnalysisPanel } from './debug/AuthAnalysisPage';
 import type { TreeEntry, FlowStep, FindingView } from '../api/types';
 
 type ExplorerMode = 'tree' | 'symbols' | 'hotspots';
@@ -35,7 +36,8 @@ type ExplorerView =
   | 'abstract-interp'
   | 'symex'
   | 'pointer'
-  | 'type-facts';
+  | 'type-facts'
+  | 'auth';
 
 const FLOW_KIND_COLORS: Record<string, string> = {
   source: 'var(--success)',
@@ -93,6 +95,7 @@ const VIEW_CONFIG: Array<{
     requiresFunction: true,
     supportsFunction: true,
   },
+  { id: 'auth', label: 'Auth' },
 ];
 
 const VIEW_CONFIG_BY_ID = new Map(VIEW_CONFIG.map((view) => [view.id, view]));
@@ -433,14 +436,12 @@ export function ExplorerPage() {
               </span>
             </div>
             {selectedFile && currentViewConfig.supportsFunction && (
-              <div className="explorer-function-picker">
-                <FunctionSelector
-                  file={selectedFile}
-                  selectedFunction={selectedFunction}
-                  onFunctionChange={handleFunctionChange}
-                  showFilePath={false}
-                />
-              </div>
+              <FunctionSelector
+                file={selectedFile}
+                selectedFunction={selectedFunction}
+                onFunctionChange={handleFunctionChange}
+                showFilePath={false}
+              />
             )}
           </div>
           <div
@@ -670,6 +671,14 @@ function renderAnalysisContent({
           functionName={selectedFunction}
           scope="file"
         />
+      </div>
+    );
+  }
+
+  if (currentView === 'auth') {
+    return (
+      <div className="explorer-analysis-content">
+        <AuthAnalysisPanel file={selectedFile} />
       </div>
     );
   }

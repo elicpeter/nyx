@@ -23,7 +23,6 @@ import { ExplorerPage } from '../../pages/ExplorerPage';
 import { DebugLayout } from '../../pages/debug/DebugLayout';
 import { CallGraphPage } from '../../pages/debug/CallGraphPage';
 import { SummaryExplorerPage } from '../../pages/debug/SummaryExplorerPage';
-import { AuthAnalysisPage } from '../../pages/debug/AuthAnalysisPage';
 
 export function AppLayout() {
   const [scanModalOpen, setScanModalOpen] = useState(false);
@@ -67,13 +66,6 @@ export function AppLayout() {
         label: 'Summary Explorer',
         hint: 'Debug',
         to: '/debug/summaries',
-      },
-      {
-        id: 'go-debug-auth',
-        group: 'Navigate',
-        label: 'Auth Analysis',
-        hint: 'Debug',
-        to: '/debug/auth',
       },
       // Actions
       {
@@ -159,7 +151,10 @@ export function AppLayout() {
               />
               <Route path="call-graph" element={<CallGraphPage />} />
               <Route path="summaries" element={<SummaryExplorerPage />} />
-              <Route path="auth" element={<AuthAnalysisPage />} />
+              <Route
+                path="auth"
+                element={<Navigate to="/explorer?view=auth" replace />}
+              />
             </Route>
           </Routes>
         </main>

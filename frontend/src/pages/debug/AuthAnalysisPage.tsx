@@ -1,12 +1,8 @@
-import { useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { useDebugAuth } from '../../api/queries/debug';
 import { ApiError } from '../../api/client';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { LoadingState } from '../../components/ui/LoadingState';
-import { FileTree } from '../../components/data-display/FileTree';
-import { useFileTree } from '../../hooks/useFileTree';
 import type {
   AuthAnalysisView,
   AuthCheckView,
@@ -16,77 +12,20 @@ import type {
   AuthValueRefView,
 } from '../../api/types';
 
-export function AuthAnalysisPage() {
-  const [params, setParams] = useSearchParams();
-  const file = params.get('file') || null;
-
-  const handleSelectFile = useCallback(
-    (path: string) => {
-      setParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.set('file', path);
-          return next;
-        },
-        { replace: false },
-      );
-    },
-    [setParams],
-  );
-
-  const {
-    rootEntries,
-    isLoading: treeLoading,
-    expandedPaths,
-    loadedChildren,
-    selectedPath,
-    handleToggleExpand,
-    handleSelectFile: onTreeSelect,
-  } = useFileTree(file, handleSelectFile);
-
-  return (
-    <div className="debug-split">
-      <div
-        className="debug-split-sidebar"
-        style={{ width: 320, overflow: 'auto' }}
-      >
-        <div className="debug-toolbar" style={{ marginBottom: 8 }}>
-          <span className="debug-toolbar-label">Pick a file</span>
-        </div>
-        {treeLoading && <LoadingState message="Loading files..." />}
-        {rootEntries && (
-          <FileTree
-            entries={rootEntries}
-            expandedPaths={expandedPaths}
-            selectedPath={selectedPath}
-            onToggleExpand={handleToggleExpand}
-            onSelectFile={onTreeSelect}
-            loadedChildren={loadedChildren}
-          />
-        )}
-      </div>
-      <div className="debug-split-main">
-        <AuthAnalysisContent file={file} />
-      </div>
-    </div>
-  );
+interface AuthAnalysisPanelProps {
+  file: string;
 }
 
-function AuthAnalysisContent({ file }: { file: string | null }) {
+export function AuthAnalysisPanel({ file }: AuthAnalysisPanelProps) {
   const { data, isLoading, error } = useDebugAuth(file);
 
-  if (!file) {
-    return (
-      <EmptyState message="Select a file from the left to inspect its authorization model." />
-    );
-  }
   if (isLoading) {
     return <LoadingState message="Running authorization extraction..." />;
   }
   if (error) {
     if (error instanceof ApiError && error.status === 400) {
       return (
-        <EmptyState message="Auth analysis only runs on supported source files. Try a .ts / .py / .rb / .rs / .go / .java / .php / .rs file." />
+        <EmptyState message="Auth analysis only runs on supported source files. Try a .ts / .py / .rb / .rs / .go / .java / .php file." />
       );
     }
     return <ErrorState message="Failed to run authorization extraction." />;
@@ -195,6 +134,13 @@ function AuthUnitsBlock({ units }: { units: AuthUnitView[] }) {
 }
 
 function AuthUnitCard({ unit, index }: { unit: AuthUnitView; index: number }) {
+  const hasDetails =
+    unit.params.length > 0 ||
+    unit.self_actor_vars.length > 0 ||
+    unit.typed_bounded_vars.length > 0 ||
+    unit.authorized_sql_vars.length > 0 ||
+    unit.const_bound_vars.length > 0;
+
   return (
     <div className="abstract-block">
       <div className="abstract-block-header">
@@ -211,32 +157,36 @@ function AuthUnitCard({ unit, index }: { unit: AuthUnitView; index: number }) {
           {unit.operations.length === 1 ? '' : 's'}
         </span>
       </div>
-      {unit.params.length > 0 && (
-        <DetailRow label="Params" value={unit.params.join(', ')} />
-      )}
-      {unit.self_actor_vars.length > 0 && (
-        <DetailRow
-          label="Self-actor vars"
-          value={unit.self_actor_vars.join(', ')}
-        />
-      )}
-      {unit.typed_bounded_vars.length > 0 && (
-        <DetailRow
-          label="Typed-bounded params"
-          value={unit.typed_bounded_vars.join(', ')}
-        />
-      )}
-      {unit.authorized_sql_vars.length > 0 && (
-        <DetailRow
-          label="Authorized SQL vars"
-          value={unit.authorized_sql_vars.join(', ')}
-        />
-      )}
-      {unit.const_bound_vars.length > 0 && (
-        <DetailRow
-          label="Const-bound vars"
-          value={unit.const_bound_vars.join(', ')}
-        />
+      {hasDetails && (
+        <div className="auth-detail-list">
+          {unit.params.length > 0 && (
+            <DetailRow label="Params" value={unit.params.join(', ')} />
+          )}
+          {unit.self_actor_vars.length > 0 && (
+            <DetailRow
+              label="Self-actor vars"
+              value={unit.self_actor_vars.join(', ')}
+            />
+          )}
+          {unit.typed_bounded_vars.length > 0 && (
+            <DetailRow
+              label="Typed-bounded params"
+              value={unit.typed_bounded_vars.join(', ')}
+            />
+          )}
+          {unit.authorized_sql_vars.length > 0 && (
+            <DetailRow
+              label="Authorized SQL vars"
+              value={unit.authorized_sql_vars.join(', ')}
+            />
+          )}
+          {unit.const_bound_vars.length > 0 && (
+            <DetailRow
+              label="Const-bound vars"
+              value={unit.const_bound_vars.join(', ')}
+            />
+          )}
+        </div>
       )}
 
       {unit.auth_checks.length > 0 && (
@@ -251,17 +201,17 @@ function AuthUnitCard({ unit, index }: { unit: AuthUnitView; index: number }) {
 
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="debug-detail-row" style={{ padding: '4px 12px' }}>
-      <span className="debug-detail-label">{label}</span>
-      <span className="debug-detail-value mono">{value}</span>
+    <div className="auth-detail-row">
+      <span className="auth-detail-label">{label}</span>
+      <span className="auth-detail-value mono">{value}</span>
     </div>
   );
 }
 
 function AuthCheckTable({ checks }: { checks: AuthCheckView[] }) {
   return (
-    <div style={{ paddingTop: 8 }}>
-      <h4 style={{ margin: '0 12px 4px' }}>Auth Checks</h4>
+    <div className="auth-subsection">
+      <div className="auth-subsection-title">Auth Checks</div>
       <table className="abstract-table">
         <thead>
           <tr>
@@ -296,8 +246,8 @@ function AuthCheckTable({ checks }: { checks: AuthCheckView[] }) {
 
 function OperationTable({ operations }: { operations: AuthOperationView[] }) {
   return (
-    <div style={{ paddingTop: 8 }}>
-      <h4 style={{ margin: '0 12px 4px' }}>Sensitive Operations</h4>
+    <div className="auth-subsection">
+      <div className="auth-subsection-title">Sensitive Operations</div>
       <table className="abstract-table">
         <thead>
           <tr>
@@ -344,17 +294,16 @@ function OperationTable({ operations }: { operations: AuthOperationView[] }) {
 
 function SubjectChips({ subjects }: { subjects: AuthValueRefView[] }) {
   return (
-    <>
+    <div className="auth-subject-chips">
       {subjects.map((s, i) => (
         <span
           key={`${s.name}-${i}`}
           className="cap-badge"
-          style={{ marginRight: 4 }}
           title={`${s.source_kind}${s.base ? ` (base: ${s.base})` : ''}`}
         >
           {s.name}
         </span>
       ))}
-    </>
+    </div>
   );
 }

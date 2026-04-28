@@ -19,7 +19,6 @@ const ROUTE_TITLES: Record<string, string> = {
   '/debug/call-graph': 'Call Graph',
   '/debug/taint': 'Taint Debugger',
   '/debug/summaries': 'Summaries',
-  '/debug/auth': 'Auth Analysis',
 };
 
 function pathToSection(pathname: string): string {

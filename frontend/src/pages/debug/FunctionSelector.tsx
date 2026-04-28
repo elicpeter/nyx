@@ -31,7 +31,9 @@ export function FunctionSelector({
   }, [functions, showClosures]);
 
   return (
-    <div className="function-selector">
+    <div
+      className={`function-selector${showFilePath ? '' : ' function-selector-flat'}`}
+    >
       {showFilePath && (
         <div className="function-selector-path">
           <span className="function-selector-path-label">File:</span>
@@ -64,20 +66,20 @@ export function FunctionSelector({
             </option>
           ))}
         </select>
-        {closureCount > 0 && (
-          <label className="function-selector-toggle">
-            <input
-              type="checkbox"
-              checked={showClosures}
-              onChange={(e) => setShowClosures(e.target.checked)}
-            />
-            <span>
-              Show {closureCount} anonymous closure
-              {closureCount === 1 ? '' : 's'}
-            </span>
-          </label>
-        )}
       </div>
+      {closureCount > 0 && (
+        <label className="function-selector-toggle">
+          <input
+            type="checkbox"
+            checked={showClosures}
+            onChange={(e) => setShowClosures(e.target.checked)}
+          />
+          <span>
+            Show {closureCount} anonymous closure
+            {closureCount === 1 ? '' : 's'}
+          </span>
+        </label>
+      )}
     </div>
   );
 }

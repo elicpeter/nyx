@@ -2149,72 +2149,36 @@ pub fn scan_with_index_parallel_observer(
                                         p.record_language(lang);
                                     }
                                 }
-                                if let Err(e) =
-                                    idx.replace_summaries_for_file(path, &hash, &func_sums)
-                                {
-                                    record_persist_error(
-                                        &persist_errors_ref,
-                                        format!("function summaries {}: {e}", path.display()),
-                                    );
-                                }
-                                // Persist SSA summaries with full FuncKey metadata
-                                if !ssa_sums.is_empty() {
-                                    let ssa_rows: Vec<_> = ssa_sums
-                                        .into_iter()
-                                        .map(|(key, sum)| {
-                                            (
-                                                key.name,
-                                                key.arity.unwrap_or(0),
-                                                key.lang.as_str().to_string(),
-                                                key.namespace,
-                                                key.container,
-                                                key.disambig,
-                                                key.kind,
-                                                sum,
-                                            )
-                                        })
-                                        .collect();
-                                    if let Err(e) =
-                                        idx.replace_ssa_summaries_for_file(path, &hash, &ssa_rows)
-                                    {
-                                        record_persist_error(
-                                            &persist_errors_ref,
-                                            format!("SSA summaries {}: {e}", path.display()),
-                                        );
-                                    }
-                                }
-                                // Persist SSA callee bodies
-                                if !ssa_bodies.is_empty() {
-                                    let body_rows: Vec<_> = ssa_bodies
-                                        .into_iter()
-                                        .map(|(key, body)| {
-                                            (
-                                                key.name,
-                                                key.arity.unwrap_or(0),
-                                                key.lang.as_str().to_string(),
-                                                key.namespace,
-                                                key.container,
-                                                key.disambig,
-                                                key.kind,
-                                                body,
-                                            )
-                                        })
-                                        .collect();
-                                    if let Err(e) =
-                                        idx.replace_ssa_bodies_for_file(path, &hash, &body_rows)
-                                    {
-                                        record_persist_error(
-                                            &persist_errors_ref,
-                                            format!("SSA bodies {}: {e}", path.display()),
-                                        );
-                                    }
-                                }
-                                // Persist per-function auth-check summaries.
-                                // Empty-lifts are skipped; an empty input
-                                // list still clears any stale entry for
-                                // this file so a helper that lost its
-                                // ownership check no longer leaks lifts
-                                // into subsequent pass-2 runs.
+                                let ssa_rows: Vec<_> = ssa_sums
+                                    .into_iter()
+                                    .map(|(key, sum)| {
+                                        (
+                                            key.name,
+                                            key.arity.unwrap_or(0),
+                                            key.lang.as_str().to_string(),
+                                            key.namespace,
+                                            key.container,
+                                            key.disambig,
+                                            key.kind,
+                                            sum,
+                                        )
+                                    })
+                                    .collect();
+                                let body_rows: Vec<_> = ssa_bodies
+                                    .into_iter()
+                                    .map(|(key, body)| {
+                                        (
+                                            key.name,
+                                            key.arity.unwrap_or(0),
+                                            key.lang.as_str().to_string(),
+                                            key.namespace,
+                                            key.container,
+                                            key.disambig,
+                                            key.kind,
+                                            body,
+                                        )
+                                    })
+                                    .collect();
                                 let auth_rows: Vec<_> = auth_sums
                                     .into_iter()
                                     .map(|(key, sum)| {
@@ -2230,12 +2194,19 @@ pub fn scan_with_index_parallel_observer(
                                         )
                                     })
                                     .collect();
-                                if let Err(e) =
-                                    idx.replace_auth_summaries_for_file(path, &hash, &auth_rows)
-                                {
+                                // Single transaction for all four caches:
+                                // one fsync per file instead of four.
+                                if let Err(e) = idx.replace_all_for_file(
+                                    path,
+                                    &hash,
+                                    &func_sums,
+                                    &ssa_rows,
+                                    &body_rows,
+                                    &auth_rows,
+                                ) {
                                     record_persist_error(
                                         &persist_errors_ref,
-                                        format!("auth summaries {}: {e}", path.display()),
+                                        format!("summaries {}: {e}", path.display()),
                                     );
                                 }
                             }

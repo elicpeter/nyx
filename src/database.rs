@@ -98,7 +98,7 @@ pub mod index {
             container TEXT NOT NULL DEFAULT '',
             disambig INTEGER,
             kind TEXT NOT NULL DEFAULT 'fn',
-            body TEXT NOT NULL,
+            body BLOB NOT NULL,
             updated_at INTEGER NOT NULL,
             UNIQUE(project, file_path, name, container, arity, disambig, kind)
         );
@@ -173,6 +173,18 @@ pub mod index {
             created_at TEXT NOT NULL,
             UNIQUE(suppress_by, match_value)
         );
+
+        -- Indexes on (project, file_path) for the per-file replace_* paths.
+        -- Without these, every DELETE WHERE project=? AND file_path=? does a
+        -- full table scan, which dominates indexing time as the cache grows.
+        CREATE INDEX IF NOT EXISTS idx_function_summaries_project_file
+            ON function_summaries(project, file_path);
+        CREATE INDEX IF NOT EXISTS idx_ssa_function_summaries_project_file
+            ON ssa_function_summaries(project, file_path);
+        CREATE INDEX IF NOT EXISTS idx_ssa_function_bodies_project_file
+            ON ssa_function_bodies(project, file_path);
+        CREATE INDEX IF NOT EXISTS idx_auth_check_summaries_project_file
+            ON auth_check_summaries(project, file_path);
     "#;
 
     /// Engine version used to detect stale caches across upgrades.
@@ -191,7 +203,10 @@ pub mod index {
     ///   byte offset to a depth-first structural index.  Pre-0.5.0 caches
     ///   store byte-offset disambigs and would fail to match bodies built
     ///   by the new engine, so they are silently rebuilt on open.
-    pub const SCHEMA_VERSION: &str = "2";
+    /// * `"3"` — `ssa_function_bodies.body` changed from JSON TEXT to
+    ///   bincode BLOB.  Old JSON payloads cannot be deserialised by the
+    ///   new engine, so they are silently rebuilt on open.
+    pub const SCHEMA_VERSION: &str = "3";
 
     // TODO: ADD CLEANS FOR EACH TABLE BASED ON PROJECT WHICH RUNS ON CLEAN
     // TODO: ADD DROP AND GIVE A CLI PARAMETER FOR DROP
@@ -263,7 +278,16 @@ pub mod index {
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX;
             let manager = SqliteConnectionManager::file(database_path).with_flags(flags);
-            let pool = Arc::new(Pool::new(manager)?);
+            // r2d2's default `max_size` is 10, which can stall rayon
+            // workers on machines with more cores than that during the
+            // parallel indexing pass.  Size the pool to comfortably hold
+            // a connection per rayon thread plus a small slack.
+            let max_conns = (num_cpus::get() as u32 + 4).max(16);
+            let pool = Arc::new(
+                Pool::builder()
+                    .max_size(max_conns)
+                    .build(manager)?,
+            );
 
             {
                 let conn = pool.get()?;
@@ -411,13 +435,17 @@ pub mod index {
                     tracing::info!(
                         "db schema version changed ({old} → {current}), clearing summary caches"
                     );
+                    // Drop ssa_function_bodies entirely: column type changed
+                    // to BLOB in v3 and `CREATE TABLE IF NOT EXISTS` will
+                    // not migrate the column on an existing table.
                     conn.execute_batch(
-                        "DELETE FROM function_summaries;
+                        "DROP TABLE IF EXISTS ssa_function_bodies;
+                         DELETE FROM function_summaries;
                          DELETE FROM ssa_function_summaries;
-                         DELETE FROM ssa_function_bodies;
                          DELETE FROM auth_check_summaries;
                          DELETE FROM files;",
                     )?;
+                    conn.execute_batch(SCHEMA)?;
                     conn.execute(
                         "INSERT OR REPLACE INTO nyx_metadata (key, value) VALUES ('schema_version', ?1)",
                         params![current],
@@ -1041,7 +1069,11 @@ pub mod index {
         /// Atomically replace all SSA callee bodies for a single file.
         ///
         /// Persists cross-file callee bodies for interprocedural symex.
-        /// Bodies are serialized as JSON TEXT, matching the ssa_function_summaries pattern.
+        /// Bodies are serialized as MessagePack (rmp-serde, named-field
+        /// encoding) BLOBs — JSON proved too costly at indexing time on
+        /// large SSA structures, and bincode's positional format trips
+        /// over the `#[serde(skip_serializing_if = ...)]` attributes
+        /// scattered through `OptimizeResult` and friends.
         /// Input tuple: `(name, arity, lang, namespace, container, disambig, kind, body)`.
         pub fn replace_ssa_bodies_for_file(
             &mut self,
@@ -1076,7 +1108,7 @@ pub mod index {
                 )?;
 
                 for (name, arity, lang, namespace, container, disambig, kind, body) in bodies {
-                    let json = serde_json::to_string(body)
+                    let blob = rmp_serde::to_vec_named(body)
                         .map_err(|e| NyxError::Msg(format!("SSA body serialise: {e}")))?;
                     let disambig_sql = disambig.map(|d| d as i64);
                     stmt.execute(params![
@@ -1090,7 +1122,7 @@ pub mod index {
                         container,
                         disambig_sql,
                         kind.as_str(),
-                        json,
+                        blob,
                         now
                     ])?;
                 }
@@ -1134,7 +1166,7 @@ pub mod index {
                 String,
                 Option<i64>,
                 String,
-                String,
+                Vec<u8>,
             )> = stmt
                 .query_map([&self.project], |row| {
                     Ok((
@@ -1146,7 +1178,7 @@ pub mod index {
                         row.get::<_, String>(5)?,
                         row.get::<_, Option<i64>>(6)?,
                         row.get::<_, String>(7)?,
-                        row.get::<_, String>(8)?,
+                        row.get::<_, Vec<u8>>(8)?,
                     ))
                 })?
                 .filter_map(|r| match r {
@@ -1163,10 +1195,10 @@ pub mod index {
                 let results: Vec<_> = rows
                     .par_iter()
                     .filter_map(
-                        |(fp, name, lang, arity, ns, container, disambig, kind, json)| {
-                            serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json)
+                        |(fp, name, lang, arity, ns, container, disambig, kind, blob)| {
+                            rmp_serde::from_slice::<crate::taint::ssa_transfer::CalleeSsaBody>(blob)
                                 .map_err(|e| {
-                                    tracing::warn!("failed to deserialize SSA body JSON: {e}");
+                                    tracing::warn!("failed to deserialize SSA body: {e}");
                                     e
                                 })
                                 .ok()
@@ -1194,8 +1226,8 @@ pub mod index {
                 Ok(results)
             } else {
                 let mut out = Vec::with_capacity(rows.len());
-                for (fp, name, lang, arity, ns, container, disambig, kind, json) in &rows {
-                    match serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json) {
+                for (fp, name, lang, arity, ns, container, disambig, kind, blob) in &rows {
+                    match rmp_serde::from_slice::<crate::taint::ssa_transfer::CalleeSsaBody>(blob) {
                         Ok(mut b) => {
                             // See note in parallel branch above.
                             crate::taint::ssa_transfer::rebuild_body_graph(&mut b);
@@ -1212,7 +1244,7 @@ pub mod index {
                             ));
                         }
                         Err(e) => {
-                            tracing::warn!("failed to deserialize SSA body JSON: {e}");
+                            tracing::warn!("failed to deserialize SSA body: {e}");
                         }
                     }
                 }
@@ -1259,6 +1291,205 @@ pub mod index {
                 )?;
 
                 for (name, arity, lang, namespace, container, disambig, kind, summary) in summaries
+                {
+                    let json = serde_json::to_string(summary)
+                        .map_err(|e| NyxError::Msg(format!("auth summary serialise: {e}")))?;
+                    let disambig_sql = disambig.map(|d| d as i64);
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        name,
+                        *arity as i64,
+                        lang,
+                        namespace,
+                        container,
+                        disambig_sql,
+                        kind.as_str(),
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            tx.commit()?;
+            Ok(())
+        }
+
+        /// Atomically replace all four per-file caches in a single
+        /// transaction.  Equivalent in effect to calling
+        /// [`Self::replace_summaries_for_file`],
+        /// [`Self::replace_ssa_summaries_for_file`],
+        /// [`Self::replace_ssa_bodies_for_file`] and
+        /// [`Self::replace_auth_summaries_for_file`] in sequence, but
+        /// issues a single fsync at commit instead of four — the
+        /// dominant cost on large scans.
+        ///
+        /// Behaviour parity with the four-call sequence:
+        /// * function and auth summaries: DELETE-then-INSERT regardless
+        ///   of input length, so emptying a file's summaries clears
+        ///   stale rows.
+        /// * SSA summaries and bodies: only touched when the input is
+        ///   non-empty, matching the existing scan path.
+        #[allow(clippy::too_many_arguments)]
+        pub fn replace_all_for_file(
+            &mut self,
+            file_path: &Path,
+            file_hash: &[u8],
+            func_summaries: &[crate::summary::FuncSummary],
+            ssa_summaries: &[(
+                String,
+                usize,
+                String,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::summary::ssa_summary::SsaFuncSummary,
+            )],
+            ssa_bodies: &[(
+                String,
+                usize,
+                String,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::taint::ssa_transfer::CalleeSsaBody,
+            )],
+            auth_summaries: &[(
+                String,
+                usize,
+                String,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::auth_analysis::model::AuthCheckSummary,
+            )],
+        ) -> NyxResult<()> {
+            let tx = self.conn.transaction()?;
+            let path_str = file_path.to_string_lossy();
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+
+            // function_summaries — always replace.
+            tx.execute(
+                "DELETE FROM function_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO function_summaries
+                        (project, file_path, file_hash, name, arity, lang,
+                         container, disambig, kind, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                )?;
+                for s in func_summaries {
+                    let json = serde_json::to_string(s)
+                        .map_err(|e| NyxError::Msg(format!("summary serialise: {e}")))?;
+                    let disambig_sql = s.disambig.map(|d| d as i64);
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        s.name,
+                        s.param_count as i64,
+                        s.lang,
+                        s.container,
+                        disambig_sql,
+                        s.kind.as_str(),
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            // ssa_function_summaries — only touched when non-empty.
+            if !ssa_summaries.is_empty() {
+                tx.execute(
+                    "DELETE FROM ssa_function_summaries
+                     WHERE project = ?1 AND file_path = ?2",
+                    params![self.project, path_str],
+                )?;
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO ssa_function_summaries
+                        (project, file_path, file_hash, name, arity, lang, namespace,
+                         container, disambig, kind, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                )?;
+                for (name, arity, lang, namespace, container, disambig, kind, summary) in
+                    ssa_summaries
+                {
+                    let json = serde_json::to_string(summary)
+                        .map_err(|e| NyxError::Msg(format!("SSA summary serialise: {e}")))?;
+                    let disambig_sql = disambig.map(|d| d as i64);
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        name,
+                        *arity as i64,
+                        lang,
+                        namespace,
+                        container,
+                        disambig_sql,
+                        kind.as_str(),
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            // ssa_function_bodies — only touched when non-empty.
+            if !ssa_bodies.is_empty() {
+                tx.execute(
+                    "DELETE FROM ssa_function_bodies
+                     WHERE project = ?1 AND file_path = ?2",
+                    params![self.project, path_str],
+                )?;
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO ssa_function_bodies
+                        (project, file_path, file_hash, name, arity, lang, namespace,
+                         container, disambig, kind, body, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                )?;
+                for (name, arity, lang, namespace, container, disambig, kind, body) in ssa_bodies {
+                    let blob = rmp_serde::to_vec_named(body)
+                        .map_err(|e| NyxError::Msg(format!("SSA body serialise: {e}")))?;
+                    let disambig_sql = disambig.map(|d| d as i64);
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        name,
+                        *arity as i64,
+                        lang,
+                        namespace,
+                        container,
+                        disambig_sql,
+                        kind.as_str(),
+                        blob,
+                        now
+                    ])?;
+                }
+            }
+
+            // auth_check_summaries — always replace, even when empty,
+            // so a helper that lost its ownership check no longer
+            // leaks lifts into subsequent pass-2 runs.
+            tx.execute(
+                "DELETE FROM auth_check_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO auth_check_summaries
+                        (project, file_path, file_hash, name, arity, lang, namespace,
+                         container, disambig, kind, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                )?;
+                for (name, arity, lang, namespace, container, disambig, kind, summary) in
+                    auth_summaries
                 {
                     let json = serde_json::to_string(summary)
                         .map_err(|e| NyxError::Msg(format!("auth summary serialise: {e}")))?;

@@ -107,11 +107,7 @@ function TypeFactGroup({
           {facts.length} value{facts.length === 1 ? '' : 's'}
         </span>
       </div>
-      {subtitle && (
-        <p className="text-secondary" style={{ padding: '0 12px' }}>
-          {subtitle}
-        </p>
-      )}
+      {subtitle && <p className="abstract-subtitle">{subtitle}</p>}
       <table className="abstract-table">
         <thead>
           <tr>
@@ -167,11 +163,7 @@ function DtoFactGroup({
           {facts.length} DTO{facts.length === 1 ? '' : 's'}
         </span>
       </div>
-      {subtitle && (
-        <p className="text-secondary" style={{ padding: '0 12px' }}>
-          {subtitle}
-        </p>
-      )}
+      {subtitle && <p className="abstract-subtitle">{subtitle}</p>}
       {facts.map((f) => (
         <div key={f.ssa_value} style={{ padding: '8px 12px' }}>
           <div className="debug-detail-row">

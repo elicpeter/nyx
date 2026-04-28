@@ -56,9 +56,7 @@ export function PointerAnalysisPanel({
           </span>
         </div>
         {data.values.length === 0 ? (
-          <p className="text-secondary" style={{ padding: '8px 12px' }}>
-            All SSA values point to nothing tracked.
-          </p>
+          <p className="abstract-empty">All SSA values point to nothing tracked.</p>
         ) : (
           <PointerValueTable
             values={data.values}
@@ -174,9 +172,7 @@ function FieldEntriesBlock({
         </span>
       </div>
       {entries.length === 0 ? (
-        <p className="text-secondary" style={{ padding: '8px 12px' }}>
-          {emptyHint}
-        </p>
+        <p className="abstract-empty">{emptyHint}</p>
       ) : (
         <table className="abstract-table">
           <thead>
