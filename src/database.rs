@@ -174,6 +174,14 @@ pub mod index {
             UNIQUE(suppress_by, match_value)
         );
 
+        -- First time we observed each finding fingerprint. Lazy-populated by the
+        -- overview endpoint when computing backlog age — INSERT OR IGNORE means
+        -- only the earliest scan that mentioned a fingerprint sticks.
+        CREATE TABLE IF NOT EXISTS finding_first_seen (
+            fingerprint TEXT PRIMARY KEY,
+            first_seen_at TEXT NOT NULL
+        );
+
         -- Indexes on (project, file_path) for the per-file replace_* paths.
         -- Without these, every DELETE WHERE project=? AND file_path=? does a
         -- full table scan, which dominates indexing time as the cache grows.
@@ -2197,6 +2205,103 @@ pub mod index {
                 .filter_map(Result::ok)
                 .collect();
             Ok(rows)
+        }
+
+        /// Record the first time a finding fingerprint was observed. Idempotent —
+        /// the earliest call wins via INSERT OR IGNORE. Used by the overview
+        /// backlog-age computation; ts should be the originating scan's
+        /// `started_at` (RFC-3339).
+        pub fn record_finding_first_seen(&self, fingerprint: &str, ts: &str) -> NyxResult<()> {
+            self.c().execute(
+                "INSERT OR IGNORE INTO finding_first_seen (fingerprint, first_seen_at) VALUES (?1, ?2)",
+                params![fingerprint, ts],
+            )?;
+            Ok(())
+        }
+
+        /// Bulk variant. Inserts ignoring conflicts.
+        pub fn record_finding_first_seen_bulk(
+            &self,
+            entries: &[(String, String)],
+        ) -> NyxResult<()> {
+            if entries.is_empty() {
+                return Ok(());
+            }
+            let conn = self.c();
+            let tx = conn.unchecked_transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR IGNORE INTO finding_first_seen (fingerprint, first_seen_at) VALUES (?1, ?2)",
+                )?;
+                for (fp, ts) in entries {
+                    stmt.execute(params![fp, ts])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        }
+
+        /// Look up first-seen timestamps for a set of fingerprints. Missing
+        /// entries are simply absent from the returned map.
+        pub fn get_first_seen_map(
+            &self,
+            fingerprints: &[String],
+        ) -> NyxResult<std::collections::HashMap<String, String>> {
+            if fingerprints.is_empty() {
+                return Ok(std::collections::HashMap::new());
+            }
+            // SQLite IN-clause cap is high but parameter count is bounded — chunk
+            // for safety with large fingerprint sets.
+            let mut out = std::collections::HashMap::with_capacity(fingerprints.len());
+            let conn = self.c();
+            for chunk in fingerprints.chunks(500) {
+                let placeholders = (1..=chunk.len())
+                    .map(|i| format!("?{i}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let sql = format!(
+                    "SELECT fingerprint, first_seen_at FROM finding_first_seen WHERE fingerprint IN ({placeholders})"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let params: Vec<&dyn rusqlite::ToSql> =
+                    chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+                let rows = stmt.query_map(params.as_slice(), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                for r in rows.flatten() {
+                    out.insert(r.0, r.1);
+                }
+            }
+            Ok(out)
+        }
+
+        /// Get a single metadata value by key. Returns None if absent.
+        pub fn get_metadata(&self, key: &str) -> NyxResult<Option<String>> {
+            let conn = self.c();
+            let mut stmt = conn.prepare("SELECT value FROM nyx_metadata WHERE key = ?1")?;
+            let mut rows = stmt.query(params![key])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(row.get(0)?))
+            } else {
+                Ok(None)
+            }
+        }
+
+        /// Set a metadata value (insert-or-replace).
+        pub fn set_metadata(&self, key: &str, value: &str) -> NyxResult<()> {
+            self.c().execute(
+                "INSERT OR REPLACE INTO nyx_metadata (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )?;
+            Ok(())
+        }
+
+        /// Remove a metadata key. Returns true if a row was deleted.
+        pub fn delete_metadata(&self, key: &str) -> NyxResult<bool> {
+            let n = self
+                .c()
+                .execute("DELETE FROM nyx_metadata WHERE key = ?1", params![key])?;
+            Ok(n > 0)
         }
 
         /// Delete a suppression rule by ID. Returns true if a row was deleted.

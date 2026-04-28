@@ -137,6 +137,128 @@ fn fused_walltime() {
     );
 }
 
+/// Production-equivalent fused stage breakdown: mirrors the post-round-1
+/// `analyse_file_fused` pipeline (shared lowering, no double-lower).
+/// Use this — `stage_breakdown` over-counts because its helper double-lowers.
+#[test]
+fn fused_stage_breakdown() {
+    use nyx_scanner::ast::{analyse_file_fused, perf_stage_breakdown_fused};
+    let fixtures = Path::new(FIXTURES).canonicalize().expect("fixtures");
+    let mut cfg = Config::default();
+    cfg.scanner.mode = AnalysisMode::Full;
+
+    let (rx, handle) = nyx_scanner::walk::spawn_file_walker(&fixtures, &cfg);
+    handle.join().unwrap();
+    let paths: Vec<_> = rx.into_iter().flatten().collect();
+    let bytes_per: Vec<Vec<u8>> = paths
+        .iter()
+        .map(|p| std::fs::read(p).unwrap())
+        .collect();
+    eprintln!("=== fused_stage_breakdown: {} files", paths.len());
+
+    // Drive pass 1 once so pass 2 has realistic GlobalSummaries.
+    let mut local_gs = nyx_scanner::summary::GlobalSummaries::new();
+    let root_str = fixtures.to_string_lossy();
+    for (i, path) in paths.iter().enumerate() {
+        if let Ok(r) = analyse_file_fused(&bytes_per[i], path, &cfg, None, Some(&fixtures)) {
+            for s in r.summaries {
+                let key = s.func_key(Some(&root_str));
+                local_gs.insert(key, s);
+            }
+            for (key, ssa_sum) in r.ssa_summaries {
+                local_gs.insert_ssa(key, ssa_sum);
+            }
+            for (key, body) in r.ssa_bodies {
+                local_gs.insert_body(key, body);
+            }
+            for (key, auth_sum) in r.auth_summaries {
+                local_gs.insert_auth(key, auth_sum);
+            }
+        }
+    }
+    local_gs.install_hierarchy();
+
+    // 8 outer slots, 7 lower sub-slots.
+    let mut outer: [Vec<Vec<u128>>; 8] = std::array::from_fn(|_| {
+        (0..paths.len()).map(|_| Vec::new()).collect()
+    });
+    let mut inner: [Vec<Vec<u128>>; 7] = std::array::from_fn(|_| {
+        (0..paths.len()).map(|_| Vec::new()).collect()
+    });
+
+    for _iter in 0..ITERATIONS {
+        for (i, path) in paths.iter().enumerate() {
+            if let Some((o, l)) = perf_stage_breakdown_fused(
+                &bytes_per[i], path, &cfg, Some(&local_gs), Some(&fixtures),
+            ) {
+                for (s, t) in o.iter().enumerate() {
+                    outer[s][i].push(*t);
+                }
+                for (s, t) in l.iter().enumerate() {
+                    inner[s][i].push(*t);
+                }
+            }
+        }
+    }
+
+    let outer_names = [
+        "parse+CFG", "shared_lower", "taint_flow", "build_eligible",
+        "ast_queries", "suppression", "auth", "state(reserved)",
+    ];
+    let inner_names = [
+        "lower_to_ssa(per-body)",
+        "extract_ssa_func_summary(per-body)",
+        "optimize_ssa(per-body)",
+        "typed_recv+pointer(per-body)",
+        "augment_summaries",
+        "rerun_extraction",
+        "per-body misc",
+    ];
+
+    let mut tot_outer = [0u128; 8];
+    for s in 0..8 {
+        for i in 0..paths.len() {
+            tot_outer[s] += pct(&mut outer[s][i].clone(), 0.5);
+        }
+    }
+    let mut tot_inner = [0u128; 7];
+    for s in 0..7 {
+        for i in 0..paths.len() {
+            tot_inner[s] += pct(&mut inner[s][i].clone(), 0.5);
+        }
+    }
+    let outer_sum: u128 = tot_outer.iter().sum();
+    let inner_sum: u128 = tot_inner.iter().sum();
+    let lower_total = tot_outer[1].max(1);
+
+    eprintln!();
+    eprintln!("=== Outer fused stages (sum of medians, µs) ===");
+    eprintln!("  total              : {outer_sum:>8} µs");
+    for (s, n) in outer_names.iter().enumerate() {
+        let p = 100.0 * tot_outer[s] as f64 / outer_sum.max(1) as f64;
+        eprintln!("  {:<22} {:>8} µs   {:>5.1}%", n, tot_outer[s], p);
+    }
+    eprintln!();
+    eprintln!("=== shared_lower sub-stages (sum of medians, µs) ===");
+    eprintln!("  inner sum          : {inner_sum:>8} µs   (vs outer shared_lower {} µs)", tot_outer[1]);
+    for (s, n) in inner_names.iter().enumerate() {
+        let p_lower = 100.0 * tot_inner[s] as f64 / lower_total as f64;
+        let p_outer = 100.0 * tot_inner[s] as f64 / outer_sum.max(1) as f64;
+        eprintln!("  {:<32} {:>8} µs   {:>5.1}% of shared_lower   {:>5.1}% of total",
+            n, tot_inner[s], p_lower, p_outer);
+    }
+    eprintln!();
+    eprintln!("=== Per-file outer µs (median) ===");
+    eprintln!("{:<22} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8}",
+        "fixture", "parseCFG", "lower", "taint", "elig", "astQ", "suppr", "auth");
+    for (i, path) in paths.iter().enumerate() {
+        let m: Vec<u128> = (0..7).map(|s| pct(&mut outer[s][i].clone(), 0.5)).collect();
+        let name = path.file_name().unwrap().to_string_lossy();
+        eprintln!("{:<22} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8}",
+            name, m[0], m[1], m[2], m[3], m[4], m[5], m[6]);
+    }
+}
+
 #[test]
 fn stage_breakdown() {
     let fixtures = Path::new(FIXTURES).canonicalize().expect("fixtures");

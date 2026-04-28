@@ -71,6 +71,45 @@ fn js_ts_pass2_cap() -> usize {
     if o == 0 { JS_TS_PASS2_SAFETY_CAP } else { o }
 }
 
+// ── Perf-audit sub-stage timers (lower_all_functions_from_bodies) ───────
+//
+// Slot layout (µs):
+//   [0] lower_to_ssa_with_params (per-body sum)
+//   [1] extract_ssa_func_summary (per-body sum, includes per-param probes)
+//   [2] optimize_ssa_with_param_types (per-body sum)
+//   [3] typed_call_receivers + pointer fact extraction (per-body sum)
+//   [4] augment_summaries_with_child_sinks
+//   [5] rerun_extraction_with_augmented_summaries
+//   [6] per-body misc (FuncKey resolve, HashMap insert, interner ctor)
+//
+// Active only when the slot is `Some`.  Production code path leaves it
+// `None`, making instrumentation cost a single thread-local borrow + a
+// `match Option::None` per measured chunk — sub-nanosecond.
+thread_local! {
+    static PERF_LOWER_TIMINGS: std::cell::Cell<Option<[u128; 7]>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[doc(hidden)]
+pub fn perf_lower_timings_start() {
+    PERF_LOWER_TIMINGS.with(|c| c.set(Some([0; 7])));
+}
+
+#[doc(hidden)]
+pub fn perf_lower_timings_take() -> Option<[u128; 7]> {
+    PERF_LOWER_TIMINGS.with(|c| c.replace(None))
+}
+
+#[inline]
+fn perf_lower_record(slot: usize, micros: u128) {
+    PERF_LOWER_TIMINGS.with(|c| {
+        if let Some(mut t) = c.get() {
+            t[slot] = t[slot].saturating_add(micros);
+            c.set(Some(t));
+        }
+    });
+}
+
 /// Test-only override for the Gauss-Seidel toggle.  Values:
 ///
 /// * `0` — respect `NYX_JS_GAUSS_SEIDEL` env var (default production
@@ -1415,6 +1454,7 @@ pub(crate) fn lower_all_functions_from_bodies(
     let mut bodies = std::collections::HashMap::new();
 
     for body in file_cfg.function_bodies() {
+        let _t_misc = std::time::Instant::now();
         let func_name = body.meta.name.clone().unwrap_or_else(|| {
             body.meta
                 .func_key
@@ -1425,6 +1465,9 @@ pub(crate) fn lower_all_functions_from_bodies(
 
         let interner = SymbolInterner::from_cfg(&body.graph);
         let formal_params = &body.meta.params;
+        perf_lower_record(6, _t_misc.elapsed().as_micros());
+
+        let _t_lower = std::time::Instant::now();
         let mut func_ssa = match crate::ssa::lower_to_ssa_with_params(
             &body.graph,
             body.entry,
@@ -1435,6 +1478,7 @@ pub(crate) fn lower_all_functions_from_bodies(
             Ok(ssa) => ssa,
             Err(_) => continue,
         };
+        perf_lower_record(0, _t_lower.elapsed().as_micros());
 
         let param_count = if !formal_params.is_empty() {
             formal_params.len()
@@ -1471,6 +1515,7 @@ pub(crate) fn lower_all_functions_from_bodies(
         // to avoid cluttering `GlobalSummaries` with trivially-empty
         // entries.
         {
+            let _t_extract = std::time::Instant::now();
             let mod_aliases = compute_module_aliases_for_summary(&func_ssa, lang);
             let mod_aliases_ref = if mod_aliases.is_empty() {
                 None
@@ -1501,15 +1546,19 @@ pub(crate) fn lower_all_functions_from_bodies(
             if param_count > 0 || summary.points_to.returns_fresh_alloc {
                 summaries.insert(key.clone(), summary);
             }
+            perf_lower_record(1, _t_extract.elapsed().as_micros());
         }
 
+        let _t_opt = std::time::Instant::now();
         let opt = crate::ssa::optimize_ssa_with_param_types(
             &mut func_ssa,
             &body.graph,
             Some(lang),
             &body.meta.param_types,
         );
+        perf_lower_record(2, _t_opt.elapsed().as_micros());
 
+        let _t_typed = std::time::Instant::now();
         // Phase 2 (typed call-graph devirtualisation): walk every SSA
         // method call in this body, look up the receiver SSA value's
         // [`crate::ssa::type_facts::TypeKind`] in the just-computed
@@ -1548,6 +1597,9 @@ pub(crate) fn lower_all_functions_from_bodies(
             }
         }
 
+        perf_lower_record(3, _t_typed.elapsed().as_micros());
+
+        let _t_misc2 = std::time::Instant::now();
         bodies.insert(
             key,
             ssa_transfer::CalleeSsaBody {
@@ -1558,6 +1610,7 @@ pub(crate) fn lower_all_functions_from_bodies(
                 body_graph: Some(body.graph.clone()),
             },
         );
+        perf_lower_record(6, _t_misc2.elapsed().as_micros());
     }
 
     // ── Closure-capture summary augmentation ─────────────────────────
@@ -1583,6 +1636,7 @@ pub(crate) fn lower_all_functions_from_bodies(
     // removes or modifies existing data — so it cannot regress
     // detection. Bounded: each parent-param probe runs each child
     // body's analysis exactly once.
+    let _t_aug = std::time::Instant::now();
     augment_summaries_with_child_sinks(
         file_cfg,
         lang,
@@ -1592,6 +1646,7 @@ pub(crate) fn lower_all_functions_from_bodies(
         &bodies,
         &mut summaries,
     );
+    perf_lower_record(4, _t_aug.elapsed().as_micros());
 
     // ── Second extraction pass: transitive cross-function summary lift ───
     //
@@ -1608,6 +1663,7 @@ pub(crate) fn lower_all_functions_from_bodies(
     // entries to existing summaries. Existing entries (return
     // transforms, source caps, augment-populated sinks, etc.) are
     // preserved. Strict-additive — cannot regress detection.
+    let _t_rerun = std::time::Instant::now();
     rerun_extraction_with_augmented_summaries(
         file_cfg,
         lang,
@@ -1618,6 +1674,7 @@ pub(crate) fn lower_all_functions_from_bodies(
         &bodies,
         &mut summaries,
     );
+    perf_lower_record(5, _t_rerun.elapsed().as_micros());
 
     if !summaries.is_empty() {
         tracing::debug!(
@@ -1648,6 +1705,16 @@ fn rerun_extraction_with_augmented_summaries(
     summaries: &mut std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
 ) {
     use crate::state::symbol::SymbolInterner;
+    use crate::ssa::ir::SsaOp;
+
+    // Fast-out: rerun matters only when at least one body in the file has
+    // an SSA summary entry that *another* body in the same file might
+    // resolve a Call to.  If no SSA summaries were produced, nothing to
+    // re-extract.  This is the dominant case for files of unrelated
+    // functions or with all-cross-file callees.
+    if summaries.is_empty() {
+        return;
+    }
 
     // Snapshot the augmented summaries map so the probes resolve
     // callees against a stable view (the merge below mutates
@@ -1656,6 +1723,18 @@ fn rerun_extraction_with_augmented_summaries(
         FuncKey,
         crate::summary::ssa_summary::SsaFuncSummary,
     > = summaries.clone();
+
+    // Set of bare callee names known to have an in-file SsaFuncSummary.
+    // `extract_ssa_func_summary_full` only consults `ssa_summaries` at
+    // Call resolution time, so a body with no Call to any of these names
+    // produces a summary identical to its first-pass output.
+    //
+    // SSA `Call::callee` carries the bare method name after lowering
+    // decomposes chained-receiver calls, which matches `FuncKey::name`.
+    // Borrows `augmented_snapshot` (immutable view) so the loop below can
+    // freely mutate `summaries`.
+    let in_file_names: std::collections::HashSet<&str> =
+        augmented_snapshot.keys().map(|k| k.name.as_str()).collect();
 
     for body in file_cfg.function_bodies() {
         let Some(parent_key) = body.meta.func_key.clone() else {
@@ -1673,6 +1752,23 @@ fn rerun_extraction_with_augmented_summaries(
         let Some(parent_cfg) = callee.body_graph.as_ref() else {
             continue;
         };
+
+        // Narrow: rerun only bodies whose SSA references at least one
+        // in-file summary by name.  Bodies with no in-file Call cannot
+        // benefit from the augmented `ssa_summaries` view, so their
+        // re-extraction is a strict no-op.
+        let has_in_file_call = callee.ssa.blocks.iter().any(|b| {
+            b.body.iter().any(|inst| {
+                if let SsaOp::Call { callee: name, .. } = &inst.op {
+                    in_file_names.contains(name.as_str())
+                } else {
+                    false
+                }
+            })
+        });
+        if !has_in_file_call {
+            continue;
+        }
 
         let interner = SymbolInterner::from_cfg(parent_cfg);
         let mod_aliases = compute_module_aliases_for_summary(&callee.ssa, lang);

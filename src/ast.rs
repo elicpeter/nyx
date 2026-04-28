@@ -1456,6 +1456,90 @@ pub fn extract_auth_model_for_debug(
     Ok(Some(model))
 }
 
+/// Production-equivalent fused-path stage timing.
+///
+/// Returns `[parse+CFG, shared_lower, taint_flow, build_eligible,
+///           ast_queries, suppression, auth, run_cfg_state]` in µs, plus
+/// the per-substage breakdown of `shared_lower` from the thread-local
+/// timers in `taint::perf_lower_timings_*`.
+///
+/// Mirrors `analyse_file_fused`'s control flow so each chunk is timed
+/// without the double-lowering overcount that `perf_stage_breakdown`
+/// suffers (the latter calls `run_cfg_analyses` and
+/// `extract_ssa_artifacts` separately, both of which lower).
+#[doc(hidden)]
+pub fn perf_stage_breakdown_fused(
+    bytes: &[u8],
+    path: &Path,
+    cfg: &Config,
+    global_summaries: Option<&crate::summary::GlobalSummaries>,
+    scan_root: Option<&Path>,
+) -> Option<([u128; 8], [u128; 7])> {
+    use std::time::Instant;
+    let s_parse = Instant::now();
+    let source = ParsedSource::try_new(bytes, path).ok()??;
+    let parsed = ParsedFile::from_source(source, cfg);
+    let t_parse_cfg = s_parse.elapsed().as_micros();
+
+    crate::taint::ssa_transfer::reset_path_safe_suppressed_spans();
+    crate::taint::perf_lower_timings_start();
+
+    let s_lower = Instant::now();
+    let (lowered_summaries, lowered_bodies) =
+        parsed.lower_ssa_for_fused(global_summaries, scan_root);
+    let t_lower = s_lower.elapsed().as_micros();
+    let lower_breakdown = crate::taint::perf_lower_timings_take().unwrap_or([0; 7]);
+
+    let s_taint = Instant::now();
+    let taint_diags = parsed.run_cfg_analyses_with_lowered(
+        cfg,
+        global_summaries,
+        scan_root,
+        &lowered_summaries,
+        &lowered_bodies,
+    );
+    let t_taint_flow = s_taint.elapsed().as_micros();
+
+    let s_eligible = Instant::now();
+    let _ = crate::taint::build_eligible_bodies(&parsed.file_cfg, lowered_bodies);
+    let t_eligible = s_eligible.elapsed().as_micros();
+
+    let s_ast = Instant::now();
+    let ast_findings = parsed.source.run_ast_queries(cfg);
+    let t_ast = s_ast.elapsed().as_micros();
+
+    let s_suppr = Instant::now();
+    let suppression =
+        TaintSuppressionCtx::build(&parsed.file_cfg, &parsed.source.tree, &taint_diags);
+    let _filtered: Vec<_> = ast_findings
+        .into_iter()
+        .filter(|d| !suppression.should_suppress(&d.id, d.line))
+        .collect();
+    let t_suppr = s_suppr.elapsed().as_micros();
+
+    let s_auth = Instant::now();
+    let _ = parsed.run_auth_analyses(cfg, global_summaries, scan_root);
+    let t_auth = s_auth.elapsed().as_micros();
+
+    // 8th slot reserved (state-analysis breakdown if needed later);
+    // currently included in t_taint_flow.
+    let t_state = 0u128;
+
+    Some((
+        [
+            t_parse_cfg,
+            t_lower,
+            t_taint_flow,
+            t_eligible,
+            t_ast,
+            t_suppr,
+            t_auth,
+            t_state,
+        ],
+        lower_breakdown,
+    ))
+}
+
 /// Diagnostic stage-timing helper for the perf audit.
 ///
 /// Times each stage of pass 2 internally and returns µs counts.  Returns

@@ -228,6 +228,120 @@ export interface OverviewResponse {
   noisy_rules: NoisyRule[];
   recent_scans: ScanSummary[];
   insights: Insight[];
+
+  // Tier 1
+  health?: HealthScore;
+  posture?: PostureSummary;
+  backlog?: BacklogStats;
+  weighted_top_files?: WeightedFile[];
+  confidence_distribution?: ConfidenceDistribution;
+
+  // Tier 2
+  scanner_quality?: ScannerQuality;
+  issue_categories?: IssueCategoryBucket[];
+  hot_sinks?: HotSink[];
+  owasp_buckets?: OwaspBucket[];
+  cross_file_ratio?: number;
+
+  // Tier 3
+  baseline?: BaselineInfo;
+  language_health?: LanguageHealth[];
+  suppression_hygiene?: SuppressionHygiene;
+}
+
+export interface HealthComponent {
+  label: string;
+  score: number;
+  weight: number;
+  detail: string;
+}
+
+export interface HealthScore {
+  score: number;
+  grade: string;
+  components: HealthComponent[];
+}
+
+export interface PostureSummary {
+  trend: 'improving' | 'regressing' | 'stable' | 'unknown' | string;
+  severity: 'success' | 'warning' | 'danger' | 'info' | string;
+  message: string;
+  reintroduced_count: number;
+}
+
+export interface BacklogStats {
+  oldest_open_days?: number;
+  median_age_days?: number;
+  stale_count: number;
+  age_buckets: OverviewCount[];
+}
+
+export interface WeightedFile {
+  name: string;
+  score: number;
+  high: number;
+  medium: number;
+  low: number;
+  total: number;
+}
+
+export interface ConfidenceDistribution {
+  high: number;
+  medium: number;
+  low: number;
+  none: number;
+}
+
+export interface ScannerQuality {
+  files_scanned: number;
+  files_skipped: number;
+  parse_success_rate: number;
+  functions_analyzed: number;
+  call_edges: number;
+  unresolved_calls: number;
+  call_resolution_rate: number;
+  symex_verified_rate: number;
+  symex_breakdown: Record<string, number>;
+}
+
+export interface IssueCategoryBucket {
+  label: string;
+  count: number;
+}
+
+export interface HotSink {
+  callee: string;
+  count: number;
+}
+
+export interface OwaspBucket {
+  code: string;
+  label: string;
+  count: number;
+}
+
+export interface LanguageHealth {
+  language: string;
+  findings: number;
+  high: number;
+  medium: number;
+  low: number;
+}
+
+export interface SuppressionHygiene {
+  fingerprint_level: number;
+  rule_level: number;
+  file_level: number;
+  rule_in_file_level: number;
+  blanket_rate: number;
+}
+
+export interface BaselineInfo {
+  scan_id: string;
+  started_at?: string;
+  baseline_total: number;
+  drift_new: number;
+  drift_fixed: number;
 }
 
 // Rules types

@@ -5,6 +5,7 @@ pub mod error;
 pub mod jobs;
 pub mod models;
 pub mod observability;
+pub mod owasp;
 pub mod progress;
 pub mod routes;
 pub mod scan_log;

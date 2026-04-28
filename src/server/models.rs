@@ -582,6 +582,187 @@ pub struct OverviewResponse {
     pub noisy_rules: Vec<NoisyRule>,
     pub recent_scans: Vec<ScanSummary>,
     pub insights: Vec<Insight>,
+
+    // ── Tier 1 ──
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health: Option<HealthScore>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub posture: Option<PostureSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backlog: Option<BacklogStats>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weighted_top_files: Vec<WeightedFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence_distribution: Option<ConfidenceDistribution>,
+
+    // ── Tier 2 ──
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scanner_quality: Option<ScannerQuality>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issue_categories: Vec<IssueCategoryBucket>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hot_sinks: Vec<HotSink>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owasp_buckets: Vec<OwaspBucket>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cross_file_ratio: Option<f64>,
+
+    // ── Tier 3 ──
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<BaselineInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub language_health: Vec<LanguageHealth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suppression_hygiene: Option<SuppressionHygiene>,
+}
+
+/// Composite repo-health rollup.
+#[derive(Debug, Clone, Serialize)]
+pub struct HealthScore {
+    /// 0–100 score; higher is better.
+    pub score: u8,
+    /// Letter grade A–F derived from score.
+    pub grade: String,
+    /// Sub-component contributions (0–100 each) for transparency.
+    pub components: Vec<HealthComponent>,
+}
+
+/// Single line item in the health-score breakdown.
+#[derive(Debug, Clone, Serialize)]
+pub struct HealthComponent {
+    /// Human label (e.g. "Severity pressure", "Trend", "Triage").
+    pub label: String,
+    /// 0–100 — already inverted so higher = healthier.
+    pub score: u8,
+    /// Weight applied when blending into the final score (0.0–1.0).
+    pub weight: f64,
+    /// Short rationale shown in tooltip.
+    pub detail: String,
+}
+
+/// One-line trend posture for the page header.
+#[derive(Debug, Clone, Serialize)]
+pub struct PostureSummary {
+    /// "improving" | "regressing" | "stable" | "unknown"
+    pub trend: String,
+    /// "success" | "warning" | "danger" | "info"
+    pub severity: String,
+    /// Short message shown verbatim in the banner.
+    pub message: String,
+    /// Findings that were previously fixed and have re-appeared.
+    pub reintroduced_count: usize,
+}
+
+/// Backlog age statistics computed from finding_first_seen.
+#[derive(Debug, Clone, Serialize)]
+pub struct BacklogStats {
+    /// Days since the oldest still-open finding was first seen.
+    pub oldest_open_days: Option<u32>,
+    /// Median age of currently-open findings, in days.
+    pub median_age_days: Option<u32>,
+    /// Findings older than 30 days that remain open.
+    pub stale_count: usize,
+    /// Histogram buckets (label, count) — fixed 5 buckets.
+    pub age_buckets: Vec<OverviewCount>,
+}
+
+/// Top-file row including severity stack for the weighted ranking.
+#[derive(Debug, Clone, Serialize)]
+pub struct WeightedFile {
+    pub name: String,
+    pub score: u32,
+    pub high: usize,
+    pub medium: usize,
+    pub low: usize,
+    pub total: usize,
+}
+
+/// Confidence-level distribution.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ConfidenceDistribution {
+    pub high: usize,
+    pub medium: usize,
+    pub low: usize,
+    pub none: usize,
+}
+
+/// Engine-quality metrics that describe analysis depth/coverage.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScannerQuality {
+    pub files_scanned: u64,
+    pub files_skipped: u64,
+    /// 0.0–1.0 — files_scanned / (files_scanned + files_skipped).
+    pub parse_success_rate: f64,
+    pub functions_analyzed: u64,
+    pub call_edges: u64,
+    pub unresolved_calls: u64,
+    /// 0.0–1.0 — call_edges / (call_edges + unresolved_calls).
+    pub call_resolution_rate: f64,
+    /// % of taint findings that received a symbolic verdict (Confirmed|Infeasible|Inconclusive).
+    pub symex_verified_rate: f64,
+    /// Count broken down by symbolic verdict label.
+    pub symex_breakdown: HashMap<String, usize>,
+}
+
+/// One issue-category bucket (rule-family derived). Broader than OWASP, with
+/// engine-friendly labels like "Tainted Flow" or "Code Quality".
+#[derive(Debug, Clone, Serialize)]
+pub struct IssueCategoryBucket {
+    pub label: String,
+    pub count: usize,
+}
+
+/// "Hot sink" — a single callee that absorbs many findings.
+#[derive(Debug, Clone, Serialize)]
+pub struct HotSink {
+    /// Callee name (best-effort; from flow_steps last Sink).
+    pub callee: String,
+    pub count: usize,
+}
+
+/// One OWASP Top-10 (2021) bucket.
+#[derive(Debug, Clone, Serialize)]
+pub struct OwaspBucket {
+    /// "A01:2021 — Broken Access Control" etc.
+    pub code: String,
+    pub label: String,
+    pub count: usize,
+}
+
+/// Per-language posture.
+#[derive(Debug, Clone, Serialize)]
+pub struct LanguageHealth {
+    pub language: String,
+    pub findings: usize,
+    pub high: usize,
+    pub medium: usize,
+    pub low: usize,
+}
+
+/// Suppression-quality breakdown.
+#[derive(Debug, Clone, Serialize)]
+pub struct SuppressionHygiene {
+    /// Findings explicitly triaged by fingerprint.
+    pub fingerprint_level: usize,
+    /// Findings suppressed by rule-level suppression.
+    pub rule_level: usize,
+    /// Findings suppressed by file-level suppression.
+    pub file_level: usize,
+    /// Findings suppressed by rule-in-file suppression.
+    pub rule_in_file_level: usize,
+    /// % of suppressed findings using low-specificity (rule/file/rule_in_file) rules.
+    pub blanket_rate: f64,
+}
+
+/// Pinned baseline scan and current drift relative to it.
+#[derive(Debug, Clone, Serialize)]
+pub struct BaselineInfo {
+    pub scan_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    pub baseline_total: usize,
+    pub drift_new: usize,
+    pub drift_fixed: usize,
 }
 
 /// A name + count pair for overview top-N lists.

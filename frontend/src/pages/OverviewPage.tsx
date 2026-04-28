@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useOverview, useOverviewTrends } from '../api/queries/overview';
+import { usePinBaseline, useUnpinBaseline } from '../api/mutations/baseline';
 import { StatCard } from '../components/ui/StatCard';
 import { LoadingState } from '../components/ui/LoadingState';
 import { ErrorState } from '../components/ui/ErrorState';
@@ -7,6 +8,18 @@ import { HorizontalBarChart } from '../components/charts/HorizontalBarChart';
 import { LineChart } from '../components/charts/LineChart';
 import { OverviewIcon } from '../components/icons/Icons';
 import { truncPath } from '../utils/truncPath';
+import {
+  HealthScoreCard,
+  BacklogCard,
+  ConfidenceDistributionChart,
+  ScannerQualityPanel,
+  HotSinksList,
+  OwaspChart,
+  WeightedTopFiles,
+  LanguageHealthTable,
+  SuppressionHygieneCard,
+  BaselinePinControl,
+} from '../components/overview/OverviewWidgets';
 import type { OverviewCount, ScanSummary, Insight } from '../api/types';
 import { usePageTitle } from '../hooks/usePageTitle';
 
@@ -15,6 +28,8 @@ export function OverviewPage() {
   const navigate = useNavigate();
   const { data: overview, isLoading, error, refetch } = useOverview();
   const { data: trends } = useOverviewTrends();
+  const pinBaseline = usePinBaseline();
+  const unpinBaseline = useUnpinBaseline();
 
   if (isLoading) {
     return <LoadingState message="Loading overview..." />;
@@ -40,40 +55,46 @@ export function OverviewPage() {
       <div className="overview-empty">
         <OverviewIcon size={48} />
         <h2>Welcome to Nyx</h2>
-        <p>Start your first scan to see security findings and analytics.</p>
+        <p>Run your first scan to see security findings and analytics.</p>
+        <code className="cli-hint">nyx scan .</code>
       </div>
     );
   }
 
-  // Data preparation
   const netDelta = overview.new_since_last - overview.fixed_since_last;
 
-  const sevItems = (['HIGH', 'MEDIUM', 'LOW'] as const).map((s) => ({
-    label: s.charAt(0) + s.slice(1).toLowerCase(),
-    value: overview.by_severity[s] || 0,
-    color: s === 'HIGH' ? '#e74c3c' : s === 'MEDIUM' ? '#e67e22' : '#3498db',
-  }));
-
-  const catItems = Object.entries(overview.by_category || {})
-    .sort((a, b) => b[1] - a[1])
+  const categoryItems = (overview.issue_categories || [])
     .slice(0, 8)
-    .map(([k, v]) => ({ label: k, value: v, color: '#5856d6' }));
-
-  const langItems = Object.entries(overview.by_language || {})
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([k, v]) => ({ label: k, value: v, color: '#5856d6' }));
+    .map((b) => ({ label: b.label, value: b.count, color: '#5856d6' }));
 
   const trendData = (trends || []).map((t) => ({
     label: t.timestamp,
     value: t.total,
   }));
 
+  const hotSinks = overview.hot_sinks || [];
+
   return (
     <>
       <div className="page-header">
         <h2>Overview</h2>
       </div>
+
+      {/* Baseline strip */}
+      <BaselinePinControl
+        baseline={overview.baseline}
+        latestScanId={overview.latest_scan_id}
+        onPin={(id) => pinBaseline.mutate(id)}
+        onUnpin={() => unpinBaseline.mutate()}
+        isPending={pinBaseline.isPending || unpinBaseline.isPending}
+      />
+
+      {overview.health && (
+        <HealthScoreCard
+          health={overview.health}
+          posture={overview.posture}
+        />
+      )}
 
       {/* Fresh banner */}
       {overview.state === 'fresh' && (
@@ -100,8 +121,9 @@ export function OverviewPage() {
         </div>
       )}
 
-      {/* Stat cards */}
-      <div className="overview-stat-grid">
+      {/* Stat cards — kept lean: 5 cards, severity stacks live in Top Files
+          and Per-Language. Cross-file / Symex moved into Scanner Quality. */}
+      <div className="overview-stat-grid overview-stat-grid-5">
         <StatCard
           label="Total Findings"
           value={overview.total_findings}
@@ -125,48 +147,71 @@ export function OverviewPage() {
           label="Triage Coverage"
           value={`${(overview.triage_coverage * 100).toFixed(0)}%`}
         />
-        <StatCard
-          label="Scan Duration"
-          value={
-            overview.latest_scan_duration_secs != null
-              ? `${overview.latest_scan_duration_secs.toFixed(1)}s`
-              : '-'
-          }
-        />
       </div>
 
       {/* Charts */}
       <div className="overview-chart-grid">
         <div className="card">
           <div className="card-header">Findings Over Time</div>
-          <LineChart points={trendData} />
+          {trendData.length >= 2 ? (
+            <LineChart points={trendData} />
+          ) : (
+            <div className="empty-state" style={{ padding: 16 }}>
+              <p>Run a second scan to see trends.</p>
+            </div>
+          )}
         </div>
         <div className="card">
-          <div className="card-header">By Severity</div>
-          <HorizontalBarChart items={sevItems} />
+          <div className="card-header">OWASP Top 10 (2021)</div>
+          {overview.owasp_buckets && overview.owasp_buckets.length > 0 ? (
+            <OwaspChart buckets={overview.owasp_buckets} />
+          ) : (
+            <div className="empty-state" style={{ padding: 16 }}>
+              <p>No OWASP-mapped findings.</p>
+            </div>
+          )}
         </div>
         <div className="card">
-          <div className="card-header">By Category</div>
-          <HorizontalBarChart items={catItems} />
+          <div className="card-header">Confidence Distribution</div>
+          {overview.confidence_distribution ? (
+            <ConfidenceDistributionChart dist={overview.confidence_distribution} />
+          ) : (
+            <div className="empty-state" style={{ padding: 16 }}>
+              <p>No data</p>
+            </div>
+          )}
         </div>
         <div className="card">
-          <div className="card-header">By Language</div>
-          <HorizontalBarChart items={langItems} />
+          <div className="card-header">Issue Categories</div>
+          <HorizontalBarChart items={categoryItems} />
         </div>
       </div>
 
-      {/* Tables */}
+      {/* Per-language + Top Files */}
       <div className="overview-table-grid">
         <div className="card">
-          <div className="card-header">Top Affected Files</div>
-          <CompactTable
-            items={overview.top_files}
-            nameLabel="File"
-            countLabel="Findings"
-            truncate
-            onRowClick={(item) =>
-              navigate(`/findings?search=${encodeURIComponent(item.name)}`)
+          <div className="card-header">Per-Language Posture</div>
+          <LanguageHealthTable rows={overview.language_health || []} />
+        </div>
+        <div className="card">
+          <div className="card-header">Top Affected Files (severity-weighted)</div>
+          <WeightedTopFiles
+            files={overview.weighted_top_files || []}
+            onRowClick={(name) =>
+              navigate(`/findings?search=${encodeURIComponent(name)}`)
             }
+          />
+        </div>
+      </div>
+
+      {/* Top Rules + Top Directories (or Hot Sinks when taint findings exist) */}
+      <div className="overview-table-grid">
+        <div className="card">
+          <div className="card-header">Top Rules Triggered</div>
+          <CompactTable
+            items={overview.top_rules}
+            nameLabel="Rule"
+            countLabel="Findings"
           />
         </div>
         <div className="card">
@@ -178,36 +223,72 @@ export function OverviewPage() {
             truncate
           />
         </div>
-        <div className="card">
-          <div className="card-header">Top Rules Triggered</div>
-          <CompactTable
-            items={overview.top_rules}
-            nameLabel="Rule"
-            countLabel="Findings"
-          />
+      </div>
+
+      {hotSinks.length > 0 && (
+        <div className="overview-table-grid">
+          <div className="card card-full">
+            <div className="card-header">Hot Sinks (taint flow)</div>
+            <HotSinksList sinks={hotSinks} />
+          </div>
         </div>
+      )}
+
+      {overview.backlog && <BacklogCard backlog={overview.backlog} />}
+
+      {/* Scanner Quality + Hygiene */}
+      <div className="overview-table-grid">
+        <div className="card">
+          <div className="card-header">Scanner Quality</div>
+          {overview.scanner_quality ? (
+            <ScannerQualityPanel
+              quality={overview.scanner_quality}
+              crossFileRatio={overview.cross_file_ratio}
+            />
+          ) : (
+            <div className="empty-state" style={{ padding: 16 }}>
+              <p>No engine metrics available</p>
+            </div>
+          )}
+        </div>
+        <div className="card">
+          <div className="card-header">Suppression Hygiene</div>
+          {overview.suppression_hygiene ? (
+            <SuppressionHygieneCard hygiene={overview.suppression_hygiene} />
+          ) : (
+            <div className="empty-state" style={{ padding: 16 }}>
+              <p>No suppressions</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Recent scans */}
+      <div className="overview-table-grid">
         <div className="card">
           <div className="card-header">Recent Scans</div>
           <RecentScansTable
             scans={overview.recent_scans}
+            currentBaselineId={overview.baseline?.scan_id}
             onRowClick={(scan) => navigate(`/scans/${scan.id}`)}
+            onPinBaseline={(scanId) => pinBaseline.mutate(scanId)}
           />
         </div>
-      </div>
-
-      {/* Insights */}
-      {overview.insights.length > 0 && (
-        <div className="overview-insights">
-          <div className="card">
-            <div className="card-header">Insights</div>
+        <div className="card">
+          <div className="card-header">Insights</div>
+          {overview.insights.length > 0 ? (
             <div className="insight-list">
               {overview.insights.map((insight, i) => (
                 <InsightCard key={i} insight={insight} />
               ))}
             </div>
-          </div>
+          ) : (
+            <div className="empty-state" style={{ padding: 16 }}>
+              <p>Nothing to flag.</p>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </>
   );
 }
@@ -267,10 +348,17 @@ function CompactTable({
 
 interface RecentScansTableProps {
   scans: ScanSummary[];
+  currentBaselineId?: string;
   onRowClick: (scan: ScanSummary) => void;
+  onPinBaseline?: (scanId: string) => void;
 }
 
-function RecentScansTable({ scans, onRowClick }: RecentScansTableProps) {
+function RecentScansTable({
+  scans,
+  currentBaselineId,
+  onRowClick,
+  onPinBaseline,
+}: RecentScansTableProps) {
   if (!scans || scans.length === 0) {
     return (
       <div className="empty-state" style={{ padding: 16 }}>
@@ -287,31 +375,50 @@ function RecentScansTable({ scans, onRowClick }: RecentScansTableProps) {
           <th>Duration</th>
           <th>Findings</th>
           <th>Time</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
-        {scans.slice(0, 5).map((scan) => (
-          <tr
-            key={scan.id}
-            className="clickable"
-            onClick={() => onRowClick(scan)}
-          >
-            <td>
-              <span className={`status-dot ${scan.status}`} /> {scan.status}
-            </td>
-            <td>
-              {scan.duration_secs != null
-                ? `${scan.duration_secs.toFixed(1)}s`
-                : '-'}
-            </td>
-            <td>{scan.finding_count ?? '-'}</td>
-            <td>
-              {scan.started_at
-                ? new Date(scan.started_at).toLocaleString()
-                : '-'}
-            </td>
-          </tr>
-        ))}
+        {scans.slice(0, 5).map((scan) => {
+          const isBaseline = scan.id === currentBaselineId;
+          const canPin =
+            !isBaseline && onPinBaseline && scan.status === 'completed';
+          return (
+            <tr
+              key={scan.id}
+              className="clickable"
+              onClick={() => onRowClick(scan)}
+            >
+              <td>
+                <span className={`status-dot ${scan.status}`} /> {scan.status}
+              </td>
+              <td>
+                {scan.duration_secs != null
+                  ? `${scan.duration_secs.toFixed(1)}s`
+                  : '-'}
+              </td>
+              <td>{scan.finding_count ?? '-'}</td>
+              <td>
+                {scan.started_at
+                  ? new Date(scan.started_at).toLocaleString()
+                  : '-'}
+              </td>
+              <td onClick={(e) => e.stopPropagation()}>
+                {isBaseline ? (
+                  <span className="baseline-label">baseline</span>
+                ) : canPin ? (
+                  <button
+                    type="button"
+                    className="baseline-action"
+                    onClick={() => onPinBaseline!(scan.id)}
+                  >
+                    Pin
+                  </button>
+                ) : null}
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
