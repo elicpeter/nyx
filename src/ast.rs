@@ -14,7 +14,6 @@ use crate::state;
 use crate::summary::ssa_summary::SsaFuncSummary;
 use crate::summary::{FuncSummary, GlobalSummaries};
 use crate::symbol::{Lang, normalize_namespace};
-use crate::taint::analyse_file;
 use crate::utils::config::AnalysisMode;
 use crate::utils::ext::lowercase_ext;
 use crate::utils::{Config, query_cache};
@@ -972,12 +971,93 @@ impl<'a> ParsedFile<'a> {
         (summaries.into_iter().collect(), bodies)
     }
 
+    /// Lower every function body in this file to SSA exactly once, with the
+    /// per-file [`SinkSiteLocator`] attached so summaries carry stable sink
+    /// span info.  Used by [`analyse_file_fused`] to share the result between
+    /// the taint engine ([`run_cfg_analyses_with_lowered`]) and the SSA
+    /// artifact filter ([`build_eligible_bodies_from_lowered`]) — the prior
+    /// code path lowered twice (once inside `analyse_file`, once inside
+    /// `extract_ssa_artifacts_from_file_cfg`) and accounted for ~24% of the
+    /// pass-2 wall-clock on the bench corpus.
+    ///
+    /// Returns the locator-rich (summaries, bodies) pair.  Both consumers
+    /// see exactly the same lowering result so taint behaviour is
+    /// preserved bit-for-bit while the SSA bodies stored cross-file (after
+    /// the eligibility filter) keep their full sink-span data.
+    fn lower_ssa_for_fused(
+        &self,
+        global_summaries: Option<&GlobalSummaries>,
+        scan_root: Option<&Path>,
+    ) -> (
+        std::collections::HashMap<
+            crate::symbol::FuncKey,
+            crate::summary::ssa_summary::SsaFuncSummary,
+        >,
+        std::collections::HashMap<
+            crate::symbol::FuncKey,
+            crate::taint::ssa_transfer::CalleeSsaBody,
+        >,
+    ) {
+        let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
+        let scan_root_str = scan_root.map(|p| p.to_string_lossy());
+        let namespace = normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
+        let locator = crate::summary::SinkSiteLocator {
+            tree: &self.source.tree,
+            bytes: self.source.bytes,
+            file_rel: &namespace,
+        };
+        crate::taint::lower_all_functions_from_bodies(
+            &self.file_cfg,
+            caller_lang,
+            &namespace,
+            self.local_summaries(),
+            global_summaries,
+            Some(&locator),
+        )
+    }
+
     /// Run taint analysis, CFG structural analyses, and state-model analysis.
+    ///
+    /// Wrapper around [`run_cfg_analyses_with_lowered`] that lowers SSA
+    /// internally (the standalone path).  Callers that already hold a
+    /// pre-lowered result (today: only [`analyse_file_fused`]) should use
+    /// the `_with_lowered` variant directly to avoid the duplicate
+    /// lowering.
     fn run_cfg_analyses(
         &self,
         cfg: &Config,
         global_summaries: Option<&GlobalSummaries>,
         scan_root: Option<&Path>,
+    ) -> Vec<Diag> {
+        let (ssa_summaries, callee_bodies) =
+            self.lower_ssa_for_fused(global_summaries, scan_root);
+        self.run_cfg_analyses_with_lowered(
+            cfg,
+            global_summaries,
+            scan_root,
+            &ssa_summaries,
+            &callee_bodies,
+        )
+    }
+
+    /// Like [`run_cfg_analyses`] but takes pre-lowered SSA summaries +
+    /// callee bodies and threads them into [`taint::analyse_file_with_lowered`].
+    /// Used by [`analyse_file_fused`] to share the lowering with the SSA
+    /// artifact extractor.
+    #[allow(clippy::too_many_arguments)]
+    fn run_cfg_analyses_with_lowered(
+        &self,
+        cfg: &Config,
+        global_summaries: Option<&GlobalSummaries>,
+        scan_root: Option<&Path>,
+        ssa_summaries: &std::collections::HashMap<
+            crate::symbol::FuncKey,
+            crate::summary::ssa_summary::SsaFuncSummary,
+        >,
+        callee_bodies: &std::collections::HashMap<
+            crate::symbol::FuncKey,
+            crate::taint::ssa_transfer::CalleeSsaBody,
+        >,
     ) -> Vec<Diag> {
         let mut out = Vec::new();
         let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
@@ -992,7 +1072,7 @@ impl<'a> ParsedFile<'a> {
         } else {
             Some(self.lang_rules.extra_labels.as_slice())
         };
-        let taint_results = analyse_file(
+        let taint_results = crate::taint::analyse_file_with_lowered(
             &self.file_cfg,
             self.local_summaries(),
             global_summaries,
@@ -1000,6 +1080,8 @@ impl<'a> ParsedFile<'a> {
             &namespace,
             &[],
             extra,
+            ssa_summaries,
+            callee_bodies,
         );
         // Drain the path-safe-suppressed sink-span set published by the
         // SSA taint engine.  Used below by the state-analysis pass to
@@ -1368,6 +1450,49 @@ pub fn extract_auth_model_for_debug(
         &rules,
     );
     Ok(Some(model))
+}
+
+/// Diagnostic stage-timing helper for the perf audit.
+///
+/// Times each stage of pass 2 internally and returns µs counts.  Returns
+/// `None` for unsupported languages.  Not used in production — just for
+/// `tests/perf_breakdown.rs` to attribute time inside `run_rules_on_bytes`
+/// without touching the hot path.
+#[doc(hidden)]
+pub fn perf_stage_breakdown(
+    bytes: &[u8],
+    path: &Path,
+    cfg: &Config,
+    global_summaries: Option<&crate::summary::GlobalSummaries>,
+    scan_root: Option<&Path>,
+) -> Option<[u128; 6]> {
+    use std::time::Instant;
+    let s_parse = Instant::now();
+    let source = ParsedSource::try_new(bytes, path).ok()??;
+    let parsed = ParsedFile::from_source(source, cfg);
+    let t_parse_cfg = s_parse.elapsed().as_micros();
+
+    let s_taint = Instant::now();
+    let taint = parsed.run_cfg_analyses(cfg, global_summaries, scan_root);
+    let t_taint = s_taint.elapsed().as_micros();
+
+    let s_suppr = Instant::now();
+    let _ = TaintSuppressionCtx::build(&parsed.file_cfg, &parsed.source.tree, &taint);
+    let t_suppr = s_suppr.elapsed().as_micros();
+
+    let s_ast = Instant::now();
+    let _ast_findings = parsed.source.run_ast_queries(cfg);
+    let t_ast = s_ast.elapsed().as_micros();
+
+    let s_auth = Instant::now();
+    let _ = parsed.run_auth_analyses(cfg, global_summaries, scan_root);
+    let t_auth = s_auth.elapsed().as_micros();
+
+    let s_ssa = Instant::now();
+    let _ = parsed.extract_ssa_artifacts(global_summaries, scan_root);
+    let t_ssa = s_ssa.elapsed().as_micros();
+
+    Some([t_parse_cfg, t_taint, t_suppr, t_ast, t_auth, t_ssa])
 }
 
 /// Extract both `FuncSummary` and `SsaFuncSummary` from pre-read bytes.
@@ -1841,8 +1966,24 @@ pub fn analyse_file_fused(
     );
 
     let (ssa_summaries, ssa_bodies) = if needs_cfg {
-        out.extend(parsed.run_cfg_analyses(cfg, global_summaries, scan_root));
-        parsed.extract_ssa_artifacts(global_summaries, scan_root)
+        // Lower SSA exactly once and feed both the taint engine and the
+        // SSA-artifact extractor.  Pre-fix, both consumers re-lowered the
+        // same `FileCfg` independently — `lower_all_functions_from_bodies`
+        // accounted for ~20% of `analyse_file_fused` wall-clock on the
+        // bench corpus.
+        let (lowered_summaries, lowered_bodies) =
+            parsed.lower_ssa_for_fused(global_summaries, scan_root);
+        out.extend(parsed.run_cfg_analyses_with_lowered(
+            cfg,
+            global_summaries,
+            scan_root,
+            &lowered_summaries,
+            &lowered_bodies,
+        ));
+        let eligible_bodies =
+            crate::taint::build_eligible_bodies(&parsed.file_cfg, lowered_bodies);
+        let summaries_vec: Vec<_> = lowered_summaries.into_iter().collect();
+        (summaries_vec, eligible_bodies)
     } else {
         (vec![], vec![])
     };

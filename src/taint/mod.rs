@@ -298,17 +298,8 @@ pub fn analyse_file(
     interop_edges: &[InteropEdge],
     extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
 ) -> Vec<Finding> {
-    let _span = tracing::debug_span!("taint_analyse_file").entered();
-
-    // Clear the file-level path-safe-suppressed sink-span set before this
-    // file's analysis.  Populated by `is_path_safe_for_sink` and consumed
-    // by the state-analysis pass via `take_path_safe_suppressed_spans` to
-    // suppress `state-unauthed-access` on sinks already proven path-safe.
-    ssa_transfer::reset_path_safe_suppressed_spans();
-
-    // 1. Lower all function bodies: produce SSA summaries + cached bodies.
-    //    No locator: pass-2 intra-file summaries are transient (not persisted)
-    //    and behavior depends on SinkSite.cap only, which is always populated.
+    // No locator: pass-2 intra-file summaries are transient (not persisted)
+    // and behavior depends on SinkSite.cap only, which is always populated.
     let (ssa_summaries, callee_bodies) = lower_all_functions_from_bodies(
         file_cfg,
         caller_lang,
@@ -317,10 +308,49 @@ pub fn analyse_file(
         global_summaries,
         None,
     );
+    analyse_file_with_lowered(
+        file_cfg,
+        local_summaries,
+        global_summaries,
+        caller_lang,
+        caller_namespace,
+        interop_edges,
+        extra_labels,
+        &ssa_summaries,
+        &callee_bodies,
+    )
+}
+
+/// Same as [`analyse_file`] but takes pre-lowered SSA summaries + callee
+/// bodies.  Used by [`crate::ast::analyse_file_fused`] to share a single
+/// `lower_all_functions_from_bodies` invocation across the taint engine and
+/// the SSA-artifact extractor; the bare [`analyse_file`] entry-point keeps
+/// its prior signature for any caller that does not have a pre-lowered
+/// result handy.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn analyse_file_with_lowered(
+    file_cfg: &FileCfg,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+    caller_lang: Lang,
+    caller_namespace: &str,
+    interop_edges: &[InteropEdge],
+    extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
+    ssa_summaries: &std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+    callee_bodies: &std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
+) -> Vec<Finding> {
+    let _span = tracing::debug_span!("taint_analyse_file").entered();
+
+    // Clear the file-level path-safe-suppressed sink-span set before this
+    // file's analysis.  Populated by `is_path_safe_for_sink` and consumed
+    // by the state-analysis pass via `take_path_safe_suppressed_spans` to
+    // suppress `state-unauthed-access` on sinks already proven path-safe.
+    ssa_transfer::reset_path_safe_suppressed_spans();
+
     let ssa_sums_ref = if ssa_summaries.is_empty() {
         None
     } else {
-        Some(&ssa_summaries)
+        Some(ssa_summaries)
     };
 
     // 2. Context-sensitive inline analysis setup.  Toggle lives at
@@ -329,7 +359,7 @@ pub fn analyse_file(
     let context_sensitive = crate::utils::analysis_options::current().context_sensitive;
     let inline_cache = std::cell::RefCell::new(std::collections::HashMap::new());
     let callee_bodies_ref = if context_sensitive && !callee_bodies.is_empty() {
-        Some(&callee_bodies)
+        Some(callee_bodies)
     } else {
         None
     };
@@ -1359,7 +1389,7 @@ pub(crate) fn extract_intra_file_ssa_summaries(
 /// resistant identity we have: same-name methods on different classes, same-
 /// name overloads with different arity, and anonymous bodies at distinct
 /// source spans all get distinct keys.
-fn lower_all_functions_from_bodies(
+pub(crate) fn lower_all_functions_from_bodies(
     file_cfg: &FileCfg,
     lang: Lang,
     namespace: &str,
@@ -2051,7 +2081,21 @@ pub(crate) fn extract_ssa_artifacts_from_file_cfg(
         global_summaries,
         locator,
     );
+    let eligible_bodies = build_eligible_bodies(file_cfg, bodies);
+    (summaries, eligible_bodies)
+}
 
+/// Filter pre-lowered SSA bodies down to the cross-file-eligible subset and
+/// populate per-node metadata against the original CFG.
+///
+/// Split out from [`extract_ssa_artifacts_from_file_cfg`] so callers that
+/// already hold a freshly-lowered `bodies` map (specifically
+/// `analyse_file_fused`, which now lowers once and feeds both the taint
+/// engine and this filter) don't pay for a second lowering pass.
+pub(crate) fn build_eligible_bodies(
+    file_cfg: &FileCfg,
+    bodies: std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
+) -> EligibleCalleeBodies {
     let mut eligible_bodies = Vec::new();
     if crate::symex::cross_file_symex_enabled() {
         for (key, mut body) in bodies {
@@ -2085,8 +2129,7 @@ pub(crate) fn extract_ssa_artifacts_from_file_cfg(
             eligible_bodies.push((key, body));
         }
     }
-
-    (summaries, eligible_bodies)
+    eligible_bodies
 }
 
 #[cfg(test)]
