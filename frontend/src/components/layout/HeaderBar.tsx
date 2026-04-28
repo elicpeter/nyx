@@ -95,7 +95,7 @@ export function HeaderBar({ onStartScan, onOpenPalette }: HeaderBarProps) {
         {onOpenPalette && (
           <button
             type="button"
-            className="btn btn-sm btn-ghost palette-trigger"
+            className="btn btn-ghost palette-trigger"
             onClick={onOpenPalette}
             aria-label="Open command palette"
             title={`Command palette (${PALETTE_HINT})`}

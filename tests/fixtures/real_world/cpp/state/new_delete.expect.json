@@ -33,24 +33,24 @@
     {
       "rule_id": "cpp.memory.strcpy",
       "severity": "HIGH",
-      "must_match": true,
+      "must_match": false,
       "line_range": [
         5,
         5
       ],
       "evidence_contains": [],
-      "notes": "strcpy(buf, \"hello\") in leak() \u2014 dangerous unbounded copy, AST pattern correctly flags it."
+      "notes": "Deliberately suppressed by Layer D (`is_c_buffer_call_literal_safe` in src/ast.rs): literal source `\"hello\"` has statically-bounded length. The `state-resource-leak` finding at this function still flags the underlying bug (missing `delete[]`). Positive coverage for the unsuppressed path lives in tests/fixtures/real_world/cpp/taint/gets_strcpy.cpp."
     },
     {
       "rule_id": "cpp.memory.strcpy",
       "severity": "HIGH",
-      "must_match": true,
+      "must_match": false,
       "line_range": [
         10,
         10
       ],
       "evidence_contains": [],
-      "notes": "strcpy(buf, \"hello\") in clean() \u2014 dangerous unbounded copy, AST pattern correctly flags it."
+      "notes": "Suppressed by Layer D: literal source. See line 5 entry for full rationale."
     }
   ]
 }

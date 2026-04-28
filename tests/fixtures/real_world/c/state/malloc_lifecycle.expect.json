@@ -44,35 +44,35 @@
     {
       "rule_id": "c.memory.strcpy",
       "severity": "HIGH",
-      "must_match": true,
+      "must_match": false,
       "line_range": [
         5,
         8
       ],
       "evidence_contains": [],
-      "notes": "strcpy(buf, \"hello\") in alloc_leak \u2014 AST pattern match on dangerous function."
+      "notes": "Deliberately suppressed by Layer D (`is_c_buffer_call_literal_safe` in src/ast.rs): the source argument is a string literal (`\"hello\"`) so the contributed length is statically bounded \u2014 no attacker-controlled overflow vector regardless of `buf`'s size. Positive coverage for the unsuppressed path lives in tests/fixtures/real_world/c/taint/buffer_overflow.c (`strcpy(buf, input)` where input is a parameter)."
     },
     {
       "rule_id": "c.memory.strcpy",
       "severity": "HIGH",
-      "must_match": true,
+      "must_match": false,
       "line_range": [
         10,
         13
       ],
       "evidence_contains": [],
-      "notes": "strcpy(buf, \"hello\") in alloc_free \u2014 AST pattern match on dangerous function."
+      "notes": "Suppressed by Layer D: literal source. See line 5 entry for full rationale."
     },
     {
       "rule_id": "c.memory.strcpy",
       "severity": "HIGH",
-      "must_match": true,
+      "must_match": false,
       "line_range": [
         23,
         26
       ],
       "evidence_contains": [],
-      "notes": "strcpy(buf, \"oops\") in use_after_free \u2014 AST pattern match on dangerous function."
+      "notes": "Suppressed by Layer D: literal source `\"oops\"`. The lifecycle bug at this line (use-after-free) is still flagged by the `state-use-after-close` rule above; Layer D's suppression is specifically for the AST pattern's exploitation surface."
     }
   ]
 }

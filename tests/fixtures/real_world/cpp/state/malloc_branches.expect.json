@@ -23,13 +23,13 @@
     {
       "rule_id": "cpp.memory.strcpy",
       "severity": "HIGH",
-      "must_match": true,
+      "must_match": false,
       "line_range": [
         7,
         7
       ],
       "evidence_contains": [],
-      "notes": "strcpy(buf, \"hello\") is a dangerous unbounded copy \u2014 AST pattern correctly flags it."
+      "notes": "Deliberately suppressed by Layer D (`is_c_buffer_call_literal_safe` in src/ast.rs): literal source (`\"hello\"`) has statically-bounded length \u2014 no attacker-controlled overflow vector. Positive coverage for the unsuppressed path lives in tests/fixtures/real_world/cpp/taint/gets_strcpy.cpp."
     }
   ]
 }

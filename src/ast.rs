@@ -2132,6 +2132,34 @@ fn is_php_unserialize_allowed_classes_restricted(
 /// rules when the source / format-string argument is a literal whose
 /// contributed length is statically bounded.
 ///
+/// **Policy (vulnerability detection, not style):** Nyx flags
+/// `c.memory.strcpy` / `c.memory.strcat` / `c.memory.sprintf` (and the
+/// `cpp.memory.*` mirrors) when the source argument can carry
+/// attacker-controlled length.  Calls whose source is a string literal
+/// have a compile-time bound and cannot overflow due to attacker input
+/// — a too-small destination is a fixed developer bug (caught by
+/// compiler warnings / `-fstack-protector` / clang-tidy / ASan), not an
+/// exploitable channel.  Suppressing these literal-source calls is a
+/// deliberate noise / false-positive reduction aligned with Nyx's scope
+/// (vulnerability detection over style enforcement).
+///
+/// **Test coverage convention:**
+/// - Negative cases (suppression correct) live alongside other state /
+///   lifecycle fixtures and are recorded as soft expectations
+///   (`must_match: false`) in `*.expect.json`.  The notes there
+///   reference this function so future authors can trace why the AST
+///   pattern doesn't fire.  Examples:
+///     - `tests/fixtures/real_world/c/state/malloc_lifecycle.expect.json`
+///     - `tests/fixtures/real_world/cpp/state/new_delete.expect.json`
+///     - `tests/fixtures/real_world/cpp/state/malloc_branches.expect.json`
+/// - Positive cases (suppression must NOT fire — source is a parameter
+///   or other attacker-reachable value) live as hard expectations
+///   (`must_match: true`) in the taint fixtures:
+///     - `tests/fixtures/real_world/c/taint/buffer_overflow.c`
+///     - `tests/fixtures/real_world/cpp/taint/gets_strcpy.cpp`
+///   Removing this function or weakening its predicate would be caught
+///   by neither — it would be caught by the unit tests below.
+///
 /// Pattern rules `c.memory.strcpy` / `c.memory.strcat` / `c.memory.sprintf`
 /// (and the `cpp.memory.*` mirrors) flag the call syntactically; their
 /// stated danger is "no bounds checking on destination buffer" / "no length
