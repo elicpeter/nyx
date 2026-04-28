@@ -11,8 +11,8 @@
 //! Fixture layout:
 //!   * closure capture —
 //!     - `closure_capture_py` (required)
-//!     - `closure_capture_js` (known gap)
-//!     - `closure_capture_ts` (known gap)
+//!     - `closure_capture_js` (required)
+//!     - `closure_capture_ts` (required)
 //!   * async/await —
 //!     - `async_python` (required)
 //!     - `async_rust`   (required — Tokio process coverage)
@@ -48,9 +48,9 @@ fn closure_capture_py() {
     validate_expectations(&diags, &dir);
 }
 
-/// See README.md — current behaviour is zero findings; expectation is
-/// codified as a `forbidden_findings` entry so a future improvement
-/// forces an expectation update.
+/// Closure-capture taint detection is now supported on the JS path —
+/// arrow function captures of outer-scope tainted vars flow to the
+/// inner sink.  See README.md for the intended flow.
 #[test]
 fn closure_capture_js() {
     let dir = fixture_path("closure_capture_js");
@@ -58,10 +58,9 @@ fn closure_capture_js() {
     validate_expectations(&diags, &dir);
 }
 
-/// See README.md — current behaviour is zero findings (parallels the
-/// JS sibling).  The TS fixture is separately regression-guarded so
-/// the TypeScript grammar path does not silently diverge when the JS
-/// gap is eventually closed.
+/// Closure-capture taint detection on the TS path — parity with the JS
+/// sibling.  Separately regression-guarded so the TypeScript grammar
+/// path does not silently diverge.
 #[test]
 fn closure_capture_ts() {
     let dir = fixture_path("closure_capture_ts");
