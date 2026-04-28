@@ -10,6 +10,7 @@ import { ApiError } from '../api/client';
 import { FileTree } from '../components/data-display/FileTree';
 import { CodeViewer } from '../components/data-display/CodeViewer';
 import { LoadingState } from '../components/ui/LoadingState';
+import { usePageTitle } from '../hooks/usePageTitle';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ExplorerIcon } from '../components/icons/Icons';
 import { useFileTree } from '../hooks/useFileTree';
@@ -20,6 +21,8 @@ import { TaintAnalysisPanel } from './debug/TaintViewerPage';
 import { SummaryAnalysisPanel } from './debug/SummaryExplorerPage';
 import { AbstractInterpAnalysisPanel } from './debug/AbstractInterpPage';
 import { SymexAnalysisPanel } from './debug/SymexPage';
+import { PointerAnalysisPanel } from './debug/PointerViewerPage';
+import { TypeFactsAnalysisPanel } from './debug/TypeFactsPage';
 import type { TreeEntry, FlowStep, FindingView } from '../api/types';
 
 type ExplorerMode = 'tree' | 'symbols' | 'hotspots';
@@ -30,7 +33,9 @@ type ExplorerView =
   | 'taint'
   | 'summaries'
   | 'abstract-interp'
-  | 'symex';
+  | 'symex'
+  | 'pointer'
+  | 'type-facts';
 
 const FLOW_KIND_COLORS: Record<string, string> = {
   source: 'var(--success)',
@@ -76,13 +81,27 @@ const VIEW_CONFIG: Array<{
     requiresFunction: true,
     supportsFunction: true,
   },
+  {
+    id: 'pointer',
+    label: 'Pointer',
+    requiresFunction: true,
+    supportsFunction: true,
+  },
+  {
+    id: 'type-facts',
+    label: 'Type Facts',
+    requiresFunction: true,
+    supportsFunction: true,
+  },
 ];
 
 const VIEW_CONFIG_BY_ID = new Map(VIEW_CONFIG.map((view) => [view.id, view]));
 
 export function ExplorerPage() {
+  usePageTitle('Explorer');
   const [params, setParams] = useSearchParams();
   const [explorerMode, setExplorerMode] = useState<ExplorerMode>('tree');
+  const [showClosures, setShowClosures] = useState(false);
   const [highlightLine, setHighlightLine] = useState<number | undefined>();
   const [selectedFindingIndex, setSelectedFindingIndex] = useState<
     number | null
@@ -130,6 +149,19 @@ export function ExplorerPage() {
 
   const { data: symbolEntries, error: symbolsError } =
     useExplorerSymbols(rawFile);
+
+  const closureSymbolCount = useMemo(
+    () =>
+      symbolEntries?.filter((s) => s.func_kind === 'closure').length ?? 0,
+    [symbolEntries],
+  );
+
+  const visibleSymbolEntries = useMemo(() => {
+    if (!symbolEntries) return symbolEntries;
+    return showClosures
+      ? symbolEntries
+      : symbolEntries.filter((s) => s.func_kind !== 'closure');
+  }, [symbolEntries, showClosures]);
   const hasInvalidFile = Boolean(
     rawFile && isPathResolutionError(symbolsError),
   );
@@ -315,8 +347,21 @@ export function ExplorerPage() {
               {selectedFile && symbolEntries && symbolEntries.length === 0 && (
                 <div className="explorer-hint">No symbols found</div>
               )}
+              {selectedFile && closureSymbolCount > 0 && (
+                <label className="explorer-symbol-toggle">
+                  <input
+                    type="checkbox"
+                    checked={showClosures}
+                    onChange={(e) => setShowClosures(e.target.checked)}
+                  />
+                  <span>
+                    Show {closureSymbolCount} anonymous closure
+                    {closureSymbolCount === 1 ? '' : 's'}
+                  </span>
+                </label>
+              )}
               {selectedFile &&
-                symbolEntries?.map((sym, index) => (
+                visibleSymbolEntries?.map((sym, index) => (
                   <div
                     key={`${sym.name}-${index}`}
                     className="explorer-symbol-item"
@@ -327,6 +372,16 @@ export function ExplorerPage() {
                     <span className="symbol-name">{sym.name}</span>
                     {sym.arity !== undefined && sym.arity !== null && (
                       <span className="symbol-arity">({sym.arity})</span>
+                    )}
+                    {sym.func_kind === 'closure' && (
+                      <span
+                        className="text-secondary"
+                        style={{ marginLeft: 6, fontSize: '0.85em' }}
+                      >
+                        {sym.container
+                          ? `[closure in ${sym.container}]`
+                          : '[closure]'}
+                      </span>
                     )}
                     {sym.finding_count > 0 && (
                       <span className="tree-node-badge">
@@ -500,7 +555,7 @@ export function ExplorerPage() {
                 {symbolEntries && symbolEntries.length === 0 && (
                   <div className="explorer-hint">No symbols found</div>
                 )}
-                {symbolEntries?.map((sym, index) => (
+                {visibleSymbolEntries?.map((sym, index) => (
                   <div
                     key={`${sym.name}-${index}`}
                     className="explorer-symbol-item compact"
@@ -509,8 +564,26 @@ export function ExplorerPage() {
                       {sym.kind === 'function' ? 'ƒ' : 'm'}
                     </span>
                     <span className="symbol-name">{sym.name}</span>
+                    {sym.func_kind === 'closure' && (
+                      <span
+                        className="text-secondary"
+                        style={{ marginLeft: 6, fontSize: '0.85em' }}
+                      >
+                        [closure]
+                      </span>
+                    )}
                   </div>
                 ))}
+                {!showClosures && closureSymbolCount > 0 && (
+                  <button
+                    className="explorer-symbol-toggle-link"
+                    type="button"
+                    onClick={() => setShowClosures(true)}
+                  >
+                    Show {closureSymbolCount} closure
+                    {closureSymbolCount === 1 ? '' : 's'}
+                  </button>
+                )}
               </div>
 
               <div className="explorer-right-section">
@@ -659,6 +732,24 @@ function renderAnalysisContent({
       return (
         <div className="explorer-analysis-content">
           <SymexAnalysisPanel
+            file={selectedFile}
+            functionName={selectedFunction}
+          />
+        </div>
+      );
+    case 'pointer':
+      return (
+        <div className="explorer-analysis-content">
+          <PointerAnalysisPanel
+            file={selectedFile}
+            functionName={selectedFunction}
+          />
+        </div>
+      );
+    case 'type-facts':
+      return (
+        <div className="explorer-analysis-content">
+          <TypeFactsAnalysisPanel
             file={selectedFile}
             functionName={selectedFunction}
           />

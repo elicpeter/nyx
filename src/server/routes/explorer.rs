@@ -54,7 +54,19 @@ struct TreeEntry {
 #[derive(Debug, Serialize)]
 struct SymbolEntry {
     name: String,
+    /// Legacy display kind (`"function"` / `"method"`) used by existing CSS
+    /// classes in the frontend.  Kept for backward-compat — new consumers
+    /// should prefer `func_kind`.
     kind: String,
+    /// Structural [`crate::symbol::FuncKind`] slug (`"fn"`, `"method"`,
+    /// `"closure"`, `"ctor"`, `"getter"`, `"setter"`, `"toplevel"`).  Lets
+    /// the UI distinguish anonymous closures (`<anon#N>`) from named
+    /// functions and offer a default-hide toggle.
+    func_kind: String,
+    /// Enclosing container path (class / impl / module / outer function).
+    /// Empty for free top-level functions.  Surfaced so the UI can render
+    /// closures as `<anon#N> [in outer_fn]`.
+    container: String,
     line: Option<usize>,
     finding_count: usize,
     namespace: Option<String>,
@@ -278,16 +290,21 @@ async fn get_symbols(
 
     let entries: Vec<SymbolEntry> = symbols
         .into_iter()
-        .map(|(name, arity, _lang, namespace)| {
-            let kind = if !namespace.is_empty() && namespace != name {
-                "method".to_string()
-            } else {
-                "function".to_string()
+        .map(|(name, arity, _lang, namespace, container, func_kind)| {
+            // Legacy `kind` field — still used by existing CSS classes
+            // (`symbol-kind-method`, `symbol-kind-function`).  Map any
+            // method-like FuncKind onto `"method"` and everything else
+            // onto `"function"` so the rendered icon stays sensible.
+            let kind = match func_kind.as_str() {
+                "method" | "ctor" | "getter" | "setter" => "method".to_string(),
+                _ => "function".to_string(),
             };
             let finding_count = func_finding_counts.get(&name).copied().unwrap_or(0);
             SymbolEntry {
                 name,
                 kind,
+                func_kind,
+                container,
                 line: None,
                 finding_count,
                 namespace: if namespace.is_empty() {

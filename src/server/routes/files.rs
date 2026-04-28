@@ -1,7 +1,7 @@
 use crate::server::app::AppState;
+use crate::server::error::{ApiError, ApiResult};
 use crate::utils::path::{DEFAULT_UI_MAX_FILE_BYTES, RepoPathError, open_repo_text_file};
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -33,9 +33,9 @@ struct FileResponse {
 async fn get_file(
     State(state): State<AppState>,
     Query(query): Query<FileQuery>,
-) -> Result<Json<FileResponse>, StatusCode> {
+) -> ApiResult<Json<FileResponse>> {
     let opened = open_repo_text_file(&state.scan_root, &query.path, DEFAULT_UI_MAX_FILE_BYTES)
-        .map_err(map_path_error)?;
+        .map_err(|e| map_path_error(e, &query.path))?;
     let content = opened.content;
     let all_lines: Vec<&str> = content.lines().collect();
     let total_lines = all_lines.len();
@@ -64,14 +64,27 @@ async fn get_file(
     }))
 }
 
-fn map_path_error(err: RepoPathError) -> StatusCode {
+fn map_path_error(err: RepoPathError, path: &str) -> ApiError {
     match err {
-        RepoPathError::InvalidPath | RepoPathError::OutsideRoot => StatusCode::FORBIDDEN,
-        RepoPathError::NotFound => StatusCode::NOT_FOUND,
-        RepoPathError::TooLarge
-        | RepoPathError::InvalidText
-        | RepoPathError::NotFile
-        | RepoPathError::NotDirectory => StatusCode::BAD_REQUEST,
-        RepoPathError::Io => StatusCode::INTERNAL_SERVER_ERROR,
+        RepoPathError::InvalidPath => {
+            ApiError::forbidden(format!("invalid path: {path}"))
+        }
+        RepoPathError::OutsideRoot => {
+            ApiError::forbidden(format!("path outside scan root: {path}"))
+        }
+        RepoPathError::NotFound => ApiError::not_found(format!("file not found: {path}")),
+        RepoPathError::TooLarge => {
+            ApiError::bad_request(format!("file too large to display: {path}"))
+        }
+        RepoPathError::InvalidText => {
+            ApiError::bad_request(format!("file is not valid UTF-8 text: {path}"))
+        }
+        RepoPathError::NotFile => {
+            ApiError::bad_request(format!("path is not a regular file: {path}"))
+        }
+        RepoPathError::NotDirectory => {
+            ApiError::bad_request(format!("path is not a directory: {path}"))
+        }
+        RepoPathError::Io => ApiError::internal(format!("I/O error reading: {path}")),
     }
 }

@@ -2,13 +2,13 @@
 
 use crate::commands::scan::Diag;
 use crate::database::index::Indexer;
-use crate::server::app::AppState;
+use crate::server::app::{AppState, CachedFindings};
+use crate::server::error::{ApiError, ApiResult};
 use crate::server::models::{
     FilterValues, FindingSummary, FindingView, collect_filter_values, finding_from_diag,
     finding_from_diag_with_detail, overlay_triage_states, summarize_findings,
 };
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -22,16 +22,30 @@ pub fn routes() -> Router<AppState> {
         .route("/findings/{index}", get(get_finding))
 }
 
+/// Sentinel job id for "we read this from SQLite, not from JobManager."
+/// Used as the cache key when no in-memory job exists (e.g. fresh server boot).
+const DB_FALLBACK_KEY: &str = "__db_fallback__";
+
+/// Bundle returned by [`load_latest_findings`]: the raw diags plus the cache
+/// key under which their derived views should be stored. The cache key is the
+/// in-memory job id when available, or [`DB_FALLBACK_KEY`] when we fell back
+/// to SQLite.
+struct LoadedFindings {
+    cache_key: String,
+    findings: Arc<Vec<Diag>>,
+}
+
 /// Load findings for the latest completed scan, falling back to DB if no
 /// in-memory completed scan exists (e.g. after a server restart).
-pub fn load_latest_findings(state: &AppState) -> Arc<Vec<Diag>> {
-    // In-memory first
+fn load_latest_findings_internal(state: &AppState) -> LoadedFindings {
     if let Some(job) = state.job_manager.get_latest_completed() {
         if let Some(ref findings) = job.findings {
-            return Arc::clone(findings);
+            return LoadedFindings {
+                cache_key: job.id.clone(),
+                findings: Arc::clone(findings),
+            };
         }
     }
-    // DB fallback — find the most recent completed scan with findings
     if let Some(ref pool) = state.db_pool {
         if let Ok(idx) = Indexer::from_pool("_scans", pool) {
             if let Ok(scans) = idx.list_scans(20) {
@@ -39,7 +53,10 @@ pub fn load_latest_findings(state: &AppState) -> Arc<Vec<Diag>> {
                     if scan.status == "completed" {
                         if let Some(json) = scan.findings_json.as_deref() {
                             if let Ok(diags) = serde_json::from_str::<Vec<Diag>>(json) {
-                                return Arc::new(diags);
+                                return LoadedFindings {
+                                    cache_key: format!("{DB_FALLBACK_KEY}:{}", scan.id),
+                                    findings: Arc::new(diags),
+                                };
                             }
                         }
                     }
@@ -47,10 +64,61 @@ pub fn load_latest_findings(state: &AppState) -> Arc<Vec<Diag>> {
             }
         }
     }
-    Arc::new(Vec::new())
+    LoadedFindings {
+        cache_key: DB_FALLBACK_KEY.to_string(),
+        findings: Arc::new(Vec::new()),
+    }
+}
+
+/// Build (or fetch from cache) the per-scan derived views.
+///
+/// Returns clones of `Arc`s so callers can drop the lock immediately and work
+/// without contention. Triage state is *not* baked into the cached views — it
+/// changes on a different cadence and is overlaid per request.
+fn cached_for_latest(state: &AppState) -> CachedFindings {
+    let loaded = load_latest_findings_internal(state);
+
+    // Fast path: cache hit for the same job id.
+    if let Some(cached) = state.findings_cache.read().as_ref() {
+        if cached.job_id == loaded.cache_key {
+            return cached.clone();
+        }
+    }
+
+    // Slow path: rebuild. Guard against concurrent rebuilds of the same key —
+    // a second writer that finds the cache already populated for our key
+    // simply returns it.
+    let mut guard = state.findings_cache.write();
+    if let Some(existing) = guard.as_ref() {
+        if existing.job_id == loaded.cache_key {
+            return existing.clone();
+        }
+    }
+
+    let views: Vec<FindingView> = loaded
+        .findings
+        .iter()
+        .enumerate()
+        .map(|(i, d)| finding_from_diag(i, d))
+        .collect();
+    let summary = summarize_findings(&loaded.findings);
+    let filters = collect_filter_values(&loaded.findings);
+
+    let entry = CachedFindings {
+        job_id: loaded.cache_key,
+        views: Arc::new(views),
+        summary: Arc::new(summary),
+        filters: Arc::new(filters),
+    };
+    *guard = Some(entry.clone());
+    entry
 }
 
 /// Load triage states and suppression rules from DB, apply to views.
+///
+/// Triage state is overlaid onto a freshly-cloned `Vec` rather than mutating
+/// the cached views so concurrent readers see consistent data and the cache
+/// stays valid across triage edits.
 fn apply_triage_overlay(state: &AppState, views: &mut [FindingView]) {
     if let Some(ref pool) = state.db_pool {
         if let Ok(idx) = Indexer::from_pool("_triage", pool) {
@@ -80,19 +148,11 @@ struct FindingsQuery {
 async fn list_findings(
     State(state): State<AppState>,
     Query(query): Query<FindingsQuery>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let findings = load_latest_findings(&state);
-
-    let mut views: Vec<FindingView> = findings
-        .iter()
-        .enumerate()
-        .map(|(i, d)| finding_from_diag(i, d))
-        .collect();
-
-    // Overlay triage states from DB before filtering
+) -> ApiResult<Json<serde_json::Value>> {
+    let cached = cached_for_latest(&state);
+    let mut views: Vec<FindingView> = (*cached.views).clone();
     apply_triage_overlay(&state, &mut views);
 
-    // Apply filters.
     if let Some(ref sev) = query.severity {
         let sev_upper = sev.to_ascii_uppercase();
         views.retain(|f| f.severity.as_db_str() == sev_upper);
@@ -138,7 +198,6 @@ async fn list_findings(
         });
     }
 
-    // Sort.
     match query.sort_by.as_deref() {
         Some("severity") => views.sort_by_key(|a| a.severity),
         Some("path") | Some("file") => views.sort_by(|a, b| a.path.cmp(&b.path)),
@@ -163,13 +222,12 @@ async fn list_findings(
         }),
         Some("status") => views.sort_by(|a, b| a.status.cmp(&b.status)),
         Some("category") => views.sort_by_key(|a| a.category.to_string()),
-        _ => {} // default order (by index)
+        _ => {}
     }
     if query.sort_dir.as_deref() == Some("desc") {
         views.reverse();
     }
 
-    // Paginate.
     let total = views.len();
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(50).clamp(1, 10000);
@@ -185,22 +243,28 @@ async fn list_findings(
 }
 
 async fn findings_summary(State(state): State<AppState>) -> Json<FindingSummary> {
-    let findings = load_latest_findings(&state);
-    Json(summarize_findings(&findings))
+    Json((*cached_for_latest(&state).summary).clone())
 }
 
 async fn findings_filters(State(state): State<AppState>) -> Json<FilterValues> {
-    let findings = load_latest_findings(&state);
-    Json(collect_filter_values(&findings))
+    Json((*cached_for_latest(&state).filters).clone())
 }
 
 async fn get_finding(
     State(state): State<AppState>,
     Path(index): Path<usize>,
-) -> Result<Json<FindingView>, StatusCode> {
-    let findings = load_latest_findings(&state);
-    let diag = findings.get(index).ok_or(StatusCode::NOT_FOUND)?;
+) -> ApiResult<Json<FindingView>> {
+    let findings = load_latest_findings_internal(&state).findings;
+    let diag = findings
+        .get(index)
+        .ok_or_else(|| ApiError::not_found(format!("finding {index} not found")))?;
     let mut view = finding_from_diag_with_detail(index, diag, &state.scan_root, &findings);
     apply_triage_overlay(&state, std::slice::from_mut(&mut view));
     Ok(Json(view))
+}
+
+/// Public alias for callers (overview, explorer, triage) that just want
+/// the raw diag list. Kept as `load_latest_findings` for source-compat.
+pub fn load_latest_findings(state: &AppState) -> Arc<Vec<Diag>> {
+    load_latest_findings_internal(state).findings
 }

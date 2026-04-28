@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useScanCompare } from '../api/queries/scans';
 import { LoadingState } from '../components/ui/LoadingState';
 import { ErrorState } from '../components/ui/ErrorState';
+import { usePageTitle } from '../hooks/usePageTitle';
 import type {
   CompareResponse,
   ComparedFinding,
@@ -275,14 +276,24 @@ function CompareByGroup({
 type CompareTab = 'status' | 'rule' | 'file';
 
 export function ScanComparePage() {
+  usePageTitle('Compare scans');
   const { left, right } = useParams<{ left: string; right: string }>();
   const navigate = useNavigate();
-  const { data, isLoading, error } = useScanCompare(left || '', right || '');
+  const { data, isLoading, error, refetch } = useScanCompare(
+    left || '',
+    right || '',
+  );
   const [activeTab, setActiveTab] = useState<CompareTab>('status');
 
   if (isLoading) return <LoadingState message="Loading comparison..." />;
   if (error)
-    return <ErrorState title="Comparison failed" message={error.message} />;
+    return (
+      <ErrorState
+        title="Comparison failed"
+        error={error}
+        onRetry={() => refetch()}
+      />
+    );
   if (!data) return <ErrorState message="No comparison data" />;
 
   const severities = ['HIGH', 'MEDIUM', 'LOW'];

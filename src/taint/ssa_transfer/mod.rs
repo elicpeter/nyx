@@ -36,7 +36,7 @@ use state::{
 pub(crate) use state::{
     push_origin_bounded, record_engine_note, reset_body_engine_notes, take_body_engine_notes,
 };
-pub use summary_extract::extract_ssa_func_summary;
+pub use summary_extract::{extract_ssa_func_summary, extract_ssa_func_summary_full};
 
 use crate::abstract_interp::AbstractState;
 use crate::callgraph::{callee_container_hint, callee_leaf_name};
@@ -5888,23 +5888,48 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
     } else {
         Some(info.call.arg_uses.len())
     };
-    info.call
-        .callee
-        .as_ref()
-        .and_then(|c| {
-            resolve_callee_hinted(transfer, c, caller_func, info.call.call_ordinal, arity_hint)
-        })
-        .filter(|r| !r.sink_caps.is_empty())
-        .map(|r| SinkInfo {
+    let primary = info.call.callee.as_ref().and_then(|c| {
+        resolve_callee_hinted(transfer, c, caller_func, info.call.call_ordinal, arity_hint)
+    });
+    if let Some(r) = primary.filter(|r| !r.sink_caps.is_empty()) {
+        return SinkInfo {
             caps: r.sink_caps,
             param_to_sink: r.param_to_sink,
             param_to_sink_sites: r.param_to_sink_sites,
-        })
-        .unwrap_or(SinkInfo {
-            caps: Cap::empty(),
-            param_to_sink: vec![],
-            param_to_sink_sites: vec![],
-        })
+        };
+    }
+
+    // Fallback: when first_member_label rebound `info.call.callee` to an
+    // inner source path (e.g. `helper(req.body.uri)` → callee="req.body.uri",
+    // outer_callee="helper"), the inner-name lookup misses the actual
+    // wrapper's summary. Retry with `outer_callee` so the wrapper's
+    // `param_to_sink` summary fires for cross-function sink propagation.
+    // Strict-additive: only fires when the primary inner-callee resolution
+    // produced no sink caps; any positive primary result wins.  Motivated
+    // by CVE-2025-64430.
+    if let Some(oc) = info.call.outer_callee.as_ref() {
+        if let Some(r) = resolve_callee_hinted(
+            transfer,
+            oc,
+            caller_func,
+            info.call.call_ordinal,
+            arity_hint,
+        )
+        .filter(|r| !r.sink_caps.is_empty())
+        {
+            return SinkInfo {
+                caps: r.sink_caps,
+                param_to_sink: r.param_to_sink,
+                param_to_sink_sites: r.param_to_sink_sites,
+            };
+        }
+    }
+
+    SinkInfo {
+        caps: Cap::empty(),
+        param_to_sink: vec![],
+        param_to_sink_sites: vec![],
+    }
 }
 
 /// Collect tainted SSA values at a sink instruction.
@@ -7619,9 +7644,29 @@ fn resolve_callee_full(
     // FuncKey-keyed `local_summaries` index, then consult `ssa_summaries` by
     // the same key.  This preserves container/arity/disambig identity so two
     // same-name definitions in the same file never share an SSA summary.
+    //
+    // Namespace fallback: `lower_all_functions_from_bodies` rewrites
+    // every SSA summary key's `namespace` to the caller-relative
+    // namespace (for cross-file consistency in `GlobalSummaries`),
+    // while `local_summaries` keys keep the raw file path that
+    // `build_cfg` wrote.  When the exact-key lookup misses, fall back
+    // to a namespace-tolerant scan that matches every other FuncKey
+    // field (lang/container/name/arity/disambig/kind) — this recovers
+    // intra-file SSA summary lookups in single-file or non-indexed
+    // scans where the two namespaces disagree by construction.
     if let Some(ssa_sums) = transfer.ssa_summaries {
         if let Some(key) = resolve_local_func_key_query(transfer.local_summaries, &build_query()) {
             if let Some(ssa_sum) = ssa_sums.get(&key) {
+                return Some(convert_ssa_to_resolved(ssa_sum));
+            }
+            if let Some((_, ssa_sum)) = ssa_sums.iter().find(|(k, _)| {
+                k.lang == key.lang
+                    && k.container == key.container
+                    && k.name == key.name
+                    && k.arity == key.arity
+                    && k.disambig == key.disambig
+                    && k.kind == key.kind
+            }) {
                 return Some(convert_ssa_to_resolved(ssa_sum));
             }
         }

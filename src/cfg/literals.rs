@@ -363,7 +363,15 @@ pub(super) fn find_chained_inner_call<'a>(
         .child_by_field_name("function")
         .or_else(|| object.child_by_field_name("method"))
         .or_else(|| object.child_by_field_name("name"))?;
-    let inner_text = text_of(inner_func, code)?;
+    // Multi-line dotted member expressions (`http\n  .get`) include
+    // formatting whitespace in the source-text slice. The labels map
+    // keys are literal `"http.get"` etc. — strip whitespace so the
+    // chained-call inner-gate rebinding fires for both single-line and
+    // multi-line chain styles. Also strips `\r` for CRLF sources.
+    // Motivated by upstream Parse Server CVE-2025-64430 which uses the
+    // multi-line `http\n  .get(uri, ...)\n  .on(...)` form.
+    let raw = text_of(inner_func, code)?;
+    let inner_text: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
     Some((object, inner_text))
 }
 

@@ -5,6 +5,7 @@ import { useDeleteScan } from '../api/mutations/scans';
 import { useSSE } from '../contexts/SSEContext';
 import { LoadingState } from '../components/ui/LoadingState';
 import { ErrorState } from '../components/ui/ErrorState';
+import { usePageTitle } from '../hooks/usePageTitle';
 import type { ScanView } from '../api/types';
 
 function relTime(iso?: string): string {
@@ -123,6 +124,7 @@ function ScanProgress({
 }
 
 export function ScansPage() {
+  usePageTitle('Scans');
   const navigate = useNavigate();
   const { data: scans, isLoading, error } = useScans();
   const deleteScan = useDeleteScan();

@@ -46,6 +46,21 @@ pub(super) fn extract_param_meta<'a>(
             .and_then(|d| d.child_by_field_name(cfg.params_field))
     });
     let Some(params) = params else {
+        // Single-param arrow shorthand (`uri => ...` in JS/TS): tree-sitter
+        // exposes the lone identifier under the singular `parameter` field
+        // rather than wrapping it in `formal_parameters`. Without this
+        // fallback the function appears parameterless to the SSA pipeline,
+        // breaking cross-function param_to_sink resolution for any
+        // single-arg arrow helper. Motivated by CVE-2025-64430.
+        if func_node.kind() == "arrow_function" {
+            if let Some(p) = func_node.child_by_field_name("parameter") {
+                if p.kind() == "identifier" {
+                    if let Some(name) = text_of(p, code) {
+                        out.push((name, None));
+                    }
+                }
+            }
+        }
         return out;
     };
     let mut cursor = params.walk();

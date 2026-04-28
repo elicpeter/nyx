@@ -51,6 +51,49 @@ pub fn extract_ssa_func_summary(
     locator: Option<&crate::summary::SinkSiteLocator<'_>>,
     formal_param_names: Option<&[String]>,
 ) -> crate::summary::ssa_summary::SsaFuncSummary {
+    extract_ssa_func_summary_full(
+        ssa,
+        cfg,
+        local_summaries,
+        global_summaries,
+        lang,
+        namespace,
+        interner,
+        param_count,
+        module_aliases,
+        locator,
+        formal_param_names,
+        None,
+    )
+}
+
+/// Like [`extract_ssa_func_summary`] but allows passing an in-progress
+/// `ssa_summaries` map so the per-parameter probes can resolve callee
+/// SSA summaries via step 0 of `resolve_callee_full`.
+///
+/// This enables transitive cross-function summary propagation: when a
+/// caller's body references a callee whose summary was just augmented
+/// by the closure-capture lift pass, the caller's probe sees the
+/// augmented `param_to_sink` and can propagate it onto the caller's
+/// own summary. Used by `lower_all_functions_from_bodies`'s second
+/// extraction pass after `augment_summaries_with_child_sinks`.
+#[allow(clippy::too_many_arguments)]
+pub fn extract_ssa_func_summary_full(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+    lang: Lang,
+    namespace: &str,
+    interner: &crate::state::symbol::SymbolInterner,
+    param_count: usize,
+    module_aliases: Option<&HashMap<SsaValue, SmallVec<[String; 2]>>>,
+    locator: Option<&crate::summary::SinkSiteLocator<'_>>,
+    formal_param_names: Option<&[String]>,
+    ssa_summaries: Option<
+        &HashMap<crate::symbol::FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+    >,
+) -> crate::summary::ssa_summary::SsaFuncSummary {
     use crate::summary::SinkSite;
     use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
 
@@ -143,7 +186,7 @@ pub fn extract_ssa_func_summary(
             receiver_seed: None,
             const_values: None,
             type_facts: None,
-            ssa_summaries: None,
+            ssa_summaries,
             extra_labels: None,
             base_aliases: None,
             callee_bodies: None,
@@ -359,14 +402,48 @@ pub fn extract_ssa_func_summary(
             source_kind: SourceKind::UserInput,
             source_span: None,
         };
+        let probe_taint = VarTaint {
+            caps: Cap::all(),
+            origins: SmallVec::from_elem(origin, 1),
+            uses_summary: false,
+        };
         seed.insert(
             BindingKey::new(var_name.as_str(), BodyId(0)),
-            VarTaint {
-                caps: Cap::all(),
-                origins: SmallVec::from_elem(origin, 1),
-                uses_summary: false,
-            },
+            probe_taint.clone(),
         );
+
+        // Phantom-Param prefix seeding.  SSA lowering of arrow / nested
+        // function bodies often exposes free-identifier member-access
+        // expressions (e.g. `file._source.uri`) as their own
+        // [`SsaOp::Param`] ops with composite `var_name`s like
+        // `"file._source.uri"`.  These phantom Params are the values
+        // actually used as call arguments — not the formal-param SSA
+        // value the seed targets.  Without this, the per-param probe
+        // misses cross-call sinks because the call's arg SSA value is
+        // a phantom Param with no seed entry, so `transfer_inst::Param`
+        // leaves it untainted and `collect_tainted_sink_values`
+        // observes empty caps despite the formal param being seeded.
+        //
+        // Seed every phantom Param whose `var_name` begins with
+        // `formal_var_name + "."` with the same caps the formal param
+        // received: semantically "if `file` is tainted, then every
+        // observable field path on `file` is tainted too".  Bounded
+        // by SSA size; cap-equivalent to direct seeding.
+        let prefix = format!("{}.", var_name);
+        for block in &ssa.blocks {
+            for inst in block.phis.iter().chain(block.body.iter()) {
+                if let SsaOp::Param { .. } = &inst.op {
+                    if let Some(name) = inst.var_name.as_ref() {
+                        if name.starts_with(&prefix) {
+                            seed.insert(
+                                BindingKey::new(name.as_str(), BodyId(0)),
+                                probe_taint.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         let (return_caps, events, _, per_return_obs) = run_probe(seed);
 
@@ -494,7 +571,7 @@ pub fn extract_ssa_func_summary(
             receiver_seed: None,
             const_values: None,
             type_facts: None,
-            ssa_summaries: None,
+            ssa_summaries,
             extra_labels: None,
             base_aliases: None,
             callee_bodies: None,

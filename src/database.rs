@@ -1005,26 +1005,32 @@ pub mod index {
             }
         }
 
-        /// Load symbol metadata (name, arity, lang, namespace) for a single file.
+        /// Load symbol metadata (name, arity, lang, namespace, container, kind)
+        /// for a single file.
         ///
         /// Lighter than `load_all_ssa_summaries` — skips JSON deserialization of
-        /// the full summary body and filters by file_path in the query.
+        /// the full summary body and filters by file_path in the query.  `kind`
+        /// is the [`crate::symbol::FuncKind`] slug (`"fn"`, `"method"`,
+        /// `"closure"`, ...) so consumers can distinguish anonymous functions
+        /// from named ones.
         pub fn load_ssa_summaries_for_file(
             &self,
             file_path: &str,
-        ) -> NyxResult<Vec<(String, i64, String, String)>> {
+        ) -> NyxResult<Vec<(String, i64, String, String, String, String)>> {
             let mut stmt = self.c().prepare(
-                "SELECT name, arity, lang, namespace
+                "SELECT name, arity, lang, namespace, container, kind
                  FROM ssa_function_summaries
                  WHERE project = ?1 AND file_path = ?2",
             )?;
-            let rows: Vec<(String, i64, String, String)> = stmt
+            let rows: Vec<(String, i64, String, String, String, String)> = stmt
                 .query_map(rusqlite::params![self.project, file_path], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, i64>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
                     ))
                 })?
                 .filter_map(Result::ok)

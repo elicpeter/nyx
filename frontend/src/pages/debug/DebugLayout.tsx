@@ -3,6 +3,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 const TABS = [
   { path: '/debug/call-graph', label: 'Call Graph' },
   { path: '/debug/summaries', label: 'Summaries' },
+  { path: '/debug/auth', label: 'Auth Analysis' },
 ];
 
 export function DebugLayout() {

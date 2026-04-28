@@ -9,6 +9,7 @@ import {
 } from '../api/queries/scans';
 import { LoadingState } from '../components/ui/LoadingState';
 import { ErrorState } from '../components/ui/ErrorState';
+import { usePageTitle } from '../hooks/usePageTitle';
 import type { ScanView, ScanLogEntry, ScanMetricsSnapshot } from '../api/types';
 
 function truncPath(p?: string, max = 50): string {
@@ -384,6 +385,7 @@ export function ScanDetailPage() {
   const { data: scan, isLoading, error } = useScan(id || '');
   const { data: allScans } = useScans();
   const [activeTab, setActiveTab] = useState<TabId>('summary');
+  usePageTitle(scan ? `Scan ${scan.id.slice(0, 8)}` : 'Scan');
 
   const prevScanId = useMemo(() => {
     if (!scan || scan.status !== 'completed' || !allScans) return null;

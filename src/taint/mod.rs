@@ -1519,6 +1519,65 @@ fn lower_all_functions_from_bodies(
         );
     }
 
+    // ── Closure-capture summary augmentation ─────────────────────────
+    //
+    // Lift child-body sinks into the parent's `param_to_sink` for
+    // every parent body with lexically contained children. This
+    // handles the direct-wrapper case
+    // `f(x) { return new Promise((res, rej) => sink(x)) }` — the
+    // executor's gated http.get sink becomes visible to callers of
+    // `f` via `f.summary.param_to_sink`.
+    //
+    // Without this pass, `f.summary.param_to_sink` stays empty
+    // because the sink lives in a separately-extracted child body
+    // that the parent's pass-1 probe never sees. The
+    // lexical-containment propagation in `analyse_multi_body`
+    // carries seeded taint into child bodies for the production
+    // analysis path, but the single-body summary extractor in
+    // `extract_ssa_func_summary` does not. This pass reproduces that
+    // propagation at summary-extraction time so cross-call
+    // resolution sees the sink at every caller of `f`.
+    //
+    // Strict-additive: only ADDs `param_to_sink` entries — never
+    // removes or modifies existing data — so it cannot regress
+    // detection. Bounded: each parent-param probe runs each child
+    // body's analysis exactly once.
+    augment_summaries_with_child_sinks(
+        file_cfg,
+        lang,
+        namespace,
+        local_summaries,
+        global_summaries,
+        &bodies,
+        &mut summaries,
+    );
+
+    // ── Second extraction pass: transitive cross-function summary lift ───
+    //
+    // The augment pass populates direct sink-wrapper summaries
+    // (`f(x) { Promise(() => sink(x)) }`). This second pass then
+    // re-runs every body's per-parameter probe with the augmented
+    // `summaries` map plumbed through to the probe transfer's
+    // `ssa_summaries` field, so callers of those wrappers (e.g. an
+    // `addFileDataIfNeeded` whose body calls a `downloadFileFromURI`
+    // sink wrapper) see the augmented `param_to_sink` at step 0 of
+    // `resolve_callee_full` and propagate it onto their own summary.
+    //
+    // OR-merge: only adds `param_to_sink` / `param_to_sink_param`
+    // entries to existing summaries. Existing entries (return
+    // transforms, source caps, augment-populated sinks, etc.) are
+    // preserved. Strict-additive — cannot regress detection.
+    rerun_extraction_with_augmented_summaries(
+        file_cfg,
+        lang,
+        namespace,
+        local_summaries,
+        global_summaries,
+        locator,
+        &bodies,
+        &mut summaries,
+    );
+
     if !summaries.is_empty() {
         tracing::debug!(
             count = summaries.len(),
@@ -1528,6 +1587,382 @@ fn lower_all_functions_from_bodies(
     }
 
     (summaries, bodies)
+}
+
+/// Second extraction pass: re-runs `extract_ssa_func_summary_full` for
+/// every body with the augmented `summaries` map plumbed through.
+///
+/// Only sink-related fields (`param_to_sink`, `param_to_sink_param`)
+/// are merged into existing summaries; other fields stay as-produced
+/// by the first pass.  Bounded: one re-extraction per body.
+#[allow(clippy::too_many_arguments)]
+fn rerun_extraction_with_augmented_summaries(
+    file_cfg: &FileCfg,
+    lang: Lang,
+    namespace: &str,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+    locator: Option<&crate::summary::SinkSiteLocator<'_>>,
+    bodies: &std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
+    summaries: &mut std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+) {
+    use crate::state::symbol::SymbolInterner;
+
+    // Snapshot the augmented summaries map so the probes resolve
+    // callees against a stable view (the merge below mutates
+    // `summaries` as we iterate).
+    let augmented_snapshot: std::collections::HashMap<
+        FuncKey,
+        crate::summary::ssa_summary::SsaFuncSummary,
+    > = summaries.clone();
+
+    for body in file_cfg.function_bodies() {
+        let Some(parent_key) = body.meta.func_key.clone() else {
+            continue;
+        };
+        let mut key = parent_key;
+        key.namespace = namespace.to_string();
+
+        let Some(callee) = bodies.get(&key) else {
+            continue;
+        };
+        if callee.param_count == 0 {
+            continue;
+        }
+        let Some(parent_cfg) = callee.body_graph.as_ref() else {
+            continue;
+        };
+
+        let interner = SymbolInterner::from_cfg(parent_cfg);
+        let mod_aliases = compute_module_aliases_for_summary(&callee.ssa, lang);
+        let mod_aliases_ref = if mod_aliases.is_empty() {
+            None
+        } else {
+            Some(&mod_aliases)
+        };
+
+        let new_summary = ssa_transfer::extract_ssa_func_summary_full(
+            &callee.ssa,
+            parent_cfg,
+            local_summaries,
+            global_summaries,
+            lang,
+            namespace,
+            &interner,
+            callee.param_count,
+            mod_aliases_ref,
+            locator,
+            Some(&body.meta.params),
+            Some(&augmented_snapshot),
+        );
+
+        // OR-merge sink-only fields into the existing summary.
+        let entry = summaries.entry(key).or_default();
+        merge_sink_fields(entry, &new_summary);
+    }
+}
+
+/// OR-merge `param_to_sink` and `param_to_sink_param` from `src` into
+/// `dst`. Existing entries are preserved; only NEW entries are added.
+fn merge_sink_fields(
+    dst: &mut crate::summary::ssa_summary::SsaFuncSummary,
+    src: &crate::summary::ssa_summary::SsaFuncSummary,
+) {
+    for (idx, sites) in &src.param_to_sink {
+        if let Some((_, dst_sites)) =
+            dst.param_to_sink.iter_mut().find(|(i, _)| i == idx)
+        {
+            for site in sites {
+                let key = site.dedup_key();
+                if !dst_sites.iter().any(|s| s.dedup_key() == key) {
+                    dst_sites.push(site.clone());
+                }
+            }
+        } else {
+            dst.param_to_sink.push((*idx, sites.clone()));
+        }
+    }
+    for &(idx, pos, caps) in &src.param_to_sink_param {
+        if !dst
+            .param_to_sink_param
+            .iter()
+            .any(|(i, p, c)| *i == idx && *p == pos && *c == caps)
+        {
+            dst.param_to_sink_param.push((idx, pos, caps));
+        }
+    }
+}
+
+/// Walk lexical-containment children of every parent body and lift
+/// their sinks into the parent's [`SsaFuncSummary::param_to_sink`].
+///
+/// For each parent body P with at least one lexically contained
+/// child:
+///   - For each formal parameter `p_i` of P:
+///     - Seed a probe with `{ p_i → Cap::all() }`, run P's SSA
+///       analysis, extract P's exit state.
+///     - For every descendant child body C of P, run C's SSA
+///       analysis with the parent's exit state seeded as
+///       `global_seed`. Collect sink events.
+///     - For each event whose `sink_caps` is non-empty, append a
+///       cap-only [`SinkSite`] under `p_i` on P's summary
+///       (deduplicated by cap-mask so repeat probes don't inflate
+///       the entry).
+///
+/// Strict-additive: only inserts new `param_to_sink` entries; never
+/// modifies `param_return_paths`, `points_to`, `source_caps`, etc.
+fn augment_summaries_with_child_sinks(
+    file_cfg: &FileCfg,
+    lang: Lang,
+    namespace: &str,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+    bodies: &std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
+    summaries: &mut std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+) {
+    use crate::cfg::BodyId;
+    use crate::labels::{Cap, SourceKind};
+    use crate::summary::SinkSite;
+    use crate::taint::domain::{TaintOrigin, VarTaint};
+    use ssa_transfer::BindingKey;
+
+    // ── Build lexical-containment relationships ──────────────────────
+    // Map parent BodyId → list of descendant body indices.  Reverse-walk
+    // each body's `parent_body_id` chain so a grand-child's sinks are
+    // attributed to every ancestor in its containment chain.
+    let body_id_to_idx: std::collections::HashMap<BodyId, usize> = file_cfg
+        .bodies
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.meta.id, i))
+        .collect();
+    let mut descendants: std::collections::HashMap<BodyId, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (idx, body) in file_cfg.bodies.iter().enumerate() {
+        // Walk up the parent chain, registering this body as a descendant
+        // of every ancestor.
+        let mut cur = body.meta.parent_body_id;
+        while let Some(pid) = cur {
+            descendants.entry(pid).or_default().push(idx);
+            cur = body_id_to_idx
+                .get(&pid)
+                .and_then(|i| file_cfg.bodies[*i].meta.parent_body_id);
+        }
+    }
+
+    // ── Map each parent body to its FuncKey and the SSA body cache ──
+    // Skip bodies with no formal params (nothing to probe) and bodies
+    // whose SSA was never lowered (lowering errors logged earlier).
+    for parent_body in &file_cfg.bodies {
+        let Some(parent_key) = parent_body.meta.func_key.clone() else {
+            continue;
+        };
+        let mut parent_key = parent_key;
+        parent_key.namespace = namespace.to_string();
+
+        let Some(parent_callee) = bodies.get(&parent_key) else {
+            continue;
+        };
+        if parent_callee.param_count == 0 {
+            continue;
+        }
+        let Some(child_indices) = descendants.get(&parent_body.meta.id) else {
+            continue;
+        };
+        if child_indices.is_empty() {
+            continue;
+        }
+
+        let parent_ssa = &parent_callee.ssa;
+        let parent_cfg = match parent_callee.body_graph.as_ref() {
+            Some(g) => g,
+            None => continue,
+        };
+        let parent_interner =
+            crate::state::symbol::SymbolInterner::from_cfg(parent_cfg);
+
+        // Collect (formal_param_idx, var_name, ssa_value) for the parent's
+        // formal params — mirrors `extract_ssa_func_summary`'s param scan.
+        let mut parent_param_info: Vec<(usize, String)> = Vec::new();
+        for block in &parent_ssa.blocks {
+            for inst in block.phis.iter().chain(block.body.iter()) {
+                if let crate::ssa::ir::SsaOp::Param { index } = &inst.op {
+                    if *index < parent_callee.param_count {
+                        if let Some(name) = inst.var_name.as_ref() {
+                            parent_param_info.push((*index, name.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        for (param_idx, param_name) in &parent_param_info {
+            // Seed parent's probe with this single param tainted to all caps.
+            let mut seed: std::collections::HashMap<BindingKey, VarTaint> =
+                std::collections::HashMap::new();
+            seed.insert(
+                BindingKey::new(param_name.as_str(), BodyId(0)),
+                VarTaint {
+                    caps: Cap::all(),
+                    origins: smallvec::SmallVec::from_elem(
+                        TaintOrigin {
+                            node: petgraph::graph::NodeIndex::new(0),
+                            source_kind: SourceKind::UserInput,
+                            source_span: None,
+                        },
+                        1,
+                    ),
+                    uses_summary: false,
+                },
+            );
+
+            let parent_transfer = ssa_transfer::SsaTaintTransfer {
+                lang,
+                namespace,
+                interner: &parent_interner,
+                local_summaries,
+                global_summaries,
+                interop_edges: &[],
+                owner_body_id: BodyId(0),
+                parent_body_id: None,
+                global_seed: Some(&seed),
+                param_seed: None,
+                receiver_seed: None,
+                const_values: None,
+                type_facts: None,
+                ssa_summaries: Some(summaries),
+                extra_labels: None,
+                base_aliases: None,
+                callee_bodies: None,
+                inline_cache: None,
+                context_depth: 0,
+                callback_bindings: None,
+                points_to: None,
+                dynamic_pts: None,
+                import_bindings: None,
+                promisify_aliases: None,
+                module_aliases: None,
+                static_map: None,
+                auto_seed_handler_params: false,
+                cross_file_bodies: None,
+                pointer_facts: None,
+            };
+
+            let (_parent_events, parent_block_states) =
+                ssa_transfer::run_ssa_taint_full(parent_ssa, parent_cfg, &parent_transfer);
+            let parent_exit = ssa_transfer::extract_ssa_exit_state(
+                &parent_block_states,
+                parent_ssa,
+                parent_cfg,
+                &parent_transfer,
+                BodyId(0),
+            );
+            if parent_exit.is_empty() {
+                continue;
+            }
+
+            for &child_idx in child_indices {
+                let child_body = &file_cfg.bodies[child_idx];
+                let Some(child_key) = child_body.meta.func_key.clone() else {
+                    continue;
+                };
+                let mut child_key = child_key;
+                child_key.namespace = namespace.to_string();
+                let Some(child_callee) = bodies.get(&child_key) else {
+                    continue;
+                };
+                let child_ssa = &child_callee.ssa;
+                let Some(child_cfg) = child_callee.body_graph.as_ref() else {
+                    continue;
+                };
+
+                let child_interner =
+                    crate::state::symbol::SymbolInterner::from_cfg(child_cfg);
+
+                let child_transfer = ssa_transfer::SsaTaintTransfer {
+                    lang,
+                    namespace,
+                    interner: &child_interner,
+                    local_summaries,
+                    global_summaries,
+                    interop_edges: &[],
+                    owner_body_id: BodyId(0),
+                    parent_body_id: None,
+                    global_seed: Some(&parent_exit),
+                    param_seed: None,
+                    receiver_seed: None,
+                    const_values: None,
+                    type_facts: None,
+                    ssa_summaries: Some(summaries),
+                    extra_labels: None,
+                    base_aliases: None,
+                    callee_bodies: None,
+                    inline_cache: None,
+                    context_depth: 0,
+                    callback_bindings: None,
+                    points_to: None,
+                    dynamic_pts: None,
+                    import_bindings: None,
+                    promisify_aliases: None,
+                    module_aliases: None,
+                    static_map: None,
+                    auto_seed_handler_params: false,
+                    cross_file_bodies: None,
+                    pointer_facts: None,
+                };
+
+                let (child_events, _child_block_states) =
+                    ssa_transfer::run_ssa_taint_full(child_ssa, child_cfg, &child_transfer);
+
+                if child_events.is_empty() {
+                    continue;
+                }
+
+                // Aggregate sink caps across all child events into one
+                // entry per parent param (cap-only SinkSite — the
+                // exact location lives in the child body's CFG and is
+                // not directly addressable from the parent's summary).
+                let mut union_caps = Cap::empty();
+                for ev in &child_events {
+                    union_caps |= ev.sink_caps;
+                }
+                if union_caps.is_empty() {
+                    continue;
+                }
+
+                let entry = summaries.entry(parent_key.clone()).or_default();
+                let new_site = SinkSite::cap_only(union_caps);
+                let new_key = new_site.dedup_key();
+                if let Some((_, sites)) =
+                    entry.param_to_sink.iter_mut().find(|(i, _)| *i == *param_idx)
+                {
+                    if !sites.iter().any(|s| s.dedup_key() == new_key) {
+                        sites.push(new_site);
+                    }
+                } else {
+                    entry
+                        .param_to_sink
+                        .push((*param_idx, smallvec::smallvec![new_site]));
+                }
+
+                // Mirror cap-only attribution into `param_to_sink_param`
+                // so the call-site emission path that consults it (the
+                // engine's primary sink-site picker uses
+                // `param_to_sink_param` for arg-position filtering)
+                // sees this captured-flow sink. Position 0 is a
+                // best-effort placeholder — the actual filtering at
+                // the caller is by SSRF cap, not arg position, when
+                // the wrapper is itself non-gated.
+                if !entry
+                    .param_to_sink_param
+                    .iter()
+                    .any(|(i, _, c)| *i == *param_idx && *c == union_caps)
+                {
+                    entry.param_to_sink_param.push((*param_idx, 0, union_caps));
+                }
+            }
+        }
+    }
 }
 
 /// Walk every SSA `Call` instruction in `ssa` and produce

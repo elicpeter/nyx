@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useDebugSummaries } from '../../api/queries/debug';
 import { ApiError } from '../../api/client';
 import { EmptyState } from '../../components/ui/EmptyState';
@@ -22,6 +22,19 @@ export function SummaryAnalysisPanel({
     scope === 'global' ? null : (functionName ?? null),
   );
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [showClosures, setShowClosures] = useState(false);
+
+  const closureCount = useMemo(
+    () => data?.filter((s) => s.func_kind === 'closure').length ?? 0,
+    [data],
+  );
+
+  const visible = useMemo(() => {
+    if (!data) return data;
+    return showClosures
+      ? data
+      : data.filter((s) => s.func_kind !== 'closure');
+  }, [data, showClosures]);
 
   if (isLoading) {
     return <LoadingState message="Loading summaries..." />;
@@ -48,15 +61,32 @@ export function SummaryAnalysisPanel({
     );
   }
 
+  const visibleCount = visible?.length ?? 0;
+  const totalCount = data.length;
+
   return (
     <div className="summary-explorer">
       <div className="summary-header">
         <span className="text-secondary">
-          {data.length}{' '}
+          {visibleCount}
+          {visibleCount !== totalCount && ` of ${totalCount}`}{' '}
           {scope === 'global'
             ? 'functions across the project'
             : 'functions in this file'}
         </span>
+        {closureCount > 0 && (
+          <label className="summary-toggle">
+            <input
+              type="checkbox"
+              checked={showClosures}
+              onChange={(e) => setShowClosures(e.target.checked)}
+            />
+            <span>
+              Show {closureCount} anonymous closure
+              {closureCount === 1 ? '' : 's'}
+            </span>
+          </label>
+        )}
       </div>
       <table className="summary-table">
         <thead>
@@ -71,20 +101,19 @@ export function SummaryAnalysisPanel({
           </tr>
         </thead>
         <tbody>
-          {data.map((s) => (
-            <SummaryRow
-              key={`${s.namespace}::${s.name}`}
-              summary={s}
-              isExpanded={expanded === `${s.namespace}::${s.name}`}
-              onToggle={() =>
-                setExpanded(
-                  expanded === `${s.namespace}::${s.name}`
-                    ? null
-                    : `${s.namespace}::${s.name}`,
-                )
-              }
-            />
-          ))}
+          {visible?.map((s) => {
+            const rowKey = `${s.namespace}::${s.container}::${s.name}`;
+            return (
+              <SummaryRow
+                key={rowKey}
+                summary={s}
+                isExpanded={expanded === rowKey}
+                onToggle={() =>
+                  setExpanded(expanded === rowKey ? null : rowKey)
+                }
+              />
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -104,10 +133,23 @@ function SummaryRow({
   isExpanded: boolean;
   onToggle: () => void;
 }) {
+  const isClosure = summary.func_kind === 'closure';
   return (
     <>
       <tr onClick={onToggle} style={{ cursor: 'pointer' }}>
-        <td className="mono">{summary.name}</td>
+        <td className="mono">
+          {summary.name}
+          {isClosure && (
+            <span
+              className="text-secondary"
+              style={{ marginLeft: 8, fontSize: '0.85em' }}
+            >
+              {summary.container
+                ? `[closure in ${summary.container}]`
+                : '[closure]'}
+            </span>
+          )}
+        </td>
         <td>{summary.lang}</td>
         <td>{summary.param_count}</td>
         <td>

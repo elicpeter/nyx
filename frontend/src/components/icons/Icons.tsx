@@ -108,15 +108,6 @@ export function DebugIcon({ className, size = 18 }: IconProps) {
   );
 }
 
-export function SettingsIcon({ className, size = 18 }: IconProps) {
-  return (
-    <svg {...svgProps({ className, size })} viewBox="0 0 18 18">
-      <circle cx="9" cy="9" r="2.5" />
-      <path d="M9 1.5v2M9 14.5v2M1.5 9h2M14.5 9h2M3.7 3.7l1.4 1.4M12.9 12.9l1.4 1.4M14.3 3.7l-1.4 1.4M5.1 12.9l-1.4 1.4" />
-    </svg>
-  );
-}
-
 export function FolderIcon({ className, size = 14 }: IconProps) {
   return (
     <svg
@@ -154,6 +145,48 @@ export function TagIcon({ className, size = 14 }: IconProps) {
   );
 }
 
+export function CloseIcon({ className, size = 14 }: IconProps) {
+  return (
+    <svg {...svgProps({ className, size })} viewBox="0 0 14 14">
+      <path d="M3 3l8 8M11 3l-8 8" />
+    </svg>
+  );
+}
+
+export function SunIcon({ className, size = 16 }: IconProps) {
+  return (
+    <svg {...svgProps({ className, size })} viewBox="0 0 16 16">
+      <circle cx="8" cy="8" r="3" />
+      <path d="M8 1.5v1.5M8 13v1.5M1.5 8h1.5M13 8h1.5M3.5 3.5l1 1M11.5 11.5l1 1M3.5 12.5l1-1M11.5 4.5l1-1" />
+    </svg>
+  );
+}
+
+export function MoonIcon({ className, size = 16 }: IconProps) {
+  return (
+    <svg {...svgProps({ className, size })} viewBox="0 0 16 16">
+      <path d="M13.5 9.5A6 6 0 0 1 6.5 2.5 6 6 0 1 0 13.5 9.5z" />
+    </svg>
+  );
+}
+
+export function RefreshIcon({ className, size = 16 }: IconProps) {
+  return (
+    <svg {...svgProps({ className, size })} viewBox="0 0 16 16">
+      <path d="M14 8a6 6 0 1 1-1.76-4.24" />
+      <path d="M14 2v4h-4" />
+    </svg>
+  );
+}
+
+export function CommandIcon({ className, size = 16 }: IconProps) {
+  return (
+    <svg {...svgProps({ className, size })} viewBox="0 0 16 16">
+      <path d="M5 3a2 2 0 1 0 0 4h6a2 2 0 1 0 0-4 2 2 0 0 0-2 2v6a2 2 0 1 0 2 2 2 2 0 0 0-2-2H5a2 2 0 1 0 0 4 2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z" />
+    </svg>
+  );
+}
+
 /** Map of icon name to component, for dynamic lookup */
 export const ICONS: Record<string, FC<IconProps>> = {
   overview: OverviewIcon,
@@ -164,7 +197,6 @@ export const ICONS: Record<string, FC<IconProps>> = {
   config: ConfigIcon,
   explorer: ExplorerIcon,
   debug: DebugIcon,
-  settings: SettingsIcon,
   folder: FolderIcon,
   tag: TagIcon,
 };

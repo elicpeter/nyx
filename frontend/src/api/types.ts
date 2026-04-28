@@ -361,7 +361,15 @@ export interface TreeEntry {
 
 export interface SymbolEntry {
   name: string;
+  /// Legacy display kind (`"function"` | `"method"`) used by existing
+  /// CSS classes.  Prefer `func_kind` for new logic.
   kind: string;
+  /// Structural FuncKind slug: `"fn"` | `"method"` | `"closure"` |
+  /// `"ctor"` | `"getter"` | `"setter"` | `"toplevel"`.
+  func_kind: string;
+  /// Enclosing container (class / impl / module / outer function).
+  /// Empty for free top-level functions.
+  container: string;
   line?: number;
   finding_count: number;
   namespace?: string;
@@ -393,6 +401,10 @@ export interface ScanLogEntry {
 export interface FunctionInfo {
   name: string;
   namespace: string;
+  /// Enclosing container (class / impl / module / outer function).
+  container: string;
+  /// Structural FuncKind slug: `"fn"` | `"method"` | `"closure"` | etc.
+  func_kind: string;
   param_count: number;
   line: number;
   source_caps: string[];
@@ -580,6 +592,10 @@ export interface FuncSummaryView {
   file_path: string;
   lang: string;
   namespace: string;
+  /// Enclosing container (class / impl / module / outer function).
+  container: string;
+  /// Structural FuncKind slug: `"fn"` | `"method"` | `"closure"` | etc.
+  func_kind: string;
   arity?: number;
   param_count: number;
   source_caps: string[];
@@ -590,4 +606,125 @@ export interface FuncSummaryView {
   tainted_sink_params: number[];
   callees: string[];
   ssa_summary?: SsaSummaryView;
+}
+
+// ── Pointer (field-sensitive Steensgaard) ─────────────────────────────────
+export interface PointerLocationView {
+  id: number;
+  kind: 'Top' | 'Alloc' | 'Param' | 'SelfParam' | 'Field';
+  display: string;
+  parent?: number;
+  field?: string;
+}
+
+export interface PointerValueView {
+  ssa_value: number;
+  var_name?: string;
+  points_to: number[];
+  is_top: boolean;
+}
+
+export interface PointerFieldEntryView {
+  /// `null` means the implicit receiver.
+  param_index: number | null;
+  field: string;
+}
+
+export interface PointerView {
+  locations: PointerLocationView[];
+  values: PointerValueView[];
+  field_reads: PointerFieldEntryView[];
+  field_writes: PointerFieldEntryView[];
+  location_count: number;
+}
+
+// ── Type Facts (standalone) ────────────────────────────────────────────────
+export interface DtoFieldView {
+  name: string;
+  kind: string;
+}
+
+export interface DtoFactView {
+  class_name: string;
+  fields: DtoFieldView[];
+}
+
+export interface TypeFactDetailView {
+  ssa_value: number;
+  var_name?: string;
+  line: number;
+  kind: string;
+  nullable: boolean;
+  container?: string;
+  dto?: DtoFactView;
+}
+
+export interface TypeFactsView {
+  facts: TypeFactDetailView[];
+  total_values: number;
+  unknown_count: number;
+}
+
+// ── Auth Analysis ──────────────────────────────────────────────────────────
+export interface AuthValueRefView {
+  source_kind: string;
+  name: string;
+  base?: string;
+  field?: string;
+  index?: string;
+  line: number;
+}
+
+export interface AuthCheckView {
+  kind: string;
+  callee: string;
+  line: number;
+  subjects: AuthValueRefView[];
+  args: string[];
+  condition_text?: string;
+}
+
+export interface AuthOperationView {
+  kind: string;
+  sink_class?: string;
+  callee: string;
+  line: number;
+  text: string;
+  subjects: AuthValueRefView[];
+}
+
+export interface AuthCallSiteView {
+  name: string;
+  line: number;
+  args: string[];
+}
+
+export interface AuthUnitView {
+  kind: string;
+  name?: string;
+  line: number;
+  params: string[];
+  auth_checks: AuthCheckView[];
+  operations: AuthOperationView[];
+  call_sites: AuthCallSiteView[];
+  self_actor_vars: string[];
+  typed_bounded_vars: string[];
+  authorized_sql_vars: string[];
+  const_bound_vars: string[];
+}
+
+export interface AuthRouteView {
+  framework: string;
+  method: string;
+  path: string;
+  middleware: string[];
+  handler_params: string[];
+  line: number;
+  unit_idx: number;
+}
+
+export interface AuthAnalysisView {
+  routes: AuthRouteView[];
+  units: AuthUnitView[];
+  enabled: boolean;
 }

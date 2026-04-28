@@ -451,6 +451,14 @@ fn build_taint_diag(
     diag
 }
 
+/// Resolve a file extension to a language slug (e.g. `"rust"`,
+/// `"javascript"`).  Public façade over [`lang_for_path`] for callers
+/// that only need the slug — used by the debug API to look up
+/// per-language rule enablement without re-parsing the file.
+pub fn lang_slug_for_path(path: &Path) -> Option<&'static str> {
+    lang_for_path(path).map(|(_, slug)| slug)
+}
+
 /// Resolve a file extension to a (tree‑sitter Language, slug) pair.
 fn lang_for_path(path: &Path) -> Option<(Language, &'static str)> {
     match lowercase_ext(path) {
@@ -1331,6 +1339,35 @@ pub fn build_cfg_for_file(path: &Path, cfg: &Config) -> NyxResult<Option<(FileCf
     let lang = Lang::from_slug(source.lang_slug).unwrap_or(Lang::C);
     let parsed = ParsedFile::from_source(source, cfg);
     Ok(Some((parsed.file_cfg, lang)))
+}
+
+/// Parse a file and return its `AuthorizationModel` for debug inspection.
+///
+/// Runs only the auth-extraction pipeline — no taint, no CFG construction.
+/// Returns `None` for binary files or unsupported languages.  Used by the
+/// `/api/debug/auth` route to surface the structured authorization model
+/// (routes, units, sensitive operations, auth checks) in the debug UI.
+pub fn extract_auth_model_for_debug(
+    path: &Path,
+    cfg: &Config,
+) -> NyxResult<Option<auth_analysis::model::AuthorizationModel>> {
+    let bytes = std::fs::read(path)?;
+    let Some(source) = ParsedSource::try_new(&bytes, path)? else {
+        return Ok(None);
+    };
+    let rules = auth_analysis::config::build_auth_rules(cfg, source.lang_slug);
+    if !rules.enabled {
+        return Ok(Some(auth_analysis::model::AuthorizationModel::default()));
+    }
+    let model = auth_analysis::extract::extract_authorization_model(
+        source.lang_slug,
+        cfg.framework_ctx.as_ref(),
+        &source.tree,
+        source.bytes,
+        source.path,
+        &rules,
+    );
+    Ok(Some(model))
 }
 
 /// Extract both `FuncSummary` and `SsaFuncSummary` from pre-read bytes.

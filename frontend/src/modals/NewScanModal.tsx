@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Modal } from '../components/ui/Modal';
 import { useHealth } from '../api/queries/health';
+import { useToast } from '../contexts/ToastContext';
+import { ApiError } from '../api/client';
 import {
   useStartScan,
   type ScanMode,
@@ -31,6 +33,7 @@ export function NewScanModal({ open, onClose }: NewScanModalProps) {
   const { data: health } = useHealth();
   const startScan = useStartScan();
   const navigate = useNavigate();
+  const toast = useToast();
   const defaultRoot = health?.scan_root || '';
   const [scanRoot, setScanRoot] = useState('');
   const [mode, setMode] = useState<ScanMode>('full');
@@ -45,10 +48,17 @@ export function NewScanModal({ open, onClose }: NewScanModalProps) {
     const payload = Object.keys(body).length ? body : undefined;
     try {
       await startScan.mutateAsync(payload);
+      toast.success('Scan started', 'Started');
       onClose();
       navigate('/scans');
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Failed to start scan');
+      const msg =
+        e instanceof ApiError && e.status === 409
+          ? 'A scan is already running'
+          : e instanceof Error
+            ? e.message
+            : 'Failed to start scan';
+      toast.error(msg, 'Could not start scan');
     }
   };
 

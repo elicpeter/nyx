@@ -8,10 +8,12 @@ import { LineChart } from '../components/charts/LineChart';
 import { OverviewIcon } from '../components/icons/Icons';
 import { truncPath } from '../utils/truncPath';
 import type { OverviewCount, ScanSummary, Insight } from '../api/types';
+import { usePageTitle } from '../hooks/usePageTitle';
 
 export function OverviewPage() {
+  usePageTitle('Overview');
   const navigate = useNavigate();
-  const { data: overview, isLoading, error } = useOverview();
+  const { data: overview, isLoading, error, refetch } = useOverview();
   const { data: trends } = useOverviewTrends();
 
   if (isLoading) {
@@ -22,7 +24,8 @@ export function OverviewPage() {
     return (
       <ErrorState
         title="Error loading overview"
-        message={(error as Error).message}
+        error={error}
+        onRetry={() => refetch()}
       />
     );
   }

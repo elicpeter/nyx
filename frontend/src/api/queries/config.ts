@@ -9,6 +9,19 @@ export function useConfig() {
   });
 }
 
+export interface RawConfigView {
+  path: string;
+  exists: boolean;
+  content: string;
+}
+
+export function useRawConfig() {
+  return useQuery({
+    queryKey: ['config', 'raw'],
+    queryFn: ({ signal }) => apiGet<RawConfigView>('/config/raw', signal),
+  });
+}
+
 export function useSources() {
   return useQuery({
     queryKey: ['config', 'sources'],

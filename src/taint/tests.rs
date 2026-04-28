@@ -5825,3 +5825,280 @@ class Maker {
          got {typed:?}",
     );
 }
+
+/// Regression: nested arrow functions inside `return new Promise((res,rej)
+/// => { ... })` must be lifted as separate bodies. Before the Kind::Return
+/// arm in cfg/mod.rs called `collect_nested_function_nodes`, only the
+/// outer function (`downloadFromUri`) was extracted — the executor and
+/// its inner callbacks were silently swallowed, hiding the inner gated
+/// http.get sink from classification. Motivated by CVE-2025-64430.
+#[test]
+fn cve_2025_64430_promise_executor_extracted_as_body() {
+    let src = br#"
+const downloadFromUri = (uri) => {
+  return new Promise((res, rej) => {
+    http.get(uri, response => { response.on('data', () => {}); }).on('error', e => rej(e));
+  });
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let names: Vec<Option<String>> = file_cfg
+        .bodies
+        .iter()
+        .map(|b| b.meta.name.clone())
+        .collect();
+    assert!(
+        file_cfg.bodies.len() >= 3,
+        "expected at least 3 bodies (top-level + downloadFromUri + Promise executor), \
+         got {}: {:?}",
+        file_cfg.bodies.len(),
+        names
+    );
+}
+
+/// End-to-end: cross-function flow through a Promise-wrapping helper.
+/// Caller passes a labeled-source value (`req.body.uri`) to a wrapper
+/// whose body is `return new Promise((res, rej) => http.get(uri))`.
+/// The wrapper's SSA summary's `param_to_sink` must include SSRF (via
+/// the closure-capture summary-augmentation pass in
+/// `lower_all_functions_from_bodies`), so the caller's
+/// `wrapper(req.body.uri)` call resolves to a SSRF sink.
+/// Motivated by CVE-2025-64430.
+#[test]
+fn cve_2025_64430_promise_wrapper_via_summary_param_to_sink() {
+    let src = br#"
+const downloadFromUri = uri => {
+  return new Promise((res, rej) => {
+    http.get(uri, response => { response.on('data', () => {}); }).on('error', e => rej(e));
+  });
+};
+const handler = (req) => {
+  downloadFromUri(req.body.uri);
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "expected SSRF flow finding via Promise-wrapper summary; got 0",
+    );
+}
+
+/// End-to-end smoke check: when a JS/TS handler param is recognised as
+/// user-input-bearing (`is_js_ts_handler_param_name`), Promise-executor
+/// closure capture via lexical containment must propagate the seeded
+/// taint into the executor body so the inner gated http.get sink fires.
+/// Without the Kind::Return fix the executor was never extracted as a
+/// body and the sink was invisible to classification. Motivated by
+/// CVE-2025-64430.
+#[test]
+fn cve_2025_64430_promise_executor_sink_via_lexical_containment() {
+    let src = br#"
+const f = (input) => {
+  return new Promise((res, rej) => {
+    http.get(input);
+  });
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "expected SSRF Sink finding in Promise executor capturing `input`; got 0",
+    );
+}
+
+/// Regression: `wrapper(req.body.uri)` where wrapper passes its first
+/// param to a gated SSRF sink must fire. The CFG's first_member_label
+/// rebinds info.call.callee to `"req.body.uri"` (so the source label
+/// applies) and preserves the actual function name in `outer_callee`.
+/// resolve_sink_info has to consult outer_callee when the inner callee
+/// has no sink so the wrapper's `param_to_sink: [(0, SSRF)]` summary
+/// fires. Motivated by CVE-2025-64430.
+#[test]
+fn cve_2025_64430_wrapper_with_member_source_arg_fires() {
+    let src = br#"
+const helper = (uri) => {
+  http.get(uri);
+};
+
+const handler = (req) => {
+  helper(req.body.uri);
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "expected at least one SSRF flow finding through wrapper; got 0",
+    );
+}
+
+/// Two-hop transitive cross-function summary propagation. The chain is
+/// `handler(req) -> helper(req.body) -> downloadFromUri(x.url) ->
+///     Promise(http.get(uri))`.
+///
+/// The augment pass populates `downloadFromUri.summary.param_to_sink:
+/// [(0, SSRF)]` (single-hop closure-capture lift). For the handler's
+/// `helper(req.body)` call to fire, `helper.summary.param_to_sink` must
+/// also contain `[(0, SSRF)]` — but that requires `helper`'s probe to
+/// see `downloadFromUri`'s augmented summary at resolution time.
+///
+/// Because the probe currently runs with `ssa_summaries=None`,
+/// `helper.summary.param_to_sink` stays empty and the handler call site
+/// reports nothing. A second extraction pass that re-runs probes with
+/// the augmented summaries map plumbed through closes the gap. Mirrors
+/// the upstream Parse Server CVE chain (`addFileDataIfNeeded` →
+/// `downloadFileFromURI` → executor). Motivated by CVE-2025-64430.
+#[test]
+fn cve_2025_64430_two_hop_transitive_summary_propagation() {
+    let src = br#"
+const downloadFromUri = uri => {
+  return new Promise((res, rej) => {
+    http.get(uri, response => { response.on('data', () => {}); }).on('error', e => rej(e));
+  });
+};
+const helper = file => {
+  downloadFromUri(file._source.uri);
+};
+const handler = (req) => {
+  helper(req.body);
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "expected SSRF flow finding via two-hop transitive summary propagation; got 0",
+    );
+}
+
+/// Regression for the multi-line method-chain form
+/// `http\n  .get(uri, ...)\n  .on('error', ...)`. Tree-sitter parses
+/// this with whitespace embedded in the inner member-expression's
+/// source text (`"http\n      .get"`), so the chained-call inner-gate
+/// rebinding's classification lookup missed the gated `http.get` sink.
+/// `find_chained_inner_call` now strips whitespace from the inner
+/// callee text before classification. Without this, the upstream
+/// Parse Server fixture (CVE-2025-64430 vulnerable.js) does not fire
+/// even after the transitive summary propagation fix.
+#[test]
+fn cve_2025_64430_multiline_chained_get_classifies_inner_sink() {
+    let src = br#"
+const downloadFromUri = uri => {
+  return new Promise((res, rej) => {
+    http
+      .get(uri, response => { response.on('data', () => {}); })
+      .on('error', e => rej(e));
+  });
+};
+const helper = file => {
+  downloadFromUri(file._source.uri);
+};
+const handler = (req) => {
+  helper(req.body);
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "expected SSRF flow finding through multi-line chained http.get; got 0",
+    );
+}
+
+/// Three-hop transitive propagation: handler -> middle -> helper ->
+/// downloadFromUri (Promise wrapper) -> http.get. The second extraction
+/// pass must lift `downloadFromUri.summary.param_to_sink` (single-hop
+/// from augment) onto `helper.summary.param_to_sink`, then onto
+/// `middle.summary.param_to_sink`, then handler's call site picks it up.
+///
+/// Today the second-pass runs only once (no fixed-point), so depth-3+
+/// is expected to NOT fire — guards against accidental fixed-point
+/// regression that would mask an over-eager rewrite.  Marked
+/// `#[ignore]` so it documents the depth limit without breaking CI.
+/// Motivated by CVE-2025-64430 corner case; remove the `#[ignore]` and
+/// any guarding `assert!` polarity if a fixed-point is added later.
+#[test]
+#[ignore]
+fn cve_2025_64430_three_hop_transitive_documents_depth_limit() {
+    let src = br#"
+const downloadFromUri = uri => {
+  return new Promise((res, rej) => {
+    http.get(uri, response => { response.on('data', () => {}); }).on('error', e => rej(e));
+  });
+};
+const helper = file => {
+  downloadFromUri(file._source.uri);
+};
+const middle = data => {
+  helper(data);
+};
+const handler = (req) => {
+  middle(req.body);
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let _findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+}

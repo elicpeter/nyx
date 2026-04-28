@@ -2829,6 +2829,36 @@ pub(super) fn build_sub<'a>(
                     analysis_rules,
                 );
                 connect_all(g, &[call_idx], ret, EdgeKind::Seq);
+
+                // Recurse into any function expressions nested inside the
+                // returned call's arguments (e.g.
+                // `return new Promise((res, rej) => { ... })`). Without this
+                // the executor and any further inner callbacks are silently
+                // swallowed and the gated sinks they contain become invisible
+                // to classification. Mirrors the same recursion done by the
+                // CallWrapper / CallFn arms. Motivated by CVE-2025-64430.
+                let nested = collect_nested_function_nodes(ast, lang);
+                for func_node in nested {
+                    build_sub(
+                        func_node,
+                        &[call_idx],
+                        g,
+                        lang,
+                        code,
+                        summaries,
+                        file_path,
+                        enclosing_func,
+                        call_ordinal,
+                        analysis_rules,
+                        break_targets,
+                        continue_targets,
+                        throw_targets,
+                        bodies,
+                        next_body_id,
+                        current_body_id,
+                    );
+                }
+
                 Vec::new()
             } else {
                 let ret = push_node(
@@ -2882,6 +2912,32 @@ pub(super) fn build_sub<'a>(
                 );
                 connect_all(g, &[call_idx], ret, EdgeKind::Seq);
                 throw_targets.push(ret);
+
+                // Same nested-function recursion as the Return arm: a
+                // `throw new Promise(() => { ... })` would otherwise lose
+                // any inner gated sinks.
+                let nested = collect_nested_function_nodes(ast, lang);
+                for func_node in nested {
+                    build_sub(
+                        func_node,
+                        &[call_idx],
+                        g,
+                        lang,
+                        code,
+                        summaries,
+                        file_path,
+                        enclosing_func,
+                        call_ordinal,
+                        analysis_rules,
+                        break_targets,
+                        continue_targets,
+                        throw_targets,
+                        bodies,
+                        next_body_id,
+                        current_body_id,
+                    );
+                }
+
                 Vec::new()
             } else {
                 let ret = push_node(

@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-27T19:52:10Z",
+  "timestamp": "2026-04-28T00:05:20Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,10 +9,10 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:be3d9b879531f487b60ad0d1c079e5ab9b5456a87794e3da5d44c4b7a2480575",
+  "ground_truth_hash": "sha256:831e21842d3988482c9d8343c90443b85e384f7bb8eebe417816223c621e2151",
   "corpus_size": 410,
-  "cases_run": 407,
-  "cases_skipped": 3,
+  "cases_run": 409,
+  "cases_skipped": 1,
   "outcomes": [
     {
       "case_id": "c-buf-001",
@@ -1223,6 +1223,40 @@
         "taint-unsanitised-flow (source 24:5)"
       ],
       "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-js-2025-64430-patched",
+      "file": "cve_corpus/javascript/CVE-2025-64430/patched.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-js-2025-64430-vulnerable",
+      "file": "cve_corpus/javascript/CVE-2025-64430/vulnerable.js",
+      "language": "javascript",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 52:30)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 52:30)"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -7334,22 +7368,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 204,
+    "tp": 205,
     "fp": 1,
     "fn_": 0,
-    "tn": 202,
-    "precision": 0.9951219512195122,
+    "tn": 203,
+    "precision": 0.9951456310679612,
     "recall": 1.0,
-    "f1": 0.9975550122249389
+    "f1": 0.9975669099756691
   },
   "aggregate_rule_level": {
-    "tp": 204,
+    "tp": 205,
     "fp": 1,
     "fn_": 0,
-    "tn": 202,
-    "precision": 0.9951219512195122,
+    "tn": 203,
+    "precision": 0.9951456310679612,
     "recall": 1.0,
-    "f1": 0.9975550122249389
+    "f1": 0.9975669099756691
   },
   "by_language": {
     "c": {
@@ -7389,10 +7423,10 @@
       "f1": 1.0
     },
     "javascript": {
-      "tp": 18,
+      "tp": 19,
       "fp": 0,
       "fn_": 0,
-      "tn": 22,
+      "tn": 23,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -7565,7 +7599,7 @@
       "tp": 0,
       "fp": 1,
       "fn_": 0,
-      "tn": 202,
+      "tn": 203,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -7589,7 +7623,7 @@
       "f1": 1.0
     },
     "ssrf": {
-      "tp": 23,
+      "tp": 24,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -7609,31 +7643,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 83,
-      "fp": 89,
-      "fn_": 121,
+      "tp": 82,
+      "fp": 90,
+      "fn_": 123,
       "tn": 114,
-      "precision": 0.48255813953488375,
-      "recall": 0.4068627450980392,
-      "f1": 0.44148936170212766
+      "precision": 0.47674418604651164,
+      "recall": 0.4,
+      "f1": 0.4350132625994695
     },
     ">=Low": {
-      "tp": 84,
-      "fp": 104,
-      "fn_": 120,
+      "tp": 83,
+      "fp": 105,
+      "fn_": 122,
       "tn": 99,
-      "precision": 0.44680851063829785,
-      "recall": 0.4117647058823529,
-      "f1": 0.42857142857142855
+      "precision": 0.44148936170212766,
+      "recall": 0.40487804878048783,
+      "f1": 0.42239185750636127
     },
     ">=Medium": {
-      "tp": 84,
-      "fp": 104,
-      "fn_": 120,
+      "tp": 83,
+      "fp": 105,
+      "fn_": 122,
       "tn": 99,
-      "precision": 0.44680851063829785,
-      "recall": 0.4117647058823529,
-      "f1": 0.42857142857142855
+      "precision": 0.44148936170212766,
+      "recall": 0.40487804878048783,
+      "f1": 0.42239185750636127
     }
   }
 }
