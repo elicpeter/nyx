@@ -421,6 +421,34 @@ function renderCli(shellCommand, outFile) {
   );
 }
 
+// Stage a temporary HOME with a sample nyx.local so that
+// `nyx config show` (which now defaults to a diff view) has
+// something to display.  Without this the capture would be a one-
+// line "No overrides" notice — accurate but not a useful screenshot.
+//
+// The `directories` crate on macOS resolves the config path through
+// `$HOME/Library/Application Support/nyx`, so swapping HOME is
+// enough to redirect both reads and writes for the wrapped command.
+const DEMO_CONFIG_HOME = '/tmp/nyx-demo-config-home';
+const DEMO_NYX_LOCAL = `[scanner]
+mode = "taint"
+min_severity = "Medium"
+
+[output]
+default_format = "json"
+max_low = 5
+
+[analysis.engine]
+backwards_analysis = true
+`;
+
+function stageDemoConfigHome() {
+  const cfgDir = join(DEMO_CONFIG_HOME, 'Library/Application Support/nyx');
+  rmSync(DEMO_CONFIG_HOME, { recursive: true, force: true });
+  mkdirSync(cfgDir, { recursive: true });
+  writeFileSync(join(cfgDir, 'nyx.local'), DEMO_NYX_LOCAL);
+}
+
 function captureCli() {
   // Re-stage v1 so cli-scan output shows the richer set of findings
   // (the previous --stills phase patched the demo to v2).
@@ -452,8 +480,12 @@ function captureCli() {
   console.error('[cli] cli-idxstatus');
   renderCli(`${NYX_BIN} index status ${SCAN_ROOT}`, out('cli-idxstatus.png'));
 
-  console.error('[cli] cli-configshow');
-  renderCli(`${NYX_BIN} config show`, out('cli-configshow.png'));
+  console.error('[cli] cli-configshow (with staged nyx.local)');
+  stageDemoConfigHome();
+  renderCli(
+    `HOME=${DEMO_CONFIG_HOME} ${NYX_BIN} config show`,
+    out('cli-configshow.png'),
+  );
 
   // cli-rollup-tail.png is intentionally not regenerated. Its alt text
   // describes a 57-issue rollup that the synthetic demo cannot produce
