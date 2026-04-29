@@ -104,6 +104,15 @@ thread_local! {
     /// extractors against same-file DTOs.
     pub(crate) static DTO_CLASSES: RefCell<HashMap<String, crate::ssa::type_facts::DtoFields>>
         = RefCell::new(HashMap::new());
+    /// Per-file set of TS / JS `type X = Map<...>` (or `Set<...>` /
+    /// `Array<...>` / `T[]`) aliases, populated at the top of
+    /// [`build_cfg`].  Lets `classify_param_type_ts` resolve a
+    /// parameter typed `m: ElementsMap` to
+    /// [`crate::ssa::type_facts::TypeKind::LocalCollection`] via
+    /// same-file alias lookup.  Cross-file aliases are not yet
+    /// resolved.
+    pub(crate) static TYPE_ALIAS_LC: RefCell<std::collections::HashSet<String>>
+        = RefCell::new(std::collections::HashSet::new());
 }
 
 /// Populate the per-file DFS-index map from a preorder walk of the
@@ -4161,6 +4170,12 @@ pub(crate) fn build_cfg<'a>(
     DTO_CLASSES.with(|cell| {
         *cell.borrow_mut() = dto::collect_dto_classes(tree.root_node(), lang, code);
     });
+    // harvest same-file `type X = Map<...>` / `Set<...>` / `T[]`
+    // aliases so JS/TS param classifiers resolve `m: ElementsMap`
+    // to `LocalCollection`.  Empty for non-JS/TS languages.
+    TYPE_ALIAS_LC.with(|cell| {
+        *cell.borrow_mut() = dto::collect_type_alias_local_collections(tree.root_node(), lang, code);
+    });
 
     // Create the top-level body graph (BodyId(0)).
     let (mut g, entry, exit) = create_body_graph(0, code.len(), None);
@@ -4289,6 +4304,7 @@ pub(crate) fn build_cfg<'a>(
     clear_fn_dfs_indices();
     // same hygiene for the DTO map.
     DTO_CLASSES.with(|cell| cell.borrow_mut().clear());
+    TYPE_ALIAS_LC.with(|cell| cell.borrow_mut().clear());
 
     // collect every
     // declared inheritance / impl / implements relationship in the

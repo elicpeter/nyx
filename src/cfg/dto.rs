@@ -9,12 +9,14 @@
 //! whether to use that as a "Dto with no inferred fields" or fall back
 //! to the pre-Phase-6 Object/Unknown classification.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tree_sitter::Node;
 
 use super::helpers::text_of;
-use super::params::{java_type_to_kind, python_primitive_to_kind, ts_type_to_kind};
+use super::params::{
+    java_type_to_kind, python_primitive_to_kind, ts_type_to_kind, ts_type_to_local_collection,
+};
 use crate::ssa::type_facts::{DtoFields, TypeKind};
 
 /// Collect all DTO-shaped class definitions in a parsed file.
@@ -37,6 +39,55 @@ pub(super) fn collect_dto_classes(
         _ => {}
     }
     out
+}
+
+/// Collect same-file `type X = Map<...>` / `Set<...>` / `T[]`
+/// aliases for TS / JS so the param classifier can resolve a
+/// parameter typed `m: ElementsMap` (where
+/// `type ElementsMap = Map<K, V>`) to
+/// [`TypeKind::LocalCollection`].
+///
+/// Empty for non-JS/TS languages.  Cross-file aliases are not
+/// resolved here — that requires the multi-file type-resolution
+/// pipeline that doesn't yet exist for TS.  Excalidraw's
+/// `type ElementsMap = Map<...>` is in
+/// `packages/element/src/types.ts`; users that import the alias
+/// without a same-file copy still see the original FP.  Most
+/// real-repo aliases the FP cluster touched were declared in the
+/// same file as their consumers (see fixture).
+pub(super) fn collect_type_alias_local_collections(
+    root: Node<'_>,
+    lang: &str,
+    code: &[u8],
+) -> HashSet<String> {
+    let mut out: HashSet<String> = HashSet::new();
+    if matches!(lang, "typescript" | "ts" | "javascript" | "js") {
+        collect_ts_type_alias_local_collections(root, code, &mut out);
+    }
+    out
+}
+
+fn collect_ts_type_alias_local_collections(root: Node<'_>, code: &[u8], out: &mut HashSet<String>) {
+    walk(root, &mut |node| {
+        if node.kind() != "type_alias_declaration" {
+            return;
+        }
+        let Some(name_node) = node.child_by_field_name("name") else {
+            return;
+        };
+        let Some(alias_name) = text_of(name_node, code) else {
+            return;
+        };
+        let Some(value_node) = node.child_by_field_name("value") else {
+            return;
+        };
+        let Some(value_text) = text_of(value_node, code) else {
+            return;
+        };
+        if ts_type_to_local_collection(value_text.trim()).is_some() {
+            out.insert(alias_name);
+        }
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────

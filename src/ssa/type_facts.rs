@@ -235,6 +235,20 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
         Lang::JavaScript | Lang::TypeScript => match suffix {
             "URL" => Some(TypeKind::Url),
             "Request" | "XMLHttpRequest" => Some(TypeKind::HttpClient),
+            // JS built-in collection constructors. `new Map()` / `new Set()`
+            // / `new WeakMap()` / `new WeakSet()` / `new Array()` produce
+            // in-memory collections; downstream `m.get(k)` / `m.set(k, v)`
+            // / `s.add(x)` / `s.has(x)` / `arr.find(p)` are container ops,
+            // not data-layer reads. Without this mapping the bare verb
+            // dispatch in `auth_analysis::config::classify_sink_class`
+            // matches the `get` / `find` / `add` read/mutation indicators
+            // and over-fires `js.auth.missing_ownership_check` on every
+            // Map lookup in pure data-manipulation code (excalidraw's
+            // `elementsMap.get(id)`, `origIdToDuplicateId.get(...)`,
+            // `groupIdMapForOperation.set(...)` shapes).
+            "Map" | "Set" | "WeakMap" | "WeakSet" | "Array" => {
+                Some(TypeKind::LocalCollection)
+            }
             _ => None,
         },
         Lang::Python => {
@@ -1639,6 +1653,47 @@ mod tests {
             Some(TypeKind::FileHandle)
         );
         assert_eq!(constructor_type(Lang::Cpp, "printf"), None);
+    }
+
+    #[test]
+    fn constructor_type_javascript_typescript_local_collections() {
+        // `new Map()` / `new Set()` / `new WeakMap()` / `new WeakSet()` /
+        // `new Array()` produce in-memory collections.  Excalidraw's
+        // `elementsMap.get(id)` shape (which dominates the
+        // `js.auth.missing_ownership_check` cluster on JS data-manipulation
+        // libraries) is suppressed once the receiver type is known.
+        for lang in [Lang::JavaScript, Lang::TypeScript] {
+            assert_eq!(
+                constructor_type(lang, "Map"),
+                Some(TypeKind::LocalCollection)
+            );
+            assert_eq!(
+                constructor_type(lang, "Set"),
+                Some(TypeKind::LocalCollection)
+            );
+            assert_eq!(
+                constructor_type(lang, "WeakMap"),
+                Some(TypeKind::LocalCollection)
+            );
+            assert_eq!(
+                constructor_type(lang, "WeakSet"),
+                Some(TypeKind::LocalCollection)
+            );
+            assert_eq!(
+                constructor_type(lang, "Array"),
+                Some(TypeKind::LocalCollection)
+            );
+            // Existing pre-fix mappings still resolve.
+            assert_eq!(constructor_type(lang, "URL"), Some(TypeKind::Url));
+            assert_eq!(
+                constructor_type(lang, "XMLHttpRequest"),
+                Some(TypeKind::HttpClient)
+            );
+            // Negative: unrelated identifiers stay None.
+            assert_eq!(constructor_type(lang, "Object"), None);
+            assert_eq!(constructor_type(lang, "Promise"), None);
+            assert_eq!(constructor_type(lang, "Foo"), None);
+        }
     }
 
     #[test]

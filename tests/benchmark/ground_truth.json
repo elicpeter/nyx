@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 453
+    "corpus_size": 455
   },
   "cases": [
     {
@@ -13937,6 +13937,59 @@
       ],
       "disabled": false,
       "notes": "Regression guard: same TRPC handler shape as ts-auth-realrepo-004 but the SQL parameter is `input.targetUserId` (request body field), not `ctx.user.id`.  The TRPC ctx self-actor exemption must apply ONLY to ctx.user.<id-like> subjects, never to other paths in the same param."
+    },
+    {
+      "case_id": "ts-auth-realrepo-006",
+      "file": "typescript/auth/safe_local_collection_receiver.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "js.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-29"
+      ],
+      "disabled": false,
+      "notes": "Excalidraw `Map<K, V>` / `Set<T>` / `WeakMap` / `WeakSet` / `Array<T>` / `T[]` / `readonly T[]` receivers — direct annotation, same-file `type X = Map<...>` aliasing, and inline `new Map()` constructor. SSA `constructor_type` JS/TS arm + `cfg::params::ts_type_to_local_collection` + `cfg::dto::collect_type_alias_local_collections` route every shape through `TypeKind::LocalCollection` → `SinkClass::InMemoryLocal`, suppressing missing-ownership."
+    },
+    {
+      "case_id": "ts-auth-realrepo-007",
+      "file": "typescript/auth/vuln_local_collection_does_not_blanket_suppress.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-639",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "js.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "real-repo-precision-2026-04-29"
+      ],
+      "disabled": false,
+      "notes": "Vulnerable counterpart to ts-auth-realrepo-006: `prisma.user.findUnique` / `prisma.user.update` with attacker-supplied id and no preceding auth check.  Receiver is NOT a tracked Map / Set / Array, so the LocalCollection fix must NOT suppress this — proves the type-aware suppression doesn't blanket-cover real DB clients that share method names (`get`, `find`, `update`) with JS containers."
     },
     {
       "case_id": "rs-auth-realrepo-009",

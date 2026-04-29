@@ -563,7 +563,29 @@ pub(super) fn ts_type_to_kind(t: &str) -> Option<TypeKind> {
 /// is not a framework extractor — without a NestJS decorator no
 /// runtime gate is implied.  Pipe coercions (`ParseIntPipe` /
 /// `ParseBoolPipe`) override the static type.
+///
+/// Exception: parameters annotated as a known JS built-in collection
+/// type (`Map<...>`, `Set<...>`, `WeakMap<...>`, `WeakSet<...>`,
+/// `Array<...>` / `T[]` / `ReadonlyArray<...>`) resolve to
+/// [`TypeKind::LocalCollection`] regardless of decorator presence.
+/// `LocalCollection` is a *receiver-shape* claim, not a
+/// framework-validated-input claim — it tells the auth analyser that
+/// `param.get(k)` / `param.set(k, v)` / `param.find(p)` is a
+/// container operation rather than a data-layer read/mutation.  This
+/// closes the Excalidraw FP cluster (`elementsMap: ElementsMap`,
+/// `groupIdMapForOperation: Map<string, string>`) without affecting
+/// any input-validation reasoning.
 fn classify_param_type_ts<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeKind> {
+    let type_text = param
+        .child_by_field_name("type")
+        .and_then(|n| inner_ts_type_text(n, code));
+
+    if let Some(t) = type_text.as_deref()
+        && let Some(k) = ts_type_to_local_collection(t.trim().trim_start_matches(':').trim())
+    {
+        return Some(k);
+    }
+
     if !has_ts_decorator_argument(
         param,
         code,
@@ -586,9 +608,7 @@ fn classify_param_type_ts<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeKin
     if has_ts_decorator_argument(param, code, &["ParseBoolPipe"]) {
         return Some(TypeKind::Bool);
     }
-    let t = param
-        .child_by_field_name("type")
-        .and_then(|n| inner_ts_type_text(n, code))?;
+    let t = type_text?;
     let stripped = t.trim().trim_start_matches(':').trim();
     if let Some(k) = ts_type_to_kind(stripped) {
         return Some(k);
@@ -599,6 +619,39 @@ fn classify_param_type_ts<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeKin
     // type so `Foo<Bar>` matches on `Foo`.
     let head = stripped.split('<').next().unwrap_or(stripped).trim();
     lookup_dto_class(head)
+}
+
+/// Map a TypeScript / JavaScript type-text fragment to
+/// [`TypeKind::LocalCollection`] when the head is a JS built-in
+/// container type.  Recognises:
+///
+/// * `Map<K, V>`, `Set<T>`, `WeakMap<K, V>`, `WeakSet<T>` — the four
+///   built-in keyed/unkeyed collection types.
+/// * `Array<T>`, `ReadonlyArray<T>` — the named array generics.
+/// * `T[]`, `readonly T[]` — the array shorthand syntax.
+/// * Same-file `type X = Map<...>` aliases (resolved via the
+///   per-file `TYPE_ALIAS_LC` map populated at the top of
+///   [`build_cfg`]).
+///
+/// Same-file user types named `Map` / `Set` / etc. (which would
+/// shadow the built-ins) are vanishingly rare in TS codebases that
+/// also define the methods (`get`, `set`, `has`, `find`); the
+/// classifier accepts the head match.
+pub(super) fn ts_type_to_local_collection(t: &str) -> Option<TypeKind> {
+    let head_text = t.trim().trim_start_matches("readonly ").trim();
+    // Array shorthand: `T[]` or `readonly T[]`.
+    if head_text.ends_with("[]") {
+        return Some(TypeKind::LocalCollection);
+    }
+    let head = head_text.split('<').next().unwrap_or(head_text).trim();
+    match head {
+        "Map" | "Set" | "WeakMap" | "WeakSet" | "Array" | "ReadonlyArray" => {
+            Some(TypeKind::LocalCollection)
+        }
+        _ => super::TYPE_ALIAS_LC
+            .with(|cell| cell.borrow().contains(head))
+            .then_some(TypeKind::LocalCollection),
+    }
 }
 
 fn inner_ts_type_text<'a>(type_anno: Node<'a>, code: &'a [u8]) -> Option<String> {
@@ -806,9 +859,68 @@ pub(super) fn is_configured_terminator(
 mod typed_extractor_tests {
     use super::{
         contains_fastapi_marker, java_type_to_kind, python_primitive_to_kind, python_type_to_kind,
-        rust_primitive_to_kind, rust_type_to_kind,
+        rust_primitive_to_kind, rust_type_to_kind, ts_type_to_local_collection,
     };
     use crate::ssa::type_facts::TypeKind;
+
+    // ── TypeScript / JavaScript local-collection types ───────────────────
+
+    #[test]
+    fn ts_built_in_collections_map_to_local_collection() {
+        // The four keyed/unkeyed built-in container generics.
+        assert_eq!(
+            ts_type_to_local_collection("Map<string, number>"),
+            Some(TypeKind::LocalCollection)
+        );
+        assert_eq!(
+            ts_type_to_local_collection("Set<string>"),
+            Some(TypeKind::LocalCollection)
+        );
+        assert_eq!(
+            ts_type_to_local_collection("WeakMap<object, string>"),
+            Some(TypeKind::LocalCollection)
+        );
+        assert_eq!(
+            ts_type_to_local_collection("WeakSet<object>"),
+            Some(TypeKind::LocalCollection)
+        );
+        // Array forms.
+        assert_eq!(
+            ts_type_to_local_collection("Array<string>"),
+            Some(TypeKind::LocalCollection)
+        );
+        assert_eq!(
+            ts_type_to_local_collection("ReadonlyArray<string>"),
+            Some(TypeKind::LocalCollection)
+        );
+        assert_eq!(
+            ts_type_to_local_collection("string[]"),
+            Some(TypeKind::LocalCollection)
+        );
+        assert_eq!(
+            ts_type_to_local_collection("readonly string[]"),
+            Some(TypeKind::LocalCollection)
+        );
+        // Excalidraw-style keyed map with index-type generic args.
+        assert_eq!(
+            ts_type_to_local_collection("Map<ExcalidrawElement[\"id\"], ExcalidrawElement>"),
+            Some(TypeKind::LocalCollection)
+        );
+    }
+
+    #[test]
+    fn ts_non_collection_types_return_none() {
+        // Plain primitives.
+        assert_eq!(ts_type_to_local_collection("string"), None);
+        assert_eq!(ts_type_to_local_collection("number"), None);
+        assert_eq!(ts_type_to_local_collection("boolean"), None);
+        // Promise / Iterator / etc. are not LocalCollections.
+        assert_eq!(ts_type_to_local_collection("Promise<string>"), None);
+        assert_eq!(ts_type_to_local_collection("Iterator<number>"), None);
+        // User types.
+        assert_eq!(ts_type_to_local_collection("CreateUserDto"), None);
+        assert_eq!(ts_type_to_local_collection("ElementsMap"), None);
+    }
 
     // ── Java (Spring) ────────────────────────────────────────────────────
 

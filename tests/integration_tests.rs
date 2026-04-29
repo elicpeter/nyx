@@ -986,6 +986,27 @@ fn fp_guard_php_unserialize_allowed_classes() {
     validate_expectations(&diags, &dir);
 }
 
+/// FP guard — JS / TS local-collection receivers.  Pinned from the
+/// excalidraw element-manipulation cluster (66 → ~9 on
+/// `js.auth.missing_ownership_check` over the repo).  The fix lives at
+/// the deepest representable layer: SSA `TypeFacts::constructor_type`
+/// recognises `new Map()` / `new Set()` / `new WeakMap()` /
+/// `new WeakSet()` / `new Array()` as `TypeKind::LocalCollection`;
+/// `cfg::params::ts_type_to_local_collection` extends
+/// `classify_param_type_ts` so explicitly-typed params resolve to
+/// `LocalCollection` independent of NestJS decorator presence;
+/// `cfg::dto::collect_type_alias_local_collections` populates a
+/// per-file `TYPE_ALIAS_LC` set so same-file `type X = Map<...>`
+/// aliases also resolve.  The auth analyser already exempts
+/// `LocalCollection`-typed receivers via
+/// `auth_analysis::sink_class_for_type → InMemoryLocal`.
+#[test]
+fn fp_guard_auth_local_collection_receiver() {
+    let dir = fixture_path("fp_guards/auth_local_collection_receiver");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 /// FP guard — C/C++ buffer-overflow pattern rules
 /// (`c.memory.strcpy`, `strcat`, `sprintf`) over-fire when the source /
 /// format-string argument is a literal whose contributed length is
