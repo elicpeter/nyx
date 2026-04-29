@@ -41,7 +41,11 @@ const ROWS: { section: string; rows: Row[] }[] = [
 export function ShortcutsHelp({ open, onClose }: ShortcutsHelpProps) {
   if (!open) return null;
   return (
-    <div className="palette-overlay" role="dialog" aria-label="Keyboard shortcuts">
+    <div
+      className="palette-overlay"
+      role="dialog"
+      aria-label="Keyboard shortcuts"
+    >
       <div className="palette-backdrop" onClick={onClose} />
       <div className="shortcuts-modal">
         <div className="shortcuts-header">

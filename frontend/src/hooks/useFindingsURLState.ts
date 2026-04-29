@@ -80,7 +80,11 @@ export function useFindingsURLState() {
       const fromUrl = searchParams.get(key);
       if (fromUrl) {
         s[key] = fromUrl;
-      } else if (key === 'per_page' || key === 'sort_by' || key === 'sort_dir') {
+      } else if (
+        key === 'per_page' ||
+        key === 'sort_by' ||
+        key === 'sort_dir'
+      ) {
         s[key] = prefs[key] || FINDINGS_DEFAULTS[key];
       } else {
         s[key] = FINDINGS_DEFAULTS[key];

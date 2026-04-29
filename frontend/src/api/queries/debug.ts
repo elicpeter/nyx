@@ -125,10 +125,7 @@ export function useDebugPointer(file: string | null, fn_name: string | null) {
   });
 }
 
-export function useDebugTypeFacts(
-  file: string | null,
-  fn_name: string | null,
-) {
+export function useDebugTypeFacts(file: string | null, fn_name: string | null) {
   return useQuery({
     queryKey: ['debug', 'type-facts', file, fn_name],
     queryFn: ({ signal }) =>

@@ -135,9 +135,7 @@ function TypeFactGroup({
               </td>
               <td className="mono">{f.container ?? '-'}</td>
               <td>{f.nullable ? 'Yes' : 'No'}</td>
-              <td className="mono">
-                {f.line > 0 ? `L${f.line}` : '-'}
-              </td>
+              <td className="mono">{f.line > 0 ? `L${f.line}` : '-'}</td>
             </tr>
           ))}
         </tbody>
@@ -173,9 +171,7 @@ function DtoFactGroup({
               {f.dto?.class_name ?? '?'}
             </span>
           </div>
-          {f.dto && f.dto.fields.length > 0 && (
-            <DtoFieldTable dto={f.dto} />
-          )}
+          {f.dto && f.dto.fields.length > 0 && <DtoFieldTable dto={f.dto} />}
         </div>
       ))}
     </div>

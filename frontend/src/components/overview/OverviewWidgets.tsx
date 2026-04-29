@@ -82,13 +82,17 @@ export function BacklogCard({ backlog }: { backlog: BacklogStats }) {
       <div className="backlog-body">
         <div className="backlog-stat">
           <div className="backlog-stat-value">
-            {backlog.oldest_open_days != null ? `${backlog.oldest_open_days}d` : '–'}
+            {backlog.oldest_open_days != null
+              ? `${backlog.oldest_open_days}d`
+              : '–'}
           </div>
           <div className="backlog-stat-label">Oldest open</div>
         </div>
         <div className="backlog-stat">
           <div className="backlog-stat-value">
-            {backlog.median_age_days != null ? `${backlog.median_age_days}d` : '–'}
+            {backlog.median_age_days != null
+              ? `${backlog.median_age_days}d`
+              : '–'}
           </div>
           <div className="backlog-stat-label">Median age</div>
         </div>
@@ -111,7 +115,10 @@ function BucketBar({ buckets }: { buckets: OverviewCount[] }) {
   if (total === 0) return null;
   const colors = ['#3498db', '#2ecc71', '#f1c40f', '#e67e22', '#e74c3c'];
   return (
-    <div className="bucket-bar" title={buckets.map((b) => `${b.name}: ${b.count}`).join(' · ')}>
+    <div
+      className="bucket-bar"
+      title={buckets.map((b) => `${b.name}: ${b.count}`).join(' · ')}
+    >
       {buckets.map((b, i) => (
         <div
           key={b.name}
@@ -135,7 +142,11 @@ export function ConfidenceDistributionChart({
 }) {
   const total = dist.high + dist.medium + dist.low + dist.none;
   if (total === 0) {
-    return <div className="empty-state"><p>No data</p></div>;
+    return (
+      <div className="empty-state">
+        <p>No data</p>
+      </div>
+    );
   }
   const segments = [
     { label: 'High', value: dist.high, color: '#27ae60' },
@@ -163,7 +174,10 @@ export function ConfidenceDistributionChart({
       <div className="confidence-legend">
         {segments.map((s) => (
           <div key={s.label} className="confidence-legend-item">
-            <span className="confidence-swatch" style={{ background: s.color }} />
+            <span
+              className="confidence-swatch"
+              style={{ background: s.color }}
+            />
             <span>{s.label}</span>
             <span className="confidence-count">{s.value}</span>
           </div>
@@ -228,9 +242,7 @@ export function ScannerQualityPanel({
       label: 'Cross-file flows',
       hint: 'Findings whose taint path crosses a file boundary.',
       value:
-        crossFileRatio != null
-          ? `${(crossFileRatio * 100).toFixed(1)}%`
-          : '0%',
+        crossFileRatio != null ? `${(crossFileRatio * 100).toFixed(1)}%` : '0%',
       detail: 'of findings',
     },
     {
@@ -268,7 +280,11 @@ export function ScannerQualityPanel({
 
 export function HotSinksList({ sinks }: { sinks: HotSink[] }) {
   if (!sinks.length) {
-    return <div className="empty-state"><p>No data</p></div>;
+    return (
+      <div className="empty-state">
+        <p>No data</p>
+      </div>
+    );
   }
   return (
     <table>
@@ -294,7 +310,11 @@ export function HotSinksList({ sinks }: { sinks: HotSink[] }) {
 
 export function OwaspChart({ buckets }: { buckets: OwaspBucket[] }) {
   if (!buckets.length) {
-    return <div className="empty-state"><p>No data</p></div>;
+    return (
+      <div className="empty-state">
+        <p>No data</p>
+      </div>
+    );
   }
   const max = Math.max(...buckets.map((b) => b.count), 1);
   return (
@@ -326,7 +346,11 @@ export function WeightedTopFiles({
   onRowClick?: (name: string) => void;
 }) {
   if (!files.length) {
-    return <div className="empty-state"><p>No data</p></div>;
+    return (
+      <div className="empty-state">
+        <p>No data</p>
+      </div>
+    );
   }
   return (
     <table>
@@ -403,13 +427,13 @@ function SeverityStack({
 
 // ── LanguageHealthTable ────────────────────────────────────────────────────
 
-export function LanguageHealthTable({
-  rows,
-}: {
-  rows: LanguageHealth[];
-}) {
+export function LanguageHealthTable({ rows }: { rows: LanguageHealth[] }) {
   if (!rows.length) {
-    return <div className="empty-state"><p>No data</p></div>;
+    return (
+      <div className="empty-state">
+        <p>No data</p>
+      </div>
+    );
   }
   return (
     <table>
@@ -458,7 +482,10 @@ export function SuppressionHygieneCard({
   return (
     <dl className="kv-list">
       <div className="kv-row kv-row-emphasis">
-        <dt className="kv-label" title="Share of suppressions that are not pinned to a specific finding fingerprint. Lower is better — it means triage is decisive rather than blanket-silencing whole rules or files.">
+        <dt
+          className="kv-label"
+          title="Share of suppressions that are not pinned to a specific finding fingerprint. Lower is better — it means triage is decisive rather than blanket-silencing whole rules or files."
+        >
           Blanket rate
           <span className="kv-hint">Lower is better</span>
         </dt>
@@ -468,7 +495,10 @@ export function SuppressionHygieneCard({
         </dd>
       </div>
       <div className="kv-row">
-        <dt className="kv-label" title="Suppressions that target one specific finding by its fingerprint. Most precise.">
+        <dt
+          className="kv-label"
+          title="Suppressions that target one specific finding by its fingerprint. Most precise."
+        >
           By fingerprint
           <span className="kv-hint">Most specific</span>
         </dt>
@@ -477,7 +507,10 @@ export function SuppressionHygieneCard({
         </dd>
       </div>
       <div className="kv-row">
-        <dt className="kv-label" title="Suppressions that silence a rule only inside a specific file.">
+        <dt
+          className="kv-label"
+          title="Suppressions that silence a rule only inside a specific file."
+        >
           By rule in a file
         </dt>
         <dd className="kv-value">
@@ -485,7 +518,10 @@ export function SuppressionHygieneCard({
         </dd>
       </div>
       <div className="kv-row">
-        <dt className="kv-label" title="Suppressions that silence an entire rule across the project.">
+        <dt
+          className="kv-label"
+          title="Suppressions that silence an entire rule across the project."
+        >
           By rule
         </dt>
         <dd className="kv-value">
@@ -493,7 +529,10 @@ export function SuppressionHygieneCard({
         </dd>
       </div>
       <div className="kv-row">
-        <dt className="kv-label" title="Suppressions that silence everything in a file.">
+        <dt
+          className="kv-label"
+          title="Suppressions that silence everything in a file."
+        >
           By file
           <span className="kv-hint">Least specific</span>
         </dt>
@@ -526,7 +565,11 @@ export function BaselinePinControl({
   if (baseline) {
     const net = baseline.drift_new - baseline.drift_fixed;
     const driftClass =
-      net > 0 ? 'baseline-drift-bad' : net < 0 ? 'baseline-drift-good' : 'baseline-drift-flat';
+      net > 0
+        ? 'baseline-drift-bad'
+        : net < 0
+          ? 'baseline-drift-good'
+          : 'baseline-drift-flat';
     return (
       <div className="baseline-strip">
         <span className="baseline-label">Baseline:</span>
@@ -540,8 +583,8 @@ export function BaselinePinControl({
             : baseline.scan_id.slice(0, 8)}
         </button>
         <span className={driftClass}>
-          drift: +{baseline.drift_new} new / -{baseline.drift_fixed} fixed
-          {' '}({net >= 0 ? '+' : ''}
+          drift: +{baseline.drift_new} new / -{baseline.drift_fixed} fixed (
+          {net >= 0 ? '+' : ''}
           {net})
         </span>
         <button

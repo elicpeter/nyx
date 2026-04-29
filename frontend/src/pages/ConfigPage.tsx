@@ -128,9 +128,7 @@ function SettingsSection({
             id="theme-select"
             className="settings-row-control"
             value={preference}
-            onChange={(e) =>
-              setPreference(e.target.value as ThemePreference)
-            }
+            onChange={(e) => setPreference(e.target.value as ThemePreference)}
           >
             {THEME_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -158,11 +156,7 @@ function SettingsSection({
 
 // ── Read-only key/value grid for effective config display ───────────────────
 
-function KvGrid({
-  entries,
-}: {
-  entries: Array<[string, React.ReactNode]>;
-}) {
+function KvGrid({ entries }: { entries: Array<[string, React.ReactNode]> }) {
   return (
     <div className="config-kv-grid">
       {entries.map(([k, v]) => (
@@ -366,9 +360,7 @@ function RawEditor() {
         </div>
         <div className="raw-editor-actions">
           {dirty && <span className="raw-editor-dirty">Unsaved changes</span>}
-          {savedAt && !dirty && (
-            <span className="raw-editor-saved">Saved</span>
-          )}
+          {savedAt && !dirty && <span className="raw-editor-saved">Saved</span>}
           <button
             className="btn btn-sm"
             onClick={handleDiscard}
@@ -469,7 +461,12 @@ function EffectiveOverview({
       {
         key: 'database',
         title: 'Database',
-        keys: ['path', 'auto_cleanup_days', 'max_db_size_mb', 'vacuum_on_startup'],
+        keys: [
+          'path',
+          'auto_cleanup_days',
+          'max_db_size_mb',
+          'vacuum_on_startup',
+        ],
       },
       {
         key: 'server',
@@ -486,7 +483,13 @@ function EffectiveOverview({
       {
         key: 'runs',
         title: 'Runs',
-        keys: ['persist', 'max_runs', 'save_logs', 'save_stdout', 'save_code_snippets'],
+        keys: [
+          'persist',
+          'max_runs',
+          'save_logs',
+          'save_stdout',
+          'save_code_snippets',
+        ],
       },
     ],
     [],
@@ -496,8 +499,8 @@ function EffectiveOverview({
     <>
       <p className="config-help">
         The merged result of <code>nyx.conf</code> defaults plus your
-        <code> nyx.local</code> overrides. To change anything, edit fields
-        below or use the <strong>Raw</strong> tab.
+        <code> nyx.local</code> overrides. To change anything, edit fields below
+        or use the <strong>Raw</strong> tab.
       </p>
       {sections.map((s) => {
         const sec = cfg?.[s.key] as Record<string, unknown> | undefined;
@@ -555,13 +558,25 @@ export function ConfigPage() {
     e instanceof Error ? e.message : String(e ?? 'Unknown error');
 
   const addRuleHandlers = (kind: 'source' | 'sink' | 'sanitizer') => ({
-    onSuccess: (_d: unknown, b: { lang: string; matchers: string[]; cap: string }) =>
-      toast.success(ruleSummary(b), `${kind[0].toUpperCase()}${kind.slice(1)} added`),
+    onSuccess: (
+      _d: unknown,
+      b: { lang: string; matchers: string[]; cap: string },
+    ) =>
+      toast.success(
+        ruleSummary(b),
+        `${kind[0].toUpperCase()}${kind.slice(1)} added`,
+      ),
     onError: (e: unknown) => toast.error(errMsg(e), `Could not add ${kind}`),
   });
   const deleteRuleHandlers = (kind: 'source' | 'sink' | 'sanitizer') => ({
-    onSuccess: (_d: unknown, b: { lang: string; matchers: string[]; cap: string }) =>
-      toast.success(ruleSummary(b), `${kind[0].toUpperCase()}${kind.slice(1)} removed`),
+    onSuccess: (
+      _d: unknown,
+      b: { lang: string; matchers: string[]; cap: string },
+    ) =>
+      toast.success(
+        ruleSummary(b),
+        `${kind[0].toUpperCase()}${kind.slice(1)} removed`,
+      ),
     onError: (e: unknown) => toast.error(errMsg(e), `Could not remove ${kind}`),
   });
 
@@ -605,7 +620,8 @@ export function ConfigPage() {
       <div className="page-header">
         <h2>Config</h2>
         <span className="page-header-sub">
-          Edit defaults, rules, profiles, and the raw <code>nyx.local</code> file
+          Edit defaults, rules, profiles, and the raw <code>nyx.local</code>{' '}
+          file
         </span>
       </div>
 
@@ -686,8 +702,9 @@ export function ConfigPage() {
 
           <ConfigSection title="Terminators" id="config-terminators">
             <p className="config-help">
-              Function calls that abort control flow (e.g. <code>process.exit</code>,
-              <code> sys.exit</code>) so the analyzer doesn't continue past them.
+              Function calls that abort control flow (e.g.{' '}
+              <code>process.exit</code>,<code> sys.exit</code>) so the analyzer
+              doesn't continue past them.
             </p>
             <div className="config-form-row">
               <div className="form-group">

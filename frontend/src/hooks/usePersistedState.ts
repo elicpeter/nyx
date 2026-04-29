@@ -49,14 +49,11 @@ export function usePersistedState<T>(
     write(key, state);
   }, [key, state]);
 
-  const set = useCallback(
-    (next: T | ((prev: T) => T)) => {
-      setState((prev) =>
-        typeof next === 'function' ? (next as (p: T) => T)(prev) : next,
-      );
-    },
-    [],
-  );
+  const set = useCallback((next: T | ((prev: T) => T)) => {
+    setState((prev) =>
+      typeof next === 'function' ? (next as (p: T) => T)(prev) : next,
+    );
+  }, []);
 
   return [state, set];
 }

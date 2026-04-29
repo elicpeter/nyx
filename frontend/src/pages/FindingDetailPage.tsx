@@ -818,7 +818,9 @@ export function FindingDetailPage() {
 
   const { data: finding, isLoading, isError, error } = useFinding(id ?? '');
   usePageTitle(
-    finding ? `${finding.rule_id} · ${finding.path}:${finding.line}` : 'Finding',
+    finding
+      ? `${finding.rule_id} · ${finding.path}:${finding.line}`
+      : 'Finding',
   );
 
   const bulkTriage = useBulkTriage();

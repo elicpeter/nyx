@@ -3,10 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { HeaderBar } from './HeaderBar';
 import { NewScanModal } from '../../modals/NewScanModal';
-import {
-  CommandPalette,
-  type PaletteCommand,
-} from '../ui/CommandPalette';
+import { CommandPalette, type PaletteCommand } from '../ui/CommandPalette';
 import { ShortcutsHelp } from '../ui/ShortcutsHelp';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useChordNavigation } from '../../hooks/useChordNavigation';

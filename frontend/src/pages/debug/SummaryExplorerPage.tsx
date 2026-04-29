@@ -31,9 +31,7 @@ export function SummaryAnalysisPanel({
 
   const visible = useMemo(() => {
     if (!data) return data;
-    return showClosures
-      ? data
-      : data.filter((s) => s.func_kind !== 'closure');
+    return showClosures ? data : data.filter((s) => s.func_kind !== 'closure');
   }, [data, showClosures]);
 
   if (isLoading) {

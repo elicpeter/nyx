@@ -26,7 +26,8 @@ export function useAddSource() {
 export function useDeleteSource() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: AddLabelBody) => apiDelete<void>('/config/sources', body),
+    mutationFn: (body: AddLabelBody) =>
+      apiDelete<void>('/config/sources', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sources'] });
       qc.invalidateQueries({ queryKey: ['rules'] });

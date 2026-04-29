@@ -154,8 +154,7 @@ export function ExplorerPage() {
     useExplorerSymbols(rawFile);
 
   const closureSymbolCount = useMemo(
-    () =>
-      symbolEntries?.filter((s) => s.func_kind === 'closure').length ?? 0,
+    () => symbolEntries?.filter((s) => s.func_kind === 'closure').length ?? 0,
     [symbolEntries],
   );
 

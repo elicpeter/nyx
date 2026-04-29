@@ -68,8 +68,8 @@ function AuthSummaryHeader({ data }: { data: AuthAnalysisView }) {
         <span className="text-secondary">
           {data.routes.length} route{data.routes.length === 1 ? '' : 's'} ·{' '}
           {data.units.length} unit{data.units.length === 1 ? '' : 's'} ·{' '}
-          {totalChecks} auth check{totalChecks === 1 ? '' : 's'} ·{' '}
-          {totalOps} sensitive op{totalOps === 1 ? '' : 's'}
+          {totalChecks} auth check{totalChecks === 1 ? '' : 's'} · {totalOps}{' '}
+          sensitive op{totalOps === 1 ? '' : 's'}
         </span>
       </div>
     </div>
@@ -152,8 +152,8 @@ function AuthUnitCard({ unit, index }: { unit: AuthUnitView; index: number }) {
         </h3>
         <span className="text-secondary">
           {unit.auth_checks.length} check
-          {unit.auth_checks.length === 1 ? '' : 's'} ·{' '}
-          {unit.operations.length} op
+          {unit.auth_checks.length === 1 ? '' : 's'} · {unit.operations.length}{' '}
+          op
           {unit.operations.length === 1 ? '' : 's'}
         </span>
       </div>

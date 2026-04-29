@@ -89,10 +89,7 @@ export function OverviewPage() {
       />
 
       {overview.health && (
-        <HealthScoreCard
-          health={overview.health}
-          posture={overview.posture}
-        />
+        <HealthScoreCard health={overview.health} posture={overview.posture} />
       )}
 
       {/* Fresh banner */}
@@ -173,7 +170,9 @@ export function OverviewPage() {
         <div className="card">
           <div className="card-header">Confidence Distribution</div>
           {overview.confidence_distribution ? (
-            <ConfidenceDistributionChart dist={overview.confidence_distribution} />
+            <ConfidenceDistributionChart
+              dist={overview.confidence_distribution}
+            />
           ) : (
             <div className="empty-state" style={{ padding: 16 }}>
               <p>No data</p>
@@ -193,7 +192,9 @@ export function OverviewPage() {
           <LanguageHealthTable rows={overview.language_health || []} />
         </div>
         <div className="card">
-          <div className="card-header">Top Affected Files (severity-weighted)</div>
+          <div className="card-header">
+            Top Affected Files (severity-weighted)
+          </div>
           <WeightedTopFiles
             files={overview.weighted_top_files || []}
             onRowClick={(name) =>

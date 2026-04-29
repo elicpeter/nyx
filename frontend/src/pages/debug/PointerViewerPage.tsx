@@ -50,18 +50,17 @@ export function PointerAnalysisPanel({
           <h3 style={{ margin: 0 }}>Per-Value Points-To</h3>
           <span className="text-secondary">
             {data.values.length} value
-            {data.values.length === 1 ? '' : 's'} ·{' '}
-            {data.location_count} location
+            {data.values.length === 1 ? '' : 's'} · {data.location_count}{' '}
+            location
             {data.location_count === 1 ? '' : 's'}
           </span>
         </div>
         {data.values.length === 0 ? (
-          <p className="abstract-empty">All SSA values point to nothing tracked.</p>
+          <p className="abstract-empty">
+            All SSA values point to nothing tracked.
+          </p>
         ) : (
-          <PointerValueTable
-            values={data.values}
-            locations={data.locations}
-          />
+          <PointerValueTable values={data.values} locations={data.locations} />
         )}
       </div>
 
@@ -113,7 +112,10 @@ function PointerValueTable({
             <td className="mono">{v.var_name ?? '-'}</td>
             <td>
               {v.is_top ? (
-                <span className="cap-badge cap-badge-sink" title="Over-approximation">
+                <span
+                  className="cap-badge cap-badge-sink"
+                  title="Over-approximation"
+                >
                   ⊤ (top)
                 </span>
               ) : (

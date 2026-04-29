@@ -20,7 +20,9 @@ export interface Toast {
 
 interface ToastContextValue {
   toasts: Toast[];
-  push: (t: Omit<Toast, 'id' | 'durationMs'> & { durationMs?: number }) => number;
+  push: (
+    t: Omit<Toast, 'id' | 'durationMs'> & { durationMs?: number },
+  ) => number;
   dismiss: (id: number) => void;
   /** Convenience helpers — call sites read more naturally as toast.error('…'). */
   info: (message: string, title?: string) => number;
