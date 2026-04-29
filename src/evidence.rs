@@ -289,7 +289,7 @@ pub struct StateEvidence {
 /// (validation guards may have been lost, so the finding is more
 /// likely to be a false positive); `Bail` means analysis of the body
 /// aborted before producing a trustworthy result.  `UnderReport` notes
-/// (e.g. `WorklistCapped`) do *not* cap confidence — the reported flow
+/// (e.g. `WorklistCapped`) do *not* cap confidence, the reported flow
 /// is still real, just surrounded by an incomplete result set.
 pub fn compute_confidence(diag: &Diag) -> Confidence {
     // Degraded analysis caps confidence
@@ -343,7 +343,7 @@ fn apply_engine_notes_cap(diag: &Diag, base: Confidence) -> Confidence {
         | crate::engine_notes::LossDirection::Bail => base.min(Confidence::Medium),
         // UnderReport: result set is a lower bound, but the emitted
         // finding itself remains as credible as the analysis decided.
-        // Do not cap — the rank completeness penalty is the right lever
+        // Do not cap, the rank completeness penalty is the right lever
         // for that case (see rank.rs::completeness_penalty).
         crate::engine_notes::LossDirection::UnderReport => base,
         // Informational is filtered out upstream by `worst_direction`,
@@ -600,7 +600,7 @@ pub fn generate_explanation(diag: &Diag) -> Option<String> {
 
 /// Extract a vulnerability category label from the Diag (used in explanation text).
 fn extract_category_from_id(id: &str) -> String {
-    // Rule IDs like "taint-unsanitised-flow (source 3:1)" — category comes
+    // Rule IDs like "taint-unsanitised-flow (source 3:1)", category comes
     // from the finding category field, but we approximate from the ID here.
     if id.contains("sql") || id.contains("SQL") {
         "SQL injection".to_string()
@@ -680,7 +680,7 @@ pub fn compute_confidence_limiters(diag: &Diag) -> Vec<String> {
                 "Backwards demand-driven analysis exceeded its budget (verdict not reached)".into(),
             );
         }
-        // Confirmation is *not* a limiter — it is a positive signal.  The
+        // Confirmation is *not* a limiter, it is a positive signal.  The
         // taint-confidence scorer picks it up separately.
         let _ = NOTE_CONFIRMED;
     }
@@ -976,7 +976,7 @@ mod tests {
     #[test]
     fn confidence_capped_at_medium_by_over_report() {
         // OverReport (PredicateStateWidened) means validation predicates
-        // were lost — the emitted finding is more likely to be spurious.
+        // were lost, the emitted finding is more likely to be spurious.
         let d = with_notes(
             taint_high_confidence_diag(),
             vec![crate::engine_notes::EngineNote::PredicateStateWidened],
@@ -995,7 +995,7 @@ mod tests {
 
     #[test]
     fn confidence_cap_does_not_upgrade_low() {
-        // `base.min(Medium)` is what caps — it must not *raise* a Low
+        // `base.min(Medium)` is what caps, it must not *raise* a Low
         // baseline to Medium.  Use a taint finding with weak evidence so
         // the points scorer gives us Low, then attach a Bail note.
         let mut d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::Low);

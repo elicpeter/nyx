@@ -4,6 +4,7 @@ use super::{
     member_expr_text, push_node, text_of,
 };
 use crate::labels::{DataLabel, LangAnalysisRules, classify};
+use crate::utils::snippet::truncate_at_char_boundary;
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
 use tree_sitter::Node;
@@ -72,20 +73,15 @@ pub(super) fn push_condition_node<'a>(
     code: &'a [u8],
     enclosing_func: Option<&str>,
 ) -> NodeIndex {
-    // Pass cond_ast as both args — sub-conditions are never `unless` nodes
+    // Pass cond_ast as both args, sub-conditions are never `unless` nodes
     let (inner, negated) = detect_negation(cond_ast, cond_ast, lang);
     let mut vars = Vec::new();
     collect_idents(inner, code, &mut vars);
     vars.sort();
     vars.dedup();
     vars.truncate(MAX_COND_VARS);
-    let text = text_of(cond_ast, code).map(|t| {
-        if t.len() > MAX_CONDITION_TEXT_LEN {
-            t[..MAX_CONDITION_TEXT_LEN].to_string()
-        } else {
-            t
-        }
-    });
+    let text = text_of(cond_ast, code)
+        .map(|t| truncate_at_char_boundary(&t, MAX_CONDITION_TEXT_LEN).to_string());
     let span = (cond_ast.start_byte(), cond_ast.end_byte());
     g.add_node(NodeInfo {
         kind: StmtKind::If,
@@ -140,7 +136,7 @@ pub(super) fn detect_rust_let_match_guard<'a>(
 /// Synthesize a `StmtKind::If` CFG node carrying a Rust match-arm guard's
 /// condition text and vars.  The let-binding name is added to `condition_vars`
 /// so `apply_branch_predicates` narrows validation to that specific variable
-/// — the variable that receives the arm's value and flows to downstream sinks.
+///, the variable that receives the arm's value and flows to downstream sinks.
 pub(super) fn emit_rust_match_guard_if<'a>(
     g: &mut Cfg,
     guard: Node<'a>,
@@ -154,13 +150,8 @@ pub(super) fn emit_rust_match_guard_if<'a>(
     vars.sort();
     vars.dedup();
     vars.truncate(MAX_COND_VARS);
-    let text = text_of(guard, code).map(|t| {
-        if t.len() > MAX_CONDITION_TEXT_LEN {
-            t[..MAX_CONDITION_TEXT_LEN].to_string()
-        } else {
-            t
-        }
-    });
+    let text = text_of(guard, code)
+        .map(|t| truncate_at_char_boundary(&t, MAX_CONDITION_TEXT_LEN).to_string());
     let span = (guard.start_byte(), guard.end_byte());
     g.add_node(NodeInfo {
         kind: StmtKind::If,
@@ -181,7 +172,7 @@ pub(super) fn emit_rust_match_guard_if<'a>(
 /// `lhs_text` is then synthesised by SSA lowering at the join.
 ///
 /// The condition's identifiers live on the If node's `condition_vars`, **not**
-/// on the branch `uses`. This is the whole point of the split — cond is control
+/// on the branch `uses`. This is the whole point of the split, cond is control
 /// flow, branches are data flow.
 ///
 /// Returns the exit frontier for downstream statement chaining (a single-element
@@ -219,7 +210,7 @@ pub(super) fn build_ternary_diamond<'a>(
     g[cond_if].is_eq_with_const = detect_eq_with_const(cond_ast, lang);
     connect_all(g, preds, cond_if, pred_edge);
 
-    // 2. Branches. Each branch produces its own exit frontier (≥ 1 node) —
+    // 2. Branches. Each branch produces its own exit frontier (≥ 1 node) ,
     //    a nested ternary recurses and returns its own join node.
     let true_exits = lower_ternary_branch(
         cons_ast,
@@ -332,7 +323,7 @@ pub(super) fn lower_ternary_branch<'a>(
         analysis_rules,
     );
 
-    // The branch expression's own `defines` (if any — typically None for a
+    // The branch expression's own `defines` (if any, typically None for a
     // pure value expression) is replaced with the outer LHS so that both
     // branches agree on the target, driving phi insertion at the join.
     g[node].taint.defines = Some(lhs_text.to_string());
@@ -410,7 +401,7 @@ pub(super) fn classify_ternary_lhs(
         .unwrap_or_default();
 
     // Try the full dotted path first (e.g. "document.cookie"), then fall back
-    // to the property alone (e.g. "innerHTML") — mirrors the LHS classification
+    // to the property alone (e.g. "innerHTML"), mirrors the LHS classification
     // already performed in `push_node` for non-split assignments.
     if let Some(l) = classify(lang, &lhs_text, extra) {
         labels.push(l);
@@ -429,7 +420,7 @@ pub(super) fn classify_ternary_lhs(
 /// Recursively decompose a boolean condition into a chain of `StmtKind::If` nodes
 /// with short-circuit edges.
 ///
-/// Returns `(true_exits, false_exits)` — the sets of nodes from which True/False
+/// Returns `(true_exits, false_exits)`, the sets of nodes from which True/False
 /// edges should connect to the then/else branches.
 pub(super) fn build_condition_chain<'a>(
     cond_ast: Node<'a>,

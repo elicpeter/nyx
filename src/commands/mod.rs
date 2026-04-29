@@ -21,7 +21,7 @@ pub fn handle_command(
     // Resolve engine options once for the whole process.  Scan overlays CLI
     // flags below; other subcommands use the config values verbatim.  The
     // install is a no-op after the first call, so Scan's overlay must happen
-    // before we reach this point for its own call path — we delay the install
+    // before we reach this point for its own call path, we delay the install
     // to the Scan arm and gate non-scan commands behind a fallback install of
     // the bare config values.
     let install_from_config = |config: &Config| {
@@ -378,7 +378,7 @@ fn print_engine_explanation(config: &Config, engine_profile: Option<EngineProfil
     use console::style;
 
     // Plain-text on/off, padded to 3 chars so the trailing column aligns
-    // regardless of which value is rendered.  Colour is layered on top —
+    // regardless of which value is rendered.  Colour is layered on top ,
     // the visible width stays 3 characters because `console::style` emits
     // zero-width ANSI codes (and nothing at all when NO_COLOR is set).
     fn onoff(b: bool) -> String {

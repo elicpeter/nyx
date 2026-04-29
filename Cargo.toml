@@ -33,6 +33,13 @@ pkg-url = "{ repo }/releases/download/v{ version }/nyx-{ target }{ archive-suffi
 pkg-fmt = "zip"
 bin-dir = "target/{ target }/release/{ bin }{ binary-ext }"
 
+# docs.rs builds the `serve` feature (default) so the server module renders.
+# `smt` is left off — bundled Z3 takes too long on docs.rs builders, and
+# `smt-system-z3` needs a system library that isn't available there.
+[package.metadata.docs.rs]
+features = ["serve"]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [features]
 default = ["serve"]
 serve = ["dep:axum", "dep:tokio", "dep:tokio-stream", "dep:tower-http"]

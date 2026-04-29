@@ -25,7 +25,7 @@ fn find_acquire_nodes(
             }
             if let Some(callee) = &info.call.callee {
                 let callee_lower = callee.to_ascii_lowercase();
-                // Check exclusions first — if the callee matches an exclude
+                // Check exclusions first, if the callee matches an exclude
                 // pattern, it is NOT an acquire even if it also matches an
                 // acquire pattern (e.g. `freopen` ends with `fopen`).
                 let excluded = exclude_patterns.iter().any(|p| {
@@ -74,7 +74,7 @@ fn find_release_nodes(ctx: &AnalysisContext, release_patterns: &[&str]) -> Vec<N
 /// `if (acquire_var)` (or `if (!acquire_var)`) and the edge represents
 /// "acquire_var is null", the resource was never actually produced on that
 /// path, so a release is unnecessary.  This closes the canonical
-/// `FILE *f = fopen(...); if (f) fclose(f);` idiom — without this rule the
+/// `FILE *f = fopen(...); if (f) fclose(f);` idiom, without this rule the
 /// false edge of the null check provides a path acquire→exit that misses
 /// the release, producing a may-leak FP.
 fn release_on_all_exit_paths(
@@ -103,8 +103,8 @@ fn release_on_all_exit_paths(
 /// the resource handle is null/falsy and therefore not actually acquired.
 ///
 /// Recognises:
-///   * `if (var)` — false edge means `var` is null
-///   * `if (!var)` — true edge means `var` is null
+///   * `if (var)`, false edge means `var` is null
+///   * `if (!var)`, true edge means `var` is null
 ///
 /// Rejects comparisons (`if (var != NULL)`), method calls
 /// (`if (var.is_valid())`), and composite conditions (`if (var && cond)`).
@@ -198,7 +198,7 @@ fn all_paths_pass_through(
 ///   - `obj.field = var`    (C dot / generic field store)
 ///   - `list->next = ...`   (linked-list insertion)
 ///
-/// If the variable is transferred, there is no leak — the receiving struct is
+/// If the variable is transferred, there is no leak, the receiving struct is
 /// responsible for the lifetime.
 fn is_ownership_transferred(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
     let acquired_var = match &ctx.cfg[acquire].taint.defines {
@@ -258,7 +258,7 @@ fn is_ownership_transferred(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
                 false
             };
             if !is_field_write {
-                continue; // genuine redefinition — stop this path
+                continue; // genuine redefinition, stop this path
             }
         }
 
@@ -343,7 +343,7 @@ fn is_consumed_by_owner(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
             }
         }
 
-        // Also check the span text for consuming calls — handles cases where
+        // Also check the span text for consuming calls, handles cases where
         // the call is embedded in a return statement (e.g. `return FileResponse(f)`)
         if info.taint.uses.iter().any(|u| u == &acquired_var) {
             let (start, end) = info.ast.span;

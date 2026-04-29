@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-29T05:42:03Z",
+  "timestamp": "2026-04-29T21:50:34Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:3e034f1fc5c7bb7838f1fb2c63de5ca5a36aacfdf5d66cf25f30bff99f25f1cf",
-  "corpus_size": 433,
-  "cases_run": 432,
+  "ground_truth_hash": "sha256:5b391d654f88673e5a200af875d513cf83812af747739395e8315768b8983ce3",
+  "corpus_size": 458,
+  "cases_run": 457,
   "cases_skipped": 1,
   "outcomes": [
     {
@@ -1307,6 +1307,74 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "cve-java-2022-1471-patched",
+      "file": "cve_corpus/java/CVE-2022-1471/patched.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-java-2022-1471-vulnerable",
+      "file": "cve_corpus/java/CVE-2022-1471/vulnerable.java",
+      "language": "java",
+      "vuln_class": "deserialization",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "java.deser.snakeyaml_unsafe_constructor"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "java.deser.snakeyaml_unsafe_constructor"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-java-2022-42889-patched",
+      "file": "cve_corpus/java/CVE-2022-42889/patched.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-java-2022-42889-vulnerable",
+      "file": "cve_corpus/java/CVE-2022-42889/vulnerable.java",
+      "language": "java",
+      "vuln_class": "code_exec",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "java.code_exec.text4shell_interpolator"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "java.code_exec.text4shell_interpolator"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "cve-js-2019-14939-patched",
       "file": "cve_corpus/javascript/CVE-2019-14939/patched.js",
       "language": "javascript",
@@ -1518,6 +1586,76 @@
         "taint-unsanitised-flow (source 26:12)"
       ],
       "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-py-2025-69662-patched",
+      "file": "cve_corpus/python/CVE-2025-69662/patched.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-py-2025-69662-vulnerable",
+      "file": "cve_corpus/python/CVE-2025-69662/vulnerable.py",
+      "language": "python",
+      "vuln_class": "sql_injection",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 35:12)",
+        "py.sqli.text_format"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 35:12)",
+        "py.sqli.text_format"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-py-2026-33626-patched",
+      "file": "cve_corpus/python/CVE-2026-33626/patched.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-py-2026-33626-vulnerable",
+      "file": "cve_corpus/python/CVE-2026-33626/vulnerable.py",
+      "language": "python",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 43:12)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 43:12)"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -1733,6 +1871,40 @@
       "unexpected_rule_ids": [],
       "all_finding_ids": [
         "taint-unsanitised-flow (source 28:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-ts-ghsa-4x48-cgf9-q33f-patched",
+      "file": "cve_corpus/typescript/GHSA-4x48-cgf9-q33f/patched.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-ts-ghsa-4x48-cgf9-q33f-vulnerable",
+      "file": "cve_corpus/typescript/GHSA-4x48-cgf9-q33f/vulnerable.ts",
+      "language": "typescript",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 50:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 50:5)"
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 0
@@ -2359,6 +2531,21 @@
     {
       "case_id": "go-safe-realrepo-005",
       "file": "go/safe/safe_self_method_receiver.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-realrepo-006",
+      "file": "go/safe/safe_test_helper_fatal.go",
       "language": "go",
       "vuln_class": "safe",
       "is_vulnerable": false,
@@ -3591,6 +3778,21 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "js-safe-realrepo-006",
+      "file": "javascript/safe/safe_localised_gherkin_regex.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "js-sqli-001",
       "file": "javascript/sqli/sqli_concat.js",
       "language": "javascript",
@@ -4493,6 +4695,70 @@
       "unexpected_rule_ids": [],
       "all_finding_ids": [
         "py.auth.token_override_without_validation"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-auth-realrepo-005",
+      "file": "python/safe/safe_fastapi_route_dependencies_auth.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-auth-realrepo-006",
+      "file": "python/safe/safe_pytest_sqlalchemy_session.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-auth-realrepo-007",
+      "file": "python/safe/safe_fastapi_route_level_row_fetch.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-auth-realrepo-007",
+      "file": "python/auth/vuln_fastapi_route_no_dependencies.py",
+      "language": "python",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.auth.missing_ownership_check"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "py.auth.missing_ownership_check"
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 0
@@ -5614,6 +5880,55 @@
     {
       "case_id": "rs-auth-realrepo-010",
       "file": "rust/auth/unsafe_local_user_view_extractor.rs",
+      "language": "rust",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-realrepo-011",
+      "file": "rust/auth/safe_param_type_segment_idents.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-realrepo-012",
+      "file": "rust/auth/safe_local_collection_param_types.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-realrepo-013",
+      "file": "rust/auth/unsafe_handler_local_collection_does_not_blanket_suppress.rs",
       "language": "rust",
       "vuln_class": "auth",
       "is_vulnerable": true,
@@ -7044,6 +7359,42 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "ts-auth-realrepo-006",
+      "file": "typescript/auth/safe_local_collection_receiver.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-auth-realrepo-007",
+      "file": "typescript/auth/vuln_local_collection_does_not_blanket_suppress.ts",
+      "language": "typescript",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "js.auth.missing_ownership_check",
+        "js.auth.missing_ownership_check"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "js.auth.missing_ownership_check",
+        "js.auth.missing_ownership_check"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "ts-cmdi-001",
       "file": "typescript/cmdi/cmdi_exec_template.ts",
       "language": "typescript",
@@ -7494,6 +7845,53 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "ts-safe-017",
+      "file": "typescript/safe/safe_strapi_db_query_chain.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "ts.quality.any_annotation"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "ts-safe-018",
+      "file": "typescript/safe/safe_indirect_validator.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-safe-019",
+      "file": "typescript/safe/safe_helper_with_validator.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "ts-secrets-001",
       "file": "typescript/secrets/fallback_secret.ts",
       "language": "typescript",
@@ -7551,6 +7949,30 @@
       ],
       "security_finding_count": 2,
       "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-sqli-003",
+      "file": "typescript/sqli/sqli_db_query_concat.ts",
+      "language": "typescript",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 15:5)",
+        "taint-unsanitised-flow (source 21:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "ts.quality.any_annotation",
+        "ts.quality.any_annotation",
+        "taint-unsanitised-flow (source 15:5)",
+        "taint-unsanitised-flow (source 21:5)",
+        "ts.quality.any_annotation"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 3
     },
     {
       "case_id": "ts-ssrf-001",
@@ -7771,22 +8193,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 216,
+    "tp": 225,
     "fp": 1,
     "fn_": 0,
-    "tn": 215,
-    "precision": 0.9953917050691244,
+    "tn": 231,
+    "precision": 0.995575221238938,
     "recall": 1.0,
-    "f1": 0.997690531177829
+    "f1": 0.9977827050997783
   },
   "aggregate_rule_level": {
-    "tp": 216,
+    "tp": 225,
     "fp": 1,
     "fn_": 0,
-    "tn": 215,
-    "precision": 0.9953917050691244,
+    "tn": 231,
+    "precision": 0.995575221238938,
     "recall": 1.0,
-    "f1": 0.997690531177829
+    "f1": 0.9977827050997783
   },
   "by_language": {
     "c": {
@@ -7811,16 +8233,16 @@
       "tp": 25,
       "fp": 1,
       "fn_": 0,
-      "tn": 27,
+      "tn": 28,
       "precision": 0.9615384615384616,
       "recall": 1.0,
       "f1": 0.9803921568627451
     },
     "java": {
-      "tp": 17,
+      "tp": 19,
       "fp": 0,
       "fn_": 0,
-      "tn": 18,
+      "tn": 20,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -7829,7 +8251,7 @@
       "tp": 19,
       "fp": 0,
       "fn_": 0,
-      "tn": 23,
+      "tn": 24,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -7844,10 +8266,10 @@
       "f1": 1.0
     },
     "python": {
-      "tp": 23,
+      "tp": 26,
       "fp": 0,
       "fn_": 0,
-      "tn": 23,
+      "tn": 28,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -7862,19 +8284,19 @@
       "f1": 1.0
     },
     "rust": {
-      "tp": 33,
+      "tp": 34,
       "fp": 0,
       "fn_": 0,
-      "tn": 37,
+      "tn": 39,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
     },
     "typescript": {
-      "tp": 29,
+      "tp": 32,
       "fp": 0,
       "fn_": 0,
-      "tn": 18,
+      "tn": 23,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -7882,7 +8304,7 @@
   },
   "by_vuln_class": {
     "auth": {
-      "tp": 13,
+      "tp": 16,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -7909,7 +8331,7 @@
       "f1": 1.0
     },
     "code_exec": {
-      "tp": 2,
+      "tp": 3,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -7945,7 +8367,7 @@
       "f1": 1.0
     },
     "deserialization": {
-      "tp": 4,
+      "tp": 5,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -8002,7 +8424,7 @@
       "tp": 0,
       "fp": 1,
       "fn_": 0,
-      "tn": 215,
+      "tn": 231,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -8016,8 +8438,17 @@
       "recall": 1.0,
       "f1": 1.0
     },
+    "sql_injection": {
+      "tp": 1,
+      "fp": 0,
+      "fn_": 0,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
     "sqli": {
-      "tp": 29,
+      "tp": 30,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -8026,7 +8457,7 @@
       "f1": 1.0
     },
     "ssrf": {
-      "tp": 26,
+      "tp": 28,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -8046,31 +8477,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 90,
-      "fp": 90,
-      "fn_": 126,
-      "tn": 126,
-      "precision": 0.5,
-      "recall": 0.4166666666666667,
-      "f1": 0.45454545454545453
+      "tp": 79,
+      "fp": 104,
+      "fn_": 146,
+      "tn": 128,
+      "precision": 0.43169398907103823,
+      "recall": 0.3511111111111111,
+      "f1": 0.3872549019607843
     },
     ">=Low": {
-      "tp": 94,
-      "fp": 102,
-      "fn_": 122,
-      "tn": 114,
-      "precision": 0.47959183673469385,
-      "recall": 0.4351851851851852,
-      "f1": 0.4563106796116505
+      "tp": 81,
+      "fp": 116,
+      "fn_": 144,
+      "tn": 116,
+      "precision": 0.41116751269035534,
+      "recall": 0.36,
+      "f1": 0.3838862559241706
     },
     ">=Medium": {
-      "tp": 94,
-      "fp": 102,
-      "fn_": 122,
-      "tn": 114,
-      "precision": 0.47959183673469385,
-      "recall": 0.4351851851851852,
-      "f1": 0.4563106796116505
+      "tp": 81,
+      "fp": 116,
+      "fn_": 144,
+      "tn": 116,
+      "precision": 0.41116751269035534,
+      "recall": 0.36,
+      "f1": 0.3838862559241706
     }
   }
 }

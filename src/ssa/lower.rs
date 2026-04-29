@@ -29,16 +29,16 @@ use super::ir::*;
 ///   - Construct the `Call` op with `callee = bare_method_name`,
 ///     `callee_text = Some(original_callee.to_string())`,
 ///     `receiver = Some(final_receiver_value)`.
-///   - Use the returned receiver as the implicit method receiver — do NOT
+///   - Use the returned receiver as the implicit method receiver, do NOT
 ///     add the chain root or any intermediate field name to `args`.
 ///
-/// **Decomposition rules** (Phase 2 of the field-projections rollout):
+/// **Decomposition rules**:
 ///   - Skip when the callee contains zero `.` characters (no member access)
 ///     or only one `.` (single-dot case is handled by the existing
 ///     `info.call.receiver` channel without needing a `FieldProj` op).
-///   - Bail when any "complex" token appears in the callee — `(`, `)`,
+///   - Bail when any "complex" token appears in the callee, `(`, `)`,
 ///     `[`, `]`, `::`, `->`, `?`, `<`, `>`, `*`, `&`, `:` (other than `::`
-///     already filtered), or whitespace — signaling the callee text isn't
+///     already filtered), or whitespace, signaling the callee text isn't
 ///     a clean `<ident>.<ident>...` chain we can safely split on `.`.
 ///   - The first segment must be a known SSA variable in `var_stacks`;
 ///     otherwise the chain root is unresolvable and we bail.
@@ -221,7 +221,7 @@ fn lower_to_ssa_inner(
     // 4b. For per-function scope: identify external variables (used but not defined)
     //     and inject synthetic Param defs at entry block so rename can find them.
     //     When formal_params is supplied, reorder so formal params come first in
-    //     declaration order — this makes Param indices correspond to call-site positions.
+    //     declaration order, this makes Param indices correspond to call-site positions.
     //
     let external_vars = if scope.is_some() && !scope_all && !scope_nop {
         let raw = identify_external_uses(cfg, &blocks_nodes, &var_defs);
@@ -277,7 +277,7 @@ fn lower_to_ssa_inner(
     }
 
     // 7b. Debug assertions: verify structural invariants.
-    // The helper body is `debug_assert!` only, so it's a no-op in release —
+    // The helper body is `debug_assert!` only, so it's a no-op in release ,
     // call unconditionally to avoid a dead_code warning when the lib is
     // built without `--tests`.
     debug_assert_bfs_ordering(&block_preds);
@@ -451,10 +451,10 @@ fn collect_reachable(
 /// Form basic blocks from filtered CFG nodes.
 ///
 /// Returns:
-/// - blocks_nodes: Vec<Vec<NodeIndex>> — nodes per block (in order)
-/// - block_of_node: HashMap<NodeIndex, usize> — node → block index
-/// - block_succs: Vec<Vec<usize>> — successors per block
-/// - block_preds: Vec<Vec<usize>> — predecessors per block
+/// - blocks_nodes: Vec<Vec<NodeIndex>>, nodes per block (in order)
+/// - block_of_node: HashMap<NodeIndex, usize>, node → block index
+/// - block_succs: Vec<Vec<usize>>, successors per block
+/// - block_preds: Vec<Vec<usize>>, predecessors per block
 fn form_blocks(
     cfg: &Cfg,
     entry: NodeIndex,
@@ -537,7 +537,7 @@ fn form_blocks(
     // Discover leaders in BFS order over `cfg`, but skip edges whose
     // source is a terminating (Return / Throw) node.  Walking the raw
     // `cfg` directly here would re-introduce the bookkeeping
-    // Return/Throw → fn_exit edges we just stripped — fn_exit (or any
+    // Return/Throw → fn_exit edges we just stripped, fn_exit (or any
     // post-return join) would be discovered through them and assigned a
     // block ID before its true block-level predecessors, breaking the
     // BFS-forward-pred invariant (`debug_assert_bfs_ordering`).
@@ -546,7 +546,7 @@ fn form_blocks(
     // exception edges entirely (collect_reachable strips them and records
     // them separately in `exception_edges`).  Catch-block nodes are still
     // in `reachable` and must be discoverable as leaders via the
-    // try-body → catch path — only the terminating-source bookkeeping
+    // try-body → catch path, only the terminating-source bookkeeping
     // edges are bogus.
     {
         let mut bfs_queue: VecDeque<NodeIndex> = VecDeque::new();
@@ -572,7 +572,7 @@ fn form_blocks(
         // Belt-and-braces: any leader still unvisited gets appended in
         // CFG-node-index order so block-ID assignment remains
         // deterministic.  We do NOT include the synthetic function-exit
-        // node when it is unreachable through filtered edges — that
+        // node when it is unreachable through filtered edges, that
         // happens whenever every path in the body terminates explicitly
         // (e.g. a function whose only return is `return buf.toString()`
         // at the tail).  Including it would emit an orphan SSA block
@@ -760,19 +760,19 @@ pub(crate) fn is_receiver_name(name: &str) -> bool {
 /// on to emit one [`SsaOp::SelfParam`] (for the leading receiver slot, when
 /// present) followed by a contiguous run of [`SsaOp::Param { index }`] values
 /// whose indices 0..N correspond exactly to positional call-site argument
-/// positions — no receiver offset required anywhere downstream.
+/// positions, no receiver offset required anywhere downstream.
 ///
 /// W1.b: every formal parameter gets a Param op even when the body never
 /// references it directly.  Without this, the *first* `obj.f = rhs` on a
 /// formal `obj` whose body never reads `obj` produces no W1
-/// `field_writes` entry — `var_stacks["obj"]` is empty when the synth
+/// `field_writes` entry, `var_stacks["obj"]` is empty when the synth
 /// Assign runs because no external-use path interned `obj`.  Subsequent
 /// writes work because the synth Assign itself defines `obj`, so the
 /// gap is exactly the FIRST write.  Always emitting a formal Param at
 /// block 0 closes that gap.
 fn reorder_external_vars(external: Vec<String>, formal_params: &[String]) -> Vec<String> {
     if formal_params.is_empty() {
-        return external; // no reordering — preserve existing alphabetical sort
+        return external; // no reordering, preserve existing alphabetical sort
     }
     let ext_set: HashSet<&str> = external.iter().map(|s| s.as_str()).collect();
     let formal_set: HashSet<&str> = formal_params.iter().map(|s| s.as_str()).collect();
@@ -789,7 +789,7 @@ fn reorder_external_vars(external: Vec<String>, formal_params: &[String]) -> Vec
     }
     // Formal positional params next (declaration order), skipping any
     // receiver that was already emitted above.  W1.b: include EVERY
-    // formal regardless of whether the body uses it externally — an
+    // formal regardless of whether the body uses it externally, an
     // unused formal that gets field-written via `obj.cache = rhs` still
     // needs a Param op so the synth Assign loop sees its prior reaching
     // def in `var_stacks`.
@@ -865,7 +865,7 @@ fn collect_var_defs(
 /// Returns a `BTreeSet<String>` per block so downstream consumers that iterate
 /// the set (notably `rename_variables`) observe a deterministic, alphabetical
 /// order regardless of the underlying hasher state.  The Cytron algorithm
-/// itself is order-independent — only its observers are.
+/// itself is order-independent, only its observers are.
 fn insert_phis(
     var_defs: &BTreeMap<String, HashSet<usize>>,
     dom_frontiers: &[HashSet<usize>],
@@ -882,7 +882,7 @@ fn insert_phis(
             for &f in &dom_frontiers[b] {
                 if has_phi.insert(f) {
                     phi_placements[f].insert(var.clone());
-                    // Phi is a new definition — add to worklist
+                    // Phi is a new definition, add to worklist
                     if !def_blocks.contains(&f) {
                         worklist.push_back(f);
                     }
@@ -945,7 +945,7 @@ fn rename_variables(
     // empty otherwise so existing per-statement Call lowering is
     // bit-for-bit unchanged.
     let mut field_interner = crate::ssa::ir::FieldInterner::new();
-    // Pointer-Phase 3 / W1: side-table mapping each synthetic base-update
+    //side-table mapping each synthetic base-update
     // [`SsaOp::Assign`]'s defined value to its `(receiver, field)` pair.
     // Populated below at the synthetic-Assign emission site.  Read by
     // the taint engine to lift the assign into a structural field WRITE.
@@ -968,7 +968,7 @@ fn rename_variables(
 
     // `BTreeMap` guarantees a deterministic (alphabetical) iteration order when
     // pushing phi values onto `var_stacks` and when filling operands on
-    // successor phis — both sites are observable in SSA numbering if they
+    // successor phis, both sites are observable in SSA numbering if they
     // reordered between runs.
     let mut phi_values: Vec<BTreeMap<String, SsaValue>> = vec![BTreeMap::new(); num_blocks];
 
@@ -1118,14 +1118,14 @@ fn rename_variables(
                 .any(|l| matches!(l, crate::labels::DataLabel::Source(_)))
                 && info.call.callee.is_none()
             {
-                // Pure source (e.g. $_GET, env var) — no callee, so no args to track.
+                // Pure source (e.g. $_GET, env var), no callee, so no args to track.
                 // Source-labeled calls (e.g. file_get_contents) fall through to Call
                 // so argument taint and sink detection still work.
                 SsaOp::Source
             } else if info.call.callee.is_some() {
                 let callee = info.call.callee.as_deref().unwrap_or("").to_string();
                 let (mut args, mut receiver) = build_call_args(info, var_stacks);
-                // Phase 2: try decomposing chained-receiver method calls
+                // try decomposing chained-receiver method calls
                 // (`a.b.c()`) into a FieldProj chain plus a bare-method Call
                 // so downstream consumers can read the receiver structure
                 // without re-parsing the callee text.  Bails to None on any
@@ -1145,7 +1145,7 @@ fn rename_variables(
                     Some((recv_v, bare_method)) => {
                         receiver = Some(recv_v);
                         // Strip any positional arg group that exactly matches the
-                        // chain root identifier — it has been replaced by the
+                        // chain root identifier, it has been replaced by the
                         // FieldProj chain receiver, and re-listing it as an
                         // argument would inflate arity / double-taint.
                         if let Some(base_ident) = callee.split('.').next() {
@@ -1175,7 +1175,7 @@ fn rename_variables(
                 // Reassignment kill: a node that defines a variable but has no
                 // uses (operands) and is not a source is a constant/literal
                 // assignment.  SSA rename allocates a fresh SsaValue, so
-                // downstream references see this new (untainted) value — the
+                // downstream references see this new (untainted) value, the
                 // prior tainted definition is implicitly dead.
                 SsaOp::Const(info.taint.const_text.clone())
             } else if info.taint.defines.is_some() {
@@ -1217,12 +1217,12 @@ fn rename_variables(
                 // `Assign(uses)` so the SSA carries an explicit pass-through
                 // for the returned/thrown value.  Without this, the Return
                 // node was lowered as a `Nop` and the terminator-setup
-                // "last non-Nop body inst" search returned None — producing
+                // "last non-Nop body inst" search returned None, producing
                 // `Terminator::Return(None)` for a function that visibly
                 // returns an identifier.  That broke per-return-path
                 // PathFact narrowing for non-Rust languages where the
                 // returned identifier wasn't computed in the same block
-                // (e.g. Python `def f(s): return s` — `s` is a Param in
+                // (e.g. Python `def f(s): return s`, `s` is a Param in
                 // block 0, the Return block itself has no body insts).
                 let uses: SmallVec<[SsaValue; 4]> = info
                     .taint
@@ -1250,8 +1250,8 @@ fn rename_variables(
             } else if info.call.callee.is_some() {
                 let callee = info.call.callee.as_deref().unwrap_or("").to_string();
                 let (mut args, mut receiver) = build_call_args(info, var_stacks);
-                // Phase 2: same FieldProj-chain decomposition as the primary
-                // Call branch above — kept in sync because this fallback
+                // same FieldProj-chain decomposition as the primary
+                // Call branch above, kept in sync because this fallback
                 // path also constructs SSA Call ops (used for control-flow
                 // wrapper calls that landed past the earlier match arms).
                 let (final_callee, callee_text) = match try_lower_field_proj_chain(
@@ -1342,9 +1342,9 @@ fn rename_variables(
             // overwrites properly kill taint: if obj.data is re-assigned to a
             // constant, the base `obj` no longer carries that field's taint.
             //
-            // Pointer-Phase 3 / W1: each synthetic Assign also records its
-            // structural identity into `field_writes` — `(receiver_old_value,
-            // FieldId(field_name))` — so the taint engine can recognise the
+            //each synthetic Assign also records its
+            // structural identity into `field_writes`, `(receiver_old_value,
+            // FieldId(field_name))`, so the taint engine can recognise the
             // synthetic assign as a field WRITE and mirror the rhs taint
             // into the matching `(loc, field)` cell on `SsaTaintState`.
             // The "old" parent value is the reaching def of `parent` BEFORE
@@ -1427,9 +1427,9 @@ fn rename_variables(
 
         ssa_blocks[block_idx].terminator = if succs.is_empty() {
             // A block with no successors at the block level is one of:
-            //   (1) a block containing a Throw — terminates with an
+            //   (1) a block containing a Throw, terminates with an
             //       exception; no normal fall-through.
-            //   (2) a block containing a Return — terminates with a value
+            //   (2) a block containing a Return, terminates with a value
             //       (or void).  After form_blocks strips the bookkeeping
             //       Seq edge from Return → fn_exit, every explicit-return
             //       block lands here, including `if cond { return X; }`
@@ -1458,7 +1458,7 @@ fn rename_variables(
                 let return_info = &cfg[rn];
                 // Return-value resolution.  Mirror the legacy
                 // `has_const_return` path so callers see exactly the same
-                // SSA shape they did before the merged-return fix — only
+                // SSA shape they did before the merged-return fix, only
                 // the *terminator* changes (Goto(exit) → Return(_)), not
                 // the value selection.
                 //
@@ -1468,7 +1468,7 @@ fn rename_variables(
                 //       Emit a synthetic Const inst so taint never leaks
                 //       from an unrelated inst earlier in the same block
                 //       (regression guard: C-1 inline-return precision).
-                //   (b) Computed / passthrough return — last non-Nop body
+                //   (b) Computed / passthrough return, last non-Nop body
                 //       inst.  Covers `return foo()` (Call sits before the
                 //       Return Nop), `return x + y` (Assign), and the
                 //       implicit tail expression collapsed into a single
@@ -1476,9 +1476,9 @@ fn rename_variables(
                 //       Return carries identifier uses (`return req`,
                 //       `return { req.session, ... }`), the SSA defs for
                 //       those identifiers are already on the body as
-                //       Param / Assign / Source insts — picking the last
+                //       Param / Assign / Source insts, picking the last
                 //       one matches pre-fix behaviour exactly.
-                //   (c) Void / unresolved — `Return(None)`.
+                //   (c) Void / unresolved, `Return(None)`.
                 if return_info.taint.uses.is_empty() {
                     let const_text = return_info.taint.const_text.clone();
                     let const_v = SsaValue(*next_value);
@@ -1507,7 +1507,7 @@ fn rename_variables(
                     Terminator::Return(from_body)
                 }
             } else {
-                // (3) fn_exit / true fall-off — no Return CFG node in this
+                // (3) fn_exit / true fall-off, no Return CFG node in this
                 // block.  Use the last non-Nop body instruction as the
                 // implicit return value (e.g. the function's tail-position
                 // expression in Rust).
@@ -1575,7 +1575,7 @@ fn rename_variables(
                 condition,
             }
         } else {
-            // More than 2 successors — model as a multi-way Switch.
+            // More than 2 successors, model as a multi-way Switch.
             //
             // This replaces the previous `Goto(first)` collapse: the
             // structured terminator now enumerates every target instead
@@ -1594,7 +1594,7 @@ fn rename_variables(
             //
             // Scrutinee: use the primary SSA value defined at the last
             // node in this block when one exists; fall back to
-            // `SsaValue(0)` (a valid index — SSA numbering is 1-based
+            // `SsaValue(0)` (a valid index, SSA numbering is 1-based
             // only conceptually, and value 0 is always present in a
             // non-empty body) when no value is defined. Downstream
             // consumers that care about the scrutinee (abstract interp,
@@ -1604,7 +1604,7 @@ fn rename_variables(
             let targets: SmallVec<[BlockId; 4]> =
                 succs.iter().skip(1).map(|&s| BlockId(s as u32)).collect();
             let default = BlockId(succs[0] as u32);
-            // Synthetic ≥3-way fanouts have no per-case literal metadata —
+            // Synthetic ≥3-way fanouts have no per-case literal metadata ,
             // every entry is None (unknown), so the executor falls back to
             // first-reachable behavior on this terminator.
             let case_values: SmallVec<[Option<crate::constraint::domain::ConstValue>; 4]> =
@@ -1815,7 +1815,7 @@ fn debug_assert_bfs_ordering(block_preds: &[Vec<usize>]) {
 /// predecessor of the block.
 ///
 /// Runs in release builds because phi-operand mismatches are
-/// load-bearing for soundness — downstream taint, const, and abstract
+/// load-bearing for soundness, downstream taint, const, and abstract
 /// analyses iterate phi operands by `(pred_blk, value)` pairs, and
 /// either a missing operand (silent "no contribution" on that edge)
 /// or a phantom operand (garbage into the join) corrupts analysis
@@ -1824,7 +1824,7 @@ fn debug_assert_bfs_ordering(block_preds: &[Vec<usize>]) {
 /// The invariant is strict equality. Predecessors that carry no
 /// reaching definition for the phi's variable are filled with the
 /// [`SsaOp::Undef`] sentinel in `fill_undef_phi_operands`, rather than
-/// being dropped — so consumers that look up by `(pred_blk, value)`
+/// being dropped, so consumers that look up by `(pred_blk, value)`
 /// see a real operand for every control-flow edge.
 fn assert_phi_operand_counts(ssa_blocks: &[SsaBlock], block_preds: &[Vec<usize>]) {
     use std::collections::HashSet;
@@ -1887,7 +1887,7 @@ fn assert_phi_operand_counts(ssa_blocks: &[SsaBlock], block_preds: &[Vec<usize>]
 /// single shared sentinel instruction ([`SsaOp::Undef`]) synthesized
 /// at the end of block 0's body. Consumers iterate phi operands by
 /// `(pred_blk, value)` and therefore see a real operand on every
-/// control-flow edge — no implicit "missing = empty" semantics.
+/// control-flow edge, no implicit "missing = empty" semantics.
 ///
 /// The Undef instruction is created lazily (only when at least one phi
 /// has a gap) so functions with fully-dominating definitions pay zero
@@ -1931,7 +1931,7 @@ fn fill_undef_phi_operands(
         block: BlockId(0),
     });
     // Place the Undef instruction at the end of block 0's body so it
-    // appears after any synthetic Param / SelfParam emissions — its
+    // appears after any synthetic Param / SelfParam emissions, its
     // only role is to anchor the SsaValue; ordering relative to other
     // body instructions is cosmetic (no consumer depends on its
     // position, only on the value lookup).
@@ -2181,7 +2181,7 @@ mod tests {
 
     #[test]
     fn bfs_ordering_holds_for_linear_cfg() {
-        // Entry → A → B → Exit — all blocks should satisfy BFS ordering
+        // Entry → A → B → Exit, all blocks should satisfy BFS ordering
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let a = cfg.add_node(NodeInfo {
@@ -2409,7 +2409,7 @@ mod tests {
     /// predecessor and a normal control-flow predecessor must lower to a
     /// consistent phi. For variables defined before the try (live on
     /// *both* edges), the phi at the catch block has exactly two operands
-    /// — one per predecessor — and the release assertion accepts it.
+    ///, one per predecessor, and the release assertion accepts it.
     #[test]
     fn catch_block_join_phi_has_operand_per_live_predecessor() {
         // Entry → defines `x` → Try → (Seq) → Join ← (Exception via body) Catch
@@ -2456,7 +2456,7 @@ mod tests {
         cfg.add_edge(catch, join, EdgeKind::Seq);
         cfg.add_edge(join, exit, EdgeKind::Seq);
 
-        // Lowering must succeed — the assertion is active in release.
+        // Lowering must succeed, the assertion is active in release.
         let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
 
         // Locate the block containing a phi for `x`; it must be the join
@@ -2498,7 +2498,7 @@ mod tests {
     /// Regression guard for the Undef fill pass. When a variable is
     /// only defined on one branch of a join (e.g. a catch-only binding
     /// rejoining the normal path), the lowering must still emit one
-    /// phi operand per predecessor — the missing edge becoming a
+    /// phi operand per predecessor, the missing edge becoming a
     /// reference to the synthesized `SsaOp::Undef` sentinel rather
     /// than being dropped.
     #[test]
@@ -2633,7 +2633,7 @@ mod tests {
     #[should_panic(expected = "SSA phi operand count does not match predecessor count")]
     fn phi_assertion_helper_rejects_more_operands_than_preds() {
         // A phi with MORE operands than preds references a nonexistent
-        // predecessor — unsound because downstream consumers either
+        // predecessor, unsound because downstream consumers either
         // panic on the lookup or silently feed garbage taint into the
         // join. Strict-equality invariant catches this.
         let dummy_node = NodeIndex::new(0);
@@ -2859,7 +2859,7 @@ mod tests {
     /// to a synthetic exit block.  Previously, the bookkeeping
     /// `Return → fn_exit` `Seq` edge made early-return blocks fall into
     /// the single-successor `Goto` arm, and the fall-through tail
-    /// expression's body got merged into the shared exit block — every
+    /// expression's body got merged into the shared exit block, every
     /// early-return path therefore appeared to also execute the tail.
     /// Mirrors the `if cond { return X; } Y` shape that motivated the fix.
     #[test]
@@ -2876,7 +2876,7 @@ mod tests {
         });
         // True branch: return constant.  uses=[] + const_text=Some triggers
         // the literal-return path, ensuring the block emits a synthetic
-        // Const + Return(Some(_)) — the same shape `return None` /
+        // Const + Return(Some(_)), the same shape `return None` /
         // `return String::new()` produces in real Rust code.
         let early_ret = cfg.add_node(NodeInfo {
             taint: TaintMeta {
@@ -2901,7 +2901,7 @@ mod tests {
         cfg.add_edge(if_node, early_ret, EdgeKind::True);
         cfg.add_edge(if_node, tail, EdgeKind::False);
         // Bookkeeping wire-up the real CFG construction performs in
-        // `build_cfg` — Return / Throw → fn_exit via Seq — so the SSA
+        // `build_cfg`, Return / Throw → fn_exit via Seq, so the SSA
         // lowering has to handle it.
         cfg.add_edge(early_ret, exit, EdgeKind::Seq);
         cfg.add_edge(tail, exit, EdgeKind::Seq);
@@ -2909,7 +2909,7 @@ mod tests {
         let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
 
         // Locate the block containing the early-return CFG node and
-        // assert it terminates with Return — not Goto(_) into the
+        // assert it terminates with Return, not Goto(_) into the
         // shared exit block.
         let early_block = ssa
             .blocks
@@ -2936,7 +2936,7 @@ mod tests {
         // The fall-through (tail) block must NOT have the early-return
         // block as a predecessor.  Pre-fix, both the early-return path
         // and the tail path merged into the shared fn_exit block, so the
-        // tail's body was reachable from the early-return path — that's
+        // tail's body was reachable from the early-return path, that's
         // the merged-return defect.
         let tail_block = ssa
             .blocks
@@ -2963,7 +2963,7 @@ mod tests {
     /// `if a || b || c { return X; } Y` must have its rejection body emit a
     /// `Terminator::Return(_)` and have `succs.is_empty()`.  Pre-fix the
     /// rejection body's String::new() Call shared a block whose only
-    /// successor was the merged tail — losing the early-return semantics
+    /// successor was the merged tail, losing the early-return semantics
     /// entirely and diluting per-return-path PathFact narrowing.
     #[test]
     fn or_chain_rejection_block_terminates_with_return() {
@@ -3093,7 +3093,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // Phase 2: FieldProj chain lowering tests
+    // FieldProj chain lowering tests
     // ─────────────────────────────────────────────────────────────────
     //
     // These tests pin the contract that `try_lower_field_proj_chain`
@@ -3426,7 +3426,7 @@ mod tests {
         assert!(blocks[0].body.is_empty());
     }
 
-    // ── End-to-end Phase 2 tests via real tree-sitter parsing ──────────
+    // ── End-to-end SSA decomposition tests via real tree-sitter parsing ──────────
     //
     // These exercise the integration between CFG construction (which sets
     // `info.call.callee = "c.mu.Lock"`) and SSA lowering.  We assert that
@@ -3451,7 +3451,7 @@ mod tests {
         };
         // Mirror the production lowering path: function bodies use
         // lower_to_ssa_with_params so formal parameters get synthetic
-        // Param/SelfParam injections at block 0 — without them, the
+        // Param/SelfParam injections at block 0, without them, the
         // FieldProj chain helper has no SSA root to anchor to.
         if body.meta.name.is_some() {
             let func_name = body.meta.name.clone().unwrap_or_default();
@@ -3506,7 +3506,7 @@ mod tests {
 
     #[test]
     fn phase2_e2e_go_chained_receiver_emits_field_proj() {
-        // Go: `c.writer.header.set(k, v)` — 3-segment receiver, 2 FieldProjs.
+        // Go: `c.writer.header.set(k, v)`, 3-segment receiver, 2 FieldProjs.
         // Chain root `c` is a function parameter so it is resolvable.
         let src = b"package p\nfunc f(c *T, k string, v string) { c.writer.header.set(k, v) }\n";
         let body = parse_to_first_body(
@@ -3549,7 +3549,7 @@ mod tests {
 
     #[test]
     fn phase2_e2e_python_chained_receiver_emits_field_proj() {
-        // Python: `obj.client.session.send(p)` — 3-segment receiver.
+        // Python: `obj.client.session.send(p)`, 3-segment receiver.
         let src = b"def f(obj, p):\n    obj.client.session.send(p)\n";
         let body = parse_to_first_body(
             src,
@@ -3574,7 +3574,7 @@ mod tests {
 
     #[test]
     fn phase2_e2e_javascript_chained_receiver_emits_field_proj() {
-        // JS: `obj.foo.bar.baz()` — 3-segment receiver.
+        // JS: `obj.foo.bar.baz()`, 3-segment receiver.
         let src = b"function f(obj) { obj.foo.bar.baz(); }";
         let body = parse_to_first_body(
             src,
@@ -3592,10 +3592,10 @@ mod tests {
 
     #[test]
     fn phase2_e2e_java_chained_receiver_emits_field_proj() {
-        // Java: `obj.config.handler.run()` — 3-segment receiver chain through
+        // Java: `obj.config.handler.run()`, 3-segment receiver chain through
         // a parameter `obj`.  We avoid `this.…` because `this` is a Java
         // keyword (not an identifier_node) so it isn't extracted as an
-        // external use — outside Phase 2's scope.
+        // external use, outside SSA decomposition.s scope.
         let src = b"class C { void f(Object obj) { obj.config.handler.run(); } }";
         let body = parse_to_first_body(
             src,
@@ -3620,7 +3620,7 @@ mod tests {
 
     #[test]
     fn phase2_e2e_simple_receiver_no_field_proj() {
-        // REGRESSION: `obj.foo()` — single-dot receiver.  Phase 2 must NOT
+        // REGRESSION: `obj.foo()`, single-dot receiver.  SSA lowering must NOT
         // decompose this into a FieldProj chain (existing receiver channel
         // already covers it).  Verify the body has zero FieldProj ops and
         // the Call's callee_text stays None.
@@ -3664,7 +3664,7 @@ mod tests {
     fn phase2_e2e_global_root_chain_still_emits_field_proj() {
         // REGRESSION-NEGATIVE: when the chain root is a global identifier
         // (`Math.foo.bar()`), the lowerer's external-var synthesis makes
-        // `Math` available as a synthetic Param — the chain still
+        // `Math` available as a synthetic Param, the chain still
         // decomposes, treating `Math` as the SSA receiver.  This is the
         // semantically correct outcome even for global-rooted chains: the
         // FieldProj op precisely captures the field-access structure.
@@ -3685,7 +3685,7 @@ mod tests {
 
     #[test]
     fn phase2_e2e_rust_method_call_through_field_emits_field_proj() {
-        // Rust: `c.mu.lock()` — `c` is a function parameter, `mu` is a field,
+        // Rust: `c.mu.lock()`, `c` is a function parameter, `mu` is a field,
         // `lock` is the method.  Verifies we generate FieldProj for `mu`.
         // (Rust paths like `std::env::var` use `::` and are excluded by
         // the helper's complex-token check.)
@@ -3782,16 +3782,11 @@ mod tests {
         );
     }
 
-    /// Pointer-Phase 3 / W1 end-to-end: lowering an `obj.f = rhs`
-    /// statement populates `SsaBody.field_writes` with the synthetic
-    /// base-update Assign's `(receiver, FieldId)` mapping.
-    ///
-    /// W1.b: a SINGLE-write shape — `function f(obj) { obj.cache = 42 }`
-    /// — also populates `field_writes` because every formal gets a
-    /// Param op at block 0 regardless of whether it's read by the
-    /// body.  Pre-W1.b this required two writes (the second's prior
-    /// reaching def came from the first synth Assign); now the first
-    /// write already finds the formal's Param in `var_stacks`.
+    /// End-to-end: lowering an `obj.f = rhs` statement populates
+    /// `SsaBody.field_writes` with the synthetic base-update Assign's
+    /// `(receiver, FieldId)` mapping. A single-write shape suffices ,
+    /// every formal gets a Param op at block 0 so the first write
+    /// finds the formal in `var_stacks`.
     #[test]
     fn w1_end_to_end_field_write_records_side_table_when_parent_has_prior_def() {
         // Single write to `obj.cache`: the formal `obj` provides the
@@ -3816,7 +3811,7 @@ mod tests {
         }
     }
 
-    /// W1.b: Python — single `obj.cache = 42` on a formal also
+    /// W1.b: Python, single `obj.cache = 42` on a formal also
     /// populates `field_writes` thanks to the formal Param op.
     #[test]
     fn w1b_single_write_records_field_write_python() {
@@ -3835,7 +3830,7 @@ mod tests {
         );
     }
 
-    /// W1.b: Rust — single `obj.cache = 42` on a method-style formal
+    /// W1.b: Rust, single `obj.cache = 42` on a method-style formal
     /// (`fn f(obj: &mut O)`) also populates `field_writes`.
     #[test]
     fn w1b_single_write_records_field_write_rust() {
@@ -3880,11 +3875,11 @@ mod tests {
     // ─────────────────────────────────────────────────────────────────
 
     /// Loop induction variable: `x = x + 1` inside a loop is the
-    /// canonical SSA challenge — the body uses `x` then redefines it,
+    /// canonical SSA challenge, the body uses `x` then redefines it,
     /// and the join with the entry definition must produce a phi that
     /// distinguishes the entry value from the body's redefinition.
-    /// Phase 5.2 (induction var pruning) depends on this shape being
-    /// lowered correctly.
+    /// Induction-var pruning depends on this shape being lowered
+    /// correctly.
     #[test]
     fn loop_self_assignment_induction_phi_is_distinct() {
         // Entry → x=0 → Loop header → [Body: use x; x = x_new] → Loop
@@ -4101,7 +4096,7 @@ mod tests {
 
     /// Variable defined ONLY in one branch of a conditional must be
     /// undef on the other path. The phi at the join should include an
-    /// undef sentinel for the missing arm — guards against the
+    /// undef sentinel for the missing arm, guards against the
     /// renamer silently dropping the missing operand.
     #[test]
     fn conditional_define_only_one_arm_phi_has_undef_operand() {
@@ -4137,7 +4132,7 @@ mod tests {
 
         // Find a phi for x and verify it has 2 operands. The "undef"
         // operand can manifest as a Nop-defined SsaValue or a sentinel
-        // — both are acceptable; the invariant is that arity == preds.
+        //, both are acceptable; the invariant is that arity == preds.
         let x_phi_ops = ssa
             .blocks
             .iter()

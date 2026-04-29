@@ -33,12 +33,12 @@ pub async fn transfer_community(
     req: TransferCommunity,
     pool: &mut Pool,
 ) -> Result<(), ()> {
-    // Row fetch — populates `community → [req.community_id]` — but
+    // Row fetch, populates `community → [req.community_id]`, but
     // no `check_*_action(&user, &community, ..)` follows.
     let _community = Community::read(pool, req.community_id)?;
 
     // Mutation by id with no preceding ownership/membership check.
-    // This is the genuine IDOR — must flag.
+    // This is the genuine IDOR, must flag.
     CommunityActions::delete_mods_for_community(pool, req.community_id)?;
 
     Ok(())

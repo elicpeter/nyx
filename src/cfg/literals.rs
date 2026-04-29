@@ -45,7 +45,7 @@ pub(super) fn find_call_node<'a>(n: Node<'a>, lang: &str) -> Option<Node<'a>> {
 ///   (JS `object`, TS `object`, Python `dictionary`). `names` contains
 ///   identifiers lifted from pair values whose key matches any entry in
 ///   `fields` (case-sensitive; JS/TS identifiers). When no destination-field
-///   pairs are present, returns `Some(vec![])` — the sink is effectively
+///   pairs are present, returns `Some(vec![])`, the sink is effectively
 ///   silenced because no destination identifier exists.
 /// * `None` if the arg is absent, is not an object literal (plain string
 ///   / ident / expression), or has splat/spread children that break static
@@ -77,7 +77,7 @@ pub(super) fn extract_destination_field_idents(
         match child.kind() {
             // `spread_element` (JS/TS) / `dictionary_splat` (Python): we can't
             // statically attribute spread contents to specific fields, so
-            // bail out — caller falls back to the whole-arg filter, matching
+            // bail out, caller falls back to the whole-arg filter, matching
             // the conservative posture used by arg_uses for splats.
             "spread_element" | "dictionary_splat" => {
                 return None;
@@ -107,7 +107,7 @@ pub(super) fn extract_destination_field_idents(
                         }
                     }),
                     // Computed keys like `[someVar]` can't be statically
-                    // resolved — skip (conservative: not a destination field).
+                    // resolved, skip (conservative: not a destination field).
                     "computed_property_name" => continue,
                     _ => text_of(key_node, code),
                 };
@@ -200,7 +200,7 @@ pub(super) fn extract_const_keyword_arg(
                 continue;
             }
             let value_node = child.child_by_field_name("value")?;
-            // Only return a literal — identifiers / calls / complex exprs are
+            // Only return a literal, identifiers / calls / complex exprs are
             // "dynamic" and must be reported as `None` so the gate can
             // distinguish literal-safe from dynamic.
             return match value_node.kind() {
@@ -252,7 +252,7 @@ pub(super) fn has_keyword_arg(call_node: Node, keyword_name: &str, code: &[u8]) 
 /// `interpolation` node.  Skips parenthesisation (`(arg0)` is treated as
 /// `arg0`).  Returns `None` when the call has no arguments.
 ///
-/// Used by per-language shape-aware sink suppression — for example, Ruby
+/// Used by per-language shape-aware sink suppression, for example, Ruby
 /// ActiveRecord query methods (`where`, `order`, `pluck`, …) are intrinsically
 /// parameterised when arg 0 is a hash/symbol/array/non-interpolated string,
 /// regardless of taint reaching that argument.
@@ -268,7 +268,7 @@ pub(super) fn arg0_kind_and_interpolation(call_node: Node) -> Option<(String, bo
 
 /// Walk a Java method-chain receiver looking for an inner `method_invocation`
 /// whose method name matches one of `target_methods` (e.g. `createQuery`,
-/// `prepareStatement`).  Returns the kind of that inner call's arg 0 — used
+/// `prepareStatement`).  Returns the kind of that inner call's arg 0, used
 /// to verify the SQL-bearing call up-chain was given a string literal rather
 /// than a concatenation / method call.
 ///
@@ -307,7 +307,7 @@ pub(super) fn java_chain_arg0_kind_for_method(
 /// method identifier matches one of `target_methods`, then return that
 /// inner call's [`arg0_kind_and_interpolation`].  Used when the CFG node
 /// represents a chained expression like `Model.where(...).preload(...).to_a`
-/// — the outermost call (`to_a`) has no arguments, so the shape suppressor
+///, the outermost call (`to_a`) has no arguments, so the shape suppressor
 /// must reach down the chain to inspect `where`'s arg 0.
 ///
 /// Conservative: returns `None` if the chain doesn't contain a matching
@@ -353,6 +353,116 @@ fn subtree_has_interpolation(n: Node) -> bool {
     n.named_children(&mut cursor).any(subtree_has_interpolation)
 }
 
+/// Walk a JS/TS method-chain receiver-side to find an inner `call_expression`
+/// whose member-property name matches one of `target_methods` (e.g. `query`,
+/// `execute`).  Returns the `(kind, has_interp)` of that inner call's arg 0.
+///
+/// Used to recognise ORM-accessor chains where a labelled SQL sink sits on
+/// the receiver side of a parameterised execute method:
+/// `strapi.db.query('admin::api-token').findOne({...})`.  The outer call
+/// (`findOne`) is the CFG node; the inner labelled `db.query` call carries
+/// the literal model UID that proves the chain is parameterised.
+///
+/// Conservative: returns `None` when no matching inner call is found, so
+/// callers fall through to the no-suppression path.
+pub(super) fn js_chain_arg0_kind_for_method(
+    expr: Node,
+    target_methods: &[&str],
+    code: &[u8],
+) -> Option<(String, bool)> {
+    let n = unwrap_parens(expr);
+    // tree-sitter-typescript / -javascript: call_expression with fields
+    // `function` (member_expression / identifier) and `arguments`.
+    if n.kind() == "call_expression" {
+        // Check this call's callee: if its property name (or full text) ends
+        // with one of `target_methods`, this is the inner labelled call.
+        if let Some(function) = n.child_by_field_name("function") {
+            // Property of a member_expression; falls back to the function
+            // text itself for bare-identifier calls.
+            let prop_text = function
+                .child_by_field_name("property")
+                .and_then(|p| text_of(p, code));
+            let full_text = text_of(function, code);
+            let leaf_text = full_text
+                .as_ref()
+                .map(|s| s.rsplit('.').next().unwrap_or(s).to_string());
+            let matched = target_methods.iter().any(|m| {
+                prop_text.as_deref() == Some(*m)
+                    || leaf_text.as_deref() == Some(*m)
+                    || full_text.as_deref() == Some(*m)
+                    || full_text
+                        .as_deref()
+                        .is_some_and(|s| s.ends_with(&format!(".{m}")))
+            });
+            if matched {
+                return arg0_kind_and_interpolation(n);
+            }
+            // Drill down the receiver spine: function.object is the prior
+            // call in the chain.
+            if let Some(object) = function.child_by_field_name("object")
+                && let Some(found) = js_chain_arg0_kind_for_method(object, target_methods, code)
+            {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Walk the receiver chain of a JS/TS call to count *non-execute* method
+/// calls between the outer call and an inner labelled call to
+/// `target_inner` (e.g. `query`, `execute`).  Returns the immediate outer
+/// chain method name (e.g. `findOne`) when an inner-call to `target_inner`
+/// exists somewhere on the receiver spine, otherwise `None`.
+///
+/// Used alongside [`js_chain_arg0_kind_for_method`] to verify the chain
+/// shape `<inner>.query(LITERAL).<orm_method>(...)`, bare
+/// `connection.query("SELECT ...")` returns `None` because there is no
+/// outer chain method.
+pub(super) fn js_chain_outer_method_for_inner<'a>(
+    outer: Node<'a>,
+    target_inner: &[&str],
+    code: &'a [u8],
+) -> Option<String> {
+    let n = unwrap_parens(outer);
+    if n.kind() != "call_expression" {
+        return None;
+    }
+    let function = n.child_by_field_name("function")?;
+    let object = function.child_by_field_name("object")?;
+    // If `object` itself is a call_expression whose property matches
+    // `target_inner`, the immediate outer is `function.property`.
+    if object.kind() == "call_expression" {
+        let inner_function = object.child_by_field_name("function");
+        if let Some(inner_function) = inner_function {
+            let prop_text = inner_function
+                .child_by_field_name("property")
+                .and_then(|p| text_of(p, code));
+            let full_text = text_of(inner_function, code);
+            let leaf_text = full_text
+                .as_ref()
+                .map(|s| s.rsplit('.').next().unwrap_or(s).to_string());
+            let inner_matched = target_inner.iter().any(|m| {
+                prop_text.as_deref() == Some(*m)
+                    || leaf_text.as_deref() == Some(*m)
+                    || full_text.as_deref() == Some(*m)
+                    || full_text
+                        .as_deref()
+                        .is_some_and(|s| s.ends_with(&format!(".{m}")))
+            });
+            if inner_matched {
+                return function
+                    .child_by_field_name("property")
+                    .and_then(|p| text_of(p, code).map(|s| s.to_string()));
+            }
+        }
+        // Recurse: outer chain may have more depth (`a.b().c().d()` ,
+        // d is outermost, c is next, target may be at b or further in).
+        return js_chain_outer_method_for_inner(object, target_inner, code);
+    }
+    None
+}
+
 /// For a chained method call (`a.b().c().d()`), walk down the receiver
 /// chain (`function.object`) and return the innermost call_expression
 /// alongside its callee text (e.g. `"http.get"`).
@@ -385,7 +495,7 @@ pub(super) fn find_chained_inner_call<'a>(
         return None;
     }
     // Recurse: the inner call may itself be chained
-    // (`axios.get(u).then(h).catch(h)` — innermost is `axios.get`).
+    // (`axios.get(u).then(h).catch(h)`, innermost is `axios.get`).
     if let Some(inner) = find_chained_inner_call(object, lang, code) {
         return Some(inner);
     }
@@ -398,7 +508,7 @@ pub(super) fn find_chained_inner_call<'a>(
         .or_else(|| object.child_by_field_name("name"))?;
     // Multi-line dotted member expressions (`http\n  .get`) include
     // formatting whitespace in the source-text slice. The labels map
-    // keys are literal `"http.get"` etc. — strip whitespace so the
+    // keys are literal `"http.get"` etc., strip whitespace so the
     // chained-call inner-gate rebinding fires for both single-line and
     // multi-line chain styles. Also strips `\r` for CRLF sources.
     // Motivated by upstream Parse Server CVE-2025-64430 which uses the
@@ -410,18 +520,18 @@ pub(super) fn find_chained_inner_call<'a>(
 
 /// Recursively walk the receiver chain of `outer` (a CallFn / CallMethod
 /// node) and yield each *named argument* of every inner call along the
-/// way.  Outer's own arguments are NOT included — the caller already
+/// way.  Outer's own arguments are NOT included, the caller already
 /// handles those via the standard `pre_emit_arg_source_nodes` pass over
 /// `outer.arguments`.
 ///
 /// For `json.NewDecoder(r.Body).Decode(emoji)`:
-///   outer  = `.Decode(emoji)`           — caller iterates `emoji`
-///   inner  = `json.NewDecoder(r.Body)`  — yielded arg: `r.Body`
+///   outer  = `.Decode(emoji)`          , caller iterates `emoji`
+///   inner  = `json.NewDecoder(r.Body)` , yielded arg: `r.Body`
 ///
 /// We only pull from each inner call's `arguments` field, never from its
 /// `function`/`method`/receiver expressions.  That distinction matters
 /// because chained source-receivers like `r.URL.Query()` expose a
-/// member-text path that classifies as a Source — but it's the OUTER
+/// member-text path that classifies as a Source, but it's the OUTER
 /// chain text (`r.URL.Query.Get`) that already classifies, so emitting
 /// a synth source for the inner-call's own callee would double-count.
 ///
@@ -498,7 +608,7 @@ pub(super) fn is_parameterized_query_call(call_node: Node, code: &[u8]) -> bool 
         return false;
     }
     let first_arg = named[0];
-    // Extract the raw text of arg 0 — must be a string literal or
+    // Extract the raw text of arg 0, must be a string literal or
     // template string without interpolation.
     let query_text = match first_arg.kind() {
         "string" | "string_literal" | "interpreted_string_literal" | "raw_string_literal" => {
@@ -511,7 +621,7 @@ pub(super) fn is_parameterized_query_call(call_node: Node, code: &[u8]) -> bool 
                 .named_children(&mut c)
                 .any(|ch| ch.kind() == "template_substitution")
             {
-                return false; // dynamic — not safe
+                return false; // dynamic, not safe
             }
             text_of(first_arg, code)
         }
@@ -534,7 +644,7 @@ pub(super) fn is_parameterized_query_call(call_node: Node, code: &[u8]) -> bool 
 /// - `$1`, `$2`, …, `$N` (PostgreSQL positional)
 /// - `?` (MySQL / SQLite positional)
 /// - `%s` (Python DB-API / psycopg2)
-/// - `:identifier` (Oracle / named parameters) — requires the colon to be
+/// - `:identifier` (Oracle / named parameters), requires the colon to be
 ///   preceded by a space or `=` (to avoid matching JS ternary / object
 ///   literals).
 pub(super) fn has_sql_placeholders(s: &str) -> bool {
@@ -559,7 +669,7 @@ pub(super) fn has_sql_placeholders(s: &str) -> bool {
                 && i + 1 < len
                 && bytes[i + 1].is_ascii_alphabetic() =>
             {
-                // :identifier — must be preceded by whitespace/= to avoid
+                // :identifier, must be preceded by whitespace/= to avoid
                 // false positives on object literals or ternary operators.
                 return true;
             }
@@ -581,7 +691,7 @@ pub(super) fn has_sql_placeholders(s: &str) -> bool {
 #[allow(clippy::only_used_in_recursion)]
 pub(super) fn is_syntactic_literal(node: Node, code: &[u8]) -> bool {
     match node.kind() {
-        // Scalar strings — but reject if they contain interpolation
+        // Scalar strings, but reject if they contain interpolation
         // (e.g. Ruby `"hello #{name}"`, Python f-strings).
         "string"
         | "string_literal"
@@ -602,7 +712,7 @@ pub(super) fn is_syntactic_literal(node: Node, code: &[u8]) -> bool {
         // PHP encapsed_string: safe only if no variable interpolation
         "encapsed_string" => !has_interpolation_cfg(node),
 
-        // Wrapper: PHP/Go wrap each arg in an `argument` node — unwrap
+        // Wrapper: PHP/Go wrap each arg in an `argument` node, unwrap
         "argument" => {
             node.named_child_count() == 1
                 && node
@@ -765,7 +875,7 @@ pub(super) fn has_only_literal_args(call_node: Node, code: &[u8]) -> bool {
             return false;
         }
     }
-    // Zero-arg calls are not "all literal" — taint can still flow via a
+    // Zero-arg calls are not "all literal", taint can still flow via a
     // non-literal receiver (e.g. `tainted.readObject()`), and the sink-
     // suppression gate (`info.all_args_literal`) must not skip these.
     if !any_arg {
@@ -781,7 +891,7 @@ pub(super) fn check_inner_call_args(node: Node, code: &[u8]) -> bool {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         let kind = child.kind();
-        // Skip argument lists — those are checked by the caller.
+        // Skip argument lists, those are checked by the caller.
         if kind == "arguments" || kind == "argument_list" || kind == "actual_parameters" {
             continue;
         }
@@ -804,7 +914,7 @@ pub(super) fn check_inner_call_args(node: Node, code: &[u8]) -> bool {
 /// Returns one `Vec<String>` per argument (in parameter-position order).
 /// Returns empty if argument list can't be found or contains spread/keyword args.
 pub(super) fn extract_arg_uses(call_node: Node, code: &[u8]) -> Vec<Vec<String>> {
-    // Ruby `subshell` (backticks) has no `arguments` field — its children are
+    // Ruby `subshell` (backticks) has no `arguments` field, its children are
     // string fragments and `interpolation` nodes. Lift each interpolation's
     // identifiers into a positional arg so taint flows from `#{var}` into the
     // synthetic "subshell" sink.
@@ -834,7 +944,7 @@ pub(super) fn extract_arg_uses(call_node: Node, code: &[u8]) -> Vec<Vec<String>>
     for child in args_node.named_children(&mut cursor) {
         let kind = child.kind();
         // Named / keyword arguments are tracked separately in `CallMeta.kwargs`
-        // and do not participate in positional indexing — skip them here so
+        // and do not participate in positional indexing, skip them here so
         // `arg_uses` remains strictly positional.  Splats (spread/dict splat)
         // still invalidate positional mapping; bail out in that case.
         if kind == "spread_element"
@@ -1058,13 +1168,13 @@ pub(super) fn detect_rust_replace_chain_sanitizer(call_ast: Node, code: &[u8]) -
 /// Mirrors [`detect_rust_replace_chain_sanitizer`] but for the single-call
 /// (non-method-chain) Go shape.  The caller wires the resulting cap into
 /// the call's [`crate::labels::DataLabel::Sanitizer`] label, which the
-/// taint engine consumes via the standard sanitizer pathway — taint flows
+/// taint engine consumes via the standard sanitizer pathway, taint flows
 /// in on `s`, the matching cap is stripped from the result.
 pub(super) fn detect_go_replace_call_sanitizer(call_ast: Node, code: &[u8]) -> Option<Cap> {
     if call_ast.kind() != "call_expression" {
         return None;
     }
-    // The call's `function` field is a `selector_expression` — `operand`
+    // The call's `function` field is a `selector_expression`, `operand`
     // is the package ident (`strings`), `field` is the method ident.
     let func = call_ast.child_by_field_name("function")?;
     if func.kind() != "selector_expression" {
@@ -1085,7 +1195,7 @@ pub(super) fn detect_go_replace_call_sanitizer(call_ast: Node, code: &[u8]) -> O
     let new_lit = extract_const_string_arg(call_ast, 2, code)?;
 
     // If the replacement itself reintroduces a dangerous sequence, don't
-    // credit the strip — matches the Rust chain detector's policy.
+    // credit the strip, matches the Rust chain detector's policy.
     if !caps_stripped_by_literal_pattern(&new_lit).is_empty() {
         return None;
     }
@@ -1106,7 +1216,7 @@ pub(super) fn call_ident_of<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Opti
     }
     match lookup(lang, n.kind()) {
         Kind::Function => {
-            // Function/closure expression passed as argument — return the same
+            // Function/closure expression passed as argument, return the same
             // synthetic anon name used by build_sub so callback_bindings and
             // source_to_callback can match it to the extracted BodyCfg.
             n.child_by_field_name("name")
@@ -1155,7 +1265,7 @@ pub(super) fn call_ident_of<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Opti
 /// returned vector is parallel to [`extract_arg_uses`] / [`extract_arg_callees`].
 ///
 /// Bails on splats so that a variadic call (`f(*args)`, `f(...xs)`) produces
-/// an empty vector — positional indices past the splat are meaningless and
+/// an empty vector, positional indices past the splat are meaningless and
 /// downstream passes already treat an empty vector as "no info".
 pub(super) fn extract_arg_string_literals(call_node: Node, code: &[u8]) -> Vec<Option<String>> {
     let Some(args_node) = call_node.child_by_field_name("arguments") else {
@@ -1175,7 +1285,7 @@ pub(super) fn extract_arg_string_literals(call_node: Node, code: &[u8]) -> Vec<O
             return Vec::new();
         }
         // Named / keyword arguments are tracked separately in `kwargs` and
-        // don't participate in positional indexing — skip them here so this
+        // don't participate in positional indexing, skip them here so this
         // vector stays aligned with `arg_uses`.
         if kind == "keyword_argument" || kind == "named_argument" {
             continue;
@@ -1198,7 +1308,7 @@ pub(super) fn extract_arg_string_literals(call_node: Node, code: &[u8]) -> Vec<O
             | "raw_string_literal"
             // PHP's double-quoted form (single-quoted maps to `string`).
             // Only safe to lift when there is no `encapsed_string` /
-            // `embedded_expression` interpolation child — checked below.
+            // `embedded_expression` interpolation child, checked below.
             | "encapsed_string" => {
                 let raw = text_of(target, code);
                 raw.and_then(|s| strip_literal_quotes(&s, target, code))
@@ -1212,7 +1322,7 @@ pub(super) fn extract_arg_string_literals(call_node: Node, code: &[u8]) -> Vec<O
 
 /// Strip surrounding quotes from a syntactic string literal, resolving the
 /// `string_content` child for Rust-style two-level string nodes.  Returns the
-/// raw inner text (no escape-sequence processing) — sufficient for whitelist
+/// raw inner text (no escape-sequence processing), sufficient for whitelist
 /// matching against shell-metachar sets.
 pub(super) fn strip_literal_quotes(raw: &str, node: Node, code: &[u8]) -> Option<String> {
     // Rust/tree-sitter-rust: `string_literal` wraps a `string_content` child.
@@ -1320,7 +1430,7 @@ pub(super) fn def_use(
                 // Python/Ruby `expression_statement` → `assignment`)
                 let mut cursor = ast.walk();
                 for child in ast.children(&mut cursor) {
-                    // Only use left/right fields for actual assignment nodes — binary
+                    // Only use left/right fields for actual assignment nodes, binary
                     // expressions also have left/right but are not definitions.
                     let is_assign = matches!(lookup(lang, child.kind()), Kind::Assignment);
                     let child_name = child
@@ -1403,7 +1513,7 @@ pub(super) fn def_use(
             (defs, uses, vec![])
         }
 
-        // if‑let / while‑let — the `let_condition` binds a variable from
+        // if‑let / while‑let, the `let_condition` binds a variable from
         // the value expression.  E.g. `if let Ok(cmd) = env::var("CMD")`
         // defines `cmd` and uses `env`, `var`, `CMD`.
         Kind::If | Kind::While => {
@@ -1418,7 +1528,7 @@ pub(super) fn def_use(
                     let mut tmp = Vec::<String>::new();
                     collect_idents(pat, code, &mut tmp);
                     // The first plain identifier in the pattern is the binding.
-                    // Skip type identifiers (e.g. "Ok" in Ok(cmd)) — take the
+                    // Skip type identifiers (e.g. "Ok" in Ok(cmd)), take the
                     // last ident which is the inner binding name.
                     defs = tmp.into_iter().last();
                 }

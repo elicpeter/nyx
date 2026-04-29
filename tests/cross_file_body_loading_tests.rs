@@ -4,7 +4,7 @@
 //! The body-loading path is pure plumbing: the taint engine carries a
 //! `cross_file_bodies` field on `SsaTaintTransfer` that the cross-file
 //! inline path consumes.  This test guards the *availability*
-//! invariant — if pass 1 stops populating `bodies_by_key`, the inline
+//! invariant, if pass 1 stops populating `bodies_by_key`, the inline
 //! path would silently fall back to summary resolution even when
 //! cross-file bodies could have given context-sensitive precision.
 //!
@@ -19,7 +19,7 @@ use nyx_scanner::symbol::Lang;
 use nyx_scanner::utils::config::{AnalysisMode, Config};
 use std::path::Path;
 
-/// Test-local config mirror of `tests/common/mod.rs::test_config` —
+/// Test-local config mirror of `tests/common/mod.rs::test_config` ,
 /// kept inline so this file does not need to pull in the shared module
 /// (which `cargo test --test cross_file_body_loading_tests` would
 /// require extra wiring for).
@@ -39,7 +39,7 @@ fn test_config() -> Config {
 /// Replay the pass-1 body-collection logic from `scan_filesystem` on a
 /// handful of files and return the resulting `GlobalSummaries`.
 ///
-/// This mirrors the fold-body of `scan_filesystem`'s pass-1 rayon loop —
+/// This mirrors the fold-body of `scan_filesystem`'s pass-1 rayon loop ,
 /// the production code uses the same `analyse_file_fused` entry point
 /// and the same `insert` / `insert_ssa` / `insert_body` trio.  Keeping
 /// the test close to that shape catches drift between the fused pipeline
@@ -72,7 +72,7 @@ fn cross_file_body_loading_smoke_python_two_files() {
     let root = tmp.path();
 
     // `a.py` defines a helper that takes one parameter, does a trivial
-    // string op, and returns.  The body is intentionally small — we only
+    // string op, and returns.  The body is intentionally small, we only
     // care that *any* eligible body is produced, not that it has
     // interesting taint content.
     let a_py = root.join("a.py");
@@ -133,7 +133,7 @@ fn cross_file_body_loading_smoke_python_two_files() {
         body.param_count
     );
 
-    // Quick sanity on the SSA shape — an eligible body must have at
+    // Quick sanity on the SSA shape, an eligible body must have at
     // least one block.  Zero blocks would mean we stored an empty stub,
     // which would let the inline path silently do nothing on every
     // inline attempt.
@@ -146,7 +146,7 @@ fn cross_file_body_loading_smoke_python_two_files() {
 #[test]
 fn cross_file_body_loading_empty_without_callees() {
     // A single file with no inter-procedural flow is still expected to
-    // produce a body for its one function — that's what body loading
+    // produce a body for its one function, that's what body loading
     // enables.  The *empty* case this test guards is "bodies_by_key
     // returns None when no bodies are loaded," which keeps the
     // threaded-through `Option` explicit for inline consumers.

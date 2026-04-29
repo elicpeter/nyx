@@ -1,7 +1,7 @@
 // target: authorization happens inside `validate_target`, which
 // internally calls `authz::require_membership` against the same
 // `group_id` the handler subsequently mutates. The current rule cannot
-// see this transitively — B4 lifts per-function auth-check summaries
+// see this transitively, B4 lifts per-function auth-check summaries
 // (which positional params are auth-checked) so the handler-level call
 // to `validate_target(&db, group_id, user.id)` is recognised as an
 // auth check covering `group_id`. Result: `db.exec(..)` MUST NOT flag
@@ -45,7 +45,7 @@ pub async fn handle_create_comment(
     let user = auth::require_auth(&req, &ctx).await?;
     let db = Db;
 
-    // Authorization happens inside validate_target — helper-summary
+    // Authorization happens inside validate_target, helper-summary
     // lifting propagates the per-param auth check so this covers
     // `group_id`.
     validate_target(&db, group_id, user.id).await?;

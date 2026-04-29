@@ -2,9 +2,9 @@
 //!
 //! The scanner's two-pass pipeline runs rayon `par_iter` over files in
 //! both pass-1 (summary extraction) and pass-2 (rule evaluation), and
-//! merges summaries via `try_reduce`.  A latent ordering bug — a
+//! merges summaries via `try_reduce`.  A latent ordering bug, a
 //! shared mutable state hit unprotected from multiple threads, or a
-//! `HashMap` iteration order leaking into a finding identity — can
+//! `HashMap` iteration order leaking into a finding identity, can
 //! surface as a diagnostic that appears with 4 workers but not with 1.
 //!
 //! This test runs the same fixture under worker-thread counts of 1,
@@ -14,7 +14,7 @@
 //! assertion fires only on real output divergence.
 //!
 //! If this test ever flakes, prefer investigating the engine over
-//! weakening the normaliser — engine-level determinism across thread
+//! weakening the normaliser, engine-level determinism across thread
 //! counts is load-bearing for reproducible CI runs.
 mod common;
 

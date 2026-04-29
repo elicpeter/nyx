@@ -1,7 +1,7 @@
 // Real-repo motivation (lemmy `LocalUserView` extractor).
 //
 // Lemmy's authenticated-actor extractor type is named `LocalUserView`
-// — every route handler signature is
+//, every route handler signature is
 // `pub async fn handler(.., local_user_view: LocalUserView)`.  The
 // previous exact-name list in `is_self_actor_type_text`
 // (`CurrentUser`, `SessionUser`, `AuthUser`, `AdminUser`,
@@ -44,7 +44,7 @@ pub async fn write_self_note(
     pool: &mut Pool,
     local_user_view: LocalUserView,
 ) -> Result<(), ()> {
-    // Login predicate on the actor itself — subject is the actor.
+    // Login predicate on the actor itself, subject is the actor.
     // No additional ownership check needed because the subject is the
     // caller's own row.
     let _ = is_admin(&local_user_view);

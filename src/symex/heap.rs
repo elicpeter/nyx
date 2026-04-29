@@ -8,7 +8,7 @@
 //! Design:
 #![allow(clippy::collapsible_if, clippy::new_without_default)]
 //! - `FieldSlot::Named` for object properties (per-field precision).
-//! - `FieldSlot::Elements` for container contents (flow-insensitive union —
+//! - `FieldSlot::Elements` for container contents (flow-insensitive union ,
 //!   deliberately lower precision than named fields).
 //! - Bounded: `MAX_HEAP_ENTRIES` total, `MAX_FIELDS_PER_OBJECT` per object.
 //!   Overflow silently drops the store (conservative: subsequent load → `Unknown`).
@@ -313,7 +313,7 @@ impl SymbolicHeap {
 
     /// Count non-index fields stored for a specific object.
     ///
-    /// Excludes `Index(*)` entries — those are bounded separately by
+    /// Excludes `Index(*)` entries, those are bounded separately by
     /// [`MAX_TRACKED_INDICES`] via [`count_indices_for`].
     fn fields_for_object(&self, object: HeapObjectId) -> usize {
         self.fields
@@ -425,7 +425,7 @@ pub fn resolve_receiver_ssa(
 /// Resolve an SSA value to a singleton `HeapObjectId` via points-to analysis.
 ///
 /// Returns `Some` only when the points-to set contains exactly one object.
-/// May-alias (set size > 1) or unknown (not in result) returns `None` —
+/// May-alias (set size > 1) or unknown (not in result) returns `None` ,
 /// the caller should fall through to existing behavior (sound: never pick
 /// among ambiguous options).
 pub fn resolve_singleton_object(
@@ -675,7 +675,7 @@ mod tests {
             heap.load(&index_key(0, 1)),
             SymbolicValue::ConcreteStr("safe".to_string())
         );
-        // Taint: conservative — Elements taint poisons Index(1).
+        // Taint: conservative, Elements taint poisons Index(1).
         assert!(heap.is_tainted(&index_key(0, 1)));
     }
 

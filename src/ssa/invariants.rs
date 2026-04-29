@@ -20,33 +20,33 @@
 //!
 //! Invariants are split into two groups:
 //!
-//! **Group A — SSA integrity (must hold unconditionally):**
+//! **Group A, SSA integrity (must hold unconditionally):**
 //!
-//! 1. `BlockId` indexing — `blocks[i].id == BlockId(i)`
+//! 1. `BlockId` indexing, `blocks[i].id == BlockId(i)`
 //! 2. Entry block has no predecessors
-//! 3. Pred/succ symmetry — `B.succs.contains(S)` ⇔ `S.preds.contains(B)`
-//! 4. Phi placement — every phi appears in `block.phis` (never in body)
-//! 5. Phi operand arity — ≤ `block.preds.len()`
-//! 6. Phi operand sources — every `(pred_bid, _)` operand has
+//! 3. Pred/succ symmetry, `B.succs.contains(S)` ⇔ `S.preds.contains(B)`
+//! 4. Phi placement, every phi appears in `block.phis` (never in body)
+//! 5. Phi operand arity, ≤ `block.preds.len()`
+//! 6. Phi operand sources, every `(pred_bid, _)` operand has
 //!    `block.preds.contains(pred_bid)`
-//! 7. Unique SSA definitions — every `SsaValue` is defined at most once
+//! 7. Unique SSA definitions, every `SsaValue` is defined at most once
 //!    across all phi + body instructions
-//! 8. `value_defs` coverage — every defined `SsaValue.0` is a valid index
+//! 8. `value_defs` coverage, every defined `SsaValue.0` is a valid index
 //!    into `value_defs`, and `value_defs[v.0].block` matches the block
 //!    containing the defining instruction
-//! 9. `cfg_node_map` consistency — every `(node, SsaValue)` pair points
+//! 9. `cfg_node_map` consistency, every `(node, SsaValue)` pair points
 //!    to an instruction whose `cfg_node == node`
 //!
-//! **Group B — terminator and reachability (loose, reflecting lowering):**
+//! **Group B, terminator and reachability (loose, reflecting lowering):**
 //!
 //! 10. Terminator/succs agreement *subset* form:
-//!     * `Goto(t)`              → `succs.contains(t)` — extras tolerated
+//!     * `Goto(t)`              → `succs.contains(t)`, extras tolerated
 //!       (3-successor collapse fallback)
 //!     * `Branch{t, f, …}`      → `succs` contains both `t` and `f`
 //!     * `Return`/`Unreachable` → no constraint on `succs` (CFG may carry
 //!       finally/cleanup continuation edges that downstream analysis
 //!       propagates through)
-//! 11. Reachability from entry — tolerated exceptions:
+//! 11. Reachability from entry, tolerated exceptions:
 //!     * blocks that appear as the `catch` side of an exception edge
 //!
 //! Group B is deliberately permissive: the SSA body's `succs` field is the
@@ -61,8 +61,8 @@ use super::ir::*;
 
 /// Errors returned by targeted invariant checks.
 ///
-/// Wraps a list of human-readable violation messages — one per offending
-/// block — so callers can include every failure in a single panic /
+/// Wraps a list of human-readable violation messages, one per offending
+/// block, so callers can include every failure in a single panic /
 /// warning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvariantError {
@@ -106,12 +106,12 @@ pub fn check_structural_invariants(body: &SsaBody) -> Vec<String> {
     errors
 }
 
-/// Every block carrying an [`SsaOp::CatchParam`] — an exception-handler
-/// entry — must be reachable from either the function entry (via normal
+/// Every block carrying an [`SsaOp::CatchParam`], an exception-handler
+/// entry, must be reachable from either the function entry (via normal
 /// flow) or from at least one entry in [`SsaBody::exception_edges`].
 ///
 /// When this fails, the CFG builder has produced an orphan catch block
-/// that should have been wired up as an exception successor but was not —
+/// that should have been wired up as an exception successor but was not ,
 /// a real construction bug that otherwise manifests as silent false
 /// negatives in resource-cleanup / exception-flow findings.
 pub fn check_catch_block_reachability(body: &SsaBody) -> Result<(), InvariantError> {
@@ -252,7 +252,7 @@ fn check_pred_succ_symmetry(body: &SsaBody, errors: &mut Vec<String>) {
 }
 
 fn check_terminator_succ_agreement(body: &SsaBody, errors: &mut Vec<String>) {
-    // Group B — loose agreement.  See module docs for rationale.
+    // Group B, loose agreement.  See module docs for rationale.
     for block in &body.blocks {
         match &block.terminator {
             Terminator::Goto(target) => {
@@ -301,7 +301,7 @@ fn check_terminator_succ_agreement(body: &SsaBody, errors: &mut Vec<String>) {
                 }
             }
             Terminator::Return(_) | Terminator::Unreachable => {
-                // Loose by design — cleanup/finally continuation edges in
+                // Loose by design, cleanup/finally continuation edges in
                 // `succs` are expected.  Downstream consumers (taint
                 // `compute_succ_states`, SCCP `process_terminator`) treat
                 // `succs` as authoritative and propagate across these edges,
@@ -443,7 +443,7 @@ fn check_reachability(body: &SsaBody, errors: &mut Vec<String>) {
     // Multi-root BFS: start from the entry *and* from every catch target
     // recorded in `exception_edges`.  Exception-handler blocks are reached
     // via stripped exception edges, so from the SSA body's perspective they
-    // look like roots — as does anything transitively reachable from them
+    // look like roots, as does anything transitively reachable from them
     // (e.g. a `finally` block chained after a `catch`).
     let mut visited = vec![false; n];
     let mut stack: Vec<BlockId> = Vec::new();
@@ -487,7 +487,7 @@ fn check_reachability(body: &SsaBody, errors: &mut Vec<String>) {
 /// fingerprint have the same block structure, terminator shape, per-block
 /// phi/body instruction counts and op-kind sequences.  SsaValue numbers are
 /// not part of the fingerprint, so renumbering between runs does not cause
-/// spurious diffs — only shape changes do.
+/// spurious diffs, only shape changes do.
 ///
 /// Phis are emitted in their natural (insertion) order.  Lowering now drives
 /// phi placement through a `BTreeSet`, so that order is deterministic

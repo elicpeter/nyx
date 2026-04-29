@@ -8,7 +8,7 @@
 //! Key design:
 //! - HeapObjectId is keyed by allocation-site SsaValue (deterministic, zero-cost)
 //! - PointsToSet is bounded to `analysis.engine.max_pointsto` entries
-//!   (default 32, widening on overflow — see [`effective_max_pointsto`]).
+//!   (default 32, widening on overflow, see [`effective_max_pointsto`]).
 //!   Overflow drops emit an [`crate::engine_notes::EngineNote::PointsToTruncated`]
 //!   note and increment [`POINTSTO_TRUNCATION_COUNT`] so operators can
 //!   tell when the cap is firing on their corpus.
@@ -16,7 +16,7 @@
 //!   - HeapSlot::Index(u64) for constant-index container access (proven by const propagation)
 //!   - HeapSlot::Elements for coarse element access (push/pop, dynamic index, overflow)
 //!   - Intraprocedural: constant-index sensitivity is guaranteed when const propagation proves it
-//!   - Interprocedural: best-effort — relies on correct const_values threading (already handled)
+//!   - Interprocedural: best-effort, relies on correct const_values threading (already handled)
 //!   - Unknown/unproven indices fall back to Elements (conservative)
 //! - Analysis runs as a pre-pass in optimize_ssa(), like type_facts
 
@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
-// Heap origin cap used to be `const MAX_HEAP_ORIGINS: usize = 4` — now
+// Heap origin cap used to be `const MAX_HEAP_ORIGINS: usize = 4`, now
 // governed by the shared `analysis.engine.max_origins` knob through
 // `crate::taint::ssa_transfer::push_origin_bounded`.  Unifying the two
 // lattices behind a single tunable means operators raise *one* value to
@@ -47,7 +47,7 @@ static MAX_POINTSTO_OVERRIDE: std::sync::atomic::AtomicUsize =
 /// Total heap-object members dropped by [`PointsToSet`] truncation since
 /// the last reset.  Captured from `insert`/`union` so tests (and
 /// operators inspecting scan output) can detect truncation events that
-/// don't propagate to a finding — e.g. when the cap is tight enough
+/// don't propagate to a finding, e.g. when the cap is tight enough
 /// that no taint flow survives to emit a sink event.
 pub(crate) static POINTSTO_TRUNCATION_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -114,7 +114,7 @@ pub const MAX_TRACKED_INDICES: usize = 8;
 
 /// Distinguishes constant-index container access from coarse element access.
 ///
-/// `Elements` is the conservative default — all container elements merge into
+/// `Elements` is the conservative default, all container elements merge into
 /// a single taint.  `Index(n)` provides per-index precision when the index is
 /// provably a non-negative integer constant (via the function's own const
 /// propagation pass).
@@ -302,10 +302,10 @@ impl HeapTaint {
 /// union of per-slot taint), matching the `SsaTaintState` pattern.
 ///
 /// Load semantics:
-/// - `load(id, Index(n))`: union of `(id, Index(n))` and `(id, Elements)` —
+/// - `load(id, Index(n))`: union of `(id, Index(n))` and `(id, Elements)` ,
 ///   indexed reads also see taint from dynamic/push operations.
 /// - `load(id, Elements)`: union of `(id, Elements)` and ALL `(id, Index(*))`
-///   entries — dynamic reads conservatively see all indexed taint.
+///   entries, dynamic reads conservatively see all indexed taint.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeapState {
     entries: SmallVec<[((HeapObjectId, HeapSlot), HeapTaint); 4]>,
@@ -927,7 +927,7 @@ mod tests {
         set_max_pointsto_override(4);
         reset_points_to_observability();
 
-        // a = {0,1,2,3}, b = {4,5,6} — union wants 7 members; cap is 4
+        // a = {0,1,2,3}, b = {4,5,6}, union wants 7 members; cap is 4
         // so 3 members are dropped.  Deterministic order: smallest
         // ids survive.
         let mut a = PointsToSet::empty();
@@ -1215,7 +1215,7 @@ mod tests {
 
     #[test]
     fn heap_elements_load_unions_all_indices() {
-        // Store to Index(0) and Index(2) — Elements load should see both
+        // Store to Index(0) and Index(2), Elements load should see both
         let mut h = HeapState::empty();
         let id = HeapObjectId(SsaValue(0));
         h.store(id, HeapSlot::Index(0), Cap::HTML_ESCAPE, &[origin(0)]);

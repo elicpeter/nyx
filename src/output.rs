@@ -47,14 +47,28 @@ fn cfg_rule_description(id: &str) -> Option<&'static str> {
     }
 }
 
-/// Look up a human-readable description for any rule ID.
-fn rule_description(id: &str) -> &str {
-    // Strip taint-specific suffix for lookup (e.g. "taint-unsanitised-flow:foo.rs:42" → base)
-    let base_id = if id.starts_with("taint-") {
+/// Normalise a finding's id to the base SARIF rule id.
+///
+/// Findings carry source-location-suffixed ids like
+/// `"taint-unsanitised-flow (source 12:3)"` so identical (source, sink)
+/// pairs can be deduped, but SARIF wants a single rule per category.
+/// Cap-specific taint rule classes (e.g. `taint-data-exfiltration`) are
+/// preserved as distinct bases so consumers can filter on them rather than
+/// folding everything into `taint-unsanitised-flow`.
+fn sarif_base_id(id: &str) -> &str {
+    if id.starts_with("taint-data-exfiltration") {
+        "taint-data-exfiltration"
+    } else if id.starts_with("taint-") {
         "taint-unsanitised-flow"
     } else {
         id
-    };
+    }
+}
+
+/// Look up a human-readable description for any rule ID.
+fn rule_description(id: &str) -> &str {
+    // Strip taint-specific suffix for lookup (e.g. "taint-unsanitised-flow:foo.rs:42" → base)
+    let base_id = sarif_base_id(id);
 
     if let Some(desc) = PATTERN_DESCRIPTIONS.get(base_id) {
         return desc;
@@ -62,10 +76,13 @@ fn rule_description(id: &str) -> &str {
     if let Some(desc) = cfg_rule_description(base_id) {
         return desc;
     }
-    if base_id == "taint-unsanitised-flow" {
-        return "Unsanitised data flows from source to sink";
+    match base_id {
+        "taint-unsanitised-flow" => "Unsanitised data flows from source to sink",
+        "taint-data-exfiltration" => {
+            "Sensitive data flows into the payload of an outbound network request"
+        }
+        _ => id,
     }
-    id
 }
 
 fn severity_to_level(sev: Severity) -> &'static str {
@@ -83,11 +100,7 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
     let mut rule_index_map: HashMap<String, usize> = HashMap::new();
 
     for d in diags {
-        let base = if d.id.starts_with("taint-") {
-            "taint-unsanitised-flow".to_string()
-        } else {
-            d.id.clone()
-        };
+        let base = sarif_base_id(&d.id).to_string();
         if !rule_index_map.contains_key(&base) {
             let idx = rule_ids.len();
             rule_index_map.insert(base.clone(), idx);
@@ -108,15 +121,11 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
     let results: Vec<Value> = diags
         .iter()
         .map(|d| {
-            let base = if d.id.starts_with("taint-") {
-                "taint-unsanitised-flow"
-            } else {
-                &d.id
-            };
+            let base = sarif_base_id(&d.id);
             let rule_index = rule_index_map[base];
 
             // Make path relative to scan root. Fall back to a deterministic
-            // sentinel instead of the absolute path — SARIF must not leak
+            // sentinel instead of the absolute path, SARIF must not leak
             // home-directory or host-specific prefixes.
             let uri = match Path::new(&d.path).strip_prefix(scan_root) {
                 Ok(p) => p.to_string_lossy().to_string(),
@@ -213,17 +222,17 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
                 props.insert("relatedFindings".into(), json!(d.alternative_finding_ids));
             }
 
-            // Engine provenance notes — surface any cap-hit / lowering
+            // Engine provenance notes, surface any cap-hit / lowering
             // bail / timeout signals recorded by the analysis engine so
             // downstream consumers can tell "nothing found" from "engine
             // stopped looking".
             //
             // Three properties are emitted together:
-            //   * `engine_notes`       — raw list of {kind, ...} entries
-            //   * `confidence_capped`  — true iff any non-informational
+            //   * `engine_notes`      , raw list of {kind, ...} entries
+            //   * `confidence_capped` , true iff any non-informational
             //                            note is present (back-compat
             //                            boolean; drives legacy dashboards)
-            //   * `loss_direction`     — worst `LossDirection` across
+            //   * `loss_direction`    , worst `LossDirection` across
             //                            the list ("under-report",
             //                            "over-report", "bail").  Absent
             //                            when only informational notes
@@ -590,7 +599,7 @@ mod tests {
 
     #[test]
     fn build_sarif_path_outside_scan_root_is_redacted() {
-        // Absolute host paths leak home-directory information — SARIF must
+        // Absolute host paths leak home-directory information, SARIF must
         // substitute a deterministic token when a finding falls outside the
         // scan root.
         let mut diag = make_diag("rule-x", Severity::High);

@@ -54,7 +54,7 @@ const MAX_TOTAL_STEPS: usize = 500;
 /// A single exploration path in flight.
 ///
 /// The executor advances this one block at a time via successor transitions.
-/// No pre-computed block sequence — successor choice happens at each terminator.
+/// No pre-computed block sequence, successor choice happens at each terminator.
 struct ExplorationState {
     /// Current symbolic state (cloned at fork points).
     sym_state: SymbolicState,
@@ -71,7 +71,7 @@ struct ExplorationState {
     /// Constraints checked on this path.
     constraints_checked: u32,
     /// Per-block visit count for bounded loop unrolling.
-    /// Inherited at fork points — both branches share the visit history.
+    /// Inherited at fork points, both branches share the visit history.
     visit_counts: HashMap<BlockId, u8>,
     /// When `Some`, this path entered via an exception edge.
     /// Moved into `sym_state.exception_context` immediately before block
@@ -110,7 +110,7 @@ pub(super) struct ExplorationResult {
 /// Compute the set of blocks on some CFG path from source to sink.
 ///
 /// This is **CFG source-to-sink reachability pruning**, NOT a taint slice.
-/// It does not prove that tainted data flows through these blocks — only that
+/// It does not prove that tainted data flows through these blocks, only that
 /// control flow can reach the sink from the source through them. Used to
 /// prevent exploring branches structurally disconnected from the
 /// source-to-sink span.
@@ -521,7 +521,7 @@ fn run_path(
                         steps_taken: state.steps_taken,
                         constraints_checked: state.constraints_checked,
                         visit_counts: state.visit_counts.clone(),
-                        // Taint carrier — not a faithful thrown-value model.
+                        // Taint carrier, not a faithful thrown-value model.
                         // CatchParam transfer will mark the catch parameter tainted.
                         exception_context: Some(SymbolicValue::Unknown),
                     };
@@ -545,7 +545,7 @@ fn run_path(
 
                 match (true_reachable, false_reachable) {
                     (false, false) => {
-                        // Dead end — neither successor reaches sink.
+                        // Dead end, neither successor reaches sink.
                         // Still try to extract a witness: the path may have
                         // already walked past the sink node.
                         let witness = try_extract_witness(state, finding, ssa, cfg);
@@ -594,7 +594,7 @@ fn run_path(
                         state.current_block = *false_blk;
                     }
                     (true, true) => {
-                        // Both successors reachable — fork candidate
+                        // Both successors reachable, fork candidate
                         let can_fork = state.forks_used < MAX_FORKS_PER_FINDING
                             && outcomes.len() + work_queue.len() + 1 < MAX_PATHS_PER_FINDING
                             && *total_steps < MAX_TOTAL_STEPS;
@@ -617,7 +617,7 @@ fn run_path(
                                 smt_ctx,
                             );
                         } else {
-                            // Budget exhausted — follow original path
+                            // Budget exhausted, follow original path
                             *search_exhausted = false;
                             let preferred_polarity = if on_path.contains(true_blk) {
                                 true
@@ -882,7 +882,7 @@ fn step_switch(
     let _ = planned_remaining;
 
     if !any_enqueued {
-        // All paths were pruned by infeasibility — record the current
+        // All paths were pruned by infeasibility, record the current
         // state's witness so the caller can decide.
         let witness = try_extract_witness(state, finding, ssa, cfg);
         return Some(PathOutcome {
@@ -917,7 +917,7 @@ fn apply_branch_constraint(
     };
 
     if matches!(cond_expr, constraint::ConditionExpr::Unknown) {
-        // No useful constraint — continue without recording
+        // No useful constraint, continue without recording
         return None;
     }
 
@@ -938,7 +938,7 @@ fn apply_branch_constraint(
         });
     }
 
-    // SMT escalation — check with Z3 when PathEnv says SAT but
+    // SMT escalation, check with Z3 when PathEnv says SAT but
     // accumulated constraints have cross-variable shape.
     #[cfg(feature = "smt")]
     if let Some(smt) = smt_ctx {
@@ -1073,7 +1073,7 @@ fn fork_at_branch(
         work_queue.push_back(false_state);
     }
 
-    // Original state consumed by fork — no outcome from this path
+    // Original state consumed by fork, no outcome from this path
     None
 }
 
@@ -1328,6 +1328,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         }
     }
 
@@ -1717,6 +1718,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
 
         let ctx = super::SymexContext {
@@ -1861,6 +1863,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
 
         let ctx = super::SymexContext {
@@ -2140,6 +2143,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
 
         let cfg_graph = crate::cfg::Cfg::new();

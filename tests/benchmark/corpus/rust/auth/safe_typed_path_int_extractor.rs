@@ -1,7 +1,7 @@
 // Phase 5 typed-extractor exclusion: an Axum-style `Path<i64>`
 // parameter is a framework-validated numeric extractor.  The runtime
 // guarantees a numeric value, so even though `project_id` reaches a
-// SQL helper, the rule must NOT fire — the value cannot carry an
+// SQL helper, the rule must NOT fire, the value cannot carry an
 // injection payload nor bypass ownership.
 use axum::extract::Path;
 

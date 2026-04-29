@@ -1,4 +1,4 @@
-//! Symex encoding/decoding transform classification — Java / Go / Ruby.
+//! Symex encoding/decoding transform classification, Java / Go / Ruby.
 //!
 //! Each fixture sets up a tainted source flowing through a known
 //! escape/encode helper into a sink whose vulnerability class is *not*
@@ -11,7 +11,7 @@
 //! The acceptance check is per-language: at least one taint diagnostic
 //! lands, and at least one such diagnostic carries an
 //! `evidence.symbolic.witness` string mentioning the transform's
-//! display name (`urlEncode`, `htmlEscape`, etc.) — proving the new
+//! display name (`urlEncode`, `htmlEscape`, etc.), proving the new
 //! Java/Go/Ruby classifiers in `src/symex/strings.rs` are wired through
 //! to witness generation.
 
@@ -40,9 +40,9 @@ fn scan_isolated(fixture: &Path) -> Vec<Diag> {
 
 /// Find a taint finding whose symex witness contains *any* of the given
 /// token alternatives. Either the transform display name (e.g.
-/// `urlEncode`) appears verbatim — produced by the
+/// `urlEncode`) appears verbatim, produced by the
 /// `detect_transform_mismatch` annotation when the symex value tree still
-/// carries a tainted symbol — or the witness has been concrete-folded
+/// carries a tainted symbol, or the witness has been concrete-folded
 /// through `encode_concrete_for_witness`, in which case the encoded
 /// artifact (e.g. a percent-escape) appears in place of the original
 /// characters. Both prove the new transform classifier is wired through
@@ -99,7 +99,7 @@ fn assert_renderable_witness(diags: &[Diag], lang: &str, tokens: &[&str]) {
 //     value tree carries a tainted symbol with the wrong-class encode
 //   - a percent-escape appears when `evaluate_concrete` folded
 //     `Encode(UrlEncode, …)` through `encode_concrete_for_witness`
-// The raw callee name is intentionally NOT accepted — it would appear
+// The raw callee name is intentionally NOT accepted, it would appear
 // even in the Display fallback when the classifier fails, making the
 // assertion meaningless.
 

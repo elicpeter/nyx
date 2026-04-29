@@ -7,33 +7,33 @@
 //! multi-tier correctness signal.  Each `#[test]` fn below verifies a
 //! distinct property:
 //!
-//!   * `ssa_structural_invariants_corpus` — every body in every real-world
+//!   * `ssa_structural_invariants_corpus`, every body in every real-world
 //!     fixture lowers to well-formed SSA.  Enforced via
 //!     [`nyx_scanner::ssa::invariants::check_structural_invariants`]:
 //!     single-assignment, pred/succ symmetry, terminator/succs agreement,
 //!     phi arity and operand sources, value-def coverage, and reachability.
 //!
-//!   * `ssa_lowering_is_deterministic` — lowering the same CFG twice produces
+//!   * `ssa_lowering_is_deterministic`, lowering the same CFG twice produces
 //!     structurally identical SSA (equal fingerprint).  Catches any incoming
 //!     non-determinism introduced by hashing or iteration order.
 //!
-//!   * `ssa_optimize_is_idempotent` — `optimize_ssa` reaches a fixpoint on
+//!   * `ssa_optimize_is_idempotent`, `optimize_ssa` reaches a fixpoint on
 //!     the first run: re-running it must prune zero branches, eliminate
 //!     zero copies, and remove zero dead defs, and must not change the body
 //!     fingerprint.  Catches optimiser bugs where a second pass would find
 //!     new work (indicating the first pass failed to converge).
 //!
-//!   * `summary_extraction_is_deterministic` — extracting summaries from the
+//!   * `summary_extraction_is_deterministic`, extracting summaries from the
 //!     same bytes twice yields the same `(FuncSummary, SsaFuncSummary)`
 //!     sets, compared via stable JSON serialisation.  Catches any
 //!     non-determinism in summary construction or cross-file key ordering.
 //!
-//!   * `scan_is_stable_across_runs` — a full two-pass scan produces the same
+//!   * `scan_is_stable_across_runs`, a full two-pass scan produces the same
 //!     diag list when invoked twice on the same input.  Runs on a curated
 //!     per-language fixture subset to keep wall time bounded; the other
 //!     tiers already cover full-corpus behaviour.
 //!
-//!   * `ssa_corpus_does_not_panic` — the original smoke check, kept to lock
+//!   * `ssa_corpus_does_not_panic`, the original smoke check, kept to lock
 //!     in termination on the full fixture matrix.
 //!
 //! Run with: `cargo test --test ssa_equivalence_tests`
@@ -292,7 +292,7 @@ fn ssa_lowering_is_deterministic() {
 /// Stronger determinism check than Tier 2: for every body in the corpus
 /// that carries ≥ 2 phis (where phi ordering is the most likely culprit
 /// for hasher-driven non-determinism), lower the CFG ten times in a row
-/// and assert every fingerprint matches the first — bit-for-bit, with no
+/// and assert every fingerprint matches the first, bit-for-bit, with no
 /// sort tolerance.  Runs are interleaved across fixtures so that
 /// process-wide hasher state between lowerings is as adversarial as we
 /// can make it without `PYTHONHASHSEED`-style seeding.
@@ -378,7 +378,7 @@ fn ssa_optimize_is_idempotent() {
                 continue;
             };
 
-            // First optimisation pass — may do real work.
+            // First optimisation pass, may do real work.
             let _ = optimize_ssa(&mut ssa, &body.graph, Some(lang));
             let fp_after_first = body_fingerprint(&ssa);
 
@@ -472,7 +472,7 @@ fn summary_extraction_is_deterministic() {
 
         // SSA summaries: compare after sorting by key (order from the extractor
         // is expected-deterministic, but if two runs diverge only in order the
-        // test should still pass — what matters is the set identity).
+        // test should still pass, what matters is the set identity).
         let mut ssa_a_sorted = ssa_a;
         let mut ssa_b_sorted = ssa_b;
         ssa_a_sorted.sort_by(|a, b| format!("{:?}", a.0).cmp(&format!("{:?}", b.0)));
@@ -541,7 +541,7 @@ fn scan_is_stable_across_runs() {
 
     for &name in SCAN_STABILITY_SUBSET {
         let Some(fixture) = by_name.get(name).copied() else {
-            // Not a hard failure — curated names may drift as the corpus
+            // Not a hard failure, curated names may drift as the corpus
             // evolves.  Log but continue so this tier stays useful.
             if verbose() {
                 eprintln!("scan_is_stable_across_runs: missing fixture {name}");
@@ -576,7 +576,7 @@ fn scan_is_stable_across_runs() {
 // ── Tier 6: SSA lowering coverage sanity ─────────────────────────────────
 
 /// Guards against a silent regression that would make `lower_to_ssa`
-/// return empty / trivially-satisfying bodies — which would make every
+/// return empty / trivially-satisfying bodies, which would make every
 /// invariant check pass vacuously.  Enforces that the corpus produces
 /// non-trivial SSA: many blocks, many instructions, at least one phi
 /// somewhere, at least one loop (back edge), and at least one call.
@@ -631,7 +631,7 @@ fn ssa_lowering_produces_non_trivial_bodies() {
         }
     }
 
-    // Thresholds are generous — they only catch gross regressions (e.g. a
+    // Thresholds are generous, they only catch gross regressions (e.g. a
     // lowering bug that silently produces single-block bodies with no body
     // instructions).  Update if the corpus intentionally shrinks.
     assert!(bodies > 200, "expected >200 bodies, got {bodies}");
@@ -712,7 +712,7 @@ fn build_and_lower_all(path: &Path, cfg: &Config) -> usize {
 // Construct a synthetic SsaBody where a block carries `SsaOp::CatchParam`
 // but is neither reachable from entry via normal flow nor listed as a
 // target of any exception edge. The invariant must report the
-// orphan — this is the CFG-construction-bug signal the invariant is
+// orphan, this is the CFG-construction-bug signal the invariant is
 // designed to surface.
 //
 // The test stays on the pure-function `check_catch_block_reachability`
@@ -732,8 +732,8 @@ fn orphan_catch_block_triggers_reachability_invariant() {
 
     let dummy_cfg = NodeIndex::new(0);
 
-    // Block 0: entry — does not reach block 1 via succs.
-    // Block 1: orphan — carries CatchParam, not listed in exception_edges.
+    // Block 0: entry, does not reach block 1 via succs.
+    // Block 1: orphan, carries CatchParam, not listed in exception_edges.
     let body = SsaBody {
         blocks: vec![
             SsaBlock {
@@ -766,7 +766,7 @@ fn orphan_catch_block_triggers_reachability_invariant() {
             block: BlockId(1),
         }],
         cfg_node_map: Default::default(),
-        exception_edges: vec![], // intentionally empty — the orphan condition,
+        exception_edges: vec![], // intentionally empty, the orphan condition,
         field_interner: nyx_scanner::ssa::ir::FieldInterner::default(),
         field_writes: std::collections::HashMap::new(),
     };

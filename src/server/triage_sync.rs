@@ -3,8 +3,8 @@
 //! This file is designed to be committed to version control so that triage
 //! decisions travel with the code and are shared across team members.
 //!
-//! The file uses **portable fingerprints** — computed with paths relative to the
-//! project root — so they match across machines regardless of where the repo is
+//! The file uses **portable fingerprints**, computed with paths relative to the
+//! project root, so they match across machines regardless of where the repo is
 //! checked out.
 
 use crate::commands::scan::Diag;

@@ -1,6 +1,6 @@
 {
-  "description": "fetch({url: taintedUrl, body: fixed}) — destination-aware object-literal case. url is tainted, must fire.",
-  "tags": ["taint", "ssrf", "fetch", "destination-aware", "object-config"],
+  "description": "fetch({url: taintedUrl, body: fixed}) — destination-aware object-literal case. url is tainted (SSRF), body is fixed. SSRF must fire and the cross-boundary data-exfiltration class (Cap::DATA_EXFIL) must NOT fire — the two classes share the callee but cap attribution is per-position.",
+  "tags": ["taint", "ssrf", "fetch", "destination-aware", "object-config", "cap-attribution"],
   "modes": ["full"],
   "expected": [
     {
@@ -10,6 +10,12 @@
       "line_range": [6, 14],
       "evidence_contains": [],
       "notes": "req.query.target → fetch({url: target, ...}) — tainted destination field under object-literal shape."
+    },
+    {
+      "rule_id": "taint-data-exfiltration",
+      "must_not_match": true,
+      "line_range": [6, 14],
+      "notes": "body is a fixed literal '{}' — DATA_EXFIL must NOT fire on this site (regression guard for per-cap attribution)."
     }
   ]
 }

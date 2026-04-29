@@ -55,7 +55,7 @@ pub enum OperationKind {
 }
 
 /// Classification of a sensitive operation by the resource it targets.
-/// `check_ownership_gaps` only fires on the first five classes —
+/// `check_ownership_gaps` only fires on the first five classes ,
 /// `InMemoryLocal` is never authorization-relevant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SinkClass {
@@ -76,7 +76,7 @@ pub enum SinkClass {
     /// (Redis / memcache / distributed cache client).
     CacheCrossTenant,
     /// A method call against a local, in-memory collection (HashMap,
-    /// HashSet, Vec, …) — never authorization-relevant.
+    /// HashSet, Vec, …), never authorization-relevant.
     InMemoryLocal,
 }
 
@@ -133,6 +133,33 @@ pub struct AuthCheck {
     pub line: usize,
     pub args: Vec<String>,
     pub condition_text: Option<String>,
+    /// True when the check was declared at the route boundary
+    /// (decorator / middleware / dependency-injection list) rather
+    /// than as a per-call check inside the handler body.
+    ///
+    /// Route-level non-login-guard checks authorize the *entire*
+    /// handler, they gate every value the handler receives, every
+    /// row the handler fetches, and every operation downstream.  An
+    /// in-body `auth_check_covers_subject` walk that requires a
+    /// per-name subject match cannot model that semantics: a
+    /// FastAPI `dependencies=[Depends(requires_access_dag(method=
+    /// "POST", access_entity=DagAccessEntity.RUN))]` is opaque to
+    /// the engine, the inner `requires_access_dag` call carries no
+    /// per-arg subject ref pointing to `dag_id` or `dag.id`.  The
+    /// flag tells `auth_check_covers_subject` to short-circuit
+    /// `true` for any non-login-guard route-level check, leaving
+    /// only the LoginGuard / TokenExpiry / TokenRecipient kinds
+    /// (already excluded upstream by `has_prior_subject_auth`'s
+    /// filter) to be ignored.
+    ///
+    /// Set by `inject_middleware_auth` (Django, Flask, FastAPI) at
+    /// the route-decorator entry point.  Default `false` for
+    /// in-body checks (`require_membership(user, group_id)`,
+    /// `is_admin(user)`, etc.), those still flow through the
+    /// per-subject coverage logic so a check on
+    /// `community.creator_id` doesn't blanket-suppress every other
+    /// subject in the unit.
+    pub is_route_level: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -140,7 +167,7 @@ pub struct SensitiveOperation {
     pub kind: OperationKind,
     /// Sink classification.  `None` means the operation was recorded
     /// for taxonomy completeness but does not match any known resource
-    /// class — defensive, and currently unused.
+    /// class, defensive, and currently unused.
     pub sink_class: Option<SinkClass>,
     pub callee: String,
     pub subjects: Vec<ValueRef>,
@@ -183,7 +210,7 @@ pub struct AnalysisUnit {
     /// "fetch-then-authorize" exemption in `checks.rs`: if a row-fetch
     /// operation produces variable `V` and SOME auth check elsewhere
     /// in the unit names `V`, the row-fetch operation is considered
-    /// authorized — even though the check appears textually after the
+    /// authorized, even though the check appears textually after the
     /// fetch.  This is the standard idiom in row-level authz code:
     /// fetch the row first to extract the resource id, then call
     /// `check_<resource>_<role>(&user, &row, ...)` to authorize it.
@@ -199,7 +226,7 @@ pub struct AnalysisUnit {
     /// copies of `V.id` / `V.user_id` / `V.uid` / `V.userId` for some
     /// `V ∈ self_actor_vars`).  Populated when the extractor sees
     /// `let X = V.id` or `let X = (V.id as ..).into()` / `V.id.into()`
-    /// shapes — anywhere a route-handler reduces the authenticated
+    /// shapes, anywhere a route-handler reduces the authenticated
     /// principal to a scalar id and reuses it as a SQL parameter.
     /// Consulted by `is_actor_context_subject` so subjects whose `name`
     /// is in this set count as actor context, not foreign scoped IDs.
@@ -217,7 +244,7 @@ pub struct AnalysisUnit {
     /// one of these names.
     pub authorized_sql_vars: HashSet<String>,
     /// Local variables bound (by `let`, `:=`, `var`, `const`) to a
-    /// pure literal — string, integer, float, or boolean.  These are
+    /// pure literal, string, integer, float, or boolean.  These are
     /// developer-chosen constants and cannot be user-controlled, so
     /// they must never trip `<lang>.auth.missing_ownership_check`
     /// even when the variable name passes `is_id_like`.  Closes the
@@ -231,22 +258,21 @@ pub struct AnalysisUnit {
     /// `is_typed_bounded_subject` so parameters like Spring `Long
     /// userId`, Axum `Path<i64>`, or FastAPI `user_id: int` are not
     /// classified as scoped-identifier subjects even when their name
-    /// passes `is_id_like` — the framework guarantees the value is a
+    /// passes `is_id_like`, the framework guarantees the value is a
     /// number that cannot carry a SQL/file/shell payload.
     pub typed_bounded_vars: HashSet<String>,
-    /// Phase 6: per-DTO-extractor parameter, the field names whose
+    /// per-DTO-extractor parameter, the field names whose
     /// declared type is a payload-incompatible scalar.  Map key is the
     /// parameter name (e.g. `dto`), value is the list of field names
     /// (e.g. `["age", "count"]`).  Populated by
     /// [`super::apply_typed_bounded_params`] only when the parameter
-    /// itself was recognised as a typed extractor by a Phase 1-2
-    /// matcher — bare parameters with no framework gate never lift
-    /// their fields.
+    /// itself was recognised as a typed extractor, bare parameters
+    /// with no framework gate never lift their fields.
     pub typed_bounded_dto_fields: HashMap<String, Vec<String>>,
     /// Per-unit dynamic session-base text set, supplementing the
     /// hard-coded list in `is_self_scoped_session_base`.  Populated by
     /// the extractor when a parameter's static type signals a known
-    /// auth-context shape — e.g. TRPC's `Options { ctx: { user:
+    /// auth-context shape, e.g. TRPC's `Options { ctx: { user:
     /// NonNullable<TrpcSessionUser> } }` adds `<localCtx>.user` so
     /// downstream `ctx.user.id` accesses count as actor context.  Each
     /// entry is the dotted base text (e.g. `"ctx.user"`,

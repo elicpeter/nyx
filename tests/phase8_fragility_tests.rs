@@ -9,15 +9,15 @@
 //! here and update the expectations.
 //!
 //! Fixture layout:
-//!   * closure capture —
+//!   * closure capture ,
 //!     - `closure_capture_py` (required)
 //!     - `closure_capture_js` (required)
 //!     - `closure_capture_ts` (required)
-//!   * async/await —
+//!   * async/await ,
 //!     - `async_python` (required)
-//!     - `async_rust`   (required — Tokio process coverage)
+//!     - `async_rust`   (required, Tokio process coverage)
 //!     - `async_promise_chain_js` (known gap)
-//!   * container-element taint —
+//!   * container-element taint ,
 //!     - `container_taint_py` (required)
 //!     - `container_taint_js` (required)
 //!
@@ -48,7 +48,7 @@ fn closure_capture_py() {
     validate_expectations(&diags, &dir);
 }
 
-/// Closure-capture taint detection is now supported on the JS path —
+/// Closure-capture taint detection is now supported on the JS path ,
 /// arrow function captures of outer-scope tainted vars flow to the
 /// inner sink.  See README.md for the intended flow.
 #[test]
@@ -58,7 +58,7 @@ fn closure_capture_js() {
     validate_expectations(&diags, &dir);
 }
 
-/// Closure-capture taint detection on the TS path — parity with the JS
+/// Closure-capture taint detection on the TS path, parity with the JS
 /// sibling.  Separately regression-guarded so the TypeScript grammar
 /// path does not silently diverge.
 #[test]
@@ -84,7 +84,7 @@ fn async_rust() {
     validate_expectations(&diags, &dir);
 }
 
-/// See README.md — taint across chained `.then` callbacks is not
+/// See README.md, taint across chained `.then` callbacks is not
 /// modelled today.  The `forbidden_findings` entry pins current
 /// behaviour; a future promise-resolution improvement must flip the
 /// expectation.

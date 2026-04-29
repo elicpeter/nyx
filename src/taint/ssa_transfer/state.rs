@@ -2,7 +2,7 @@
 //! the original monolithic `ssa_transfer.rs`.
 //!
 //! Contains:
-//! * [`SsaTaintState`] — the per-block lattice value with `values`,
+//! * [`SsaTaintState`], the per-block lattice value with `values`,
 //!   `validated_must`/`validated_may`, `predicates`, `heap`, `path_env`,
 //!   `abstract_state`.
 //! * [`BindingKey`] / [`seed_lookup`] for cross-body taint seeding.
@@ -25,7 +25,7 @@ use std::collections::HashMap;
 
 // NOTE: The per-SSA-value origin cap used to be a hardcoded
 // `MAX_ORIGINS: usize = 4`.  It is now governed by the stable
-// `analysis.engine.max_origins` option (default `32`) — see
+// `analysis.engine.max_origins` option (default `32`), see
 // `crate::utils::analysis_options` and [`effective_max_origins`].  The
 // test-only override below still short-circuits the config read so
 // `engine_notes_tests.rs` can force a tiny cap to trigger truncation
@@ -42,7 +42,7 @@ static WORKLIST_CAP_OVERRIDE: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 /// Records the MAX iteration count observed across every
 /// `run_ssa_taint_full` call since the most recent reset.  Cheaper and
-/// more useful for regression tests than the last-call value — a cap
+/// more useful for regression tests than the last-call value, a cap
 /// hit anywhere in the scan is remembered.
 pub(super) static MAX_WORKLIST_ITERATIONS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -90,7 +90,7 @@ pub fn reset_worklist_observability() {
 /// force `OriginsTruncated` emission on small fixtures.
 static MAX_ORIGINS_OVERRIDE: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-/// Total number of origins dropped since the most recent reset — captured
+/// Total number of origins dropped since the most recent reset, captured
 /// from `merge_origins` and the post-hoc saturation scan.  Used by tests
 /// to detect truncation events that don't propagate to a finding (e.g.
 /// when the cap is so tight no taint flow survives to emit a sink event).
@@ -136,7 +136,7 @@ pub fn reset_origins_observability() {
 thread_local! {
     /// Per-body engine-note collector.  Cleared at the start of each
     /// `analyse_body_with_seed` invocation and drained after
-    /// `run_ssa_taint_full` returns — notes are then attached to every
+    /// `run_ssa_taint_full` returns, notes are then attached to every
     /// finding emitted from that body.  Living as a thread-local avoids
     /// threading a `&RefCell` through the nearly-10-argument transfer
     /// struct; inline analysis recursion is intentionally allowed to
@@ -148,7 +148,7 @@ thread_local! {
     /// was suppressed by an SSA-engine path-safety proof (PathFact
     /// `dotdot=No && absolute=No`).  Populated by `is_path_safe_for_sink`
     /// and consumed by the state-analysis pass to suppress
-    /// `state-unauthed-access` on the same sink — when the taint engine
+    /// `state-unauthed-access` on the same sink, when the taint engine
     /// has already proved the user-controlled input cannot escape into a
     /// privileged location, the auth concern on that sink is reduced.
     /// Reset at start of `analyse_file`, drained before state analysis.
@@ -156,7 +156,7 @@ thread_local! {
         RefCell::new(std::collections::HashSet::new());
 
     /// File-level set of CFG sink spans where the SSA engine emitted an
-    /// `all_validated` event — every tainted input to the sink passed
+    /// `all_validated` event, every tainted input to the sink passed
     /// through a recognised validation/sanitisation predicate before
     /// reaching it.  Distinct from `PATH_SAFE_SUPPRESSED_SPANS`, which
     /// is FILE_IO-scoped and feeds state analysis: this set is
@@ -167,7 +167,7 @@ thread_local! {
     ///
     /// Without this signal the suppression gate has to fall back to
     /// "function emitted at least one taint-unsanitised-flow finding"
-    /// or "function contains a labelled Sanitizer node" — both of
+    /// or "function contains a labelled Sanitizer node", both of
     /// which miss validated/dominated/early-return safety where the
     /// engine cleared the flow without firing or hitting an explicit
     /// sanitiser.
@@ -227,7 +227,7 @@ pub fn take_path_safe_suppressed_spans() -> std::collections::HashSet<(usize, us
 
 /// Record a sink CFG-node span where the SSA engine proved every
 /// tainted input was validated (`SsaTaintEvent::all_validated`).
-/// Cap-agnostic — fires for any sink the engine evaluated and cleared.
+/// Cap-agnostic, fires for any sink the engine evaluated and cleared.
 /// Consumed by `TaintSuppressionCtx::build` as positive evidence that
 /// taint analysis reached this line and proved safety, so AST-pattern
 /// findings on the same line can be suppressed without misclassifying
@@ -263,7 +263,7 @@ pub fn take_all_validated_spans() -> std::collections::HashSet<(usize, usize)> {
 /// into the seed map always specify the owning body's id; readers look
 /// up by the scope they know they want (typically their own
 /// `parent_body_id`, with a fallback to `BodyId(0)` for entries that
-/// the JS/TS two-level solve has re-keyed onto the top-level scope —
+/// the JS/TS two-level solve has re-keyed onto the top-level scope ,
 /// see [`crate::taint::ssa_transfer::filter_seed_to_toplevel`]).
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct BindingKey {
@@ -284,7 +284,7 @@ impl BindingKey {
 /// Look up a binding in a seed map.
 ///
 /// Thin wrapper over [`HashMap::get`] retained for call-site readability
-/// — every seed entry is now exactly scoped to a single `(name,
+///, every seed entry is now exactly scoped to a single `(name,
 /// BodyId)`, so the lookup is O(1) with no fallback.  Writers that want
 /// cross-scope reachability must explicitly re-key their entries (see
 /// [`crate::taint::ssa_transfer::filter_seed_to_toplevel`]).
@@ -299,7 +299,7 @@ pub fn seed_lookup<'a>(
 
 /// Compact key for a heap-field taint cell.
 ///
-/// `(loc, field)` — `loc` is the abstract location of the *parent*
+/// `(loc, field)`, `loc` is the abstract location of the *parent*
 /// (interned by the body's [`crate::pointer::LocInterner`]), `field`
 /// is the [`FieldId`] of the projected field.  The pair survives lattice
 /// joins / leq comparisons by `Ord`-derived sort.
@@ -309,16 +309,16 @@ pub struct FieldTaintKey {
     pub field: FieldId,
 }
 
-/// Pointer-Phase 4 / W4: per-field-cell taint record.
+/// per-field-cell taint record.
 ///
 /// Carries the union of writers' taint for the abstract field cell plus
 /// two validation channels:
-/// * `validated_must` — set when *every* writer recorded a value that was
+/// * `validated_must`, set when *every* writer recorded a value that was
 ///   `validated_must` in its own SSA scope.  Lattice join intersects
-///   (`AND`) — matching the symbol-keyed [`SsaTaintState::validated_must`]
+///   (`AND`), matching the symbol-keyed [`SsaTaintState::validated_must`]
 ///   semantics for "validated on every path".
-/// * `validated_may` — set when *any* writer recorded a `validated_may`
-///   value.  Lattice join unions (`OR`) — matching the symbol-keyed
+/// * `validated_may`, set when *any* writer recorded a `validated_may`
+///   value.  Lattice join unions (`OR`), matching the symbol-keyed
 ///   [`SsaTaintState::validated_may`] semantics for "validated on some
 ///   path".
 ///
@@ -332,7 +332,7 @@ pub struct FieldCell {
 }
 
 impl FieldCell {
-    /// Construct a cell with no validation bits — convenience for the
+    /// Construct a cell with no validation bits, convenience for the
     /// pre-W4 callers that don't propagate symbol-level validation.
     pub fn unvalidated(taint: VarTaint) -> Self {
         Self {
@@ -365,17 +365,17 @@ pub struct SsaTaintState {
     /// interpretation is disabled (`analysis.engine.abstract_interpretation
     /// = false`).
     pub abstract_state: Option<AbstractState>,
-    /// Pointer-Phase 3: per-heap-field taint cells, keyed by
+    /// per-heap-field taint cells, keyed by
     /// `(parent_loc, field)`.  Sorted by [`FieldTaintKey`] for O(n)
     /// merge-join.  Populated only when the body's
     /// [`crate::pointer::PointsToFacts`] is available
     /// (`NYX_POINTER_ANALYSIS=1`); empty otherwise so the lattice join
     /// is a strict no-op for pointer-disabled runs.  Field reads
     /// (`SsaOp::FieldProj`) consult the cells; field writes record into
-    /// them.  Cross-call propagation lands in Phase 5 via the
+    /// them.  Cross-call propagation lands during lowering via the
     /// field-granularity `PointsToSummary`.
     ///
-    /// Cell shape (Phase 4 / W4): [`FieldCell`] carries `taint` plus
+    /// Cell shape: [`FieldCell`] carries `taint` plus
     /// `validated_must` / `validated_may` flags so validation flows
     /// through abstract field / element identity.
     pub field_taint: SmallVec<[(FieldTaintKey, FieldCell); 4]>,
@@ -403,7 +403,7 @@ impl SsaTaintState {
         }
     }
 
-    /// Pointer-Phase 3: read the field cell at `key`.  Returns `None`
+    /// read the field cell at `key`.  Returns `None`
     /// when no cell has been recorded (caller should treat as
     /// untainted).  O(log n) on the sorted [`field_taint`] list.
     pub fn get_field(&self, key: FieldTaintKey) -> Option<&FieldCell> {
@@ -413,13 +413,13 @@ impl SsaTaintState {
             .map(|idx| &self.field_taint[idx].1)
     }
 
-    /// Pointer-Phase 3 / W4: union `t` into the field cell at `key`,
+    /// union `t` into the field cell at `key`,
     /// recording per-write `validated_must` / `validated_may` channels.
     ///
     /// Maintains sorted invariant.  No-op when `t.caps` is empty (so the
     /// lattice bottom stays `[]`).  When the cell already exists, the
-    /// validation channels merge with the lattice-join semantics —
-    /// `must` AND-intersects, `may` OR-unions — matching the symbol-
+    /// validation channels merge with the lattice-join semantics ,
+    /// `must` AND-intersects, `may` OR-unions, matching the symbol-
     /// keyed [`SsaTaintState::validated_must`] / `validated_may`
     /// semantics so a write coming through a non-validated path tears
     /// down `must` while preserving `may` of any earlier validated path.
@@ -563,15 +563,15 @@ impl Lattice for SsaTaintState {
     }
 }
 
-/// Pointer-Phase 3 / W4: merge-join two sorted `field_taint` lists.
+/// merge-join two sorted `field_taint` lists.
 /// Same shape as [`merge_join_ssa_vars`] but keyed on [`FieldTaintKey`]:
-/// * `taint.caps`  — OR-union
-/// * `taint.origins` — merged with cap-respecting de-dup
-/// * `taint.uses_summary` — OR-union
-/// * `validated_must` — AND-intersect (matches the symbol-keyed
+/// * `taint.caps` , OR-union
+/// * `taint.origins`, merged with cap-respecting de-dup
+/// * `taint.uses_summary`, OR-union
+/// * `validated_must`, AND-intersect (matches the symbol-keyed
 ///   `validated_must` lattice: a path that didn't validate this cell
 ///   breaks the invariant)
-/// * `validated_may` — OR-union (any path's validation contributes)
+/// * `validated_may`, OR-union (any path's validation contributes)
 pub(super) fn merge_join_field_taint(
     a: &[(FieldTaintKey, FieldCell)],
     b: &[(FieldTaintKey, FieldCell)],
@@ -581,7 +581,7 @@ pub(super) fn merge_join_field_taint(
     while i < a.len() && j < b.len() {
         match a[i].0.cmp(&b[j].0) {
             std::cmp::Ordering::Less => {
-                // Cell present only in `a` — counterpart in `b` is the
+                // Cell present only in `a`, counterpart in `b` is the
                 // lattice bottom (no validation, no taint), so:
                 //   must = a.must AND false = false
                 //   may  = a.may  OR  false = a.may
@@ -637,11 +637,11 @@ pub(super) fn merge_join_field_taint(
 /// `a ≤ b` for sorted `field_taint` lists.  Used by the convergence
 /// check in [`Lattice::leq`].  Per-cell criteria:
 ///
-/// * `taint.caps` — `a ⊆ b` (sub-state on caps; matches per-SSA-value
+/// * `taint.caps`, `a ⊆ b` (sub-state on caps; matches per-SSA-value
 ///   `ssa_vars_leq`).
-/// * `validated_must` — `a.must ⊇ b.must` (super-state on must; same
+/// * `validated_must`, `a.must ⊇ b.must` (super-state on must; same
 ///   shape as the symbol-keyed `validated_must` leq).
-/// * `validated_may` — `a.may ⊆ b.may` (sub-state on may).
+/// * `validated_may`, `a.may ⊆ b.may` (sub-state on may).
 ///
 /// When `b` lacks a key present in `a`, `b`'s side is the lattice
 /// bottom: no caps, no validation.  `a`'s caps must also be empty
@@ -669,12 +669,12 @@ pub(super) fn field_taint_leq(
         if (ca.taint.caps - cb.taint.caps).bits() != 0 {
             return false;
         }
-        // Must: a ⊇ b — every must-validated key in b is must-validated
+        // Must: a ⊇ b, every must-validated key in b is must-validated
         // in a.  Equivalently: !cb.must OR ca.must.
         if cb.validated_must && !ca.validated_must {
             return false;
         }
-        // May: a ⊆ b — every may-validated key in a is may-validated
+        // May: a ⊆ b, every may-validated key in a is may-validated
         // in b.  Equivalently: !ca.may OR cb.may.
         if ca.validated_may && !cb.validated_may {
             return false;
@@ -735,7 +735,7 @@ pub(super) fn merge_join_ssa_vars(
 ///
 /// Ordering is lexicographic over
 /// `(source_span_start, source_span_end, source_kind_tag, node_index)`.
-/// `source_span` is the most stable component across bodies — cross-body
+/// `source_span` is the most stable component across bodies, cross-body
 /// remapped origins carry the original byte span explicitly; intra-body
 /// origins default to `(0, 0)` and fall through to the secondary keys.
 ///
@@ -760,7 +760,7 @@ fn origin_sort_key(o: &TaintOrigin) -> (usize, usize, u8, usize) {
 /// Bounded, deterministic insertion of an origin into a sorted origin
 /// set.  Returns `true` when `new` was admitted (or de-duplicated against
 /// an existing entry), `false` when the cap forced a drop.  On drop,
-/// the origin with the *largest* sort key is evicted first — the caller
+/// the origin with the *largest* sort key is evicted first, the caller
 /// sees a survivor set that depends only on the input multiset and
 /// [`effective_max_origins`], not on insertion order.
 ///
@@ -774,7 +774,7 @@ pub(crate) fn push_origin_bounded(
 ) -> bool {
     // Identity check: same node counts as the same origin.  We keep
     // node-only dedup to match [`ssa_vars_leq`], which compares origin
-    // sets by node membership — widening dedup here without tightening
+    // sets by node membership, widening dedup here without tightening
     // there would break the monotonicity invariant.
     if target.iter().any(|o| o.node == new.node) {
         return true;
@@ -814,7 +814,7 @@ pub(crate) fn push_origin_bounded(
         target.insert(pos, new);
         true
     } else {
-        // `new` itself is the worst — drop it instead of the survivor.
+        // `new` itself is the worst, drop it instead of the survivor.
         false
     }
 }
@@ -829,7 +829,7 @@ pub(super) fn merge_origins(
     a: &SmallVec<[TaintOrigin; 2]>,
     b: &SmallVec<[TaintOrigin; 2]>,
 ) -> SmallVec<[TaintOrigin; 2]> {
-    // Seed the result with `a` — but re-sort defensively in case the
+    // Seed the result with `a`, but re-sort defensively in case the
     // caller constructed `a` through non-bounded paths.  Historically
     // every write goes through `push_origin_bounded` (or `merge_origins`
     // itself), so this resort is a no-op on the steady state but costs
@@ -911,7 +911,7 @@ pub(super) fn merge_join_ssa_predicates(
 mod origin_cap_tests {
     //! Tests for the deterministic, config-driven origin cap.  These
     //! cover the behavior at the `push_origin_bounded` / `merge_origins`
-    //! boundary — the end-to-end engine-note signal is exercised in
+    //! boundary, the end-to-end engine-note signal is exercised in
     //! `tests/engine_notes_tests.rs`.
 
     use super::*;
@@ -1037,7 +1037,7 @@ mod origin_cap_tests {
     fn effective_cap_reads_runtime_config_when_override_zero() {
         // Override takes priority; override=0 falls through to config.
         // `current()` returns the default (32) when no runtime is
-        // installed — which is the state the rest of the test suite runs
+        // installed, which is the state the rest of the test suite runs
         // under.  Guard that the fallback path reaches 32.
         let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         set_max_origins_override(0);
@@ -1053,7 +1053,7 @@ mod origin_cap_tests {
 
 #[cfg(test)]
 mod field_taint_tests {
-    //! Pointer-Phase 3: tests for the heap-field taint cells on
+    //!: tests for the heap-field taint cells on
     //! [`SsaTaintState`].  Cover get/add round-trip, lattice join
     //! (cap union + origin merge), and `leq` convergence semantics.
     use super::*;
@@ -1202,7 +1202,7 @@ mod field_taint_tests {
         assert!(cell.validated_must, "a.must AND b.must = true");
         assert!(cell.validated_may);
 
-        // Now make `b`'s validated_must false — must should drop to
+        // Now make `b`'s validated_must false, must should drop to
         // false on the join, may stays at OR.
         let mut c = SsaTaintState::initial();
         c.add_field(k, taint(Cap::ENV_VAR), false, true);
@@ -1213,7 +1213,7 @@ mod field_taint_tests {
     }
 
     /// W4 audit: `merge_join_field_taint` OR-unions `validated_may`
-    /// — any path's may-validation contributes to the joined cell.
+    ///, any path's may-validation contributes to the joined cell.
     #[test]
     fn lattice_validated_may_unions_on_join() {
         let k = key(1, 7);
@@ -1275,7 +1275,7 @@ mod field_taint_tests {
             a.leq(&b),
             "must super-state and equal caps: a ≤ b should hold"
         );
-        // Reverse: b.must=false, a.must=true — for b ≤ a, we need
+        // Reverse: b.must=false, a.must=true, for b ≤ a, we need
         // b.must ⊇ a.must which is false ⊇ true = false.  So b ≤ a
         // must fail.
         assert!(!b.leq(&a), "b lacks the must invariant a holds");
@@ -1289,7 +1289,7 @@ mod field_taint_tests {
         assert!(!a2.leq(&b2), "a.may=true is NOT ⊆ b.may=false");
     }
 
-    /// Pointer-Phase 3 / A8 audit: the field_taint lattice is monotone
+    /// the field_taint lattice is monotone
     /// and converges under a deterministic enumeration of inputs.
     /// Caps grow (OR), `uses_summary` grows (OR), origins grow modulo
     /// the cap (merge_origins is bounded).  Joins must:
@@ -1409,7 +1409,7 @@ mod field_taint_tests {
 
     /// `field_taint_leq` is the soundness gate for worklist
     /// convergence: once `next ≤ acc`, the worklist halts.  Pin that
-    /// `leq` is consistent with `join` — i.e. `s.leq(s.join(t))` holds
+    /// `leq` is consistent with `join`, i.e. `s.leq(s.join(t))` holds
     /// for any `s, t`.  Without this, the worklist could loop
     /// indefinitely on inputs whose join produces a state not
     /// dominated by both inputs.

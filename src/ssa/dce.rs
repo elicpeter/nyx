@@ -51,7 +51,7 @@ pub fn eliminate_dead_defs(body: &mut SsaBody, cfg: &Cfg) -> usize {
 /// condition variable.  Without counting these, a value used solely by a
 /// terminator (the canonical case for short helpers like
 /// `def f(s): return s`) is judged dead, and DCE strips every instruction
-/// in the body — leaving empty blocks whose terminators reference
+/// in the body, leaving empty blocks whose terminators reference
 /// nonexistent SsaValues, breaking downstream analyses (per-return-path
 /// PathFact narrowing, inline-summary extraction, etc.).
 fn build_use_counts(body: &SsaBody) -> HashMap<SsaValue, usize> {
@@ -170,8 +170,8 @@ mod tests {
 
     #[test]
     fn dead_const_removed() {
-        // v0 = const("42") — unused, should be removed
-        // v1 = source() — must survive even if unused
+        // v0 = const("42"), unused, should be removed
+        // v1 = source(), must survive even if unused
         let mut cfg: Cfg = Graph::new();
         let n0 = cfg.add_node(make_cfg_node(StmtKind::Seq));
         let n1 = cfg.add_node(make_cfg_node(StmtKind::Seq));
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn dead_sanitizer_label_preserved() {
-        // v0 has a Sanitizer label on its CFG node — must survive even if unused
+        // v0 has a Sanitizer label on its CFG node, must survive even if unused
         use crate::labels::{Cap, DataLabel};
 
         let mut cfg: Cfg = Graph::new();
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn dead_source_label_preserved() {
-        // v0 has a Source label on its CFG node — must survive even if unused
+        // v0 has a Source label on its CFG node, must survive even if unused
         use crate::labels::{Cap, DataLabel};
 
         let mut cfg: Cfg = Graph::new();
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn used_def_preserved() {
-        // v0 = const("42"), v1 = assign(v0) — v0 is used, both survive
+        // v0 = const("42"), v1 = assign(v0), v0 is used, both survive
         let mut cfg: Cfg = Graph::new();
         let n0 = cfg.add_node(make_cfg_node(StmtKind::Seq));
         let n1 = cfg.add_node(make_cfg_node(StmtKind::Seq));
@@ -597,7 +597,7 @@ mod tests {
     }
 
     /// DCE must NEVER remove a Call instruction even when its result has
-    /// zero uses — calls have side effects (I/O, throws, mutations) that
+    /// zero uses, calls have side effects (I/O, throws, mutations) that
     /// cannot be modeled as SSA-value uses. This is the conservative
     /// invariant `is_dead()` enforces; regressing it would silently drop
     /// real-world code from analysis (sinks, sanitizers expressed as

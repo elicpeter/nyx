@@ -1,7 +1,7 @@
 // Regression fixture: Rust async flow through `tokio::process::Command`.
 //
 // Per docs/language-maturity.md, Rust's Tokio process variants are not
-// yet covered — the Tokio async process APIs are a known gap.  The
+// yet covered, the Tokio async process APIs are a known gap.  The
 // fixture is checked in so that when Rust async-process coverage lands,
 // the engine begins producing the intended finding and the
 // `forbidden_findings` assertion forces whoever adds the coverage to

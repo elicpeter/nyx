@@ -19,11 +19,11 @@ pub(crate) fn text_of<'a>(n: Node<'a>, code: &'a [u8]) -> Option<String> {
 ///
 /// For `Runtime.getRuntime().exec(cmd)`, the receiver of `exec` is the call
 /// `Runtime.getRuntime()`.  This function drills through that to return
-/// `"Runtime"` — the outermost non-call object.  This lets labels like
+/// `"Runtime"`, the outermost non-call object.  This lets labels like
 /// `"Runtime.exec"` match correctly.
 pub(crate) fn root_receiver_text(n: Node, lang: &str, code: &[u8]) -> Option<String> {
     match lookup(lang, n.kind()) {
-        // The receiver is itself a call — drill into ITS receiver.
+        // The receiver is itself a call, drill into ITS receiver.
         // e.g. for `Runtime.getRuntime()`, the object is `Runtime`.
         Kind::CallFn | Kind::CallMethod => {
             let inner = n
@@ -53,7 +53,7 @@ pub(crate) fn root_receiver_text(n: Node, lang: &str, code: &[u8]) -> Option<Str
 /// identifier (e.g. call expressions, subscripts, `this`/`self`, etc.).
 pub(crate) fn root_member_receiver(n: Node, code: &[u8]) -> Option<String> {
     let mut cur = n;
-    // Bounded walk — tree-sitter can nest deeply but we only need a handful
+    // Bounded walk, tree-sitter can nest deeply but we only need a handful
     // of hops for real code.
     for _ in 0..16 {
         match cur.kind() {
@@ -68,7 +68,7 @@ pub(crate) fn root_member_receiver(n: Node, code: &[u8]) -> Option<String> {
                 cur = cur.child_by_field_name("value")?;
             }
             // Drill through nested calls / method chains to find the base
-            // identifier.  E.g. `Connection::open(p).unwrap().execute(...)` —
+            // identifier.  E.g. `Connection::open(p).unwrap().execute(...)` ,
             // the receiver of `.execute` is the `.unwrap()` call whose
             // object is `Connection::open(p)`; we want the leftmost plain
             // identifier the chain resolves to (for SSA var_stacks lookup).
@@ -212,7 +212,7 @@ pub(crate) fn first_call_ident_with_span<'a>(
                 return ident.map(|s| (s, span));
             }
             Kind::Function => {
-                // Do not descend into nested function/lambda bodies —
+                // Do not descend into nested function/lambda bodies ,
                 // they are separate scopes and should not contribute
                 // callee identifiers to the parent expression.
                 continue;
@@ -240,7 +240,7 @@ pub(crate) fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> O
 /// Used for cases like `str(eval(expr))` where `str` doesn't match but `eval` does.
 ///
 /// Returns `(callee_text, label, span)` where `span` is the byte range of the
-/// inner call node itself — used to populate `CallMeta.callee_span` so that
+/// inner call node itself, used to populate `CallMeta.callee_span` so that
 /// display sites can report the actual call location rather than the enclosing
 /// statement's span.
 pub(crate) fn find_classifiable_inner_call<'a>(
@@ -251,7 +251,7 @@ pub(crate) fn find_classifiable_inner_call<'a>(
 ) -> Option<(String, DataLabel, (usize, usize))> {
     let mut cursor = n.walk();
     for c in n.children(&mut cursor) {
-        // Do not descend into Kind::Function nodes — they will be extracted
+        // Do not descend into Kind::Function nodes, they will be extracted
         // as separate BodyCfg entries and should not contribute inner callees
         // to the parent expression.
         if lookup(lang, c.kind()) == Kind::Function {
@@ -329,7 +329,7 @@ pub(crate) fn member_expr_text_inner(n: Node, code: &[u8]) -> Option<String> {
     match n.kind() {
         "member_expression" | "attribute" | "selector_expression" => {
             // Tree-sitter exposes the receiver under `object` (JS/TS, Python),
-            // `value` (Rust field_expression — handled in the matching arm
+            // `value` (Rust field_expression, handled in the matching arm
             // above), or `operand` (Go selector_expression).  Without the
             // `operand` fallback, Go member access like `r.Body` collapsed to
             // just the trailing field (`Body`), so source rules keyed on the
@@ -442,7 +442,7 @@ pub(crate) fn first_member_text(n: Node, code: &[u8]) -> Option<String> {
 /// This finds anonymous functions / arrow functions / closures that are
 /// passed as arguments to a call and should be analysed as separate
 /// function scopes.  Only direct function-argument children are collected
-/// (not functions nested inside other functions — those get handled when
+/// (not functions nested inside other functions, those get handled when
 /// the outer function is recursed into).
 pub(crate) fn collect_nested_function_nodes<'a>(n: Node<'a>, lang: &str) -> Vec<Node<'a>> {
     let mut funcs = Vec::new();
@@ -558,7 +558,7 @@ pub(crate) fn derive_anon_fn_name_from_context<'a>(
         }
 
         // Python: `h = lambda: ...` parents as `assignment`, handled above.
-        // Python `default_parameter` assigning `def foo(x=lambda: 0)` — ambiguous, skip.
+        // Python `default_parameter` assigning `def foo(x=lambda: 0)`, ambiguous, skip.
         _ => {
             // Some grammars wrap the RHS in an `expression`, `expression_list`,
             // or similar node between the binding site and the function literal.
@@ -709,7 +709,7 @@ pub(crate) fn collect_idents(n: Node, code: &[u8], out: &mut Vec<String>) {
     }
 }
 
-/// Pointer-Phase 6 / W5: AST kind names for subscript / index expressions
+/// AST kind names for subscript / index expressions
 /// across the languages whose container-element flow we model.
 ///
 /// JS/TS use `subscript_expression`; Python uses `subscript`; Go uses
@@ -724,7 +724,7 @@ pub(crate) fn is_subscript_kind(kind: &str) -> bool {
     )
 }
 
-/// Pointer-Phase 6 / W5: when the LHS of an assignment statement is a
+/// when the LHS of an assignment statement is a
 /// subscript / index expression (or a single-element wrapper around
 /// one), return that node.  Returns `None` for multi-target Go
 /// `expression_list`s, identifier LHSs, member-expression LHSs, etc.
@@ -745,10 +745,10 @@ pub(crate) fn subscript_lhs_node<'a>(lhs: Node<'a>, lang: &str) -> Option<Node<'
     None
 }
 
-/// Pointer-Phase 6 / W5: extract `(array_text, index_text)` from a
+/// extract `(array_text, index_text)` from a
 /// subscript / index AST node.
 ///
-/// Returns `None` when the array operand is not a plain identifier — we
+/// Returns `None` when the array operand is not a plain identifier, we
 /// only synthesise `__index_get__` / `__index_set__` calls when the
 /// receiver resolves cleanly to a SSA-renamed local, since the W2/W4
 /// container hooks need a stable receiver var_name to drive
@@ -771,7 +771,7 @@ pub(crate) fn subscript_components<'a>(n: Node<'a>, code: &'a [u8]) -> Option<(S
             n.named_children(&mut cur).nth(1)
         })?;
     let arr_kind = arr.kind();
-    // Only proceed when the array is a plain identifier — otherwise
+    // Only proceed when the array is a plain identifier, otherwise
     // we can't bind a stable receiver name for the synth Call.
     if !matches!(
         arr_kind,
@@ -780,7 +780,7 @@ pub(crate) fn subscript_components<'a>(n: Node<'a>, code: &'a [u8]) -> Option<(S
         return None;
     }
     let arr_text = text_of(arr, code)?;
-    // PHP-style `$x` strip not needed here — Go/JS/Python don't use it.
+    // PHP-style `$x` strip not needed here, Go/JS/Python don't use it.
     let idx_text = text_of(idx, code)?;
     Some((arr_text, idx_text))
 }

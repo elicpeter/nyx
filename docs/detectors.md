@@ -9,6 +9,16 @@ Nyx ships four independent detector families. They run together in `--mode full`
 | [State model](detectors/state.md) | `state-*` | Per-function state lattice | Use-after-close, double-close, leaks, unauthenticated access |
 | [AST patterns](detectors/patterns.md) | `<lang>.<cat>.<name>` | Tree-sitter structural match | Banned APIs, weak crypto, dangerous constructs |
 
+The taint family is split into cap-specific rule classes when a sink callee carries multiple vulnerability classes:
+
+| Rule id | Cap | Surface |
+|---|---|---|
+| `taint-unsanitised-flow` | every cap except `data_exfil` and `unauthorized_id` | Default taint flow class |
+| `taint-data-exfiltration` | `data_exfil` | Sensitive data flowing into the payload of an outbound network request (body / headers / json on `fetch`, body on `XMLHttpRequest.send`). Distinct from SSRF: the destination is fixed but attacker-influenced bytes leave the process. |
+| `rs.auth.missing_ownership_check.taint` | `unauthorized_id` | Rust auth subsystem fold-in; see [auth.md](auth.md). |
+
+A single call site can fire several of these at once when it carries multiple gates — `fetch(taintedUrl, {body: tainted})` produces both an SSRF finding (URL flow) and a `taint-data-exfiltration` finding (body flow), each with its own cap mask rather than a conflated union.
+
 For Rust auth-specific rules (`rs.auth.*`), see [auth.md](auth.md).
 
 ## How they combine

@@ -5,7 +5,7 @@
 //! `scc_file_batches_with_metadata`).  Before this wiring landed, the
 //! non-recursive batch path called `run_rules_on_file`, which discards
 //! refined SSA / body / auth artifacts.  Caller-most batches (run
-//! later in topo order) saw only pass-1 summaries — the refined cross-
+//! later in topo order) saw only pass-1 summaries, the refined cross-
 //! file context produced by callee batches in pass 2 was lost.
 //!
 //! These tests pin the new contract:
@@ -17,7 +17,7 @@
 //!   3. The opt-out env var `NYX_TOPO_REFINE=0` restores the legacy
 //!      `run_rules_on_file` path with no behavioural regression on
 //!      required findings.
-//!   4. The fixture's expectations.json is met under both modes —
+//!   4. The fixture's expectations.json is met under both modes ,
 //!      proving that refinement is a precision-positive optimisation
 //!      and not a soundness change.
 
@@ -76,7 +76,7 @@ impl Drop for EnvScope {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  D1 — Refinement is enabled by default and is observable
+//  D1, Refinement is enabled by default and is observable
 // ─────────────────────────────────────────────────────────────────────
 
 /// On a 2-file linear-chain fixture (caller → callee, no recursion),
@@ -115,13 +115,13 @@ fn nonrecursive_batches_persist_refinements_by_default() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  D2 — Opt-out via NYX_TOPO_REFINE=0 restores legacy behaviour
+//  D2, Opt-out via NYX_TOPO_REFINE=0 restores legacy behaviour
 // ─────────────────────────────────────────────────────────────────────
 
 /// With `NYX_TOPO_REFINE=0`, the legacy non-recursive branch runs:
 /// `run_rules_on_file` is called and refined artifacts are NOT
 /// persisted, so the observability counter stays at zero.  The fixture's
-/// required findings must STILL be detected — confirming that the
+/// required findings must STILL be detected, confirming that the
 /// refinement is precision-positive but not soundness-load-bearing.
 #[test]
 fn nonrecursive_batches_legacy_path_when_disabled() {
@@ -142,7 +142,7 @@ fn nonrecursive_batches_legacy_path_when_disabled() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  D3 — Refinement does not regress findings vs the legacy path
+//  D3, Refinement does not regress findings vs the legacy path
 // ─────────────────────────────────────────────────────────────────────
 
 /// Run the same fixture twice (refine on / off) and assert the set of
@@ -150,7 +150,7 @@ fn nonrecursive_batches_legacy_path_when_disabled() {
 /// the refine-on set is a *superset* of the legacy set; in practice
 /// the fixtures exercised here are small enough that the two should be
 /// equal.  This test guards against the regression where refinement
-/// silently *loses* findings — e.g. a refined summary masking a real
+/// silently *loses* findings, e.g. a refined summary masking a real
 /// finding via accidental sanitiser inference.
 #[test]
 fn refinement_does_not_lose_required_findings_vs_legacy() {
@@ -184,7 +184,7 @@ fn refinement_does_not_lose_required_findings_vs_legacy() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  D4 — Counter resets between scans
+//  D4, Counter resets between scans
 // ─────────────────────────────────────────────────────────────────────
 
 /// `last_topo_nonrecursive_refinements()` is reset to zero at the
@@ -204,7 +204,7 @@ fn refinements_counter_resets_per_scan() {
     assert!(first > 0, "first scan must record refinements, got {first}");
 
     // Second scan on the same fixture.  Counter must reset to first
-    // scan's value (or close to it — the fixture is deterministic so
+    // scan's value (or close to it, the fixture is deterministic so
     // it should match), NOT accumulate to ~2 × first.
     let _ = scan_fixture_dir(&dir, AnalysisMode::Full);
     let second = last_topo_nonrecursive_refinements();

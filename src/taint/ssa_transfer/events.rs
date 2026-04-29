@@ -1,9 +1,9 @@
 //! Taint event emission and conversion to [`crate::taint::Finding`].
 //!
 //! Extracted from the monolithic `ssa_transfer.rs`.  Contains:
-//! * [`SsaTaintEvent`] — the raw event struct produced by the block-level
+//! * [`SsaTaintEvent`], the raw event struct produced by the block-level
 //!   worklist each time a tainted value reaches a sink.
-//! * [`ssa_events_to_findings`] — event → `Finding` conversion with the
+//! * [`ssa_events_to_findings`], event → `Finding` conversion with the
 //!   `primary_location` invariant and dedup.
 //! * Flow-path reconstruction helpers ([`reconstruct_flow_path`] and
 //!   operand pickers).
@@ -38,14 +38,14 @@ pub struct SsaTaintEvent {
     /// `sink_caps`.  When multiple [`SinkSite`]s for the same `(param_idx,
     /// cap mask)` match, the emission site produces one event per
     /// [`SinkSite`] so each downstream [`crate::taint::Finding`] carries a
-    /// single primary attribution — the multi-primary case collapses to
+    /// single primary attribution, the multi-primary case collapses to
     /// multiple single-primary events.
     ///
     /// `None` for:
     /// * intra-procedural sinks (`uses_summary == false`), where the
     ///   caller's sink span already names the dangerous instruction;
     /// * summary-resolved sinks whose callee summary carried only cap-only
-    ///   [`SinkSite`]s (no source coordinates — e.g. pass-2 transient
+    ///   [`SinkSite`]s (no source coordinates, e.g. pass-2 transient
     ///   summaries or local `LocalFuncSummary`-only callees).
     pub primary_sink_site: Option<SinkSite>,
 }
@@ -79,7 +79,7 @@ pub(super) fn block_distance(ssa: &SsaBody, source_node: NodeIndex, sink_node: N
             }
         }
     }
-    0 // unreachable or not connected — conservative default
+    0 // unreachable or not connected, conservative default
 }
 
 // ── Flow Path Reconstruction ─────────────────────────────────────────────
@@ -204,7 +204,7 @@ pub(super) fn reconstruct_flow_path(
             SsaOp::FieldProj { receiver, .. } => {
                 // Treat field projection as a one-step assignment for
                 // flow-step reconstruction: taint reaching `obj.f` came
-                // from `obj`.  Phase 4 will refine the witness rendering
+                // from `obj`.  the analysis may refine the witness rendering
                 // to include the field name in the step.
                 steps.push(FlowStepRaw {
                     cfg_node: inst.cfg_node,
@@ -270,7 +270,7 @@ fn pick_tainted_operand_call(
 ///
 /// Note: this invariant is intentionally independent of `uses_summary`.
 /// The taint-chain flag tracks summary-propagated *taint*, not summary-
-/// resolved *sinks* — a local source can reach a cross-file sink, so
+/// resolved *sinks*, a local source can reach a cross-file sink, so
 /// `primary_location.is_some()` does not imply `uses_summary == true`.
 pub fn ssa_events_to_findings(
     events: &[SsaTaintEvent],
@@ -329,7 +329,7 @@ pub fn ssa_events_to_findings(
 
         // Data-integrity invariant: a populated primary_location must at least
         // carry resolved line coordinates.  `file_rel` may legitimately be
-        // empty — when the scan root is the caller file itself (single-file
+        // empty, when the scan root is the caller file itself (single-file
         // scans), every namespace normalizes to `""` and the callee's site
         // inherits that empty path; consumers resolve it against the file
         // under analysis.  Line==0 is the only filter-worthy invariant.
@@ -340,7 +340,7 @@ pub fn ssa_events_to_findings(
 
         // Dedup key includes primary location so multi-site events that
         // share a single (source, sink) pair still produce distinct findings
-        // — one per resolved callee-internal site.
+        //, one per resolved callee-internal site.
         let loc_key = primary_location
             .as_ref()
             .map(|l| (l.file_rel.clone(), l.line, l.col));
@@ -374,6 +374,11 @@ pub fn ssa_events_to_findings(
                         path_hash,
                         finding_id: String::new(),
                         alternative_finding_ids: smallvec::SmallVec::new(),
+                        // Per-event mask from the multi-gate dispatch, picks
+                        // exactly the cap that fired (e.g. `Cap::DATA_EXFIL`
+                        // for a `fetch` body-flow finding versus `Cap::SSRF`
+                        // for a URL-flow finding on the same call).
+                        effective_sink_caps: event.sink_caps & *caps,
                     });
                 }
             }

@@ -15,7 +15,7 @@ fn sanitize_desc(s: &str) -> String {
     crate::fmt::normalize_snippet(s)
 }
 
-/// Returns true if `idx` is the terminal exit of a function body — the
+/// Returns true if `idx` is the terminal exit of a function body, the
 /// convergence node where all execution paths join before leaving the function.
 ///
 /// **Invariant:** Only terminal exits carry the complete merged lifecycle state
@@ -143,7 +143,7 @@ pub fn extract_findings(
     for (idx, info) in cfg.node_references() {
         // File-level Exit (program termination, no enclosing function).
         let is_file_exit = info.kind == StmtKind::Exit && info.ast.enclosing_func.is_none();
-        // Terminal function exit — the convergence node where all paths join.
+        // Terminal function exit, the convergence node where all paths join.
         // Return nodes are intermediate and carry only path-specific state;
         // only the terminal exit carries the complete merged lifecycle.
         let is_func_terminal = is_terminal_function_exit(idx, info, cfg);
@@ -167,7 +167,7 @@ pub fn extract_findings(
             let acquire_node = find_acquire_node(cfg, sym, interner, scope);
 
             // At the file-level Exit, skip variables whose acquire site is
-            // inside a function — those are already handled by the per-
+            // inside a function, those are already handled by the per-
             // function exit checks above.  Without this, the file-level Exit
             // would duplicate leak findings with a misleading acquire span
             // (the first global match instead of the correct function-local one).
@@ -296,7 +296,7 @@ pub fn extract_findings(
     // **Language gate**: this heuristic is JS/TS-specific.  Other
     // languages (Go, Java, C, C++, Python, Rust, Ruby, PHP) use
     // explicit error returns / try-catch with deterministic control
-    // flow — an intervening call does NOT silently bypass a release.
+    // flow, an intervening call does NOT silently bypass a release.
     // Firing this on Go gave the gin/context.go FP where any method
     // calling another method (`c.Set`, `c.Get`) was flagged as a
     // possible leak on the receiver.  Skip the section but continue
@@ -374,7 +374,7 @@ pub fn extract_findings(
                 // (PathFact `dotdot=No && absolute=No`).  A web handler
                 // reading a sanitised user-controlled path is not the
                 // same shape as a handler reading any user-controlled
-                // path — the auth concern reduces once the data cannot
+                // path, the auth concern reduces once the data cannot
                 // escape into a privileged location.  Note this is per
                 // CFG-node span, so co-located unrelated sinks are
                 // unaffected.
@@ -455,7 +455,7 @@ fn is_web_entrypoint_simple(
 ) -> bool {
     let name_lower = func_name.to_ascii_lowercase();
 
-    // Skip bare "main" — it's typically a CLI entry
+    // Skip bare "main", it's typically a CLI entry
     if name_lower == "main" {
         return false;
     }
@@ -695,7 +695,7 @@ mod tests {
     fn per_body_factory_returned_resource_no_finding() {
         // Per-body graph: Entry → fopen(f) → return f → Exit
         // All nodes have enclosing_func=Some("factory").
-        // The resource is returned — no leak finding expected.
+        // The resource is returned, no leak finding expected.
         let func = "factory";
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_func_node(StmtKind::Entry, func));
@@ -764,7 +764,7 @@ mod tests {
     fn per_body_non_returned_resource_leaks() {
         // Per-body graph: Entry → fopen(f) → return (no uses) → Exit
         // All nodes have enclosing_func=Some("leaker").
-        // Resource is NOT returned — exactly one state-resource-leak expected.
+        // Resource is NOT returned, exactly one state-resource-leak expected.
         let func = "leaker";
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_func_node(StmtKind::Entry, func));

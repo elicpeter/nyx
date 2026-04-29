@@ -36,7 +36,7 @@ mod serde_json {
 }
 
 // Real-repo shape from website/src/handlers/social.rs:
-//   `realtime::publish_to_user(&ctx.env, &user.email, ...)` — publish
+//   `realtime::publish_to_user(&ctx.env, &user.email, ...)`, publish
 //   to the authed user's OWN channel keyed by their email.  The
 //   `email` / `username` / `handle` fields of a self-actor binding
 //   reference the actor's own identity, just like `id` / `user_id`,

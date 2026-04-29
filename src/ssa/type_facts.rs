@@ -25,23 +25,21 @@ pub enum TypeKind {
     FileHandle,
     Url,
     HttpClient,
-    /// A local, in-memory collection (HashMap, HashSet, Vec,
-    /// BTreeMap, …).  Consumed by the auth analysis sink gate so method
-    /// calls on variables of this type (`map.insert(...)`) are treated
-    /// as in-memory bookkeeping rather than cross-tenant sinks.  Has no
-    /// `label_prefix` — it never participates in label-based callee
+    /// A local, in-memory collection (HashMap, HashSet, Vec, etc.).
+    /// The auth sink gate uses this so calls like `map.insert(...)`
+    /// are treated as bookkeeping rather than cross-tenant sinks. No
+    /// `label_prefix`, never participates in label-based callee
     /// resolution.
     LocalCollection,
-    /// Phase 6: a framework-injected DTO body whose field types are
-    /// known.  Populated only when a parameter is recognised as a typed
-    /// extractor by a Phase 1-2 matcher AND the DTO class / struct /
-    /// Pydantic model is resolvable in the current scan scope.
-    /// Strictly additive — when no DTO definition is found, callers
-    /// fall through to today's pre-Phase-6 behaviour.
+    /// A framework-injected DTO body whose field types are known.
+    /// Populated when a parameter is recognised as a typed extractor and
+    /// the DTO class / struct / Pydantic model is resolvable in scope.
+    /// Strictly additive, without a DTO definition, callers fall back
+    /// to name-only resolution.
     Dto(DtoFields),
 }
 
-/// Phase 6: structural carrier for a recognised DTO type.  Maps
+/// structural carrier for a recognised DTO type.  Maps
 /// declared field names to their inferred [`TypeKind`].  Nested DTOs
 /// use [`TypeKind::Dto`] recursively.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,19 +80,11 @@ impl TypeKind {
         }
     }
 
-    /// Container name used by the typed call-graph devirtualisation
-    /// (`docs/typed-call-graph-prompt.md`, Phase 2).
-    ///
-    /// Returns the class / impl / module string under which an SSA
-    /// receiver value of this type would be looked up in
-    /// [`crate::callgraph::ClassMethodIndex`].  Mirrors
-    /// [`Self::label_prefix`] for the security-relevant abstract
-    /// types (HttpClient → `"HttpClient"`, DatabaseConnection →
-    /// `"DatabaseConnection"`, etc.) and additionally returns the DTO
-    /// class name for [`TypeKind::Dto`] receivers.
-    ///
-    /// Scalar / unknown types return `None` — they have no defining
-    /// container and would not narrow a method-call edge meaningfully.
+    /// Container name used by typed call-graph devirtualisation ,
+    /// the class / impl / module under which a receiver of this type
+    /// would be looked up. Returns the DTO class name for `Dto`
+    /// receivers, label prefixes for known abstract types, `None` for
+    /// scalars.
     pub fn container_name(&self) -> Option<String> {
         if let Some(prefix) = self.label_prefix() {
             return Some(prefix.to_string());
@@ -105,7 +95,7 @@ impl TypeKind {
         None
     }
 
-    /// Phase 6: convenience accessor for the inner `DtoFields` if this
+    /// convenience accessor for the inner `DtoFields` if this
     /// type is a recognised DTO.
     pub fn as_dto(&self) -> Option<&DtoFields> {
         match self {
@@ -146,7 +136,7 @@ impl TypeFact {
         TypeFact { kind, nullable }
     }
 
-    /// Phase 6: factory used by the field-access propagation rule.
+    /// factory used by the field-access propagation rule.
     pub(crate) fn from_dto_field(receiver: &TypeKind, field: &str) -> Option<Self> {
         let dto = receiver.as_dto()?;
         let kind = dto.get(field)?.clone();
@@ -190,10 +180,10 @@ impl TypeFactResult {
 ///
 /// Suppression policy:
 /// * [`TypeKind::Int`] (and float, treated as numeric): suppresses
-///   `SQL_QUERY`, `FILE_IO`, `SHELL_ESCAPE`, `HTML_ESCAPE`, `SSRF` —
+///   `SQL_QUERY`, `FILE_IO`, `SHELL_ESCAPE`, `HTML_ESCAPE`, `SSRF` ,
 ///   numeric values cannot carry the metacharacters required to drive
 ///   any of these injection classes.
-/// * [`TypeKind::Bool`]: suppresses every type-suppressible bit —
+/// * [`TypeKind::Bool`]: suppresses every type-suppressible bit ,
 ///   `true`/`false` cannot carry a payload of any kind.
 pub fn is_type_safe_for_sink(
     values: &[SsaValue],
@@ -245,6 +235,18 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
         Lang::JavaScript | Lang::TypeScript => match suffix {
             "URL" => Some(TypeKind::Url),
             "Request" | "XMLHttpRequest" => Some(TypeKind::HttpClient),
+            // JS built-in collection constructors. `new Map()` / `new Set()`
+            // / `new WeakMap()` / `new WeakSet()` / `new Array()` produce
+            // in-memory collections; downstream `m.get(k)` / `m.set(k, v)`
+            // / `s.add(x)` / `s.has(x)` / `arr.find(p)` are container ops,
+            // not data-layer reads. Without this mapping the bare verb
+            // dispatch in `auth_analysis::config::classify_sink_class`
+            // matches the `get` / `find` / `add` read/mutation indicators
+            // and over-fires `js.auth.missing_ownership_check` on every
+            // Map lookup in pure data-manipulation code (excalidraw's
+            // `elementsMap.get(id)`, `origIdToDuplicateId.get(...)`,
+            // `groupIdMapForOperation.set(...)` shapes).
+            "Map" | "Set" | "WeakMap" | "WeakSet" | "Array" => Some(TypeKind::LocalCollection),
             _ => None,
         },
         Lang::Python => {
@@ -334,10 +336,9 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
                 Some(TypeKind::DatabaseConnection)
             } else if is_rust_local_collection_constructor(base) {
                 // Rust std/indexmap/smallvec/dashmap collection
-                // constructors map to a generic "local collection" type so
-                // the auth analysis sink gate can recognise
-                // `let x = factory_fn(); x.insert(..)` even when the RHS
-                // isn't a syntactic constructor call.
+                // constructors map to a generic "local collection" type
+                // so the auth sink gate recognises
+                // `let x = factory_fn(); x.insert(..)`.
                 Some(TypeKind::LocalCollection)
             } else {
                 None
@@ -421,6 +422,15 @@ fn is_rust_local_collection_constructor(base: &str) -> bool {
         "FxHashSet",
         "DashMap",
         "DashSet",
+        // `roaring` crate, RoaringBitmap / RoaringTreemap are
+        // in-memory bitset / bitmap containers (set-of-u32 /
+        // set-of-u64).  Used heavily by indexing systems
+        // (meilisearch's index-scheduler) for `task_ids`,
+        // `docids`, and similar local-collection bookkeeping.
+        // Mutations (`insert` / `remove` / `clear`) are container
+        // ops, not data-layer writes.
+        "RoaringBitmap",
+        "RoaringTreemap",
     ];
     const VERBS: &[&str] = &[
         "new",
@@ -460,9 +470,71 @@ pub fn is_int_producing_callee(callee: &str) -> bool {
         | "Atoi" | "ParseInt" | "ParseFloat"         // Go
         | "intval" | "floatval"                       // PHP
         | "to_i" | "to_f"                             // Ruby
-        | "parse" // Rust: `.parse::<N>()` / `.parse().unwrap()` — conservative
+        | "parse" // Rust: `.parse::<N>()` / `.parse().unwrap()`, conservative
                   // (most Rust .parse() calls target numeric types)
     )
+}
+
+/// Polarity hint for a generic input-validator callee.
+///
+/// Most validation idioms route attacker-controlled input through a
+/// helper whose result the caller branches on:
+///
+/// ```text
+/// const err = validateUrlSsrf(child.webhookUrl);  // ErrorReturning
+/// if (err) throw new Error(err);                  // false branch → success
+///
+/// if (isValid(input)) { use(input); }             // BooleanTrueIsValid
+///                                                 // true branch → success
+/// ```
+///
+/// Without modeling this pattern, a one-statement rewrite of a
+/// `validate(x); if(x) ...` guard hides the semantic equivalence to
+/// `if (validate(x)) ...` (already classified as ValidationCall).  The
+/// classifier discriminates only on the textual head of the bare call
+///, strict-additive: callees that don't match any pattern return
+/// `None` and the engine falls through to its existing behaviour.
+///
+/// Motivated by Novu CVE GHSA-4x48-cgf9-q33f
+/// (`const ssrfError = await validateUrlSsrf(child.webhookUrl); if (ssrfError) throw`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputValidatorPolarity {
+    /// Returns boolean, truthy means "valid".
+    BooleanTrueIsValid,
+    /// Returns null/undefined on success, error/message on failure ,
+    /// truthy means "rejected".
+    ErrorReturning,
+}
+
+pub fn classify_input_validator_callee(callee: &str) -> Option<InputValidatorPolarity> {
+    let base = peel_identity_suffix(callee);
+    let suffix = base.rsplit(['.', ':']).next().unwrap_or(&base);
+    let lower = suffix.to_ascii_lowercase();
+
+    // Boolean returners, name typically reads as a predicate
+    // (`isValid…`, `is_valid_…`, `is_safe…`, `has_valid…`).  Truthy
+    // result → input is valid → TRUE branch carries the validation.
+    if lower.starts_with("isvalid")
+        || lower.starts_with("is_valid")
+        || lower.starts_with("issafe")
+        || lower.starts_with("is_safe")
+        || lower.starts_with("hasvalid")
+        || lower.starts_with("has_valid")
+    {
+        return Some(InputValidatorPolarity::BooleanTrueIsValid);
+    }
+
+    // Error-returning validators, name reads as a verb whose return
+    // value carries the error description.  `validateXxx`, `verifyXxx`
+    // are the dominant idioms; we deliberately do NOT match `check…`
+    // here because a name like `checkPermissions` overlaps with auth
+    // checks (different semantic) and the suppression payoff isn't
+    // worth the precision risk.
+    if lower.starts_with("validate") || lower.starts_with("verify") {
+        return Some(InputValidatorPolarity::ErrorReturning);
+    }
+
+    None
 }
 
 /// Analyze types for all SSA values.
@@ -571,7 +643,7 @@ pub fn analyze_types_with_param_types(
                             | BinOp::Gt
                             | BinOp::GtEq,
                         ) => TypeFact::from_kind(TypeKind::Int),
-                        // Add could be string concatenation — defer to operand types
+                        // Add could be string concatenation, defer to operand types
                         _ => TypeFact::unknown(),
                     }
                 }
@@ -587,7 +659,7 @@ pub fn analyze_types_with_param_types(
                     Some(tk) => TypeFact::from_kind(tk.clone()),
                     None => TypeFact::unknown(),
                 },
-                // Undef contributes no type information — phi joins
+                // Undef contributes no type information, phi joins
                 // pick up the type from the other (defined) operand.
                 SsaOp::Undef => TypeFact::unknown(),
             };
@@ -603,7 +675,7 @@ pub fn analyze_types_with_param_types(
 
         for block in &body.blocks {
             // Identity-preserving method calls: pass through receiver's type.
-            // E.g. `Connection::open(p).unwrap()` — the `.unwrap()` call's type
+            // E.g. `Connection::open(p).unwrap()`, the `.unwrap()` call's type
             // fact should mirror the receiver (Result<Connection>).  Only applies
             // when the current fact is still Unknown so explicit constructor
             // mappings win.
@@ -618,7 +690,7 @@ pub fn analyze_types_with_param_types(
                         continue;
                     }
                     // A numeric-length accessor pinned by the first pass is
-                    // load-bearing for sink suppression — do not let identity-
+                    // load-bearing for sink suppression, do not let identity-
                     // method receiver propagation overwrite the Int fact.
                     if cfg
                         .node_weight(inst.cfg_node)
@@ -644,7 +716,7 @@ pub fn analyze_types_with_param_types(
                 }
             }
 
-            // Phase 6.3: FieldProj receiver-driven type narrowing.  When
+            // FieldProj receiver-driven type narrowing.  When
             // SSA lowering decomposed `a.b.c()` into a FieldProj chain,
             // intermediate FieldProj insts default to `projected_type =
             // None`.  If the receiver value carries a Dto fact and the
@@ -701,7 +773,7 @@ pub fn analyze_types_with_param_types(
             // Copy assignments and binary arithmetic
             for inst in &block.body {
                 // Preserve the Int fact pinned by the numeric-length-access
-                // detector in the first pass — copy propagation would replace
+                // detector in the first pass, copy propagation would replace
                 // it with the receiver's (usually Unknown) type and defeat the
                 // whole point of the accessor rule.
                 if cfg
@@ -712,11 +784,11 @@ pub fn analyze_types_with_param_types(
                 }
                 if let SsaOp::Assign(uses) = &inst.op {
                     if uses.len() == 1 {
-                        // Phase 6.3: when the RHS is a single member-access
+                        // when the RHS is a single member-access
                         // expression and the receiver value carries a
                         // `TypeKind::Dto(fields)` fact, route the assignment's
                         // type to the field's declared `TypeKind`.  Strictly
-                        // additive — falls through to copy-prop when the
+                        // additive, falls through to copy-prop when the
                         // receiver isn't a DTO or the field isn't recorded.
                         let dto_field_fact = cfg
                             .node_weight(inst.cfg_node)
@@ -777,7 +849,7 @@ pub fn analyze_types_with_param_types(
 /// Used for `instanceof` resolution and type-qualified method dispatch.
 pub struct TypeHierarchy;
 
-/// (subtype, &[supertypes]) — sink-relevant framework types only.
+/// (subtype, &[supertypes]), sink-relevant framework types only.
 static JAVA_HIERARCHY: &[(&str, &[&str])] = &[
     ("HttpServletResponse", &["ServletResponse"]),
     ("HttpServletRequest", &["ServletRequest"]),
@@ -853,7 +925,7 @@ impl TypeHierarchy {
 ///
 /// Conservative: unknown interfaces → `true` (could satisfy).
 /// Only [`definitely_not`](GoInterfaceTable::definitely_not) is used for
-/// suppression — it returns `true` only when the type provably cannot
+/// suppression, it returns `true` only when the type provably cannot
 /// implement the interface.
 pub struct GoInterfaceTable;
 
@@ -1147,8 +1219,8 @@ mod tests {
         assert_eq!(result.get_type(SsaValue(99)), None);
     }
 
-    /// Phase 4: Int-typed values must suppress every type-suppressible
-    /// cap — including the freshly-added `SSRF` bit.  Numeric IDs
+    /// Int-typed values must suppress every type-suppressible
+    /// cap, including the freshly-added `SSRF` bit.  Numeric IDs
     /// cannot rewrite a URL host, cannot form path traversal sequences,
     /// cannot carry SQL/HTML/shell metacharacters.
     #[test]
@@ -1183,7 +1255,7 @@ mod tests {
         ));
     }
 
-    /// Phase 4: Bool-typed values are even safer than ints — `true` /
+    /// Bool-typed values are even safer than ints, `true` /
     /// `false` cannot carry any payload and must suppress every
     /// type-suppressible cap.
     #[test]
@@ -1207,7 +1279,7 @@ mod tests {
         }
     }
 
-    /// String-typed values must NOT trigger suppression — they are the
+    /// String-typed values must NOT trigger suppression, they are the
     /// canonical injection carrier.  Regression guard so a future
     /// change to `is_type_safe_for_sink` does not silently silence
     /// real String-payload findings.
@@ -1349,8 +1421,8 @@ mod tests {
         }
     }
 
-    /// Audit A3 (companion): mixed-type operand list — only one Int
-    /// among operands of unknown type — must NOT suppress.  The
+    /// Audit A3 (companion): mixed-type operand list, only one Int
+    /// among operands of unknown type, must NOT suppress.  The
     /// suppression rule requires every operand to be payload-incompatible.
     #[test]
     fn mixed_type_operands_do_not_suppress() {
@@ -1366,7 +1438,7 @@ mod tests {
         ));
     }
 
-    /// Phase 3: Param values seeded from `param_types` must surface
+    /// Param values seeded from `param_types` must surface
     /// the right TypeKind for downstream sink suppression.  An out-of-
     /// range index falls back to Unknown (the pre-Phase-3 default).
     #[test]
@@ -1591,6 +1663,47 @@ mod tests {
     }
 
     #[test]
+    fn constructor_type_javascript_typescript_local_collections() {
+        // `new Map()` / `new Set()` / `new WeakMap()` / `new WeakSet()` /
+        // `new Array()` produce in-memory collections.  Excalidraw's
+        // `elementsMap.get(id)` shape (which dominates the
+        // `js.auth.missing_ownership_check` cluster on JS data-manipulation
+        // libraries) is suppressed once the receiver type is known.
+        for lang in [Lang::JavaScript, Lang::TypeScript] {
+            assert_eq!(
+                constructor_type(lang, "Map"),
+                Some(TypeKind::LocalCollection)
+            );
+            assert_eq!(
+                constructor_type(lang, "Set"),
+                Some(TypeKind::LocalCollection)
+            );
+            assert_eq!(
+                constructor_type(lang, "WeakMap"),
+                Some(TypeKind::LocalCollection)
+            );
+            assert_eq!(
+                constructor_type(lang, "WeakSet"),
+                Some(TypeKind::LocalCollection)
+            );
+            assert_eq!(
+                constructor_type(lang, "Array"),
+                Some(TypeKind::LocalCollection)
+            );
+            // Existing pre-fix mappings still resolve.
+            assert_eq!(constructor_type(lang, "URL"), Some(TypeKind::Url));
+            assert_eq!(
+                constructor_type(lang, "XMLHttpRequest"),
+                Some(TypeKind::HttpClient)
+            );
+            // Negative: unrelated identifiers stay None.
+            assert_eq!(constructor_type(lang, "Object"), None);
+            assert_eq!(constructor_type(lang, "Promise"), None);
+            assert_eq!(constructor_type(lang, "Foo"), None);
+        }
+    }
+
+    #[test]
     fn constructor_type_ruby() {
         // HttpClient
         assert_eq!(
@@ -1680,7 +1793,7 @@ mod tests {
             constructor_type(Lang::Rust, "diesel::SqliteConnection::establish"),
             Some(TypeKind::DatabaseConnection)
         );
-        // Bare `Connection::open` is accepted — Rust idiom
+        // Bare `Connection::open` is accepted, Rust idiom
         // `use rusqlite::Connection; Connection::open(…)` is common, and the
         // scanner sees the unqualified callee text after import resolution.
         // Accepting this matches the benchmark fixture `rs-sqli-001`.
@@ -1938,9 +2051,9 @@ mod tests {
         );
     }
 
-    // ── Phase 6 DTO field-level taint ─────────────────────────────────────
+    // ── DTO field-level taint ─────────────────────────────────────────────
 
-    /// Phase 6: `TypeFact::from_dto_field` returns `Some(field_kind)`
+    /// `TypeFact::from_dto_field` returns `Some(field_kind)`
     /// for a DTO receiver whose `fields` map contains the requested
     /// field, and `None` otherwise.
     #[test]
@@ -1956,7 +2069,7 @@ mod tests {
         assert!(TypeFact::from_dto_field(&recv, "missing").is_none());
     }
 
-    /// Phase 6: a non-DTO receiver kind never produces a field fact —
+    /// a non-DTO receiver kind never produces a field fact ,
     /// `from_dto_field` falls through to the legacy copy-prop path.
     #[test]
     fn dto_field_lookup_on_non_dto_returns_none() {
@@ -1974,10 +2087,9 @@ mod tests {
         }
     }
 
-    /// Phase 6: nested DTO — the parent DTO's field type is
-    /// `TypeKind::Dto`, and `from_dto_field` returns that nested DTO
-    /// fact directly.  Phase 6.3 callers can recurse into the inner
-    /// fields by following the returned receiver's `as_dto()` chain.
+    /// Nested DTO, the parent DTO's field type is `TypeKind::Dto`,
+    /// and `from_dto_field` returns that nested DTO fact directly.
+    /// Callers can recurse via `as_dto()`.
     #[test]
     fn dto_field_lookup_supports_nested_dto() {
         let mut inner = DtoFields::new("Address");
@@ -1990,7 +2102,7 @@ mod tests {
         assert_eq!(addr.kind, TypeKind::Dto(inner));
     }
 
-    /// Phase 6: an empty DTO (class declared but with no inferred
+    /// an empty DTO (class declared but with no inferred
     /// fields) never resolves field reads.  Documents the safe-fallback
     /// invariant so the legacy path runs when class fields couldn't be
     /// classified.
@@ -2000,9 +2112,8 @@ mod tests {
         assert!(TypeFact::from_dto_field(&recv, "anything").is_none());
     }
 
-    /// Phase 6: an `Int`-typed field in a DTO survives the
-    /// type-suppression matrix exactly the same way a freestanding
-    /// `Int` does — sanity-check the bridge between Phase 6 and Phase 4.
+    /// An `Int`-typed DTO field survives the type-suppression matrix
+    /// the same way a freestanding `Int` does.
     #[test]
     fn dto_int_field_suppresses_sql_query_via_matrix() {
         use crate::labels::Cap;

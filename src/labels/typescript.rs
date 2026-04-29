@@ -86,7 +86,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::SHELL_ESCAPE),
         case_sensitive: false,
     },
-    // he library — HTML entity encoding
+    // he library, HTML entity encoding
     LabelRule {
         matchers: &["he.encode", "he.escape"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
@@ -131,7 +131,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: true,
     },
-    // ── Outbound HTTP clients — modeled as destination-aware gated sinks ──
+    // ── Outbound HTTP clients, modeled as destination-aware gated sinks ──
     // See GATED_SINKS below; rationale mirrors javascript.rs.
     LabelRule {
         matchers: &[
@@ -204,6 +204,14 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["net.createConnection"],
         label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+    },
+    // ── Cross-boundary data exfiltration (DATA_EXFIL) ─────────────────────
+    // See javascript.rs for rationale.  `xhr.send(body)` resolves to
+    // `HttpClient.send` via type-qualified resolution.
+    LabelRule {
+        matchers: &["HttpClient.send", "XMLHttpRequest.prototype.send"],
+        label: DataLabel::Sink(Cap::DATA_EXFIL),
         case_sensitive: false,
     },
     // ─────────── SQL injection sinks ─────────────
@@ -283,7 +291,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_kwargs: &[],
         activation: GateActivation::ValueMatch,
     },
-    // ── Outbound HTTP clients (SSRF) — see javascript.rs for rationale ────
+    // ── Outbound HTTP clients (SSRF), see javascript.rs for rationale ────
     SinkGate {
         callee_matcher: "fetch",
         arg_index: 0,
@@ -450,6 +458,24 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_kwargs: &[],
         activation: GateActivation::Destination {
             object_destination_fields: &["host", "hostname", "path", "protocol", "port", "origin"],
+        },
+    },
+    // ── Cross-boundary data exfiltration ──────────────────────────────────
+    // `fetch(input, init)`, payload-bearing fields of `init` (arg 1) flow
+    // into the request body / headers / json, distinct from SSRF on the URL
+    // (arg 0).  See javascript.rs for full rationale.
+    SinkGate {
+        callee_matcher: "fetch",
+        arg_index: 1,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::DATA_EXFIL),
+        case_sensitive: false,
+        payload_args: &[1],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["body", "headers", "json"],
         },
     },
 ];

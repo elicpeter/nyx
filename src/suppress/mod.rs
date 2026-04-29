@@ -1,8 +1,8 @@
 //! Inline per-finding suppression via source-code comments.
 //!
 //! Supports two directive forms:
-//! - `nyx:ignore <RULE_ID>[, <RULE_ID>…]`  — suppress findings on the same line
-//! - `nyx:ignore-next-line <RULE_ID>[, …]` — suppress findings on the next line
+//! - `nyx:ignore <RULE_ID>[, <RULE_ID>…]` , suppress findings on the same line
+//! - `nyx:ignore-next-line <RULE_ID>[, …]`, suppress findings on the next line
 //!
 //! Comments are detected for all supported languages without tree-sitter,
 //! using a lightweight string/comment state machine.
@@ -34,7 +34,7 @@ pub struct SuppressionMeta {
 //  Internal types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A single rule matcher — either exact or wildcard-suffix (`foo.*`).
+/// A single rule matcher, either exact or wildcard-suffix (`foo.*`).
 #[derive(Debug)]
 enum RuleMatcher {
     Exact(String),
@@ -120,11 +120,11 @@ pub fn canonical_rule_id(id: &str) -> &str {
 
 #[derive(Clone, Copy)]
 enum CommentStyle {
-    /// `//` and `/* */` — Rust, C, C++, Java, Go, JS, TS
+    /// `//` and `/* */`, Rust, C, C++, Java, Go, JS, TS
     CStyle,
-    /// `#` only — Python, Ruby
+    /// `#` only, Python, Ruby
     Hash,
-    /// `//`, `#`, and `/* */` — PHP
+    /// `//`, `#`, and `/* */`, PHP
     PhpStyle,
 }
 
@@ -189,7 +189,7 @@ pub fn parse_inline_suppressions(path: &std::path::Path, source: &str) -> Suppre
         if in_block_comment {
             // Check for block comment end.
             if let Some(end_pos) = line.find("*/") {
-                // Extract text before `*/` — may contain a directive.
+                // Extract text before `*/`, may contain a directive.
                 let block_text = &line[..end_pos];
                 if let Some(dir) = try_parse_directive(block_text, line_num) {
                     let target = target_line(&dir, line_num, total_lines);
@@ -208,7 +208,7 @@ pub fn parse_inline_suppressions(path: &std::path::Path, source: &str) -> Suppre
                     }
                 }
             } else {
-                // Still inside block comment — check for directive.
+                // Still inside block comment, check for directive.
                 if let Some(dir) = try_parse_directive(line, line_num) {
                     let target = target_line(&dir, line_num, total_lines);
                     if let Some(t) = target {
@@ -220,7 +220,7 @@ pub fn parse_inline_suppressions(path: &std::path::Path, source: &str) -> Suppre
             continue;
         }
 
-        // Not in a block comment — scan the line character by character
+        // Not in a block comment, scan the line character by character
         // tracking string state.
         if let Some(dir) = scan_line_for_directive(line, line_num, style, &mut in_block_comment) {
             let target = target_line(&dir, line_num, total_lines);
@@ -237,7 +237,7 @@ pub fn parse_inline_suppressions(path: &std::path::Path, source: &str) -> Suppre
 }
 
 /// Compute the target line for a directive. Returns `None` if the directive
-/// is `NextLine` but on the last line (EOF — no-op).
+/// is `NextLine` but on the last line (EOF, no-op).
 fn target_line(dir: &LineDirective, line_num: usize, total_lines: usize) -> Option<usize> {
     match dir.kind {
         SuppressionKind::SameLine => Some(line_num),
@@ -245,7 +245,7 @@ fn target_line(dir: &LineDirective, line_num: usize, total_lines: usize) -> Opti
             if line_num < total_lines {
                 Some(line_num + 1)
             } else {
-                None // EOF — no next line
+                None // EOF, no next line
             }
         }
     }
@@ -304,7 +304,7 @@ fn scan_line_for_directive(
         if ch == b'r' && i + 1 < len {
             let next = bytes[i + 1];
             if next == b'"' {
-                // r"..." — skip to closing "
+                // r"...", skip to closing "
                 i += 2;
                 while i < len && bytes[i] != b'"' {
                     i += 1;

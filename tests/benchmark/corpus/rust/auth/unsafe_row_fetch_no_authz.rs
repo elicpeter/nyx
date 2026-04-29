@@ -1,4 +1,4 @@
-// Vulnerable counterpart to `row_fetch_then_authorize.rs` — the row is
+// Vulnerable counterpart to `row_fetch_then_authorize.rs`, the row is
 // fetched by user-supplied id but no authorization function names it.
 // The row-fetch exemption must NOT fire here; the rule should still
 // flag the read as missing an ownership/membership check.

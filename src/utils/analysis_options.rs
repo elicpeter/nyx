@@ -27,7 +27,7 @@ pub const DEFAULT_PARSE_TIMEOUT_MS: u64 = 10_000;
 /// value.  Raised from the historical `4` to `32` so realistic codebases
 /// with wide joins (many param sources, deep helper chains) no longer
 /// silently drop origin attribution.  Tunable via
-/// [`AnalysisOptions::max_origins`] — see
+/// [`AnalysisOptions::max_origins`], see
 /// `src/taint/ssa_transfer/state.rs::effective_max_origins`.
 pub const DEFAULT_MAX_ORIGINS: u32 = 32;
 
@@ -38,11 +38,11 @@ pub const DEFAULT_MAX_ORIGINS: u32 = 32;
 pub const MIN_MAX_ORIGINS: u32 = 1;
 
 /// Default upper bound on the number of abstract heap objects tracked per
-/// intra-procedural points-to set.  Set to `32` — high enough that
+/// intra-procedural points-to set.  Set to `32`, high enough that
 /// realistic factory/builder/DI patterns (routine 10–30 allocation sites
 /// aliased into one variable) stay precise, low enough to keep
 /// `HeapState` join/clone cost bounded in the worklist.  Tunable via
-/// [`AnalysisOptions::max_pointsto`] — see
+/// [`AnalysisOptions::max_pointsto`], see
 /// `src/ssa/heap.rs::effective_max_pointsto`.
 pub const DEFAULT_MAX_POINTSTO: u32 = 32;
 
@@ -152,7 +152,7 @@ impl Default for AnalysisOptions {
 /// (notably `nyx serve`, which resolves the engine profile per scan
 /// request) can replace the installed options between scans via
 /// [`reinstall`].  Within a single scan run, engine toggles must not
-/// change mid-flight — the caller is responsible for that invariant
+/// change mid-flight, the caller is responsible for that invariant
 /// (`JobManager`'s single-scan guarantee provides it in the server).
 static RUNTIME: RwLock<Option<AnalysisOptions>> = RwLock::new(None);
 
@@ -174,7 +174,7 @@ pub fn install(opts: AnalysisOptions) -> bool {
 /// server's scan thread, which re-resolves the engine profile from each
 /// incoming request; `install`'s first-wins semantics would otherwise
 /// pin the first scan's choice for the lifetime of the server.  Callers
-/// must ensure no scan is concurrently reading `current()` — in practice
+/// must ensure no scan is concurrently reading `current()`, in practice
 /// this means calling `reinstall` before the scan's rayon pool starts.
 pub fn reinstall(opts: AnalysisOptions) {
     *RUNTIME.write().expect("analysis options RwLock poisoned") = Some(opts);

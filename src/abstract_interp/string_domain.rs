@@ -1,6 +1,6 @@
 //! String abstract domain for abstract interpretation.
 //!
-//! Tracks known prefix, suffix, and — when provably bounded — the finite set
+//! Tracks known prefix, suffix, and, when provably bounded, the finite set
 //! of possible concrete string values. Used for SSRF suppression (URL prefix
 //! proves host is locked), command-injection suppression (lookup result
 //! bounded to a safe set of literals), and general string analysis.
@@ -78,7 +78,7 @@ impl StringFact {
     /// the finite domain is `{s}`.
     ///
     /// Empty prefix/suffix are normalised to `None` because "starts/ends with
-    /// the empty string" carries no constraint — keeping `Some("")` would
+    /// the empty string" carries no constraint, keeping `Some("")` would
     /// break join idempotence (`Some("")` ⊔ `Some("")` collapses to `None`).
     pub fn exact(s: &str) -> Self {
         let prefix = truncate_prefix(s);
@@ -134,7 +134,7 @@ impl StringFact {
     /// Inputs are sorted and deduped. If the cardinality exceeds
     /// [`MAX_DOMAIN_SIZE`] or the input is empty, the domain collapses to
     /// `None` (Top on this sub-field). The prefix/suffix sub-fields remain
-    /// unset — callers can combine with [`Self::exact`] for single-element
+    /// unset, callers can combine with [`Self::exact`] for single-element
     /// sets if tighter facts are desired.
     pub fn finite_set(values: Vec<String>) -> Self {
         let mut v = values;
@@ -411,7 +411,7 @@ fn truncate_suffix(s: &str) -> String {
 /// Longest common prefix of two strings, char-aligned.
 ///
 /// Iterates by `char` rather than `byte` so multi-byte UTF-8 code points are
-/// either kept whole or dropped — a byte-wise comparison would slice into the
+/// either kept whole or dropped, a byte-wise comparison would slice into the
 /// middle of a code point and produce mojibake (`x as char` on a UTF-8
 /// continuation byte yields a garbage Latin-1 character).
 pub fn longest_common_prefix(a: &str, b: &str) -> String {
@@ -746,7 +746,7 @@ mod tests {
         let a = StringFact::from_prefix("https://api.example.com/");
         let b = StringFact::from_prefix("https://db.example.com/");
         let r = a.join(&b);
-        // Common prefix is "https://" — anything past that diverges.
+        // Common prefix is "https://", anything past that diverges.
         assert_eq!(
             r.prefix.as_deref(),
             Some("https://"),
@@ -781,7 +781,7 @@ mod tests {
         ]
     }
 
-    /// `x ⊔ x = x` — join is idempotent across all sample shapes.
+    /// `x ⊔ x = x`, join is idempotent across all sample shapes.
     #[test]
     fn join_idempotent_string() {
         for a in sample_strings() {
@@ -789,7 +789,7 @@ mod tests {
         }
     }
 
-    /// `x ⊔ y = y ⊔ x` — join is commutative.
+    /// `x ⊔ y = y ⊔ x`, join is commutative.
     #[test]
     fn join_commutative_string() {
         let xs = sample_strings();
@@ -806,7 +806,7 @@ mod tests {
         }
     }
 
-    /// `x ⊓ x = x` — meet is idempotent.
+    /// `x ⊓ x = x`, meet is idempotent.
     #[test]
     fn meet_idempotent_string() {
         for a in sample_strings() {
@@ -814,7 +814,7 @@ mod tests {
         }
     }
 
-    /// `x ⊓ y = y ⊓ x` — meet is commutative.
+    /// `x ⊓ y = y ⊓ x`, meet is commutative.
     #[test]
     fn meet_commutative_string() {
         let xs = sample_strings();
@@ -844,7 +844,7 @@ mod tests {
         }
     }
 
-    /// `x ⊑ x` — leq is reflexive.
+    /// `x ⊑ x`, leq is reflexive.
     #[test]
     fn leq_reflexive_string() {
         for a in sample_strings() {
@@ -852,7 +852,7 @@ mod tests {
         }
     }
 
-    /// **Soundness**: `widen(a, b) ⊒ join(a, b)` — widening must
+    /// **Soundness**: `widen(a, b) ⊒ join(a, b)`, widening must
     /// over-approximate join, otherwise dataflow loses information.
     #[test]
     fn widen_over_approximates_join_string() {
@@ -905,7 +905,7 @@ mod tests {
         }
     }
 
-    /// Empty-string exact value must distinguish from Top — it is a
+    /// Empty-string exact value must distinguish from Top, it is a
     /// singleton (`{""}`), not unconstrained. After the empty-prefix
     /// normalisation, prefix/suffix are `None` (carry no extra info)
     /// but the `domain` field still pins the value to exactly `""`.

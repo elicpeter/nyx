@@ -782,7 +782,7 @@ pub struct FuncSummaryView {
     /// Enclosing container path (class / impl / module / outer function).
     /// Empty for free top-level functions.
     pub container: String,
-    /// Structural [`crate::symbol::FuncKind`] slug — `"fn"`, `"method"`,
+    /// Structural [`crate::symbol::FuncKind`] slug, `"fn"`, `"method"`,
     /// `"closure"`, etc.  Lets the UI distinguish anonymous closures from
     /// named functions for filtering.
     pub func_kind: String,
@@ -934,10 +934,10 @@ pub struct PointerView {
     pub locations: Vec<PointerLocationView>,
     pub values: Vec<PointerValueView>,
     /// Field reads attributed to params/receiver via the field-points-to
-    /// extractor (Phase 5).
+    /// extractor.
     pub field_reads: Vec<PointerFieldEntryView>,
     /// Field writes attributed to params/receiver via the field-points-to
-    /// extractor (Phase 5).
+    /// extractor.
     pub field_writes: Vec<PointerFieldEntryView>,
     /// Number of distinct interned locations beyond the reserved Top sentinel.
     pub location_count: usize,
@@ -998,7 +998,7 @@ impl PointerView {
             });
         }
 
-        // Per-value pt sets — emit only values with non-empty sets to keep
+        // Per-value pt sets, emit only values with non-empty sets to keep
         // the payload focused on interesting facts.
         let mut values: Vec<PointerValueView> = Vec::new();
         for v in 0..ssa.num_values() as u32 {
@@ -1064,12 +1064,12 @@ pub struct TypeFactDetailView {
     pub ssa_value: u32,
     pub var_name: Option<String>,
     pub line: usize,
-    /// Type kind tag — matches the [`TypeKind`] discriminant
+    /// Type kind tag, matches the [`TypeKind`] discriminant
     /// (`String`, `Int`, `HttpClient`, `Dto`, …).
     pub kind: String,
     /// True when the value is allowed to be null/None.
     pub nullable: bool,
-    /// Container/class name — set for `HttpClient`, `DatabaseConnection`,
+    /// Container/class name, set for `HttpClient`, `DatabaseConnection`,
     /// `Dto`, etc.  Mirrors [`TypeKind::container_name`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container: Option<String>,
@@ -1437,7 +1437,7 @@ pub fn function_list(analysis: &FileAnalysis) -> Vec<FunctionInfo> {
 /// Lower a single function to SSA and optimize it.
 ///
 /// Returns the per-function body graph alongside the SSA. SSA is lowered
-/// against `body.graph`, whose `NodeIndex` space is body-local — the file's
+/// against `body.graph`, whose `NodeIndex` space is body-local, the file's
 /// top-level CFG (`analysis.cfg()`) has a different index space, so any
 /// downstream analysis that indexes by `inst.cfg_node` must use the returned
 /// `&Cfg`, not `analysis.cfg()`.
@@ -1638,7 +1638,7 @@ pub fn analyse_file_summaries(
 /// Run the file-level authorization extraction pipeline for the debug UI.
 ///
 /// Returns the structured `AuthorizationModel` (routes, units, sensitive
-/// operations, auth checks) plus the file bytes and an `enabled` flag —
+/// operations, auth checks) plus the file bytes and an `enabled` flag ,
 /// the bytes drive line-number resolution in the view, and `enabled`
 /// surfaces "auth analysis is off for this language" without conflating
 /// it with an empty result.
@@ -1651,7 +1651,7 @@ pub fn analyse_file_auth(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::BAD_REQUEST)?;
     // Determine whether the auth rules were actually enabled for this
-    // file's language — `extract_auth_model_for_debug` returns an empty
+    // file's language, `extract_auth_model_for_debug` returns an empty
     // model both when the rules are disabled and when the file just
     // happens to have no routes.  The view distinguishes the two so the
     // UI can show "analysis disabled" instead of "no routes found".
@@ -2122,7 +2122,7 @@ fn main() {
         // Belt-and-suspenders: assert that calling with the wrong (top-level)
         // CFG would have panicked. We can't catch the panic across rayon
         // worker threads here, but we can confirm at least one `inst.cfg_node`
-        // index lies outside `analysis.cfg()`'s range — that's what triggers
+        // index lies outside `analysis.cfg()`'s range, that's what triggers
         // the OOB indexing inside `transfer_inst`.
         let toplevel_count = analysis.cfg().node_count();
         let max_inst_idx = ssa

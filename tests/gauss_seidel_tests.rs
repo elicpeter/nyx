@@ -4,7 +4,7 @@
 //! Default mode is Jacobi (order-independent, reproducible).
 //! Gauss-Seidel is opt-in via `NYX_JS_GAUSS_SEIDEL=1` (or the
 //! test-only override).  The two variants must produce **equal
-//! findings** on every fixture — this is the core correctness
+//! findings** on every fixture, this is the core correctness
 //! invariant for shipping G-S behind a flag.
 //!
 //! If this test ever fails, Gauss-Seidel has a precision leak and
@@ -33,7 +33,7 @@ static GS_TEST_GUARD: Mutex<()> = Mutex::new(());
 
 /// Sort findings into a deterministic order that ignores
 /// non-semantic fields so we can compare Jacobi vs. Gauss-Seidel
-/// runs.  Comparing raw `Diag` equality would be too strict —
+/// runs.  Comparing raw `Diag` equality would be too strict ,
 /// evidence ordering, span-derived IDs, and rank scores can differ
 /// harmlessly between variants.  We assert on the tuple
 /// `(path, line, col, id, severity, suppressed)` which is the
@@ -68,8 +68,8 @@ fn finding_identities(
 /// Phase-C correctness invariant: Jacobi and Gauss-Seidel produce
 /// **equal findings** on the deep-chain fixture.
 ///
-/// Gauss-Seidel may converge in fewer iterations — that is the whole
-/// point of the optimisation — but the set of findings and their
+/// Gauss-Seidel may converge in fewer iterations, that is the whole
+/// point of the optimisation, but the set of findings and their
 /// primary locations must be identical.  A divergence here would
 /// mean G-S is cutting off a real flow or introducing a spurious
 /// one; ship-blocking either way.

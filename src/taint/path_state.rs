@@ -35,13 +35,13 @@ pub enum PredicateKind {
     /// Commonly paired with [`ShellMetaValidated`] in OR-chain rejection
     /// idioms (`if x.len() > MAX || x.contains(";") { reject }`).  Counts as
     /// a dominator guard for `cfg-unguarded-sink` purposes, but intentionally
-    /// does **not** mark variables as validated — the rejection direction is
+    /// does **not** mark variables as validated, the rejection direction is
     /// ambiguous from the condition alone (a `.len() > 5 { sink(x) }`
     /// gate is a precondition, not a rejection).
     BoundedLength,
     /// Comparison operators: `x == 5`, `x > threshold`
     Comparison,
-    /// Generic boolean test — cannot classify further.
+    /// Generic boolean test, cannot classify further.
     Unknown,
 }
 
@@ -50,7 +50,7 @@ pub enum PredicateKind {
 ///
 /// Presence of any of these in user input is sufficient to enable shell
 /// injection, so rejecting input that contains them is a real sanitizer.
-/// `"foo"` or other non-metachar needles don't qualify — a rejection of
+/// `"foo"` or other non-metachar needles don't qualify, a rejection of
 /// those is business logic, not security.
 const SHELL_METACHARS: &[&str] = &[";", "|", "&", "`", "$", ">", "<", "\n", "\r", "\0"];
 
@@ -65,7 +65,7 @@ const SHELL_METACHARS: &[&str] = &[";", "|", "&", "`", "$", ">", "<", "\n", "\r"
 ///   character class containing only metacharacters.
 ///
 /// Returns `false` if the needle is a non-metachar literal or cannot be
-/// extracted — falls through to broader classification.
+/// extracted, falls through to broader classification.
 fn is_shell_metachar_rejection(text: &str) -> bool {
     // Method-call form: `.contains(…)` / `.includes(…)` / `.include?(…)`
     for method in [".contains(", ".includes(", ".include?("] {
@@ -134,7 +134,7 @@ fn extract_first_string_arg(after_open: &str) -> Option<String> {
 }
 
 /// For Python `"<METACHAR>" in x` (needle on the left side of ` in `), return
-/// the needle.  Returns `None` for `x in ALLOWED` (identifier on the left) —
+/// the needle.  Returns `None` for `x in ALLOWED` (identifier on the left) ,
 /// that is an allowlist check, not a rejection.
 fn extract_python_in_needle(text: &str) -> Option<String> {
     let pos = text.find(" in ")?;
@@ -155,7 +155,7 @@ fn extract_python_in_needle(text: &str) -> Option<String> {
 
 /// Detect regex character classes that contain only shell metacharacters:
 /// `[;|&]`, `[;&`$]`, etc.  Missing: escape-class metacharacters inside the
-/// class (e.g. `[\n]`) — conservative, returns false there.
+/// class (e.g. `[\n]`), conservative, returns false there.
 fn is_metachar_regex_class(text: &str) -> bool {
     // Find `[` followed by content and `]`, anywhere in the text.
     let mut rest = text;
@@ -180,7 +180,7 @@ fn is_metachar_regex_class(text: &str) -> bool {
 
 /// Check whether `text` looks like a bounded-length rejection:
 /// `x.len() > N`, `x.len() < N`, `x.length >= N`, etc. where `N` is an
-/// integer literal >= 2.  Excludes `> 0` / `>= 1` / `< 1` — those are
+/// integer literal >= 2.  Excludes `> 0` / `>= 1` / `< 1`, those are
 /// non-empty checks, which are not length-bound validations.
 fn is_bounded_length_check(lower: &str) -> bool {
     const PROBES: &[&str] = &[
@@ -290,7 +290,7 @@ pub fn classify_condition(text: &str) -> PredicateKind {
     // Matched BEFORE AllowlistCheck so that `x.contains(";")` is recognized
     // as a rejection idiom rather than a membership test.  Checked on the
     // raw (non-lowercased) text so metacharacter comparisons stay
-    // case-accurate — `;` / `|` / `&` have no case.
+    // case-accurate, `;` / `|` / `&` have no case.
     if is_shell_metachar_rejection(text) {
         return PredicateKind::ShellMetaValidated;
     }
@@ -409,7 +409,7 @@ pub fn classify_condition(text: &str) -> PredicateKind {
 /// validator's effect is opaque: we can't tell which argument is being
 /// checked. Returning the original kind with `None` target would cause
 /// upstream code to over-validate (mark every `condition_var` as validated).
-/// Instead, we fall back to `PredicateKind::Unknown` — safer to assume the
+/// Instead, we fall back to `PredicateKind::Unknown`, safer to assume the
 /// validator did nothing than to assume it validated every variable in the
 /// condition. Single-argument calls retain `(kind, None)` so downstream code
 /// can still use the predicate-summary bit tracking.
@@ -442,7 +442,7 @@ pub fn classify_condition_with_target(text: &str) -> (PredicateKind, Option<Stri
             (kind, target)
         }
         PredicateKind::Comparison => {
-            // `x === '/login'`, `x == 5`, `null != obj` — when exactly one
+            // `x === '/login'`, `x == 5`, `null != obj`, when exactly one
             // side is a literal, extract the identifier side as the target.
             // Downstream `apply_branch_predicates` uses this to mark the
             // variable as `validated_may` on the true (equal) branch.
@@ -464,7 +464,7 @@ pub fn classify_condition_with_target(text: &str) -> (PredicateKind, Option<Stri
 /// - `'a' == 'b'` → `None` (both sides are literals)
 /// - `obj.field == 3` → `None` (not a bare identifier)
 ///
-/// Best-effort text analysis — kept conservative to avoid false validation.
+/// Best-effort text analysis, kept conservative to avoid false validation.
 fn extract_comparison_target(text: &str) -> Option<String> {
     let trimmed = text.trim();
 
@@ -537,7 +537,7 @@ fn is_comparison_literal(s: &str) -> bool {
 /// `Some(0)` for a call with empty argument list. Respects paren/bracket/brace
 /// nesting so `f(g(a, b), c)` counts as 2 top-level args.
 ///
-/// Best-effort — operates on source text, not an AST. Used by
+/// Best-effort, operates on source text, not an AST. Used by
 /// `classify_condition_with_target` to distinguish single-arg vs multi-arg
 /// validator calls when target extraction fails.
 fn count_call_args(text: &str) -> Option<usize> {
@@ -592,7 +592,7 @@ fn extract_validation_target(text: &str) -> Option<String> {
         }
     }
 
-    // Function call pattern: `func(x, ...)` — extract first argument
+    // Function call pattern: `func(x, ...)`, extract first argument
     // Strip closing paren if present
     let args_inner = args_part.trim_end().strip_suffix(')').unwrap_or(args_part);
     // Take text up to first comma (first argument)
@@ -653,7 +653,7 @@ fn extract_allowlist_target(text: &str) -> Option<String> {
 
     // Python `in` operator: `cmd in ALLOWED` / `cmd not in ALLOWED`
     if lower.contains(" in ") {
-        // Find the leftmost ` in ` — everything before it is the target expression
+        // Find the leftmost ` in `, everything before it is the target expression
         // Handle `not in` by looking for ` not in ` first
         let target_part = if let Some(pos) = lower.find(" not in ") {
             &trimmed[..pos]
@@ -857,7 +857,7 @@ mod tests {
 
     #[test]
     fn classify_validation_requires_paren() {
-        // `x_valid == true` should NOT be ValidationCall — no `(` call syntax.
+        // `x_valid == true` should NOT be ValidationCall, no `(` call syntax.
         assert_eq!(
             classify_condition("x_valid == true"),
             PredicateKind::Comparison
@@ -978,7 +978,7 @@ mod tests {
 
     #[test]
     fn target_multi_arg_fallback_opaque_expr_is_unknown() {
-        // `validate(x + 1, y)` — first arg is an expression, not an identifier.
+        // `validate(x + 1, y)`, first arg is an expression, not an identifier.
         // Target extraction fails. Multi-arg call, so fall back to Unknown
         // rather than letting upstream validate every condition var.
         let (kind, target) = classify_condition_with_target("validate(x + 1, y)");

@@ -1,3 +1,5 @@
+#![doc = include_str!(concat!(env!("OUT_DIR"), "/cfg_analysis.md"))]
+
 pub mod auth;
 pub mod dominators;
 pub mod error_handling;
@@ -30,17 +32,15 @@ pub struct BodyConstFacts {
     pub type_facts: TypeFactResult,
     /// Field-sensitive Steensgaard points-to facts.
     ///
-    /// Computed only when [`crate::pointer::is_enabled()`] (i.e. the
-    /// `NYX_POINTER_ANALYSIS=1` env var is set).  Phase 2 of the
-    /// pointer-analysis rollout consumes this in `state::transfer.rs`
-    /// to suppress proxy-acquire mis-attribution on field-aliased
-    /// locals like `m := c.mu`.  When `None`, every consumer must fall
-    /// back to its existing pointer-unaware behaviour.
+    /// Computed only when [`crate::pointer::is_enabled()`].
+    /// `state::transfer.rs` consumes this to suppress proxy-acquire
+    /// mis-attribution on field-aliased locals like `m := c.mu`. When
+    /// `None`, consumers fall back to pointer-unaware behaviour.
     pub pointer_facts: Option<crate::pointer::PointsToFacts>,
 }
 
 /// Lower a body to SSA and run constant propagation.  Returns `None` when
-/// lowering fails (empty CFG, invalid entry) — callers treat absence as
+/// lowering fails (empty CFG, invalid entry), callers treat absence as
 /// "no SSA facts available" and fall back to the syntactic path.
 pub fn build_body_const_facts(body: &crate::cfg::BodyCfg, lang: Lang) -> Option<BodyConstFacts> {
     let mut ssa = crate::ssa::lower_to_ssa_with_params(
@@ -116,13 +116,13 @@ pub struct AnalysisContext<'a> {
     /// Structural analyses use it to suppress findings when a sink's argument
     /// SSA values are proven to carry non-injectable types (e.g. integers
     /// parsed from a raw source can't form SHELL/SQL/path payloads).  Sourced
-    /// from `body_const_facts` when present — keep both pointers coherent.
+    /// from `body_const_facts` when present, keep both pointers coherent.
     pub type_facts: Option<&'a TypeFactResult>,
     /// Decorators / annotations / attributes attached to the body's
     /// declaration (e.g. Python `@login_required`, Java `@PreAuthorize`,
     /// Symfony `#[IsGranted(...)]`).  Consumed by the AuthGap analysis to
     /// suppress `cfg-auth-gap` when the framework already enforces auth at
-    /// the function-declaration level — the gap only matters when the
+    /// the function-declaration level, the gap only matters when the
     /// auth call has to live inside the body.
     pub auth_decorators: &'a [String],
 }

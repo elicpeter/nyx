@@ -1,26 +1,28 @@
-//! Phase 6.1: per-language DTO definition collectors.
+//! per-language DTO definition collectors.
 //!
 //! Walks a parsed file's AST and emits `(class_name, DtoFields)` pairs
 //! for class / interface / struct / Pydantic-model declarations whose
 //! field types resolve to a recognised [`TypeKind`].
 //!
 //! Strictly additive: classes whose fields cannot be classified produce
-//! a `DtoFields` with an empty `fields` map — the caller must decide
+//! a `DtoFields` with an empty `fields` map, the caller must decide
 //! whether to use that as a "Dto with no inferred fields" or fall back
 //! to the pre-Phase-6 Object/Unknown classification.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tree_sitter::Node;
 
 use super::helpers::text_of;
-use super::params::{java_type_to_kind, python_primitive_to_kind, ts_type_to_kind};
+use super::params::{
+    java_type_to_kind, python_primitive_to_kind, ts_type_to_kind, ts_type_to_local_collection,
+};
 use crate::ssa::type_facts::{DtoFields, TypeKind};
 
 /// Collect all DTO-shaped class definitions in a parsed file.
 ///
 /// Dispatches per-language; returns an empty map for languages without
-/// a Phase 6 collector (Go, Ruby, PHP, C/C++ — DTOs in those ecosystems
+/// a collector (Go, Ruby, PHP, C/C++, DTOs in those ecosystems
 /// either don't follow framework conventions Nyx tracks today, or are
 /// already covered by other type-inference paths).
 pub(super) fn collect_dto_classes(
@@ -37,6 +39,55 @@ pub(super) fn collect_dto_classes(
         _ => {}
     }
     out
+}
+
+/// Collect same-file `type X = Map<...>` / `Set<...>` / `T[]`
+/// aliases for TS / JS so the param classifier can resolve a
+/// parameter typed `m: ElementsMap` (where
+/// `type ElementsMap = Map<K, V>`) to
+/// [`TypeKind::LocalCollection`].
+///
+/// Empty for non-JS/TS languages.  Cross-file aliases are not
+/// resolved here, that requires the multi-file type-resolution
+/// pipeline that doesn't yet exist for TS.  Excalidraw's
+/// `type ElementsMap = Map<...>` is in
+/// `packages/element/src/types.ts`; users that import the alias
+/// without a same-file copy still see the original FP.  Most
+/// real-repo aliases the FP cluster touched were declared in the
+/// same file as their consumers (see fixture).
+pub(super) fn collect_type_alias_local_collections(
+    root: Node<'_>,
+    lang: &str,
+    code: &[u8],
+) -> HashSet<String> {
+    let mut out: HashSet<String> = HashSet::new();
+    if matches!(lang, "typescript" | "ts" | "javascript" | "js") {
+        collect_ts_type_alias_local_collections(root, code, &mut out);
+    }
+    out
+}
+
+fn collect_ts_type_alias_local_collections(root: Node<'_>, code: &[u8], out: &mut HashSet<String>) {
+    walk(root, &mut |node| {
+        if node.kind() != "type_alias_declaration" {
+            return;
+        }
+        let Some(name_node) = node.child_by_field_name("name") else {
+            return;
+        };
+        let Some(alias_name) = text_of(name_node, code) else {
+            return;
+        };
+        let Some(value_node) = node.child_by_field_name("value") else {
+            return;
+        };
+        let Some(value_text) = text_of(value_node, code) else {
+            return;
+        };
+        if ts_type_to_local_collection(value_text.trim()).is_some() {
+            out.insert(alias_name);
+        }
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -163,7 +214,7 @@ fn extract_ts_property<'a>(node: Node<'a>, code: &'a [u8]) -> Option<(String, Ty
     let name_node = node.child_by_field_name("name")?;
     let field_name = text_of(name_node, code)?;
     let type_anno = node.child_by_field_name("type")?;
-    // type_annotation node text is `: T` — walk to the inner type.
+    // type_annotation node text is `: T`, walk to the inner type.
     let type_text = type_anno
         .named_child(0)
         .and_then(|t| text_of(t, code))
@@ -193,7 +244,7 @@ fn collect_rust(root: Node<'_>, code: &[u8], out: &mut HashMap<String, DtoFields
             return;
         };
         if body.kind() != "field_declaration_list" {
-            // Tuple struct or unit struct — no named fields.
+            // Tuple struct or unit struct, no named fields.
             return;
         }
         let mut fields = DtoFields::new(class_name.clone());
@@ -291,7 +342,7 @@ fn collect_python(root: Node<'_>, code: &[u8], out: &mut HashMap<String, DtoFiel
 /// Conservative supertype scan: returns true when the class definition
 /// has a superclass list whose text mentions `BaseModel` (covers both
 /// `BaseModel` and `pydantic.BaseModel`).  No false positives on
-/// non-Pydantic classes named `BaseModel`-something — match is on the
+/// non-Pydantic classes named `BaseModel`-something, match is on the
 /// full token, not a substring.
 fn python_inherits_basemodel<'a>(class_node: Node<'a>, code: &'a [u8]) -> bool {
     let Some(supers) = class_node.child_by_field_name("superclasses") else {
@@ -418,7 +469,7 @@ mod tests {
         "#;
         let dtos = collect("rust", src);
         // Tuple structs have no named fields and must NOT produce a
-        // DtoFields entry — Phase 6 only handles named-field DTOs.
+        // DtoFields entry, This collector only handles named-field DTOs.
         assert!(!dtos.contains_key("Wrap"));
     }
 

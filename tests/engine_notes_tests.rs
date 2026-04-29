@@ -2,7 +2,7 @@
 //! test forces a specific cap-site to fire on a tiny fixture by
 //! overriding the engine's safety cap, then asserts either that the
 //! corresponding observability counter moved *or* that the note
-//! propagated to a produced finding — whichever is the more stable
+//! propagated to a produced finding, whichever is the more stable
 //! signal for that cap.
 
 mod common;
@@ -19,7 +19,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 /// Process-wide atomics for cap overrides mean tests that fiddle with
-/// them must run serially — cargo test defaults to parallel.
+/// them must run serially, cargo test defaults to parallel.
 static CAP_GUARD: Mutex<()> = Mutex::new(());
 
 fn fixture(name: &str) -> std::path::PathBuf {
@@ -32,7 +32,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
 fn worklist_cap_trips_observability_counter() {
     let _guard = CAP_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     // Force a very tight worklist budget so every body with > 0 blocks
-    // trips the cap.  The observability counter is the stable signal —
+    // trips the cap.  The observability counter is the stable signal ,
     // note attribution to a specific finding may be lost on bodies that
     // capped *before* emitting their sink event.
     reset_worklist_observability();
@@ -59,7 +59,7 @@ fn origins_cap_trips_observability_on_multi_source_fixture() {
     // Set origins to 1 and scan a fixture with multiple top-level
     // sources flowing into the same sink.  Any non-trivial taint flow
     // will produce at least one tainted value whose origin list hit the
-    // cap — detected by the post-hoc saturation scan at the end of
+    // cap, detected by the post-hoc saturation scan at the end of
     // `run_ssa_taint_internal`.
     reset_origins_observability();
     set_max_origins_override(1);

@@ -1,69 +1,20 @@
 //! Convergence-loop telemetry: per-batch and per-file JSONL sidecar.
 //!
-//! Records how many iterations each fix-point loop (cross-file SCC;
-//! JS/TS in-file pass-2) actually used on real inputs, plus the
-//! per-iteration change-set size trajectory, so we can tune caps on
-//! evidence rather than by guess.
-//!
-//! # Why this module exists
-//!
-//! The SCC fix-point safety cap ([`crate::commands::scan::SCC_FIXPOINT_SAFETY_CAP`])
-//! and the JS/TS pass-2 cap ([`crate::taint::JS_TS_PASS2_SAFETY_CAP`])
-//! are both 64 iterations — chosen as "generous for every realistic
-//! input we've seen".  Neither value is backed by telemetry from a
-//! production corpus (React, VSCode, Webpack, enterprise
-//! monorepos).  Without that data we cannot:
-//!
-//! * tell how often the cap actually fires under real workloads,
-//! * distinguish tuneable-budget problems from non-monotonicity
-//!   regressions (Phase-D classifier addresses this on cap-hit, but
-//!   tells us nothing about the near-cap distribution),
-//! * decide whether further Phase-B worklist optimisation is needed.
-//!
-//! The telemetry emitted here is consumed by offline analysis tools
-//! (`tools/convergence_report.py`, not tracked here) that compute
-//! P50/P95/P99 iteration counts per corpus.
-//!
-//! # Lifecycle
-//!
-//! Telemetry is **opt-in** via `NYX_CONVERGENCE_TELEMETRY=1` — production
-//! scans are unaffected by default.  When enabled:
-//!
-//! * [`is_enabled`] returns true.
-//! * The SCC loop and JS/TS pass-2 loop each call [`record`] when
-//!   they terminate (early-convergence or cap-hit).
-//! * On scan shutdown, the collected records are written to a JSONL
-//!   file alongside the SARIF output (or to the path specified by
-//!   `NYX_CONVERGENCE_TELEMETRY_PATH`).
-//!
-//! Records never touch the critical path — [`record`] is a cheap
-//! push onto a `Mutex<Vec<_>>` and the write happens once at scan end.
-//!
-//! # Schema stability
-//!
-//! Records serialize as JSONL (one JSON object per line, newline
-//! separated).  The `kind` tag is snake_case and stable; adding new
-//! fields is backwards-compatible because unknown fields are ignored
-//! by downstream tooling.  Removing fields, or changing existing
-//! fields' types, is a **breaking change** — bump the schema version
-//! in [`SCHEMA_VERSION`] if you must.
+//! Opt-in via `NYX_CONVERGENCE_TELEMETRY=1`. Records iteration counts
+//! and change-set trajectories for the cross-file SCC and JS/TS
+//! pass-2 fix-point loops so caps can be tuned from evidence. Output
+//! goes to `NYX_CONVERGENCE_TELEMETRY_PATH` or a SARIF-adjacent file.
 
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::sync::{Mutex, OnceLock};
 
-/// Stable schema version for the JSONL records emitted by this module.
-///
-/// Bump when the record shape changes in a way that breaks downstream
-/// consumers (field removed, type changed).  Adding optional fields is
-/// backwards-compatible and does not require a bump.
+/// JSONL schema version. Bump on breaking shape changes; optional
+/// fields don't require a bump.
 pub const SCHEMA_VERSION: u32 = 1;
 
-/// One convergence event: either a cross-file SCC batch or a JS/TS
-/// in-file pass-2 run.  The `kind` discriminator selects between them.
-///
-/// Serialized as JSON with `kind` as a snake_case tag so downstream
-/// tooling can pattern-match without depending on Rust enum layout.
+/// One convergence event, either a cross-file SCC batch or a JS/TS
+/// in-file pass-2 run.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ConvergenceEvent {
@@ -98,7 +49,7 @@ pub struct SccBatchRecord {
     /// True iff the batch reached the fixed point before the cap
     /// fired.
     pub converged: bool,
-    /// Per-iteration change-set size — the same trajectory the
+    /// Per-iteration change-set size, the same trajectory the
     /// [`crate::engine_notes::CapHitReason`] classifier consumes.  Empty
     /// when the loop terminated on iteration 0 (pathological case).
     pub trajectory: SmallVec<[u32; 4]>,
@@ -130,20 +81,10 @@ pub struct InFilePass2Record {
     pub trajectory: SmallVec<[u32; 4]>,
 }
 
-/// Global collector for convergence events recorded during a scan.
-///
-/// Stored behind a `OnceLock<Mutex<Vec<_>>>` so multiple rayon workers
-/// can record events concurrently without a startup cost when
-/// telemetry is disabled.  The mutex contention is negligible because
-/// each scan produces O(batches + JS/TS files) events, not per-task
-/// events.
 static COLLECTOR: OnceLock<Mutex<Vec<ConvergenceEvent>>> = OnceLock::new();
 
-/// Returns true when telemetry collection is active for this process.
-///
-/// Controlled by the `NYX_CONVERGENCE_TELEMETRY` env var: any value
-/// except `"0"`, `"false"`, or empty enables it.  Cached on first
-/// read so the env lookup is paid once per process.
+/// True when `NYX_CONVERGENCE_TELEMETRY` is set to anything other than
+/// `"0"`, `"false"`, or empty. Cached.
 pub fn is_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| match std::env::var("NYX_CONVERGENCE_TELEMETRY") {
@@ -152,11 +93,7 @@ pub fn is_enabled() -> bool {
     })
 }
 
-/// Record a convergence event.  No-op when telemetry is disabled.
-///
-/// Safe to call from parallel rayon contexts — the underlying mutex
-/// is reentrant-safe and the push is O(1).  Events are retained in
-/// memory until [`drain`] is called at scan end.
+/// Record a convergence event. No-op when telemetry is disabled.
 pub fn record(event: ConvergenceEvent) {
     if !is_enabled() {
         return;
@@ -167,9 +104,7 @@ pub fn record(event: ConvergenceEvent) {
     }
 }
 
-/// Drain and return all recorded events.  Leaves the collector empty
-/// so subsequent scans in the same process (e.g. integration tests)
-/// do not see stale events.
+/// Drain all recorded events.
 pub fn drain() -> Vec<ConvergenceEvent> {
     let Some(lock) = COLLECTOR.get() else {
         return Vec::new();
@@ -207,7 +142,7 @@ pub fn write_jsonl(path: &std::path::Path) -> std::io::Result<usize> {
 /// Canonical sidecar path: uses `NYX_CONVERGENCE_TELEMETRY_PATH` if
 /// set, otherwise derives from the current working directory.
 ///
-/// The `_derive_from_root` hint is the scan root — when no explicit
+/// The `_derive_from_root` hint is the scan root, when no explicit
 /// path is configured we place the sidecar next to it as
 /// `nyx-convergence.jsonl` so the file lands alongside the SARIF
 /// output by default.
@@ -230,7 +165,7 @@ mod tests {
     static COLLECTOR_TEST_GUARD: Mutex<()> = Mutex::new(());
 
     /// Clear the global collector so each test starts with a known
-    /// state.  Does **not** force `is_enabled()` true — the unit
+    /// state.  Does **not** force `is_enabled()` true, the unit
     /// tests below bypass `record()` (which is a no-op unless
     /// env-enabled) by pushing directly into the collector.
     fn reset_and_enable_telemetry() {

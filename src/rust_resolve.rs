@@ -3,11 +3,11 @@
 //! This module is entirely Rust-flavored helpers for the cross-file call graph.
 //! Other languages do not need it. The two pieces are:
 //!
-//! * [`derive_module_path`] — given a Rust source file path and an optional
+//! * [`derive_module_path`], given a Rust source file path and an optional
 //!   crate root, produce its canonical crate-relative module path
 //!   (`src/foo/bar.rs` → `"foo::bar"`, `src/lib.rs` → `""`).
 //!
-//! * [`parse_rust_use_map`] — walk the top-level `use_declaration` nodes of a
+//! * [`parse_rust_use_map`], walk the top-level `use_declaration` nodes of a
 //!   parsed tree and produce a [`RustUseMap`] mapping local aliases to fully
 //!   qualified paths plus a list of wildcard imports.
 //!
@@ -27,7 +27,7 @@
 //! * Macro-expanded `use` statements
 //! * `pub use` re-exports across modules
 //! * `extern crate alias_name;`
-//! * Self-prefixed imports (`use self::sub::foo;`) — treated as `self::sub::foo`
+//! * Self-prefixed imports (`use self::sub::foo;`), treated as `self::sub::foo`
 //!
 //! These are flagged in the final pass-1 telemetry but do not block resolution.
 
@@ -102,7 +102,7 @@ pub fn derive_module_path(file_path: &Path, scan_root: Option<&Path>) -> Option<
     let mut segments: Vec<&str> = rel.iter().filter_map(|s| s.to_str()).collect();
 
     // Strip a leading `src` directory if present. Files outside `src/` (e.g.
-    // tests, examples, build.rs) get a `None` here — we do not have a stable
+    // tests, examples, build.rs) get a `None` here, we do not have a stable
     // module path for them and resolution should fall back to file-based.
     match segments.first().copied() {
         Some("src") => {
@@ -145,7 +145,7 @@ pub fn derive_module_path(file_path: &Path, scan_root: Option<&Path>) -> Option<
 /// [`RustUseMap`].
 ///
 /// The walk only inspects direct children of the source root. Nested `use`s
-/// inside functions or impls are deliberately skipped — their scope is local
+/// inside functions or impls are deliberately skipped, their scope is local
 /// and does not influence the cross-file call graph at the module level.
 pub fn parse_rust_use_map(src: &[u8], tree: &Tree) -> RustUseMap {
     let mut map = RustUseMap::default();
@@ -160,7 +160,7 @@ pub fn parse_rust_use_map(src: &[u8], tree: &Tree) -> RustUseMap {
             Some(n) => n,
             None => {
                 // tree-sitter-rust 0.24 sometimes exposes the body as a named
-                // child instead of a field — fall back to the first named child.
+                // child instead of a field, fall back to the first named child.
                 match child.named_child(0) {
                     Some(n) => n,
                     None => continue,
@@ -179,7 +179,7 @@ pub fn parse_rust_use_map(src: &[u8], tree: &Tree) -> RustUseMap {
 /// `b::c` inside `a::{b::c}` is flattened to `a::b::c`).
 fn collect_use_paths(node: Node<'_>, src: &[u8], prefix: &[String], map: &mut RustUseMap) {
     match node.kind() {
-        // `crate::auth::token::validate` — terminal scoped path, leaf is the alias.
+        // `crate::auth::token::validate`, terminal scoped path, leaf is the alias.
         "scoped_identifier" => {
             let segments = scoped_segments(node, src);
             if segments.is_empty() {
@@ -191,7 +191,7 @@ fn collect_use_paths(node: Node<'_>, src: &[u8], prefix: &[String], map: &mut Ru
                 map.aliases.insert(leaf, full);
             }
         }
-        // `validate` — bare identifier (e.g. `use foo::validate`).
+        // `validate`, bare identifier (e.g. `use foo::validate`).
         "identifier" => {
             let name = node_text(node, src).to_string();
             if name.is_empty() {
@@ -201,7 +201,7 @@ fn collect_use_paths(node: Node<'_>, src: &[u8], prefix: &[String], map: &mut Ru
             segs.push(name.clone());
             map.aliases.insert(name, segs.join("::"));
         }
-        // `crate::auth::token::{validate, verify}` — left side is the prefix,
+        // `crate::auth::token::{validate, verify}`, left side is the prefix,
         // right side is a use_list of further use clauses.
         "scoped_use_list" => {
             // path field carries the prefix; the list field carries the body.
@@ -239,7 +239,7 @@ fn collect_use_paths(node: Node<'_>, src: &[u8], prefix: &[String], map: &mut Ru
                 collect_use_paths(c, src, prefix, map);
             }
         }
-        // `crate::auth::token::validate as ok` — alias the leaf identifier.
+        // `crate::auth::token::validate as ok`, alias the leaf identifier.
         "use_as_clause" => {
             let path_node = node
                 .child_by_field_name("path")
@@ -256,7 +256,7 @@ fn collect_use_paths(node: Node<'_>, src: &[u8], prefix: &[String], map: &mut Ru
                 map.aliases.insert(alias_name, full);
             }
         }
-        // `crate::auth::token::*` — record the prefix as a wildcard import.
+        // `crate::auth::token::*`, record the prefix as a wildcard import.
         "use_wildcard" => {
             // The wildcard's child is the path being wildcarded.
             let path_node = node.named_child(0);
@@ -270,7 +270,7 @@ fn collect_use_paths(node: Node<'_>, src: &[u8], prefix: &[String], map: &mut Ru
         }
         _ => {
             // Unknown/unsupported form (e.g. macro_invocation in use position,
-            // attribute-prefixed clauses) — flag in pass-1 telemetry, skip
+            // attribute-prefixed clauses), flag in pass-1 telemetry, skip
             // here to keep the walk total.
         }
     }
@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn module_path_no_cargo_toml_with_scan_root() {
-        // No Cargo.toml anywhere — fall back to scan root.
+        // No Cargo.toml anywhere, fall back to scan root.
         let dir = PathBuf::from("/tmp/nyx_mp_test_no_cargo");
         std::fs::create_dir_all(dir.join("src")).ok();
         // Make sure no Cargo.toml exists.
@@ -535,7 +535,7 @@ mod tests {
 
     #[test]
     fn use_map_malformed_does_not_panic() {
-        // Truncated input — must not panic.
+        // Truncated input, must not panic.
         let src = b"use crate::auth::";
         let tree = parse(std::str::from_utf8(src).unwrap());
         let _ = parse_rust_use_map(src, &tree);

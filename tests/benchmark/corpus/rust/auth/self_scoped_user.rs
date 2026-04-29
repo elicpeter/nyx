@@ -5,7 +5,7 @@ mod auth { pub async fn require_auth(_r: &super::Req, _c: &super::Ctx) -> Result
 
 // The handler's `get_peer_ids(&db, user.id)` call below must not be
 // flagged. `user` is bound from `auth::require_auth(..)` so `user.id`
-// is the caller's own id — the call is self-referential, not a foreign
+// is the caller's own id, the call is self-referential, not a foreign
 // scoped id. The library-style helper below is a pass-through so its
 // body contains no DB sinks (the internal `user_id` → DB flow is a
 // separate pattern covered by helper-summary lifting).

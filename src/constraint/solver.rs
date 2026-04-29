@@ -1,6 +1,6 @@
 //! Constraint solver: apply conditions to [`PathEnv`] and check satisfiability.
 //!
-//! The solver operates on structured [`ConditionExpr`] values — never on raw
+//! The solver operates on structured [`ConditionExpr`] values, never on raw
 //! text. Negation is always structural (via [`ConditionExpr::negate`] /
 //! [`CompOp::negate`]), not via a generic "negate ValueFact" operation.
 
@@ -13,7 +13,7 @@ use super::lower::{CompOp, ConditionExpr, Operand};
 /// for the branch where the condition has the given polarity.
 ///
 /// `polarity = true`: condition holds (true branch).
-/// `polarity = false`: condition does NOT hold (false branch) — negate
+/// `polarity = false`: condition does NOT hold (false branch), negate
 /// the condition structurally, then apply.
 pub fn refine_env(env: &PathEnv, cond: &ConditionExpr, polarity: bool) -> PathEnv {
     if env.is_unsat() {
@@ -97,7 +97,7 @@ fn apply_condition(env: &mut PathEnv, cond: &ConditionExpr) {
         }
 
         ConditionExpr::Unknown => {
-            // No information — no refinement
+            // No information, no refinement
         }
     }
 }
@@ -232,7 +232,7 @@ pub fn class_name_to_type_kind(name: &str) -> Option<TypeKind> {
         "Boolean" => Some(TypeKind::Bool),
         "List" | "ArrayList" | "Collection" | "Set" | "HashSet" => Some(TypeKind::Array),
         "URL" | "URI" => Some(TypeKind::Url),
-        // Framework HTTP clients — also listed in JAVA_HIERARCHY (type_facts.rs)
+        // Framework HTTP clients, also listed in JAVA_HIERARCHY (type_facts.rs)
         // for subtype resolution. Both locations needed: this function is called
         // directly by the constraint solver, while the hierarchy provides
         // is_subtype_of() for instanceof checks.

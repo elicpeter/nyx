@@ -57,7 +57,7 @@ fn print_toml_with_highlights(toml_str: &str) {
             continue;
         }
         // key = value lines (but not `[xxx]`).  Split on the first `=`
-        // that isn't inside a quoted string — TOML keys don't contain
+        // that isn't inside a quoted string, TOML keys don't contain
         // `=` outside quotes, so a leading-segment split is safe enough
         // for the common case.  Continuation lines from multi-line
         // arrays/strings won't have `=` and fall through to plain.
@@ -149,7 +149,7 @@ fn prune_matching(effective: &toml::Value, defaults: &toml::Value) -> Option<tom
                         }
                     }
                     None => {
-                        // Key absent in defaults — keep entirely.
+                        // Key absent in defaults, keep entirely.
                         out.insert(k.clone(), v.clone());
                     }
                 }
@@ -160,9 +160,9 @@ fn prune_matching(effective: &toml::Value, defaults: &toml::Value) -> Option<tom
                 Some(toml::Value::Table(out))
             }
         }
-        // Identical leaf — drop.
+        // Identical leaf, drop.
         _ if effective == defaults => None,
-        // Differing leaf or shape change — keep the effective value.
+        // Differing leaf or shape change, keep the effective value.
         _ => Some(effective.clone()),
     }
 }
@@ -180,13 +180,13 @@ fn count_top_level_keys(toml_str: &str) -> usize {
             continue;
         }
         if trimmed.starts_with('[') {
-            // Section header — not an override on its own.  Reset
+            // Section header, not an override on its own.  Reset
             // any stuck multi-line state defensively.
             in_multiline = false;
             continue;
         }
         if in_multiline {
-            // Inside a multi-line array/inline table — closing bracket
+            // Inside a multi-line array/inline table, closing bracket
             // ends it, intermediate lines don't count.
             if trimmed.starts_with(']') || trimmed.starts_with('}') {
                 in_multiline = false;

@@ -61,7 +61,7 @@ fn build_rule_list(state: &AppState) -> Vec<RuleInfo> {
     rules
 }
 
-/// GET /api/rules — list all rules with finding counts.
+/// GET /api/rules, list all rules with finding counts.
 async fn list_rules(State(state): State<AppState>) -> Json<Vec<RuleListItem>> {
     let rules = build_rule_list(&state);
 
@@ -99,7 +99,7 @@ async fn list_rules(State(state): State<AppState>) -> Json<Vec<RuleListItem>> {
     Json(items)
 }
 
-/// GET /api/rules/:id — full detail for one rule.
+/// GET /api/rules/:id, full detail for one rule.
 async fn get_rule(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -140,7 +140,7 @@ async fn get_rule(
     }))
 }
 
-/// POST /api/rules/:id/toggle — enable/disable a rule.
+/// POST /api/rules/:id/toggle, enable/disable a rule.
 async fn toggle_rule(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -162,7 +162,7 @@ async fn toggle_rule(
     Ok(Json(serde_json::json!({ "status": "ok", "rule_id": id })))
 }
 
-/// POST /api/rules/clone — clone a built-in rule to custom.
+/// POST /api/rules/clone, clone a built-in rule to custom.
 async fn clone_rule(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,

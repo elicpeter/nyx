@@ -4,7 +4,7 @@
 //! `FuncKey.disambig`.  An earlier implementation keyed that field on
 //! the function node's `start_byte`, so inserting a line *above* an
 //! unchanged anonymous function shifted its identity and invalidated
-//! persisted callback bindings and SSA summaries that referenced it —
+//! persisted callback bindings and SSA summaries that referenced it ,
 //! producing different diagnostics for semantically identical code.
 //!
 //! The disambig is now a depth-first preorder index over the file's
@@ -52,7 +52,7 @@ struct ShiftedKey {
 }
 
 /// Normalize a rule id so the embedded `(source N:M)` suffix on taint
-/// findings — which names the *source* line — is shifted by `line_delta`
+/// findings, which names the *source* line, is shifted by `line_delta`
 /// instead of compared literally.
 fn normalize_rule_id(id: &str, line_delta: i64) -> String {
     let Some(open) = id.find("(source ") else {
@@ -121,7 +121,7 @@ fn cold_build_index(project: &str, root: &Path, db_path: &Path, mode: AnalysisMo
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Test 1 — local edit above a nested anonymous function.
+//  Test 1, local edit above a nested anonymous function.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const LOCAL_FIXTURE_BEFORE: &str = "\
@@ -178,7 +178,7 @@ fn anon_fn_finding_stable_across_blank_line_prepend() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Test 2 — cross-file callback resolution after comment-line insert.
+//  Test 2, cross-file callback resolution after comment-line insert.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CROSS_FILE_A_BEFORE: &str = "\
@@ -216,7 +216,7 @@ fn cross_file_anon_callback_stable_across_comment_insert() {
 
     // The cross-file flow should resolve: b.js → a.js (exported anon
     // function) → child_process.exec.  Count taint findings in either
-    // file as the structural invariant — rank/line may legitimately
+    // file as the structural invariant, rank/line may legitimately
     // differ between scans, but the *presence* of a taint finding on
     // the sink side must not regress.
     fn taint_count_in(diags: &[Diag], rel: &str) -> usize {

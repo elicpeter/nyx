@@ -168,7 +168,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "expression_statement"   => Kind::CallWrapper,
     "assignment_expression"  => Kind::Assignment,
 
-    // struct expressions — recurse so env::var() calls inside field
+    // struct expressions, recurse so env::var() calls inside field
     // initialisers produce Source-labelled CFG nodes (needed for summaries).
     "struct_expression"       => Kind::Block,
     "field_initializer_list"  => Kind::Block,
@@ -287,7 +287,7 @@ pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
     rules
 }
 
-/// Phase C: auth-as-taint label rules for Rust.  Gated by
+/// auth-as-taint label rules for Rust.  Gated by
 /// `config.scanner.enable_auth_as_taint`; appended to the runtime rule set
 /// when the flag is enabled.  These declare **sinks** (state-changing or
 /// outbound operations that should not be reached by an un-checked
@@ -343,10 +343,8 @@ pub fn phase_c_auth_rules() -> Vec<RuntimeLabelRule> {
             case_sensitive: false,
         },
         // ── Sanitizers clearing Cap::UNAUTHORIZED_ID ──
-        // Ownership and membership guards from the auth_analysis default
-        // `authorization_check_names` list.  Phase C consumes these via
-        // call-site argument sanitization (see
-        // `is_auth_as_taint_arg_sanitizer` in ssa_transfer).
+        // Ownership and membership guards consumed via call-site
+        // argument sanitization (see `is_auth_as_taint_arg_sanitizer`).
         RuntimeLabelRule {
             matchers: vec![
                 "check_ownership".into(),

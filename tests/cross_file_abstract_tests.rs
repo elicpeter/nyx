@@ -4,16 +4,16 @@
 //! Three fixtures cover the documented transfer forms currently tractable
 //! against the JS/Python abstract-suppression pipelines:
 //!
-//! * `cross_file_abstract_port_range` (Python) — Identity transfer on an
+//! * `cross_file_abstract_port_range` (Python), Identity transfer on an
 //!   integer-typed passthrough.  The caller's literal `8080` crosses the
 //!   file boundary and SHELL_ESCAPE suppression fires on the bounded int.
-//! * `cross_file_abstract_bounded_index` (Python) — Clamped transfer
+//! * `cross_file_abstract_bounded_index` (Python), Clamped transfer
 //!   derived from a baseline-invariant fact.  The callee returns a
 //!   literal `42`; the per-parameter transfer attaches it as
 //!   `Clamped { 42, 42 }` and the caller sees a bounded integer
 //!   without the return-abstract channel alone carrying the fact
 //!   through summary resolution ambiguity.
-//! * `cross_file_abstract_url_prefix_lock` (JS) — String-prefix transfer
+//! * `cross_file_abstract_url_prefix_lock` (JS), String-prefix transfer
 //!   across an Identity wrapper.  The caller writes
 //!   `url = asIs('https://internal/...' + userPath)` and passes `url` to
 //!   `axios.get`.  The CFG node's `string_prefix` is consumed by the
@@ -21,7 +21,7 @@
 //!   prefix locks the host and SSRF suppression fires.
 //!
 //! Each fixture's `expectations.json` treats the cross-file SHELL/SSRF
-//! sink as *forbidden* on the main file — if cross-file abstract
+//! sink as *forbidden* on the main file, if cross-file abstract
 //! propagation regresses, the sink fires and the forbidden-finding
 //! assertion trips.
 

@@ -34,9 +34,9 @@ pub enum StringMethod {
 /// Where the string operand comes from in the call.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StringOperandSource {
-    /// `receiver.method()` — JS, Java, Ruby, Rust
+    /// `receiver.method()`, JS, Java, Ruby, Rust
     Receiver,
-    /// `func(string, ...)` — Python `len()`, Go `strings.*`, PHP `strlen()`
+    /// `func(string, ...)`, Python `len()`, Go `strings.*`, PHP `strlen()`
     FirstArg,
 }
 
@@ -68,7 +68,7 @@ pub struct SanitizerInfo {
 /// - **Representation transforms** (non-protective): witness-only, never
 ///   used for mismatch reasoning.
 ///
-/// Symex `Encode`/`Decode` nodes preserve taint unconditionally — this enum
+/// Symex `Encode`/`Decode` nodes preserve taint unconditionally, this enum
 /// carries no sanitization authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TransformKind {
@@ -79,7 +79,7 @@ pub enum TransformKind {
     UrlEncode,
     /// Shell quoting: single-quote wrapping with internal quote escaping.
     ShellEscape,
-    /// SQL string escaping: `'` → `''`. Witness-only — no label rule yet,
+    /// SQL string escaping: `'` → `''`. Witness-only, no label rule yet,
     /// so `verified_cap()` returns `Cap::empty()`.
     SqlEscape,
     // ── Representation transforms (non-protective) ───────────────────────
@@ -87,7 +87,7 @@ pub enum TransformKind {
     Base64Encode,
     /// Base64 decoding.
     Base64Decode,
-    /// URL percent-decoding (reverses URL encoding — anti-protective).
+    /// URL percent-decoding (reverses URL encoding, anti-protective).
     UrlDecode,
 }
 
@@ -119,7 +119,7 @@ impl TransformKind {
             TransformKind::HtmlEscape => Cap::HTML_ESCAPE,
             TransformKind::UrlEncode => Cap::URL_ENCODE,
             TransformKind::ShellEscape => Cap::SHELL_ESCAPE,
-            // SqlEscape: no verified label rule — witness-only
+            // SqlEscape: no verified label rule, witness-only
             TransformKind::SqlEscape => Cap::empty(),
             // Representation transforms: not protective
             TransformKind::Base64Encode
@@ -149,7 +149,7 @@ pub struct TransformMethodInfo {
 ///
 /// Returns `None` for unrecognized methods (fall through to opaque `Call`).
 /// For `Replace`, only classifies when pattern and replacement args are concrete
-/// strings — dynamic patterns produce `None`.
+/// strings, dynamic patterns produce `None`.
 pub fn classify_string_method(
     callee: &str,
     args: &[SymbolicValue],
@@ -217,7 +217,7 @@ fn classify_python(method: &str, callee: &str, args: &[SymbolicValue]) -> Option
     use StringMethod::*;
     use StringOperandSource::*;
 
-    // Python builtins: len(s) — no receiver
+    // Python builtins: len(s), no receiver
     if callee == "len" {
         return Some(StringMethodInfo {
             method: StrLen,
@@ -396,7 +396,7 @@ fn classify_php(method: &str, callee: &str, args: &[SymbolicValue]) -> Option<St
             operand_source: FirstArg,
         }),
         "str_replace" => {
-            // PHP: str_replace($search, $replace, $subject) — string is arg[2]
+            // PHP: str_replace($search, $replace, $subject), string is arg[2]
             // But in our callee model, receiver is not present for free functions.
             // args[0] = pattern, args[1] = replacement, args[2] = subject
             let (pat, rep) = extract_replace_args(args, 0)?;
@@ -488,7 +488,7 @@ fn classify_c(method: &str) -> Option<StringMethodInfo> {
 /// Classify a callee as a recognized encoding/decoding transform.
 ///
 /// Returns `None` for unrecognized methods. Rich sanitizers (DOMPurify,
-/// bleach, markupsafe, etc.) are intentionally NOT classified here — they
+/// bleach, markupsafe, etc.) are intentionally NOT classified here, they
 /// are complex library-level sanitizers, not simple character-level escapes.
 pub fn classify_transform_method(callee: &str, lang: Lang) -> Option<TransformMethodInfo> {
     match lang {
@@ -605,7 +605,7 @@ fn classify_transform_php(callee: &str) -> Option<TransformMethodInfo> {
             kind: ShellEscape,
             operand_source: FirstArg,
         }),
-        // SQL escaping (witness-only — no verified label rule)
+        // SQL escaping (witness-only, no verified label rule)
         "addslashes" => Some(TransformMethodInfo {
             kind: SqlEscape,
             operand_source: FirstArg,
@@ -624,7 +624,7 @@ fn classify_transform_java(callee: &str) -> Option<TransformMethodInfo> {
     // examine the dotted callee for receiver-qualified disambiguation.
     let method = bare_method_name(callee);
 
-    // URL encoding/decoding — `java.net.URLEncoder.encode` / `URLDecoder.decode`.
+    // URL encoding/decoding, `java.net.URLEncoder.encode` / `URLDecoder.decode`.
     if callee.ends_with("URLEncoder.encode") {
         return Some(TransformMethodInfo {
             kind: UrlEncode,
@@ -639,7 +639,7 @@ fn classify_transform_java(callee: &str) -> Option<TransformMethodInfo> {
     }
 
     // Apache commons-text / commons-lang `StringEscapeUtils.escapeHtml4`,
-    // `escapeXml11`, `escapeXml10`. These are character-level entity escapes —
+    // `escapeXml11`, `escapeXml10`. These are character-level entity escapes ,
     // NOT rich sanitizers like OWASP ESAPI's `Encoder`.
     if callee.ends_with("StringEscapeUtils.escapeHtml4")
         || callee.ends_with("StringEscapeUtils.escapeHtml")
@@ -653,7 +653,7 @@ fn classify_transform_java(callee: &str) -> Option<TransformMethodInfo> {
         });
     }
 
-    // Base64 — `Base64.getEncoder().encodeToString(bytes)` (and the URL-safe
+    // Base64, `Base64.getEncoder().encodeToString(bytes)` (and the URL-safe
     // / MIME variants). Match by leaf method name; the encoder/decoder chain
     // before it is opaque to symex, but the operand is still the first arg.
     match method {
@@ -661,7 +661,7 @@ fn classify_transform_java(callee: &str) -> Option<TransformMethodInfo> {
             kind: Base64Encode,
             operand_source: FirstArg,
         }),
-        // `Base64.getDecoder().decode(s)` — the leaf `decode` collides with
+        // `Base64.getDecoder().decode(s)`, the leaf `decode` collides with
         // `URLDecoder.decode` (handled above) so this only matches when the
         // URLDecoder branch did not.
         "decode" if callee.contains("Base64") => Some(TransformMethodInfo {
@@ -677,7 +677,7 @@ fn classify_transform_go(callee: &str) -> Option<TransformMethodInfo> {
     use TransformKind::*;
 
     match callee {
-        // URL encoding/decoding — `net/url` package.
+        // URL encoding/decoding, `net/url` package.
         "url.QueryEscape" | "url.PathEscape" => Some(TransformMethodInfo {
             kind: UrlEncode,
             operand_source: FirstArg,
@@ -686,7 +686,7 @@ fn classify_transform_go(callee: &str) -> Option<TransformMethodInfo> {
             kind: UrlDecode,
             operand_source: FirstArg,
         }),
-        // HTML entity escaping — `html` package (NOT `template.HTMLEscapeString`,
+        // HTML entity escaping, `html` package (NOT `template.HTMLEscapeString`,
         // which is a context-aware sanitizer). `html.UnescapeString` is
         // intentionally NOT classified: TransformKind has no `HtmlUnescape`
         // variant, and reusing UrlDecode would label the witness wrongly.
@@ -694,7 +694,7 @@ fn classify_transform_go(callee: &str) -> Option<TransformMethodInfo> {
             kind: HtmlEscape,
             operand_source: FirstArg,
         }),
-        // Base64 — `encoding/base64` package, `StdEncoding`/`URLEncoding`/
+        // Base64, `encoding/base64` package, `StdEncoding`/`URLEncoding`/
         // `RawStdEncoding`/`RawURLEncoding` all expose `EncodeToString`.
         "base64.StdEncoding.EncodeToString"
         | "base64.URLEncoding.EncodeToString"
@@ -723,7 +723,7 @@ fn classify_transform_ruby(callee: &str) -> Option<TransformMethodInfo> {
     let normalised = callee.replace("::", ".");
     match normalised.as_str() {
         // URL percent-encoding. Note: `CGI.escape` in Ruby is percent-encoding
-        // (NOT HTML escape — that's `CGI.escapeHTML`).
+        // (NOT HTML escape, that's `CGI.escapeHTML`).
         "CGI.escape" | "URI.encode_www_form_component" => Some(TransformMethodInfo {
             kind: UrlEncode,
             operand_source: FirstArg,
@@ -732,7 +732,7 @@ fn classify_transform_ruby(callee: &str) -> Option<TransformMethodInfo> {
             kind: UrlDecode,
             operand_source: FirstArg,
         }),
-        // HTML entity escaping (character-level — NOT Rails `sanitize` or
+        // HTML entity escaping (character-level, NOT Rails `sanitize` or
         // `strip_tags` which are rich sanitizers).
         "ERB::Util.html_escape" | "ERB.Util.html_escape" | "CGI.escapeHTML" => {
             Some(TransformMethodInfo {
@@ -740,7 +740,7 @@ fn classify_transform_ruby(callee: &str) -> Option<TransformMethodInfo> {
                 operand_source: FirstArg,
             })
         }
-        // Base64 — `Base64.strict_encode64` / `encode64` / `urlsafe_encode64`.
+        // Base64, `Base64.strict_encode64` / `encode64` / `urlsafe_encode64`.
         "Base64.strict_encode64" | "Base64.encode64" | "Base64.urlsafe_encode64" => {
             Some(TransformMethodInfo {
                 kind: Base64Encode,
@@ -763,7 +763,7 @@ fn classify_transform_ruby(callee: &str) -> Option<TransformMethodInfo> {
 
 /// Apply encoding for witness rendering.
 ///
-/// **NOT a spec-complete codec.** These are witness-quality helpers only —
+/// **NOT a spec-complete codec.** These are witness-quality helpers only ,
 /// not suitable for security decisions, not reusable outside witness display.
 pub fn encode_concrete_for_witness(kind: TransformKind, input: &str) -> Option<String> {
     match kind {
@@ -980,7 +980,7 @@ pub fn evaluate_string_op_concrete(method: &StringMethod, receiver: &str) -> Opt
         )),
         StringMethod::StrLen => Some(SymbolicValue::Concrete(receiver.len() as i64)),
         StringMethod::Substr => {
-            // Substr needs index args — concrete evaluation handled in smart constructor
+            // Substr needs index args, concrete evaluation handled in smart constructor
             None
         }
     }
@@ -993,7 +993,7 @@ pub fn evaluate_string_op_concrete(method: &StringMethod, receiver: &str) -> Opt
 /// Detect whether a Replace operation acts as a security sanitizer.
 ///
 /// Returns `None` if the pattern is not security-relevant. This is conservative:
-/// the symbolic string theory does NOT clear taint via Replace — detection is
+/// the symbolic string theory does NOT clear taint via Replace, detection is
 /// informational only for witness quality.
 pub fn detect_replace_sanitizer(
     pattern: &str,
@@ -1271,7 +1271,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_substr_returns_none() {
-        // Substr needs index args — concrete eval handled in smart constructor
+        // Substr needs index args, concrete eval handled in smart constructor
         let result = evaluate_string_op_concrete(&StringMethod::Substr, "hello");
         assert_eq!(result, None);
     }
@@ -1363,7 +1363,7 @@ mod tests {
 
     #[test]
     fn test_classify_transform_js_rich_sanitizer_not_matched() {
-        // DOMPurify.sanitize is a rich sanitizer — NOT a simple escape
+        // DOMPurify.sanitize is a rich sanitizer, NOT a simple escape
         assert!(classify_transform_method("DOMPurify.sanitize", Lang::JavaScript).is_none());
         assert!(classify_transform_method("sanitizeHtml", Lang::JavaScript).is_none());
         assert!(classify_transform_method("xss", Lang::JavaScript).is_none());
@@ -1499,7 +1499,7 @@ mod tests {
     #[test]
     fn test_classify_transform_ruby_cgi_escape() {
         let info = classify_transform_method("CGI.escape", Lang::Ruby).unwrap();
-        // CGI.escape is percent-encoding in Ruby (not HTML escape — that's
+        // CGI.escape is percent-encoding in Ruby (not HTML escape, that's
         // CGI.escapeHTML).
         assert_eq!(info.kind, TransformKind::UrlEncode);
         let info = classify_transform_method("CGI::escape", Lang::Ruby).unwrap();
@@ -1532,7 +1532,7 @@ mod tests {
 
     #[test]
     fn test_classify_transform_ruby_rich_sanitizer_not_matched() {
-        // Rails `sanitize` / `strip_tags` are rich library sanitizers — NOT
+        // Rails `sanitize` / `strip_tags` are rich library sanitizers, NOT
         // simple character-level escapes.
         assert!(classify_transform_method("sanitize", Lang::Ruby).is_none());
         assert!(classify_transform_method("strip_tags", Lang::Ruby).is_none());
@@ -1642,7 +1642,7 @@ mod tests {
 
     #[test]
     fn test_verified_cap_sql_escape_is_empty() {
-        // SqlEscape has no verified label rule — witness-only
+        // SqlEscape has no verified label rule, witness-only
         assert_eq!(TransformKind::SqlEscape.verified_cap(), Cap::empty());
         assert!(!TransformKind::SqlEscape.is_protective());
     }

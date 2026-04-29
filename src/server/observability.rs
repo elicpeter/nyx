@@ -41,7 +41,7 @@ pub async fn observe(mut request: Request, next: Next) -> Response {
         response.headers_mut().insert(REQUEST_ID_HEADER, value);
     }
 
-    // Skip noisy SSE channel — long-lived stream pollutes logs.
+    // Skip noisy SSE channel, long-lived stream pollutes logs.
     if path != "/api/events" {
         if status.is_server_error() {
             tracing::error!(

@@ -43,7 +43,7 @@ fn js_try_catch_has_exception_edges() {
 
 /// When a classifiable call (here `eval`, a built-in JS sink) is nested
 /// inside a multi-line statement, the CFG node's `classification_span()`
-/// should point at the inner call, not at the outer statement's start —
+/// should point at the inner call, not at the outer statement's start ,
 /// so finding display reports the line the dangerous call actually lives
 /// on.  `ast.span` must still cover the whole outer statement for
 /// structural passes that need the statement grain.
@@ -86,7 +86,7 @@ fn inner_call_override_narrows_classification_span() {
 }
 
 /// `classification_span()` must fall back to `ast.span` when no narrower
-/// sub-expression was recorded — so existing structural code paths keep
+/// sub-expression was recorded, so existing structural code paths keep
 /// working unchanged for nodes whose classification applies to the whole
 /// outer node.
 #[test]
@@ -125,7 +125,7 @@ fn callee_span_unset_when_no_narrowing_is_possible() {
     // A bare `eval(x);` on one line: `first_call_ident` finds the
     // call_expression whose span is nearly the whole expression_statement
     // (different by the trailing `;`).  `classification_span` still
-    // returns a sensible line — but the exact trimming is an
+    // returns a sensible line, but the exact trimming is an
     // implementation detail.  What we assert here is the invariant:
     // if callee_span *is* set, it must be contained in ast.span.
     let src = b"function f() { eval(x); }";
@@ -708,7 +708,7 @@ fn python_if_and() {
 
 #[test]
 fn ruby_unless_and() {
-    // `unless a && b` — chain built, branches swapped
+    // `unless a && b`, chain built, branches swapped
     // Body should run when condition is false
     let src = b"def f\n  unless a && b\n    x\n  end\nend\n";
     let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
@@ -848,7 +848,7 @@ fn parse_tree(src: &[u8], ts_lang: Language) -> tree_sitter::Tree {
 
 #[test]
 fn first_call_ident_skips_lambda_body() {
-    // `process(lambda: eval(dangerous))` — Python-style.
+    // `process(lambda: eval(dangerous))`, Python-style.
     // first_call_ident should return "process", not "eval".
     let src = b"process(lambda: eval(dangerous))";
     let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
@@ -860,7 +860,7 @@ fn first_call_ident_skips_lambda_body() {
 
 #[test]
 fn first_call_ident_skips_arrow_function_body() {
-    // `process(() => eval(dangerous))` — JS arrow function in argument.
+    // `process(() => eval(dangerous))`, JS arrow function in argument.
     let src = b"process(() => eval(dangerous))";
     let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
     let tree = parse_tree(src, ts_lang);
@@ -871,7 +871,7 @@ fn first_call_ident_skips_arrow_function_body() {
 
 #[test]
 fn first_call_ident_skips_named_function_in_arg() {
-    // `process(function inner() { eval(dangerous); })` — named function expression in arg.
+    // `process(function inner() { eval(dangerous); })`, named function expression in arg.
     let src = b"process(function inner() { eval(dangerous); })";
     let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
     let tree = parse_tree(src, ts_lang);
@@ -882,7 +882,7 @@ fn first_call_ident_skips_named_function_in_arg() {
 
 #[test]
 fn first_call_ident_normal_nested_call() {
-    // `outer(inner(x))` — inner is NOT behind a function boundary, should be reachable.
+    // `outer(inner(x))`, inner is NOT behind a function boundary, should be reachable.
     let src = b"outer(inner(x))";
     let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
     let tree = parse_tree(src, ts_lang);
@@ -895,7 +895,7 @@ fn first_call_ident_normal_nested_call() {
 #[test]
 fn first_call_ident_finds_call_not_blocked_by_function() {
     // Ensure a call at the same level as a function literal is still found.
-    // `[function() {}, actual_call()]` — array with function and call.
+    // `[function() {}, actual_call()]`, array with function and call.
     let src = b"[function() {}, actual_call()]";
     let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
     let tree = parse_tree(src, ts_lang);
@@ -908,7 +908,7 @@ fn first_call_ident_finds_call_not_blocked_by_function() {
 
 #[test]
 fn callee_not_resolved_from_nested_function_arg() {
-    // `safe_wrapper(function() { eval(user_input); })` — the CFG for the
+    // `safe_wrapper(function() { eval(user_input); })`, the CFG for the
     // outer call should resolve the callee as "safe_wrapper", never "eval".
     let src = b"function f() { safe_wrapper(function() { eval(user_input); }); }";
     let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
@@ -923,7 +923,7 @@ fn callee_not_resolved_from_nested_function_arg() {
     assert!(has_safe, "expected a node with callee 'safe_wrapper'");
 
     // The outer body should NOT have a node with callee "eval" attributed
-    // to the outer expression — eval lives inside the nested function body.
+    // to the outer expression, eval lives inside the nested function body.
     let outer_eval = body.graph.node_weights().any(|info| {
         info.call.callee.as_deref() == Some("eval") && info.ast.enclosing_func.is_none()
     });
@@ -1117,6 +1117,7 @@ fn clone_preserves_all_sub_structs() {
             kwargs: vec![("shell".into(), vec!["True".into()])],
             arg_string_literals: vec![Some("lit".into())],
             destination_uses: None,
+            gate_filters: Vec::new(),
         },
         taint: TaintMeta {
             labels: {
@@ -1399,7 +1400,7 @@ fn js_promisify_ignored_for_non_js_langs() {
 
 #[test]
 fn js_promisify_non_call_value_ignored() {
-    // RHS is not a promisify call — no binding should be captured.
+    // RHS is not a promisify call, no binding should be captured.
     let src = b"const execAsync = child_process.exec;";
     let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
     let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
@@ -1471,7 +1472,7 @@ fn cpp_function_extracts_param_names() {
 // ── callee-site metadata extraction ──────────────────────────────────
 
 /// Callees collected into `LocalFuncSummary` should now carry structured
-/// arity, receiver, and qualifier fields — not just a bare name.
+/// arity, receiver, and qualifier fields, not just a bare name.
 #[test]
 fn local_summary_callees_carry_arity_and_receiver() {
     // Two calls: one is a plain function call with 2 args, the other is
@@ -1703,7 +1704,7 @@ fn local_summary_callees_have_distinct_ordinals() {
         .find(|(k, _)| k.name == "outer")
         .unwrap();
 
-    // Dedup key is (name, arity, receiver, qualifier, ordinal) — the two
+    // Dedup key is (name, arity, receiver, qualifier, ordinal), the two
     // `a()` sites have different ordinals, so both must appear.
     let a_sites: Vec<_> = outer.callees.iter().filter(|c| c.name == "a").collect();
     assert_eq!(
@@ -1825,7 +1826,7 @@ fn anon_fn_named_from_short_var_decl_go() {
 
 #[test]
 fn iife_callee_resolves_to_anon_body_js() {
-    // `(function(arg){eval(arg);})(q)` — the CallFn arm must produce
+    // `(function(arg){eval(arg);})(q)`, the CallFn arm must produce
     // a synthetic anon callee name so that taint can match the
     // inline body's FuncKey.
     let src = b"(function(arg){ eval(arg); })(q);";
@@ -1898,7 +1899,7 @@ fn strip_tags(s: &str) -> String {
 
 #[test]
 fn replace_chain_rejects_unrecognised_literals() {
-    // `.replace("foo", "bar")` contains no dangerous pattern — must NOT be
+    // `.replace("foo", "bar")` contains no dangerous pattern, must NOT be
     // credited as a sanitizer.  Preserves the FP→TN guard: replace calls
     // that don't strip anything dangerous must stay transparent to taint.
     let src = br#"
@@ -1916,7 +1917,7 @@ fn rewrite(s: &str) -> String {
 
 #[test]
 fn replace_chain_rejects_when_replacement_reintroduces_pattern() {
-    // `.replace("x", "..")` strips `x` but *reintroduces* `..` — be
+    // `.replace("x", "..")` strips `x` but *reintroduces* `..`, be
     // maximally conservative and abandon all credit for this chain.
     let src = br#"
 fn evil(s: &str) -> String {
@@ -1933,7 +1934,7 @@ fn evil(s: &str) -> String {
 
 #[test]
 fn replace_chain_rejects_dynamic_arg() {
-    // `.replace(var, "")` — search is not a literal; pattern analysis can
+    // `.replace(var, "")`, search is not a literal; pattern analysis can
     // say nothing about what was stripped.  Must not earn credit.
     let src = br#"
 fn dynamic(s: &str, needle: &str) -> String {
@@ -1950,7 +1951,7 @@ fn dynamic(s: &str, needle: &str) -> String {
 
 #[test]
 fn replace_chain_rejects_non_identifier_base() {
-    // `get_s().replace("..", "")` — innermost receiver is a call, not a
+    // `get_s().replace("..", "")`, innermost receiver is a call, not a
     // parameter.  We have no reason to believe `get_s()` returns a value
     // that benefits the caller; refuse credit.
     let src = br#"
@@ -1976,7 +1977,7 @@ fn find_node_defining<'a>(cfg: &'a Cfg, var: &str) -> Option<&'a NodeInfo> {
 
 #[test]
 fn numeric_length_access_detected_on_js_property_read() {
-    // `var count = items.length` — property access on a member expression
+    // `var count = items.length`, property access on a member expression
     // should mark the CFG node as a numeric-length access so the
     // type-fact analysis infers TypeKind::Int for `count`.
     let src = br#"function f(items) {
@@ -1994,7 +1995,7 @@ fn numeric_length_access_detected_on_js_property_read() {
 
 #[test]
 fn numeric_length_access_detected_on_js_zero_arg_method_call() {
-    // `var n = str.length()` — zero-arg method call form (uncommon in JS
+    // `var n = str.length()`, zero-arg method call form (uncommon in JS
     // but present in other languages).  Detector should unwrap a
     // zero-arg call around a member expression.
     let src = br#"function f(list) {
@@ -2012,7 +2013,7 @@ fn numeric_length_access_detected_on_js_zero_arg_method_call() {
 
 #[test]
 fn numeric_length_access_ignores_unrelated_properties() {
-    // `var v = arr.foo` — arbitrary property reads must not be flagged.
+    // `var v = arr.foo`, arbitrary property reads must not be flagged.
     let src = br#"function f(arr) {
             var v = arr.foo;
             return v;
@@ -2028,7 +2029,7 @@ fn numeric_length_access_ignores_unrelated_properties() {
 
 #[test]
 fn numeric_length_access_ignores_method_calls_with_args() {
-    // `var r = s.indexOf('x')` — the detector must reject any call with
+    // `var r = s.indexOf('x')`, the detector must reject any call with
     // positional arguments because those aren't pure length reads.
     let src = br#"function f(s) {
             var r = s.indexOf('x');
@@ -2043,7 +2044,7 @@ fn numeric_length_access_ignores_method_calls_with_args() {
     );
 }
 
-// ── Pointer-Phase 6 / W5: subscript lowering tests ────────────────────────
+//── subscript lowering tests ────────────────────────
 
 /// Scope for tests that flip `NYX_POINTER_ANALYSIS=1` so the CFG-side
 /// subscript synthesis activates.  The env-var is restored afterwards
@@ -2290,7 +2291,7 @@ fn js_switch_default_in_middle_reorders_to_tail() {
     );
 }
 
-/// JS switch fall-through (`case 1: a(); case 2: b();`) — case 1's
+/// JS switch fall-through (`case 1: a(); case 2: b();`), case 1's
 /// exit should flow into case 2's body so taint from `first()`
 /// reaches `second()`'s sinks.
 ///
@@ -2301,7 +2302,7 @@ fn js_switch_default_in_middle_reorders_to_tail() {
 ///       structural shape.
 ///   (b) `first()` has a non-Back forward out-edge that lands inside
 ///       the case-2 sub-graph (the actual fall-through wire), so we
-///       prove there *is* a fall-through edge — not just an
+///       prove there *is* a fall-through edge, not just an
 ///       Entry→…→Exit path that happens to walk through both calls
 ///       via the dispatch chain.
 ///
@@ -2309,7 +2310,7 @@ fn js_switch_default_in_middle_reorders_to_tail() {
 /// Seq passthrough nodes (one per surrounding scope), so the
 /// fall-through edge from `first()` lands on the *first wrapper
 /// Seq node* of case 2, not on `second()` itself. Asserting that
-/// `second()` has ≥2 in-edges would therefore be wrong — the True
+/// `second()` has ≥2 in-edges would therefore be wrong, the True
 /// edge from the case-2 dispatch If targets the wrapper node, and
 /// only a single Seq chain leads from there to `second()`.
 #[test]
@@ -2800,7 +2801,7 @@ fn nested_loops_two_headers_two_back_edges() {
 
 #[test]
 fn loop_with_break_no_back_edge_from_break() {
-    // A `break` short-circuits the loop body — its edge must NOT be a
+    // A `break` short-circuits the loop body, its edge must NOT be a
     // back edge to the header (it leaves the loop entirely).
     let src = b"function f() { while (cond()) { if (done()) break; body(); } }";
     let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
@@ -2879,7 +2880,7 @@ fn chained_method_call_rebinds_to_inner_gated_sink() {
         // no longer be the recorded callee for this node.
         if callee.ends_with("https.get") {
             // The inner-gate path must have populated sink_payload_args
-            // (the gate's payload arg is position 0 — the URL string).
+            // (the gate's payload arg is position 0, the URL string).
             assert!(
                 info.call.sink_payload_args.is_some(),
                 "expected sink_payload_args to be populated for chained \

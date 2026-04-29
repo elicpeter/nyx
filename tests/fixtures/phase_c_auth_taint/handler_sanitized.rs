@@ -23,7 +23,7 @@ mod auth {
 
 // Negative control: the handler validates ownership via
 // `authz::require_group_member(...)?` before the realtime publish.  Phase C
-// should NOT emit `rs.auth.missing_ownership_check.taint` here — the
+// should NOT emit `rs.auth.missing_ownership_check.taint` here, the
 // sanitizer clears `UNAUTHORIZED_ID` from the argument SSA values.
 pub async fn handle_publish_checked(Path(group_id): Path<i64>) -> Result<&'static str, ()> {
     let user = auth::current_user();

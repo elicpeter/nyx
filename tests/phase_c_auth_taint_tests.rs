@@ -1,4 +1,4 @@
-//! Phase C — auth-as-taint integration tests.
+//! Phase C, auth-as-taint integration tests.
 //!
 //! Verifies the end-to-end flow of `Cap::UNAUTHORIZED_ID` folded into the
 //! SSA/taint engine:
@@ -46,7 +46,7 @@ fn diags_for(diags: &[Diag], filename: &str) -> Vec<Diag> {
 
 #[test]
 fn phase_c_flag_off_emits_no_auth_taint_finding() {
-    // Baseline: flag default (off) — no `rs.auth.missing_ownership_check.taint`
+    // Baseline: flag default (off), no `rs.auth.missing_ownership_check.taint`
     // diag should appear.  This guards against the Phase C rules leaking when
     // the flag is not flipped.
     let cfg = common::test_config(AnalysisMode::Full);

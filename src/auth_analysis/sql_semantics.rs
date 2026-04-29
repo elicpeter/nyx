@@ -28,7 +28,7 @@
 pub enum SqlAuthClassification {
     /// Query is auth-gated. The JOIN (or direct WHERE) pins returned
     /// rows to the bound user. We don't track *which* bind position
-    /// here — the caller treats whichever bind value flows into the
+    /// here, the caller treats whichever bind value flows into the
     /// query as the user-id witness; that's safe because the caller
     /// already requires the row binding to come from a `let X = …`
     /// site we can name.
@@ -37,12 +37,12 @@ pub enum SqlAuthClassification {
 
 /// Classify `sql` as auth-gated under the configured ACL tables.
 /// Returns `Some(Authorized)` when one of the recognized patterns
-/// holds, `None` otherwise (conservative — unknown shapes are treated
+/// holds, `None` otherwise (conservative, unknown shapes are treated
 /// as unauthorized).
 pub fn classify_sql_query(sql: &str, acl_tables: &[String]) -> Option<SqlAuthClassification> {
     let normalized = normalize_sql(sql);
     if !normalized.trim_start().starts_with("select") {
-        // For B3 we only authorize SELECT queries — INSERT/UPDATE/DELETE
+        // For B3 we only authorize SELECT queries, INSERT/UPDATE/DELETE
         // need their own analysis and aren't in scope. (A literal
         // `DELETE … WHERE user_id = ?N` could be safely authorized,
         // but the call sites we care about for FP suppression are
@@ -60,7 +60,7 @@ pub fn classify_sql_query(sql: &str, acl_tables: &[String]) -> Option<SqlAuthCla
 }
 
 /// `SELECT … FROM <T> [AS] <ALIAS>? JOIN <ACL> [AS] <GA>? ON … WHERE
-/// <GA?>.user_id = ?N` — verifies that an ACL table appears in a JOIN
+/// <GA?>.user_id = ?N`, verifies that an ACL table appears in a JOIN
 /// clause and that the WHERE clause contains a `<…>.user_id = ?` (or
 /// bare `user_id = ?`) predicate.  Order of the WHERE predicates
 /// doesn't matter; AND/OR connectors are ignored.
@@ -87,14 +87,14 @@ fn matches_join_through_acl(sql: &str, acl_tables: &[String]) -> bool {
     where_clause_contains_user_id_bind(where_clause)
 }
 
-/// Direct ownership: `SELECT … FROM <T> WHERE … user_id = ?N` — no
+/// Direct ownership: `SELECT … FROM <T> WHERE … user_id = ?N`, no
 /// JOIN.  Covers single-table reads where the row already carries the
 /// owning user id (`SELECT … FROM docs WHERE user_id = ?1`).  We do
 /// NOT require `id = ?M` to also be present; the `user_id = ?N`
 /// predicate alone is sufficient, since any row returned must be
 /// owned by the bound user.
 ///
-/// Refuses to fire when a JOIN is present — the JOIN target may not
+/// Refuses to fire when a JOIN is present, the JOIN target may not
 /// be in the ACL list, so the WHERE predicate (which may apply to
 /// the joined table, e.g. `WHERE al.user_id = ?N` against an
 /// `audit_log` JOIN) doesn't actually pin the primary rows to the
@@ -125,7 +125,7 @@ fn where_clause_contains_user_id_bind(where_clause: &str) -> bool {
         for (idx, _) in where_only.match_indices(needle) {
             // Make sure this is a column boundary on the left side
             // (avoid matching `posted_user_id` or `target_user_id`
-            // — those don't pin to the actor).
+            //, those don't pin to the actor).
             let before = where_only[..idx].chars().last();
             if !is_column_boundary_left(before) {
                 continue;
@@ -158,11 +158,11 @@ fn looks_like_bind_param(after_eq: &str) -> bool {
         return false;
     }
     match bytes[0] {
-        // ?N (sqlite/sqlx anonymous) — accept ?, ?1, ?2…
+        // ?N (sqlite/sqlx anonymous), accept ?, ?1, ?2…
         b'?' => true,
-        // $N (postgres style) — require a digit after.
+        // $N (postgres style), require a digit after.
         b'$' => bytes.get(1).is_some_and(|b| b.is_ascii_digit()),
-        // :name (named bind) — require an identifier char after.
+        // :name (named bind), require an identifier char after.
         b':' => bytes
             .get(1)
             .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_'),
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn join_against_non_acl_table_is_not_authorized() {
-        // `audit_log` is not in the configured ACL list — JOIN doesn't
+        // `audit_log` is not in the configured ACL list, JOIN doesn't
         // pin rows to the bound user, so the query is unauthorized.
         let sql = "SELECT d.* FROM docs d \
                    JOIN audit_log al ON al.doc_id = d.id \
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn similar_column_names_do_not_trip_user_id_match() {
-        // `posted_user_id` shouldn't satisfy the `user_id = ?` check —
+        // `posted_user_id` shouldn't satisfy the `user_id = ?` check ,
         // that column doesn't pin to the actor.
         let sql = "SELECT * FROM posts WHERE posted_user_id = ?1";
         assert_eq!(classify_sql_query(sql, &acl()), None);

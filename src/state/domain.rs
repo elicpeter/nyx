@@ -168,8 +168,8 @@ impl Lattice for AuthDomainState {
 /// (e.g. `"c.mu"`, `"c.writer.header"`) so distinct field projections
 /// of the same chain root are tracked independently.
 ///
-/// Chain-keyed proxy state is the Phase 3 replacement for the single-dot
-/// band-aid that conservatively dropped chain receivers entirely — chain
+/// Chain-keyed proxy state is the DTO replacement for the single-dot
+/// band-aid that conservatively dropped chain receivers entirely, chain
 /// receivers are now first-class, semantically distinct from their root.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChainProxyState {
@@ -192,18 +192,12 @@ pub struct ProductState {
     /// operation (e.g., fs.openSync at line 7) rather than the proxy call.
     pub proxy_acquire_spans: HashMap<SymbolId, (usize, usize)>,
     /// Per-chain-receiver proxy tracking, keyed by joined chain text
-    /// (`"c.mu"`, `"c.writer.header"`).  Each chain receiver has its own
-    /// lifecycle, class group, and acquire span — independent of both the
-    /// chain root and any other chain.  Phase 3 of the field-projections
-    /// rollout introduces this map; consumers that previously used
-    /// [`receiver_class_group`] for chain receivers (via the deleted
-    /// single-dot band-aid) now route through here for 2+ dot callees.
+    /// (`"c.mu"`, `"c.writer.header"`). Each chain receiver has its own
+    /// lifecycle, class group, and acquire span, independent of both
+    /// the chain root and any other chain.
     ///
-    /// Phase 3 ships chain_proxies in tracking-only mode: chain receivers
-    /// that remain OPEN at exit are NOT promoted to leak findings (so the
-    /// addition is strictly behaviour-preserving against the existing
-    /// benchmark).  Phase 4 / a follow-up adds chain-rooted leak findings
-    /// once the receiver-class detection is broad enough to avoid new FPs.
+    /// Tracking-only: chain receivers that remain OPEN at exit are NOT
+    /// promoted to leak findings.
     pub chain_proxies: HashMap<String, ChainProxyState>,
 }
 
@@ -386,7 +380,7 @@ mod tests {
     // the laws also need to hold on the *actual* impls used by the
     // engine. A change to ResourceLifecycle's bitset semantics or to
     // AuthLevel's ordering could quietly break commutativity /
-    // associativity / idempotence — these tests pin those properties.
+    // associativity / idempotence, these tests pin those properties.
 
     #[test]
     fn resource_lifecycle_join_laws() {
@@ -424,7 +418,7 @@ mod tests {
 
     /// `AuthLevel` satisfies idempotence, commutativity, and associativity
     /// of `join` (which is `min` of the privilege ordering). It does NOT
-    /// satisfy the `Lattice` trait's bot-identity law — see the explicit
+    /// satisfy the `Lattice` trait's bot-identity law, see the explicit
     /// `auth_level_bot_is_absorbing_not_identity` test below for a
     /// rationale and a regression guard.
     #[test]
@@ -459,14 +453,14 @@ mod tests {
     ///   * therefore `Admin.join(Unauthed) == Unauthed`, not `Admin`
     ///
     /// In other words, `Unauthed` is the *absorbing* element of the join,
-    /// not the identity — the algebraic dual of what the trait expects.
+    /// not the identity, the algebraic dual of what the trait expects.
     ///
     /// This is intentional for security: if any incoming path is unauthed,
     /// the merged state must be unauthed (the conservative baseline). The
     /// trait contract violation matters only if the dataflow engine ever
     /// joins `bot()` with a non-bot reachable state from a different path
     /// (e.g. for an unreachable predecessor); in the current engine such
-    /// nodes are skipped, so the violation is observably benign — but
+    /// nodes are skipped, so the violation is observably benign, but
     /// documenting it here prevents an accidental "fix" that flips
     /// `bot()` to `Admin` and silently elevates auth across all merges.
     #[test]
@@ -506,7 +500,7 @@ mod tests {
 
     /// `AuthDomainState::join` keeps a variable as `validated` only if
     /// it was validated on *every* incoming path. A variable validated
-    /// on one branch but not the other must be dropped — otherwise an
+    /// on one branch but not the other must be dropped, otherwise an
     /// auth bypass on one path silently authorises sinks on the merge
     /// path.
     #[test]

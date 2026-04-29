@@ -1,6 +1,6 @@
 {
-  "description": "fetch() request body carries attacker-controlled content but the destination URL is fixed. Under the destination-aware SSRF gate, only taint reaching the URL (arg 0 / object `url` field) activates — body taint must be silenced.",
-  "tags": ["taint", "ssrf", "fetch", "destination-aware", "regression-fp"],
+  "description": "fetch() with a fixed destination URL and an attacker-controlled body. SSRF must NOT fire (destination is not attacker-influenced) and the cross-boundary data-exfiltration class (Cap::DATA_EXFIL) MUST fire on the body field.",
+  "tags": ["taint", "data-exfil", "fetch", "destination-aware", "cap-attribution"],
   "modes": ["full"],
   "expected": [
     {
@@ -8,6 +8,12 @@
       "must_not_match": true,
       "line_range": [7, 14],
       "notes": "fetch('/api/telemetry', {body: payload}) — arg 0 is a fixed string, body taint must not fire as SSRF."
+    },
+    {
+      "rule_id": "taint-data-exfiltration",
+      "must_match": true,
+      "line_range": [7, 14],
+      "notes": "Body field carries req.body.message → must fire DATA_EXFIL (sensitive data leaving the process via outbound request payload)."
     }
   ]
 }

@@ -5,6 +5,7 @@ use std::fmt;
 
 use crate::cfg;
 use crate::ssa::ir::{BlockId, SsaValue};
+use crate::utils::snippet::truncate_at_char_boundary;
 
 /// Maximum expression tree depth before collapsing to `Unknown`.
 pub const MAX_EXPR_DEPTH: u32 = 32;
@@ -120,7 +121,7 @@ pub enum SymbolicValue {
     StrLen(Box<SymbolicValue>),
     // ── Encoding/decoding transforms ───────────────────────────
     /// Protective or representation transform applied to inner value.
-    /// Preserves taint unconditionally — does NOT sanitize in symex.
+    /// Preserves taint unconditionally, does NOT sanitize in symex.
     Encode(super::strings::TransformKind, Box<SymbolicValue>),
     /// Decoding/reverse transform applied to inner value.
     Decode(super::strings::TransformKind, Box<SymbolicValue>),
@@ -189,7 +190,7 @@ impl SymbolicValue {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Smart constructors — all tree-building goes through these
+//  Smart constructors, all tree-building goes through these
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Build a binary arithmetic expression with concrete folding and depth bounding.
@@ -218,11 +219,11 @@ pub fn mk_binop(op: Op, lhs: SymbolicValue, rhs: SymbolicValue) -> SymbolicValue
                     a.checked_rem(*b)
                 }
             }
-            // Bitwise — &, |, ^ cannot overflow on i64
+            // Bitwise, &, |, ^ cannot overflow on i64
             Op::BitAnd => Some(*a & *b),
             Op::BitOr => Some(*a | *b),
             Op::BitXor => Some(*a ^ *b),
-            // Shifts — bounds-checked to 0..=63 (i64 width)
+            // Shifts, bounds-checked to 0..=63 (i64 width)
             Op::LeftShift => {
                 if *b < 0 || *b > 63 {
                     None
@@ -237,7 +238,7 @@ pub fn mk_binop(op: Op, lhs: SymbolicValue, rhs: SymbolicValue) -> SymbolicValue
                     a.checked_shr(*b as u32)
                 }
             }
-            // Comparisons — produce 1 (true) or 0 (false)
+            // Comparisons, produce 1 (true) or 0 (false)
             Op::Eq => Some(if *a == *b { 1 } else { 0 }),
             Op::NotEq => Some(if *a != *b { 1 } else { 0 }),
             Op::Lt => Some(if *a < *b { 1 } else { 0 }),
@@ -397,7 +398,7 @@ pub fn mk_substr(
                     let result = cs.get(i..).unwrap_or("");
                     return SymbolicValue::ConcreteStr(result.to_owned());
                 }
-                _ => {} // end is Some but not concrete — can't fold
+                _ => {} // end is Some but not concrete, can't fold
             }
         }
     }
@@ -458,7 +459,7 @@ pub fn mk_decode(kind: super::strings::TransformKind, s: SymbolicValue) -> Symbo
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Display — human-readable witness strings
+//  Display, human-readable witness strings
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Maximum length for the Display output before truncation.
@@ -468,10 +469,12 @@ const MAX_STR_DISPLAY_LEN: usize = 64;
 
 impl fmt::Display for SymbolicValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Use an internal formatter, then truncate if needed.
+        // Use an internal formatter, then truncate if needed.  UTF-8-safe
+        // truncation, `ConcreteStr` may carry localised text from source
+        // (e.g. Cyrillic / Gurmukhi regex literals).
         let s = display_inner(self);
         if s.len() > MAX_DISPLAY_LEN {
-            write!(f, "{}...", &s[..MAX_DISPLAY_LEN])
+            write!(f, "{}...", truncate_at_char_boundary(&s, MAX_DISPLAY_LEN))
         } else {
             write!(f, "{}", s)
         }
@@ -483,7 +486,10 @@ fn display_inner(val: &SymbolicValue) -> String {
         SymbolicValue::Concrete(n) => format!("{}", n),
         SymbolicValue::ConcreteStr(s) => {
             if s.len() > MAX_STR_DISPLAY_LEN {
-                format!("\"{}...\"", &s[..MAX_STR_DISPLAY_LEN])
+                format!(
+                    "\"{}...\"",
+                    truncate_at_char_boundary(s, MAX_STR_DISPLAY_LEN)
+                )
             } else {
                 format!("\"{}\"", s)
             }
@@ -675,7 +681,7 @@ mod tests {
 
     #[test]
     fn depth_bounding() {
-        // Build a chain of depth 33 — should collapse to Unknown
+        // Build a chain of depth 33, should collapse to Unknown
         let mut val = SymbolicValue::Symbol(SsaValue(0));
         for _ in 0..MAX_EXPR_DEPTH {
             val = mk_binop(Op::Add, val, SymbolicValue::Concrete(1));
@@ -702,7 +708,7 @@ mod tests {
 
     #[test]
     fn concat_no_int_coercion() {
-        // ConcreteStr + Concrete(int) should NOT fold — no type coercion
+        // ConcreteStr + Concrete(int) should NOT fold, no type coercion
         let result = mk_concat(
             SymbolicValue::ConcreteStr("val=".into()),
             SymbolicValue::Concrete(42),
@@ -980,7 +986,7 @@ mod tests {
 
     #[test]
     fn left_shift_amount_63() {
-        // Max valid shift — should not panic
+        // Max valid shift, should not panic
         let result = mk_binop(Op::LeftShift, c(1), c(63));
         assert_eq!(result, c(1i64 << 63));
     }
@@ -1286,7 +1292,7 @@ mod tests {
 
     /// `mk_phi` must not fold when operands have differing types
     /// (e.g. one branch returns a Concrete int, another returns
-    /// ConcreteStr). The result is genuinely uncertain — a Phi node
+    /// ConcreteStr). The result is genuinely uncertain, a Phi node
     /// must be preserved to expose the type-conflict to downstream
     /// witness logic, not collapse to one operand.
     #[test]

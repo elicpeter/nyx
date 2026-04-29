@@ -213,7 +213,7 @@ async fn delete_scan(
                 Json(serde_json::json!({ "error": msg })),
             ));
         }
-        // "Scan not found" in memory is fine — may be DB-only
+        // "Scan not found" in memory is fine, may be DB-only
     }
 
     // Delete from DB (CASCADE handles metrics + logs)

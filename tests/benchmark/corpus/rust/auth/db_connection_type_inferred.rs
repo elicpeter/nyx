@@ -2,7 +2,7 @@
 // produces a `DatabaseConnection` via SSA `constructor_type` (through
 // `peel_identity_suffix`, which strips `.unwrap()` before matching).  The
 // handler then calls `conn.execute(..)`, a callee name that appears in
-// neither `mutation_indicator_names` nor `read_indicator_names` for Rust —
+// neither `mutation_indicator_names` nor `read_indicator_names` for Rust ,
 // name-based classification returns `None`, so the ownership gate
 // already cannot flag the call.  The type-map refinement should *still*
 // leave the call unflagged (the type map produces `DbMutation`, but

@@ -1,98 +1,43 @@
 //! Provenance notes attached to findings when the engine has hit an
 //! internal budget, widening, or lowering cap.
 //!
-//! The notes are surfaced through `Finding.engine_notes` (and
-//! `Evidence.engine_notes` once the finding reaches the `Diag` layer) so
-//! downstream consumers can tell "we found nothing" from "we stopped
-//! looking".
-//!
-//! Each note carries a [`LossDirection`] classification that describes
-//! *how* the engine deviated from a fully-converged analysis.  The
-//! direction drives two downstream behaviours:
-//!
-//! * [`crate::evidence::compute_confidence`] caps confidence at
-//!   `Medium` when any attached note has direction
-//!   [`LossDirection::OverReport`] or [`LossDirection::Bail`] (the
-//!   finding itself may be spurious).
-//! * [`crate::rank`] applies a direction-aware `completeness` penalty
-//!   to the attack-surface score (see `rank.rs::completeness_penalty`).
-//!
-//! This replaces the earlier Phase-3 stance of "notes are purely
-//! additive and never influence score".  A release audit flagged that
-//! users sorting thousands of findings by rank could not distinguish
-//! converged analysis from capped analysis, which produced false
-//! confidence in fragile findings.  The direction-aware pipeline
-//! preserves the observability goal while fixing the credibility gap.
+//! Each note carries a [`LossDirection`] classification.
+//! [`crate::evidence::compute_confidence`] caps confidence at `Medium`
+//! for `OverReport`/`Bail` notes, and [`crate::rank`] applies a
+//! direction-aware completeness penalty.
 
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
-/// Classification of *why* a fix-point loop hit its safety cap.
-///
-/// The cap-hit alone is not actionable — "we ran 64 iterations and did
-/// not detect convergence" can mean several very different things:
-///
-/// * the lattice is still shrinking but slowly (e.g. a 72-function chain
-///   SCC that legitimately needs >64 iterations),
-/// * the lattice stopped shrinking but the convergence predicate still
-///   detects change (the change set stabilised at a non-zero value —
-///   monotonicity is fine but something in the convergence predicate is
-///   spurious), or
-/// * the lattice is oscillating (two iterations alternating with the
-///   same change-set size; this is a *bug*, not a tuning issue).
-///
-/// Recording the reason makes cap-hit telemetry actionable: operators
-/// can tell when "raise the cap" would actually help vs. when they are
-/// looking at a summary-non-monotonicity regression.
-///
-/// Serialized as a nested snake_case tagged enum so SARIF/JSON consumers
-/// can pattern-match without depending on Rust layout.
+/// Why a fix-point loop hit its safety cap. Distinguishes "raise the
+/// cap" cases from non-monotonicity bugs in cap-hit telemetry.
+/// Serialized as a tagged snake_case enum for SARIF/JSON consumers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CapHitReason {
-    /// The change-set size was still decreasing when the cap fired.
-    /// `trajectory` is the last N iteration deltas (most recent last).
-    /// Operators can safely raise the cap; the underlying analysis is
-    /// healthy but the SCC is larger than the current budget.
+    /// Change-set still decreasing when the cap fired. Safe to raise
+    /// the cap; the SCC is just larger than budget.
     MonotoneShrinking { trajectory: SmallVec<[u32; 4]> },
-    /// The change-set size stayed constant for the last ≥2 iterations
-    /// without reaching zero.  This is unusual: every iteration is
-    /// updating the *same* keys, which suggests a summary that changes
-    /// the same fields back and forth even though the cap bits are
-    /// saturating.  Raise the cap **and** investigate.
+    /// Change-set held steady at a non-zero value for ≥2 iterations.
+    /// Same keys updating back and forth, investigate.
     Plateau { delta: u32 },
-    /// The change-set size oscillated with a detected period ≤ N/2.
-    /// Genuinely bad — the analysis is not monotone, convergence will
-    /// *never* be reached, and raising the cap will not help.  File a
-    /// bug with the fixture attached.
+    /// Period-2 oscillation detected. Non-monotone; raising the cap
+    /// will not help. File a bug.
     SuspectedOscillation {
         period: u8,
         trajectory: SmallVec<[u32; 4]>,
     },
-    /// Default when the engine did not record a trajectory (e.g. the
-    /// cap fired after only one iteration so there is nothing to
-    /// classify).  Preserves backwards compatibility for old notes
-    /// deserialized from disk.
+    /// No trajectory recorded (e.g. cap fired after a single iteration).
     #[default]
     Unknown,
 }
 
 impl CapHitReason {
-    /// Classify a trajectory of per-iteration change-set sizes.
-    ///
-    /// `deltas` should carry the *changed-key counts* from the last N
-    /// iterations (most recent last).  Classification rules:
-    ///
-    /// 1. Fewer than 2 samples → `Unknown` (nothing to diff against).
-    /// 2. A period-2 pattern (a,b,a,b) with a ≠ b → `SuspectedOscillation`.
-    /// 3. Last two samples equal and non-zero → `Plateau`.
-    /// 4. Strictly decreasing tail → `MonotoneShrinking`.
-    /// 5. Otherwise → `Unknown` (inconclusive; rare in practice).
-    ///
-    /// The function is pure — no allocation beyond the returned
-    /// [`SmallVec`] — so it is safe to call from within a hot loop when
-    /// a cap actually fires.  Callers should accumulate deltas in a
-    /// fixed-size ring buffer to bound memory.
+    /// Classify a trajectory of per-iteration change-set sizes
+    /// (most recent last). Rules: <2 samples → `Unknown`; a,b,a,b with
+    /// a≠b → `SuspectedOscillation`; last two equal non-zero →
+    /// `Plateau`; strictly decreasing tail → `MonotoneShrinking`;
+    /// otherwise `Unknown`.
     pub fn classify(deltas: &[u32]) -> CapHitReason {
         if deltas.len() < 2 {
             return CapHitReason::Unknown;
@@ -161,44 +106,26 @@ impl CapHitReason {
 }
 
 /// Direction of precision loss encoded by an [`EngineNote`].
-///
-/// Every new [`EngineNote`] variant must declare a direction via
-/// [`EngineNote::direction`] — the match is exhaustive by design so the
-/// classification cannot silently default.
-///
-/// Ordering matters: variants are sorted by worsening impact on a
-/// specific finding's credibility.  [`combine`](Self::combine) uses the
-/// `Ord` impl to merge directions when multiple notes are attached.
+/// Variants are ordered by worsening credibility impact;
+/// [`combine`](Self::combine) takes the max.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LossDirection {
-    /// The note is informational only.  Analysis was fully converged;
-    /// the note records a harmless event such as a cache reuse.
+    /// Analysis converged; the note records a harmless event.
     Informational,
-    /// The analysis may have *missed* additional findings (e.g. the
-    /// worklist was capped before fully propagating taint).  Findings
-    /// that *were* reported are still sound — they correspond to real
-    /// flows — but the result set is a lower bound.
+    /// Analysis may have missed findings (worklist was capped). Reported
+    /// findings remain sound, the result set is a lower bound.
     UnderReport,
-    /// The analysis may have reported a *spurious* finding (e.g.
-    /// predicate state was widened to top, so a validation guard that
-    /// would have suppressed the finding was lost).  The specific
-    /// finding is more likely to be a false positive than one produced
-    /// from converged state.
+    /// Analysis may have reported a spurious finding (e.g. predicate
+    /// state widened to top, dropping a guard). Likely FP.
     OverReport,
-    /// Analysis of this finding's body aborted before producing a
-    /// trustworthy result (e.g. SSA lowering bailed, parse timed out).
-    /// The finding is weakly supported; a human reviewer should treat
-    /// it as a starting point rather than a confirmed flow.
+    /// Analysis aborted before producing a trustworthy result.
+    /// Treat the finding as a starting point, not a confirmed flow.
     Bail,
 }
 
 impl LossDirection {
-    /// Merge two directions by taking the worse (later in `Ord`).
-    ///
-    /// A body with both `UnderReport` and `OverReport` notes is treated
-    /// as `OverReport` because over-reporting is the more credibility-
-    /// damaging failure mode for a specific emitted finding.
+    /// Merge by taking the worse (later in `Ord`).
     pub fn combine(self, other: LossDirection) -> LossDirection {
         self.max(other)
     }
@@ -215,111 +142,46 @@ impl LossDirection {
 }
 
 /// A single provenance event recorded during analysis.
-///
-/// `kind` is serialized as a snake_case tag so tooling can pattern-match
-/// across JSON and SARIF output without depending on Rust enum layout.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EngineNote {
-    /// The taint worklist hit its iteration budget before converging.
-    /// Direction: [`LossDirection::UnderReport`] — the fixpoint was
-    /// aborted, so some flows may have been missed, but emitted flows
-    /// are still backed by propagated taint.
+    /// Taint worklist hit its iteration budget. UnderReport.
     WorklistCapped { iterations: u32 },
-    /// Origin tracking was truncated when a value exceeded the configured
-    /// per-value origin cap (`analysis.engine.max_origins`, default 32).
-    /// Direction: [`LossDirection::UnderReport`] — each dropped origin
-    /// corresponds to a real source flow whose independent finding will
-    /// not be emitted.  Other survivors still produce findings, so the
-    /// counter is a strict lower bound on under-reporting.  Raise
-    /// `max_origins` if operators observe this note on realistic inputs.
-    /// Truncation is deterministic: origins are sorted by source
-    /// location and the largest-by-location are dropped first, so the
-    /// survivor set is stable across runs and merge orderings.
+    /// Per-value origin set truncated to `analysis.engine.max_origins`
+    /// (default 32). UnderReport, dropped origins correspond to real
+    /// source flows whose findings won't emit.
     OriginsTruncated { dropped: u32 },
-    /// JS/TS pass-2 in-file global propagation hit its iteration cap.
-    /// Direction: [`LossDirection::UnderReport`] — global state may
-    /// not have reached fixpoint; cross-function flows could be missed.
-    ///
-    /// `reason` classifies *why* the cap fired (monotone-but-slow,
-    /// plateau, suspected oscillation) so operators can tell a
-    /// tunable-budget problem from a monotonicity regression.  Older
-    /// serialized notes without this field default to
-    /// [`CapHitReason::Unknown`].
+    /// JS/TS pass-2 in-file global propagation hit its cap. UnderReport.
     InFileFixpointCapped {
         iterations: u32,
         #[serde(default)]
         reason: CapHitReason,
     },
-    /// Cross-file SCC fixpoint hit `SCC_FIXPOINT_SAFETY_CAP`.
-    /// Direction: [`LossDirection::UnderReport`] — the iterative
-    /// cross-file join aborted; summaries for members of this SCC may
-    /// be incomplete.
-    ///
-    /// `reason` classifies *why* the cap fired (monotone-but-slow,
-    /// plateau, suspected oscillation) so operators can tell a
-    /// tunable-budget problem from a monotonicity regression.  Older
-    /// serialized notes without this field default to
-    /// [`CapHitReason::Unknown`].
+    /// Cross-file SCC fixpoint hit `SCC_FIXPOINT_SAFETY_CAP`. UnderReport.
     CrossFileFixpointCapped {
         iterations: u32,
         #[serde(default)]
         reason: CapHitReason,
     },
-    /// SSA lowering produced an empty body (parse failure or
-    /// unsupported shape).  Direction: [`LossDirection::Bail`] — any
-    /// finding attributed to this body is weakly supported because the
-    /// IR itself is malformed.
+    /// SSA lowering produced an empty body. Bail.
     SsaLoweringBailed { reason: String },
-    /// Tree-sitter parse exceeded the configured timeout.
-    /// Direction: [`LossDirection::Bail`] — parse aborted; findings
-    /// surfaced from the partial tree should be treated as a human-
-    /// review starting point.
+    /// Tree-sitter parse exceeded the timeout. Bail.
     ParseTimeout { timeout_ms: u32 },
-    /// Predicate state was widened to top to maintain monotonicity.
-    /// Direction: [`LossDirection::OverReport`] — validation guards
-    /// that would have suppressed the finding may have been lost, so
-    /// the finding is more likely to be a false positive.
+    /// Predicate state widened to top to keep the lattice monotone.
+    /// OverReport, guards may have been lost.
     PredicateStateWidened,
-    /// Path-environment constraints exceeded internal cap; widened to
-    /// top.  Direction: [`LossDirection::OverReport`] — same reasoning
-    /// as [`Self::PredicateStateWidened`]: dropped path constraints can
-    /// only turn infeasible paths into apparent-feasible ones.
+    /// Path-environment constraints widened to top. OverReport.
     PathEnvCapped,
-    /// Inline cache reused a cached body summary; origins were
-    /// re-attributed.  Direction: [`LossDirection::Informational`] —
-    /// the cache hit does not affect precision, but surfacing the
-    /// re-attribution helps explain why origin locations move between
-    /// runs that share a body signature.
+    /// Inline cache reused a cached body. Informational.
     InlineCacheReused,
-    /// Points-to analysis dropped heap object members when an
-    /// intra-procedural points-to set exceeded
-    /// `analysis.engine.max_pointsto` (default 32).
-    /// Direction: [`LossDirection::UnderReport`] — stores and loads
-    /// that flow through the truncated set miss the dropped abstract
-    /// heap objects, so any taint into those objects via this alias
-    /// path will not reach downstream sinks.  Other aliasing paths to
-    /// the same objects still propagate normally, so the counter is a
-    /// strict lower bound on under-reporting.  Raise `max_pointsto`
-    /// if operators observe this note on factory-heavy codebases.
+    /// Points-to set truncated to `analysis.engine.max_pointsto`
+    /// (default 32). UnderReport.
     PointsToTruncated { dropped: u32 },
 }
 
 impl EngineNote {
-    /// Classify this note by direction of precision loss.
-    ///
-    /// The match is exhaustive: every `EngineNote` variant must declare
-    /// a direction.  When adding a new cap site, pick the direction
-    /// that most honestly describes the impact on an emitted finding:
-    ///
-    /// * `Informational` — analysis fully converged; note is a
-    ///   provenance breadcrumb (e.g. cache reuse).
-    /// * `UnderReport` — analysis was cut short, but anything emitted
-    ///   is still backed by real propagation.
-    /// * `OverReport` — precision was widened, so the emitted finding
-    ///   is *more* likely to be a false positive than the baseline.
-    /// * `Bail` — analysis of this body aborted; the finding is weakly
-    ///   supported.
+    /// Direction of precision loss for this note. New variants must
+    /// declare one explicitly.
     pub fn direction(&self) -> LossDirection {
         match self {
             EngineNote::WorklistCapped { .. } => LossDirection::UnderReport,
@@ -335,23 +197,15 @@ impl EngineNote {
         }
     }
 
-    /// True if this note indicates the engine may have deviated from a
-    /// fully-converged analysis (any non-informational direction).
-    ///
-    /// This is a convenience over
-    /// `self.direction() != LossDirection::Informational` and drives
-    /// the `confidence_capped` SARIF property.
+    /// True for any non-informational direction. Drives the
+    /// `confidence_capped` SARIF property.
     pub fn lowers_confidence(&self) -> bool {
         self.direction() != LossDirection::Informational
     }
 }
 
-/// Compute the worst direction across a slice of notes.
-///
-/// Returns `None` when `notes` is empty or contains only
-/// [`LossDirection::Informational`] notes.  Returns `Some(dir)` with
-/// the most impactful direction otherwise — this is what downstream
-/// consumers (rank, confidence) use to decide how to degrade a finding.
+/// Worst non-informational direction across a slice of notes, or
+/// `None` if the slice is empty or only carries informational notes.
 pub fn worst_direction(notes: &[EngineNote]) -> Option<LossDirection> {
     let mut worst: Option<LossDirection> = None;
     for note in notes {
@@ -367,9 +221,7 @@ pub fn worst_direction(notes: &[EngineNote]) -> Option<LossDirection> {
     worst
 }
 
-/// Deduplicating push: does not append if an identical note is already
-/// present.  Used to keep per-finding note lists small when a cap site
-/// fires repeatedly inside the same body.
+/// Push-if-not-present.
 pub fn push_unique(notes: &mut smallvec::SmallVec<[EngineNote; 2]>, note: EngineNote) {
     if !notes.iter().any(|n| n == &note) {
         notes.push(note);

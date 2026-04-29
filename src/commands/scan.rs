@@ -54,7 +54,7 @@ fn record_persist_error(errors: &Arc<Mutex<Vec<String>>>, message: String) {
 /// When `enabled` is true, a panic inside `f` is caught, logged, and
 /// converted into a `NyxError::Msg`; callers that already match on
 /// `Err(_)` will gracefully skip the file.  When `enabled` is false,
-/// the panic propagates unchanged — preserving the default behaviour
+/// the panic propagates unchanged, preserving the default behaviour
 /// for users who want to catch engine bugs loudly.
 ///
 /// `AssertUnwindSafe` is load-bearing: closures over `&Config` /
@@ -222,7 +222,7 @@ fn is_false(b: &bool) -> bool {
 /// Framework detection drives framework-conditional label rules (e.g. actix /
 /// axum / rocket handler-arg sources, Rails route helpers) and auth-analysis
 /// extractors.  If any scan entry point forgets to populate it, the indexed
-/// and non-indexed paths silently diverge — missing framework-specific
+/// and non-indexed paths silently diverge, missing framework-specific
 /// findings in whichever path skipped detection.  This helper exists so the
 /// auto-fill stays consistent across `scan_filesystem_with_observer`,
 /// `scan_with_index_parallel_observer`, and `build_index_with_observer`.
@@ -239,7 +239,7 @@ pub(crate) fn ensure_framework_ctx(root: &Path, cfg: &Config) -> Option<Config> 
 ///
 /// Drives the one-time `preview-tier scan` banner in `handle()`.  Tracks
 /// the extensions `lang_for_path` in `ast.rs` maps to the `"c"` and `"cpp"`
-/// slugs — keep this aligned with that mapping.
+/// slugs, keep this aligned with that mapping.
 pub(crate) fn is_preview_tier_path(path: &Path) -> bool {
     matches!(
         path.extension()
@@ -514,14 +514,14 @@ pub fn retain_converged_findings(diags: &mut Vec<Diag>) {
 /// the same function; tiebreak by source line asc, source col asc).
 ///
 /// Rule IDs of the form `taint-unsanitised-flow (source L:C)` share a single
-/// base `taint-unsanitised-flow`. The grouping key is column-agnostic —
+/// base `taint-unsanitised-flow`. The grouping key is column-agnostic ,
 /// multiple flows to the same sink line differing only in column or source
 /// are collapsed to one. The rule_id preserves the source location, so the
 /// kept representative still identifies which flow was reported.
 ///
 /// The grouping key **includes the resolved sink capability bits** so that
 /// two different sinks on the same line (e.g. `sink_sql(x); sink_shell(x);`)
-/// are not collapsed into one finding — they represent materially different
+/// are not collapsed into one finding, they represent materially different
 /// vulnerabilities and must surface independently. Findings with different
 /// base rule IDs (e.g. `js.code_exec.eval`) or different severities are
 /// left untouched per guardrails.
@@ -560,7 +560,7 @@ pub(crate) fn deduplicate_taint_flows(diags: &mut Vec<Diag>) {
         let src_col = src.map(|s| s.col).unwrap_or(u32::MAX);
         // Same-function check: first flow_step (Source) and the step at the
         // sink share an `enclosing_func`. If flow_steps are absent or the
-        // function markers are missing, treat as "unknown" — worse than a
+        // function markers are missing, treat as "unknown", worse than a
         // confirmed same-function match but better than a confirmed mismatch.
         let same_function_flag: u32 = ev
             .and_then(|e| {
@@ -677,7 +677,7 @@ pub const SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX: &str = "scc_unconverged:cross-
 /// [`GlobalSummaries::snapshot_caps`] results.
 ///
 /// Used by the Phase-B worklist to derive the next iteration's dirty
-/// file set.  Semantics match [`diff_cap_snapshots`] — a key that
+/// file set.  Semantics match [`diff_cap_snapshots`], a key that
 /// appears or disappears counts as changed.
 fn changed_cap_keys_of(
     before: &HashMap<crate::symbol::FuncKey, (u16, u16, u16, Vec<usize>)>,
@@ -728,7 +728,7 @@ fn changed_ssa_keys_of(
 ///
 /// Called once per unconverged batch (after the pass-2 rayon parallelism
 /// has collected `iteration_diags`) so the cost is O(n) over the batch's
-/// findings — much cheaper than a per-finding `warn!`.
+/// findings, much cheaper than a per-finding `warn!`.
 ///
 /// Confidence is **capped** at `Low` rather than unconditionally set:
 /// upstream analysis may have proven something particularly strong about
@@ -795,7 +795,7 @@ fn tag_unconverged_findings(
 
 /// Safety cap on SCC fixed-point iterations.
 ///
-/// The convergence predicate is *snapshot equality* — we break as soon as
+/// The convergence predicate is *snapshot equality*, we break as soon as
 /// an iteration leaves both `snapshot_caps()` and `snapshot_ssa()`
 /// unchanged.  The cap only triggers if something prevents monotone
 /// progress (e.g. a non-monotone SSA summary refinement or an SCC larger
@@ -809,7 +809,7 @@ fn tag_unconverged_findings(
 /// SCC with `k` functions arranged in a chain, fresh taint introduced at
 /// one end of the chain needs up to `k` iterations to reach the other
 /// end.  A hard cap of 3 was silently truncating propagation for any
-/// SCC of 4+ cross-file functions — findings vanished with no warning.
+/// SCC of 4+ cross-file functions, findings vanished with no warning.
 ///
 /// `FuncSummary` is a finite-height lattice (≤ 48 bits of caps + a
 /// bounded vector of parameter indices) and `insert()` is strictly
@@ -865,7 +865,7 @@ fn effective_scc_cap() -> usize {
 /// persisted by non-recursive topo batches in the most recent
 /// [`run_topo_batches`] invocation.  Intended for the regression tests
 /// that prove the topo-refinement pipeline is wired and producing
-/// observable cross-batch state — see
+/// observable cross-batch state, see
 /// `tests/topo_pass2_refinement_tests.rs`.  Cheap relaxed load.
 static LAST_TOPO_NONRECURSIVE_REFINEMENTS: AtomicUsize = AtomicUsize::new(0);
 
@@ -905,7 +905,7 @@ fn topo_refine_enabled() -> bool {
 ///
 /// When `call_graph` is missing an edge (e.g. a summary was inserted
 /// after graph construction), we conservatively fall back to
-/// re-analysing the full batch — correctness is preserved at the cost
+/// re-analysing the full batch, correctness is preserved at the cost
 /// of the worklist optimisation for that iteration.
 #[allow(clippy::too_many_arguments)]
 fn run_topo_batches(
@@ -1104,7 +1104,7 @@ fn run_topo_batches(
                 // A file becomes dirty for iteration N+1 iff it
                 // contains at least one caller of a FuncKey that
                 // changed in iteration N.  If no key changed, the
-                // dirty set is empty — which implies convergence (and
+                // dirty set is empty, which implies convergence (and
                 // matches `iter_converged` above).
                 let changed_cap_keys = changed_cap_keys_of(&snap_before, &snap_after);
                 let changed_ssa_keys =
@@ -1124,7 +1124,7 @@ fn run_topo_batches(
                 // changed key.  Fall back to the full batch when the
                 // call graph does not resolve any caller (e.g. all
                 // changes happened in leaf functions that no one in
-                // this batch calls — rare but must not regress to
+                // this batch calls, rare but must not regress to
                 // missed analysis).
                 let namespaces_needing_reanalysis =
                     crate::callgraph::namespaces_for_callers(call_graph, &all_changed_keys);
@@ -1165,7 +1165,7 @@ fn run_topo_batches(
                 }
                 if iter_converged {
                     // Snapshots equal but dirty_files non-empty is
-                    // anomalous — log and treat as converged
+                    // anomalous, log and treat as converged
                     // (snapshot equality is the correctness-preserving
                     // signal).
                     tracing::debug!(
@@ -1182,7 +1182,7 @@ fn run_topo_batches(
             // After the loop, flatten per-file diags into the
             // iteration_diags vector in batch order for deterministic
             // output.  Files that were in the batch but never made
-            // dirty (shouldn't happen — iter 0 runs all of them) are
+            // dirty (shouldn't happen, iter 0 runs all of them) are
             // skipped silently.
             let mut iteration_diags: Vec<Diag> = Vec::new();
             for p in &batch.files {
@@ -1268,7 +1268,7 @@ fn run_topo_batches(
             // parallel section completes, persist those refinements into
             // `global_summaries` sequentially.  Subsequent batches in
             // topo order (caller-most batches) then resolve their call
-            // sites against the refined cross-file context — the final
+            // sites against the refined cross-file context, the final
             // step in the callee-first topo pipeline that pass-2
             // sequencing was always meant to deliver.
             //
@@ -1455,7 +1455,7 @@ fn run_topo_batches(
         }
     }
 
-    // Orphan files (no functions in call graph) — process last, single pass.
+    // Orphan files (no functions in call graph), process last, single pass.
     if !orphans.is_empty() {
         let orphan_diags: Vec<Diag> = orphans
             .par_iter()
@@ -2099,7 +2099,7 @@ pub fn scan_with_index_parallel_observer(
                 if let Some(p) = &progress_ref {
                     p.set_current_file(&path.to_string_lossy());
                 }
-                // Read once, hash once — use the hash for the change check
+                // Read once, hash once, use the hash for the change check
                 // to avoid a second file read inside should_scan.
                 if let Ok(bytes) = std::fs::read(path) {
                     let hash = Indexer::digest_bytes(&bytes);
@@ -2681,7 +2681,7 @@ pub fn scan_with_index_parallel_observer(
     // pipeline intends to produce (taint + cfg-* + state-* from state
     // analysis + auth.* when configured).  A previous revision clipped this
     // to `taint*`/`cfg-*` only, silently dropping state-model findings and
-    // breaking parity with `scan_filesystem` — fixed.  Mode-scoped
+    // breaking parity with `scan_filesystem`, fixed.  Mode-scoped
     // filtering, if ever needed, belongs in the analysis layer, not here.
 
     let post_process_start = std::time::Instant::now();
@@ -3134,7 +3134,7 @@ mod dedup_taint_flow_tests {
 
     #[test]
     fn dedup_collapses_same_line_different_columns() {
-        // Two findings at line 10 but different columns — the widened key
+        // Two findings at line 10 but different columns, the widened key
         // (path, line, severity) collapses them; the tighter source wins.
         let mut diags = vec![
             make_taint("a.rs", 10, 3, 4, 1),
@@ -3151,7 +3151,7 @@ mod dedup_taint_flow_tests {
 
     #[test]
     fn dedup_does_not_drop_different_sink_caps_on_same_line() {
-        // Two findings at line 10, same column, same severity — but with
+        // Two findings at line 10, same column, same severity, but with
         // different resolved sink capability bits (SQL vs SHELL). They must
         // NOT collapse: different sink kinds are materially different
         // vulnerabilities. Regression guard.
@@ -3175,7 +3175,7 @@ mod dedup_taint_flow_tests {
 
     #[test]
     fn dedup_collapses_same_sink_caps_on_same_line() {
-        // Same line, same severity, same sink caps — this is the canonical
+        // Same line, same severity, same sink caps, this is the canonical
         // dedup case (two flows to the same sink, differing only in source).
         let mut diags = vec![
             make_taint("a.rs", 10, 5, 3, 1),

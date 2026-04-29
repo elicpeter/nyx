@@ -107,11 +107,11 @@ fn has_web_handler_params(ctx: &AnalysisContext, func_name: &str) -> bool {
 /// Determine if a function qualifies as a web entrypoint (not just any entrypoint).
 ///
 /// A web entrypoint must:
-/// 1. Match entrypoint naming rules (handle_*, route_*, api_*, etc.) — but NOT bare `main`
+/// 1. Match entrypoint naming rules (handle_*, route_*, api_*, etc.), but NOT bare `main`
 ///    unless it has web-like parameters
 /// 2. Have parameters resembling HTTP handler signatures
 fn is_web_entrypoint(ctx: &AnalysisContext, func_name: &str) -> bool {
-    // "main" without web params is a CLI entrypoint — skip
+    // "main" without web params is a CLI entrypoint, skip
     if func_name == "main" {
         return has_web_handler_params(ctx, func_name);
     }
@@ -163,7 +163,7 @@ impl CfgAnalysis for AuthGap {
 
     fn run(&self, ctx: &AnalysisContext) -> Vec<CfgFinding> {
         // Decorator/annotation/attribute auth on the body declaration
-        // already gates every sink in the body — skip the
+        // already gates every sink in the body, skip the
         // structural-call dominance check entirely when the framework
         // enforces auth at the declaration level.  Mirrors the
         // `classify_auth_decorators` lookup the state engine uses to

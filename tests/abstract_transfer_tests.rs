@@ -187,7 +187,7 @@ fn interval_join_clamped_widens_range() {
 #[test]
 fn interval_join_identity_vs_clamped_is_top() {
     // Different flow shapes cannot be combined into a single bounded
-    // form — conservative fallback is Top.
+    // form, conservative fallback is Top.
     let a = IntervalTransfer::Identity;
     let b = IntervalTransfer::Clamped { lo: 0, hi: 10 };
     assert_eq!(a.join(&b), IntervalTransfer::Top);
@@ -296,7 +296,7 @@ fn transfer_apply_combines_subdomains() {
     // Interval identity forwards the caller-known bound.
     assert_eq!(out.interval.lo, Some(8080));
     assert_eq!(out.interval.hi, Some(8080));
-    // String literal-prefix overrides the caller-side input — the
+    // String literal-prefix overrides the caller-side input, the
     // callee's structural fact wins.
     assert_eq!(out.string.prefix.as_deref(), Some("https://safe.com/"));
     // Bit subdomain is always Top on cross-file transfer by design.

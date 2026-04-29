@@ -152,6 +152,12 @@ The corpus also holds a small set of vulnerable/patched pairs extracted from pub
 
 Fixtures live under [`tests/benchmark/cve_corpus/`](tests/benchmark/cve_corpus/) with upstream attribution headers.
 
+<!--
+### Real-world findings
+
+- **Nextcloud server**, [PR #59979](https://github.com/nextcloud/server/pull/59979), merged. The runtime decoder for this column already restricted `allowed_classes`, but the repair routine called `unserialize()` without it, so magic methods on referenced classes could still run. Fix matches the runtime path.
+-->
+
 ---
 
 ## How it works

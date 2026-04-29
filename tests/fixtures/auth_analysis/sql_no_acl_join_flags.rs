@@ -1,7 +1,7 @@
 // B3 regression guard: the SELECT JOINs through `audit_log` (NOT in
 // the configured ACL list) and the WHERE clause pins on
 // `al.user_id = ?1`. The audit-log row's user is the audit subject,
-// not the doc owner — so this query does NOT prove caller ownership
+// not the doc owner, so this query does NOT prove caller ownership
 // of the returned `doc_id`. The downstream realtime publish MUST
 // still flag for a missing ownership check after B3.
 struct Ctx;

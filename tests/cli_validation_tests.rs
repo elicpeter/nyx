@@ -3,7 +3,7 @@
 //! Nyx's surface is a `clap` parser plus a handful of downstream validators
 //! (`SeverityFilter::parse`, `Severity::from_str`, `Confidence::from_str`,
 //! `apply_profile`).  These tests lock in the user-visible contract that
-//! bad input exits non-zero with a message that names the offending flag —
+//! bad input exits non-zero with a message that names the offending flag ,
 //! a scanner that silently accepts a typo'd severity and returns zero
 //! findings is a footgun in CI.
 //!
@@ -268,7 +268,7 @@ fn scan_quiet_suppresses_preview_banner() {
         .stderr(predicate::str::contains("Preview for C/C++").not());
 }
 
-/// JSON output format must not print the Preview banner either — machine-
+/// JSON output format must not print the Preview banner either, machine-
 /// readable output has to stay clean on both stdout and stderr.
 #[test]
 fn scan_json_format_suppresses_preview_banner() {

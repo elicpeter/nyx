@@ -14,7 +14,7 @@ use petgraph::visit::EdgeRef;
 /// Returns true if the identifier is exactly `err` / `error` or a
 /// snake-case error name (`err_x`, `error_x`, `x_err`, `x_error`).
 /// CamelCase names (`isErrorEnabled`, `getError`, `errorMsg`) are
-/// rejected — the cost is occasional FNs on Java-style error fields,
+/// rejected, the cost is occasional FNs on Java-style error fields,
 /// which is acceptable for a precision fix.
 fn is_error_var_ident(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
@@ -36,7 +36,7 @@ fn is_error_var_ident(name: &str) -> bool {
 /// Used by the error-fallthrough rule to skip happy-path checks
 /// like `if (!data.error && Array.isArray(results))` whose TRUE branch
 /// is the success path and is not expected to return.  The original
-/// rule fires on `if (err) { warn(); } sink_after()` — a positive
+/// rule fires on `if (err) { warn(); } sink_after()`, a positive
 /// error check whose body forgets to early-return.
 fn contains_negated_err_identifier(text: &str) -> bool {
     let bytes = text.as_bytes();
@@ -46,7 +46,7 @@ fn contains_negated_err_identifier(text: &str) -> bool {
             i += 1;
             continue;
         }
-        // Skip the `!=` / `!==` operators — those are comparisons, not
+        // Skip the `!=` / `!==` operators, those are comparisons, not
         // logical-not.  Only treat a `!` followed by whitespace or an
         // identifier-leading char as logical negation.
         if i + 1 < bytes.len() && bytes[i + 1] == b'=' {
@@ -57,7 +57,7 @@ fn contains_negated_err_identifier(text: &str) -> bool {
         while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
             j += 1;
         }
-        // Allow a leading `(` for `!(expr)` shapes — peek past one open
+        // Allow a leading `(` for `!(expr)` shapes, peek past one open
         // paren and continue capturing the identifier chain.
         if j < bytes.len() && bytes[j] == b'(' {
             j += 1;
@@ -118,7 +118,95 @@ fn branch_terminates(cfg: &crate::cfg::Cfg, if_node: NodeIndex) -> bool {
     false
 }
 
-/// Check if all paths from `node` reach a Return/Break/Continue before exiting scope.
+/// Recognise calls that never return on the success path.
+///
+/// `cfg-error-fallthrough` looks for `if err != nil { … }` whose body
+/// fails to terminate.  A `return`/`break`/`continue`/`throw` is the
+/// canonical terminator and already produces a `StmtKind::Return` /
+/// `Throw` / `Break` / `Continue` node.  But a large class of real
+/// terminators arrives as a *call* whose callee is documented to abort
+/// the goroutine, process, or test:
+///
+/// * Go testing, `t.Fatal`, `t.Fatalf`, `t.Fatalln`, `b.Fatal*`,
+///   `*Helper()` chains ending in `Fatal*`, also third-party
+///   `require.NoError(t, …)` (asserts and aborts on err) which the
+///   common `c.Fatalf("...")` pattern in minio's table tests reduces
+///   to.  All `Fatal*` methods on a `testing.T`/`B`/`F` call
+///   `runtime.Goexit()` which is documented as never returning to the
+///   caller.
+/// * Go std-library, `os.Exit`, `syscall.Exit`, `runtime.Goexit`,
+///   `log.Fatal`, `log.Fatalf`, `log.Fatalln`, `log.Panic*`.
+/// * Go builtin, bare `panic(…)`.
+/// * Rust, `panic!`, `unreachable!`, `unimplemented!`, `todo!`,
+///   `process::exit`, `std::process::exit`, `process::abort`,
+///   `std::process::abort` (the macros currently lower to
+///   `StmtKind::Throw` via tree-sitter's macro arm; the function
+///   forms need explicit recognition).
+/// * Python, `sys.exit`, `os._exit`, `os.abort`.
+///
+/// The recogniser looks at the bare method name (last segment after
+/// `.` or `::`) and, where the receiver is a closed token, the
+/// receiver's first segment.  Bare `panic` / `exit` callees are
+/// recognised only when the namespace context matches (callee equals
+/// the literal string, no other receiver).  This keeps the recogniser
+/// from claiming arbitrary user-defined `Exit(...)` / `Panic(...)` as
+/// terminators.
+///
+/// Closes the minio test-file cluster (49 in `xl-storage_test.go`
+/// alone, 176 across the repo) where every `if err != nil { c.Fatalf(...) }`
+/// fired `cfg-error-fallthrough`: the `Fatalf` aborts the goroutine
+/// and the post-if code never executes, but the rule classified it as
+/// fall-through.  Conservative: only adds new terminators; never
+/// removes the existing `Return`/`Throw`/`Break`/`Continue` recognition.
+fn call_never_returns(info: &crate::cfg::NodeInfo) -> bool {
+    if info.kind != StmtKind::Call {
+        return false;
+    }
+    let Some(callee) = info.call.callee.as_deref() else {
+        return false;
+    };
+    let last = callee.rsplit(['.', ':']).next().unwrap_or(callee);
+
+    // Method names that always terminate when called on any receiver
+    // that's a testing handle (`*testing.T`, `*testing.B`, `*testing.F`)
+    // or a logger.  Receiver type is unknown to this rule; the names
+    // are sufficiently distinctive that arbitrary user-defined methods
+    // sharing the name are vanishingly rare.
+    if matches!(
+        last,
+        // Go testing
+        "Fatal" | "Fatalf" | "Fatalln" | "FailNow" |
+        // Go log/slog terminating handlers
+        "Panic" | "Panicf" | "Panicln" |
+        // Rust process / never-return std fns
+        "abort" | "unreachable_unchecked"
+    ) {
+        return true;
+    }
+
+    // Bare callees (no receiver) that are language builtins or
+    // unambiguous std-library terminators.
+    match callee {
+        // Go builtin
+        "panic" => return true,
+        // Go std
+        "os.Exit" | "syscall.Exit" | "runtime.Goexit" | "log.Fatal" | "log.Fatalf"
+        | "log.Fatalln" | "log.Panic" | "log.Panicf" | "log.Panicln" | "slog.Fatal"
+        | "klog.Fatal" | "klog.Fatalf" | "klog.Exit" | "klog.Exitf" => return true,
+        // Rust std
+        "process::exit" | "process::abort" | "std::process::exit" | "std::process::abort" => {
+            return true;
+        }
+        // Python std
+        "sys.exit" | "os._exit" | "os.abort" => return true,
+        _ => {}
+    }
+
+    false
+}
+
+/// Check if all paths from `node` reach a Return/Break/Continue (or a
+/// known never-returning call) before exiting scope.
 fn terminates_on_all_paths(
     cfg: &crate::cfg::Cfg,
     node: NodeIndex,
@@ -142,10 +230,15 @@ fn terminates_on_all_paths(
             }
             _ => {}
         }
+        if call_never_returns(info) {
+            // Documented never-returning call (`t.Fatalf`, `os.Exit`,
+            // `panic`, `runtime.Goexit`, …), this path terminates.
+            continue;
+        }
 
         let successors: Vec<_> = cfg.neighbors(current).collect();
         if successors.is_empty() {
-            // Reached a dead end without terminating — path does not terminate
+            // Reached a dead end without terminating, path does not terminate
             return false;
         }
 
@@ -181,7 +274,7 @@ fn find_post_if_sinks(cfg: &crate::cfg::Cfg, if_node: NodeIndex) -> Vec<NodeInde
 
     // Seed from the False edge only.  If the if has no explicit False
     // edge (some CFG shapes omit it for one-branch ifs), fall back to
-    // Seq edges from the if node — but never follow True edges, which
+    // Seq edges from the if node, but never follow True edges, which
     // lead into the body.
     let mut stack: Vec<NodeIndex> = cfg
         .edges(if_node)
@@ -225,9 +318,9 @@ impl CfgAnalysis for IncompleteErrorHandling {
 
             // Look for If nodes whose CONDITION involves "err" or "error".
             // `info.taint.uses` for an If node contains identifiers from the
-            // whole if statement (condition + body) — see
+            // whole if statement (condition + body), see
             // `cfg::literals::extract_defs_uses_extra_defs` Kind::If branch
-            // — so checking it would misfire on `if (!res.ok) { ... const
+            //, so checking it would misfire on `if (!res.ok) { ... const
             // err = await … ; return … }` shapes whose body happens to
             // mention `err` even though the condition doesn't.  Use
             // `info.condition_vars`, which is populated strictly from the
@@ -244,7 +337,7 @@ impl CfgAnalysis for IncompleteErrorHandling {
 
             // Polarity gate: only fire when the condition POSITIVELY
             // checks for an error.  `if (!data.error && other)` is a
-            // happy-path check — the TRUE branch is the success branch
+            // happy-path check, the TRUE branch is the success branch
             // and is not expected to terminate.  Detect by scanning the
             // condition text for any `!` (logical-not, distinct from
             // `!=`) preceding an identifier whose name contains "err".
@@ -354,7 +447,7 @@ mod err_ident_tests {
     fn rejects_camelcase_method_names() {
         // Spring `logger.isErrorEnabled()` lifts `isErrorEnabled` into
         // `condition_vars`; under the old `lower.contains("err")` check
-        // this fired the rule.  The new strict check rejects it — the
+        // this fired the rule.  The new strict check rejects it, the
         // condition is asking "is logging enabled", not "is there an
         // error".
         assert!(!is_error_var_ident("isErrorEnabled"));
@@ -369,5 +462,105 @@ mod err_ident_tests {
         assert!(!is_error_var_ident("user"));
         assert!(!is_error_var_ident("merry"));
         assert!(!is_error_var_ident("perform"));
+    }
+}
+
+#[cfg(test)]
+mod terminator_call_tests {
+    use super::call_never_returns;
+    use crate::cfg::{CallMeta, NodeInfo, StmtKind};
+
+    fn call_node(callee: &str) -> NodeInfo {
+        NodeInfo {
+            kind: StmtKind::Call,
+            call: CallMeta {
+                callee: Some(callee.to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn recognises_go_testing_fatal_methods() {
+        // Bare method name on any receiver, the canonical minio test
+        // shape `c.Fatalf("bucket creat error: %v", err)`.
+        assert!(call_never_returns(&call_node("c.Fatalf")));
+        assert!(call_never_returns(&call_node("t.Fatal")));
+        assert!(call_never_returns(&call_node("t.Fatalf")));
+        assert!(call_never_returns(&call_node("t.Fatalln")));
+        assert!(call_never_returns(&call_node("b.Fatal")));
+        assert!(call_never_returns(&call_node("t.FailNow")));
+        // Logger panics (handler-style fatal).
+        assert!(call_never_returns(&call_node("logger.Panic")));
+        assert!(call_never_returns(&call_node("logger.Panicf")));
+    }
+
+    #[test]
+    fn recognises_go_std_terminators() {
+        assert!(call_never_returns(&call_node("os.Exit")));
+        assert!(call_never_returns(&call_node("syscall.Exit")));
+        assert!(call_never_returns(&call_node("runtime.Goexit")));
+        assert!(call_never_returns(&call_node("log.Fatal")));
+        assert!(call_never_returns(&call_node("log.Fatalf")));
+        assert!(call_never_returns(&call_node("log.Fatalln")));
+        assert!(call_never_returns(&call_node("log.Panic")));
+        assert!(call_never_returns(&call_node("klog.Exit")));
+        // Bare builtin
+        assert!(call_never_returns(&call_node("panic")));
+    }
+
+    #[test]
+    fn recognises_rust_and_python_std_terminators() {
+        assert!(call_never_returns(&call_node("std::process::exit")));
+        assert!(call_never_returns(&call_node("std::process::abort")));
+        assert!(call_never_returns(&call_node("process::exit")));
+        assert!(call_never_returns(&call_node("sys.exit")));
+        assert!(call_never_returns(&call_node("os._exit")));
+    }
+
+    #[test]
+    fn does_not_claim_user_defined_lookalikes() {
+        // Bare `Exit` on a custom receiver is a normal method, not the
+        // process-level terminator.  The bare callee path only matches
+        // exact std-library forms.
+        assert!(!call_never_returns(&call_node("server.Exit")));
+        assert!(!call_never_returns(&call_node("Exit")));
+        assert!(!call_never_returns(&call_node("session.exit")));
+        // Bare `panic` is a Go builtin; method `panic` is not.
+        // The recogniser keys off the full callee path so
+        // `widget.panic` does not match.
+        assert!(!call_never_returns(&call_node("widget.panic")));
+        // Common helpers that *don't* terminate.
+        assert!(!call_never_returns(&call_node("log.Print")));
+        assert!(!call_never_returns(&call_node("log.Println")));
+        assert!(!call_never_returns(&call_node("t.Errorf")));
+        assert!(!call_never_returns(&call_node("t.Logf")));
+        assert!(!call_never_returns(&call_node("c.Skip")));
+    }
+
+    #[test]
+    fn requires_call_kind() {
+        // Only StmtKind::Call nodes are inspected; an If or Seq node
+        // carrying the same callee text wouldn't ever come through
+        // this path.  Defensive: confirm the kind gate.
+        let mut node = call_node("t.Fatal");
+        node.kind = StmtKind::Seq;
+        assert!(!call_never_returns(&node));
+        node.kind = StmtKind::If;
+        assert!(!call_never_returns(&node));
+    }
+
+    #[test]
+    fn missing_callee_does_not_panic() {
+        let node = NodeInfo {
+            kind: StmtKind::Call,
+            call: CallMeta {
+                callee: None,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!call_never_returns(&node));
     }
 }

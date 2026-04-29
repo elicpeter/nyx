@@ -8,8 +8,8 @@
 //! findings.
 //!
 //! This binary is split from `cross_file_context_tests.rs` because
-//! Cargo compiles each `tests/*.rs` file into its own test binary —
-//! separate processes — so the `NYX_CONTEXT_SENSITIVE` env flip here
+//! Cargo compiles each `tests/*.rs` file into its own test binary ,
+//! separate processes, so the `NYX_CONTEXT_SENSITIVE` env flip here
 //! does not race against the default-on tests running in parallel.
 //!
 //! The switch is read by `AnalysisOptions::current()` via the legacy

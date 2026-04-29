@@ -16,7 +16,7 @@ pub async fn handle_list_peer_docs(req: Req, ctx: Ctx) -> Result<String, ()> {
     let user = auth::require_auth(&req, &ctx).await?;
     let doc_ids: Vec<i64> = vec![1, 2, 3];
 
-    // Pure in-memory bookkeeping — no authorization decision here.
+    // Pure in-memory bookkeeping, no authorization decision here.
     let mut counts: HashMap<i64, usize> = HashMap::new();
     let mut seen: HashSet<i64> = HashSet::new();
     for doc_id in &doc_ids {

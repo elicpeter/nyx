@@ -202,16 +202,16 @@ pub mod index {
     ///
     /// Bumped independently of `ENGINE_VERSION` whenever the serialized
     /// layout or identity of a cached artefact changes in an incompatible
-    /// way — e.g. a `FuncKey` field semantic change that would cause old
+    /// way, e.g. a `FuncKey` field semantic change that would cause old
     /// summaries to misbehave when rehydrated.
     ///
     /// History:
-    /// * `"1"` — initial.
-    /// * `"2"` — 0.5.0: `FuncKey.disambig` changed from the function-node
+    /// * `"1"`, initial.
+    /// * `"2"`, 0.5.0: `FuncKey.disambig` changed from the function-node
     ///   byte offset to a depth-first structural index.  Pre-0.5.0 caches
     ///   store byte-offset disambigs and would fail to match bodies built
     ///   by the new engine, so they are silently rebuilt on open.
-    /// * `"3"` — `ssa_function_bodies.body` changed from JSON TEXT to
+    /// * `"3"`, `ssa_function_bodies.body` changed from JSON TEXT to
     ///   bincode BLOB.  Old JSON payloads cannot be deserialised by the
     ///   new engine, so they are silently rebuilt on open.
     pub const SCHEMA_VERSION: &str = "3";
@@ -432,7 +432,7 @@ pub mod index {
 
             match stored {
                 Some(ref v) if v == current => {
-                    // Schema version matches — nothing to do.
+                    // Schema version matches, nothing to do.
                 }
                 _ => {
                     let old = stored.as_deref().unwrap_or("<none>");
@@ -475,7 +475,7 @@ pub mod index {
 
             match stored {
                 Some(ref v) if v == current => {
-                    // Version matches — nothing to do.
+                    // Version matches, nothing to do.
                 }
                 _ => {
                     let old = stored.as_deref().unwrap_or("<none>");
@@ -601,10 +601,10 @@ pub mod index {
             Ok(match row {
                 Some((stored_hash, stored_mtime)) => {
                     if stored_mtime != mtime {
-                        // mtime changed — must re-scan
+                        // mtime changed, must re-scan
                         true
                     } else {
-                        // mtime matches — compare hash only if cheap
+                        // mtime matches, compare hash only if cheap
                         // (the caller already read the file and can use
                         // should_scan_with_hash instead for full accuracy)
                         let digest = Self::digest_file(path)?;
@@ -811,7 +811,7 @@ pub mod index {
         /// Atomically replace all SSA function summaries for a single file.
         ///
         /// The input tuple is
-        /// `(name, arity, lang, namespace, container, disambig, kind, summary)` —
+        /// `(name, arity, lang, namespace, container, disambig, kind, summary)` ,
         /// matching the fields required to reconstruct a full [`crate::symbol::FuncKey`]
         /// on load.
         pub fn replace_ssa_summaries_for_file(
@@ -1040,7 +1040,7 @@ pub mod index {
         /// Load symbol metadata (name, arity, lang, namespace, container, kind)
         /// for a single file.
         ///
-        /// Lighter than `load_all_ssa_summaries` — skips JSON deserialization of
+        /// Lighter than `load_all_ssa_summaries`, skips JSON deserialization of
         /// the full summary body and filters by file_path in the query.  `kind`
         /// is the [`crate::symbol::FuncKind`] slug (`"fn"`, `"method"`,
         /// `"closure"`, ...) so consumers can distinguish anonymous functions
@@ -1074,7 +1074,7 @@ pub mod index {
         ///
         /// Persists cross-file callee bodies for interprocedural symex.
         /// Bodies are serialized as MessagePack (rmp-serde, named-field
-        /// encoding) BLOBs — JSON proved too costly at indexing time on
+        /// encoding) BLOBs, JSON proved too costly at indexing time on
         /// large SSA structures, and bincode's positional format trips
         /// over the `#[serde(skip_serializing_if = ...)]` attributes
         /// scattered through `OptimizeResult` and friends.
@@ -1260,7 +1260,7 @@ pub mod index {
         ///
         /// Mirrors [`Self::replace_ssa_summaries_for_file`].  Each input tuple
         /// is `(name, arity, lang, namespace, container, disambig, kind, summary)`
-        /// — the full identity needed to reconstruct the callee's
+        ///, the full identity needed to reconstruct the callee's
         /// [`crate::symbol::FuncKey`] on load.
         pub fn replace_auth_summaries_for_file(
             &mut self,
@@ -1326,7 +1326,7 @@ pub mod index {
         /// [`Self::replace_ssa_summaries_for_file`],
         /// [`Self::replace_ssa_bodies_for_file`] and
         /// [`Self::replace_auth_summaries_for_file`] in sequence, but
-        /// issues a single fsync at commit instead of four — the
+        /// issues a single fsync at commit instead of four, the
         /// dominant cost on large scans.
         ///
         /// Behaviour parity with the four-call sequence:
@@ -1376,7 +1376,7 @@ pub mod index {
             let path_str = file_path.to_string_lossy();
             let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
 
-            // function_summaries — always replace.
+            // function_summaries, always replace.
             tx.execute(
                 "DELETE FROM function_summaries WHERE project = ?1 AND file_path = ?2",
                 params![self.project, path_str],
@@ -1408,7 +1408,7 @@ pub mod index {
                 }
             }
 
-            // ssa_function_summaries — only touched when non-empty.
+            // ssa_function_summaries, only touched when non-empty.
             if !ssa_summaries.is_empty() {
                 tx.execute(
                     "DELETE FROM ssa_function_summaries
@@ -1444,7 +1444,7 @@ pub mod index {
                 }
             }
 
-            // ssa_function_bodies — only touched when non-empty.
+            // ssa_function_bodies, only touched when non-empty.
             if !ssa_bodies.is_empty() {
                 tx.execute(
                     "DELETE FROM ssa_function_bodies
@@ -1478,7 +1478,7 @@ pub mod index {
                 }
             }
 
-            // auth_check_summaries — always replace, even when empty,
+            // auth_check_summaries, always replace, even when empty,
             // so a helper that lost its ownership check no longer
             // leaks lifts into subsequent pass-2 runs.
             tx.execute(
@@ -2203,7 +2203,7 @@ pub mod index {
             Ok(rows)
         }
 
-        /// Record the first time a finding fingerprint was observed. Idempotent —
+        /// Record the first time a finding fingerprint was observed. Idempotent ,
         /// the earliest call wins via INSERT OR IGNORE. Used by the overview
         /// backlog-age computation; ts should be the originating scan's
         /// `started_at` (RFC-3339).
@@ -2246,7 +2246,7 @@ pub mod index {
             if fingerprints.is_empty() {
                 return Ok(std::collections::HashMap::new());
             }
-            // SQLite IN-clause cap is high but parameter count is bounded — chunk
+            // SQLite IN-clause cap is high but parameter count is bounded, chunk
             // for safety with large fingerprint sets.
             let mut out = std::collections::HashMap::with_capacity(fingerprints.len());
             let conn = self.c();
@@ -2590,7 +2590,7 @@ fn ssa_summaries_round_trip() {
 /// asserts that `return_path_facts` survive serialise → SQLite persist →
 /// load → deserialise.  Regression guard for the per-return-path PathFact
 /// decomposition that closes the rs-safe-014 / tar-rs / rs-safe-016 FP
-/// cluster — without this round-trip working, cross-file callers lose
+/// cluster, without this round-trip working, cross-file callers lose
 /// the per-arm narrowing and inline-only callees regain the joined-fact
 /// dilution.
 #[test]
@@ -2955,7 +2955,7 @@ fn ssa_bodies_replace_on_rescan() {
     assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 1);
     assert_eq!(idx.load_all_ssa_bodies().unwrap()[0].8.ssa.blocks.len(), 2);
 
-    // Store v2 with 5 blocks — should replace, not accumulate
+    // Store v2 with 5 blocks, should replace, not accumulate
     let hash2 = index::Indexer::digest_bytes(b"v2");
     let bodies2 = vec![(
         "func".to_string(),
@@ -3053,7 +3053,7 @@ fn ssa_bodies_removed_on_file_delete() {
     idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
     assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 1);
 
-    // Delete file — should also remove bodies
+    // Delete file, should also remove bodies
     idx.remove_file_and_related(&f).unwrap();
     assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 0);
 }
@@ -3215,7 +3215,7 @@ fn version_mismatch_triggers_reset() {
         1
     );
 
-    // Reopen — version mismatch should trigger full wipe
+    // Reopen, version mismatch should trigger full wipe
     drop(pool);
     let pool2 = index::Indexer::init(&db).unwrap();
 
@@ -3286,7 +3286,7 @@ fn multiple_opens_no_repeated_resets() {
     populate_project(&pool, "proj", td.path());
     drop(pool);
 
-    // Second open — should preserve data
+    // Second open, should preserve data
     let pool2 = index::Indexer::init(&db).unwrap();
     assert_eq!(
         index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(),
@@ -3297,7 +3297,7 @@ fn multiple_opens_no_repeated_resets() {
     populate_project(&pool2, "proj2", td.path());
     drop(pool2);
 
-    // Third open — should still preserve both projects
+    // Third open, should still preserve both projects
     let pool3 = index::Indexer::init(&db).unwrap();
     assert_eq!(
         index::Indexer::count_rows(&pool3, "function_summaries", "proj").unwrap(),
@@ -3376,7 +3376,7 @@ fn missing_ssa_namespace_column_triggers_recreate() {
         .unwrap();
     }
 
-    // Open via init — should detect missing namespace and recreate
+    // Open via init, should detect missing namespace and recreate
     let pool = index::Indexer::init(&db).unwrap();
 
     // Verify the table now has the namespace column by inserting with it
@@ -3405,12 +3405,12 @@ fn valid_schema_no_recreate() {
     let td = tempfile::tempdir().unwrap();
     let db = td.path().join("nyx.sqlite");
 
-    // First init — creates all tables
+    // First init, creates all tables
     let pool = index::Indexer::init(&db).unwrap();
     populate_project(&pool, "proj", td.path());
     drop(pool);
 
-    // Second init — schema is valid, should NOT drop/recreate
+    // Second init, schema is valid, should NOT drop/recreate
     let pool2 = index::Indexer::init(&db).unwrap();
     // Data survives because schema was already correct
     assert_eq!(
@@ -3735,7 +3735,7 @@ fn metadata_table_survives_clear() {
     assert_eq!(stored.as_deref(), Some(index::ENGINE_VERSION));
 }
 
-/// Pointer-Phase 5 / A3 audit: field_points_to round-trips through
+/// field_points_to round-trips through
 /// the SsaFuncSummary SQLite blob.  Pin that the new field_points_to
 /// records preserve param_field_reads, param_field_writes, the
 /// receiver sentinel (`u32::MAX`), the container-element marker
@@ -3817,7 +3817,7 @@ fn ssa_summaries_round_trip_preserves_field_points_to() {
 }
 
 /// Pre-Phase-5 blob compatibility: a summary serialised without
-/// `field_points_to` deserialises with the empty default — no
+/// `field_points_to` deserialises with the empty default, no
 /// migration needed because the field is `#[serde(default)]`.
 #[test]
 fn ssa_summaries_pre_phase5_blob_decodes_with_empty_field_points_to() {

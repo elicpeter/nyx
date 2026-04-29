@@ -272,7 +272,7 @@ fn predicate_multi_arg_validator_wrong() {
 
 /// `setAttribute(attr, val)` with a dynamic first arg returns the
 /// ALL_ARGS_PAYLOAD sentinel, so sink scanning expands to every positional
-/// arg — a tainted attribute name is itself a vulnerability path. Expects
+/// arg, a tainted attribute name is itself a vulnerability path. Expects
 /// at least two findings (one per call where either arg is tainted).
 #[test]
 fn gated_sink_dynamic_activation() {
@@ -316,7 +316,7 @@ fn cross_file_symex_js() {
 // --- True positives ---------------------------------------------------------
 
 /// Go: HTTP handler in handler.go passes r.FormValue("cmd") to runCommand()
-/// defined in executor.go, which calls exec.Command — shell execution sink.
+/// defined in executor.go, which calls exec.Command, shell execution sink.
 #[test]
 fn cross_file_go_handler_exec() {
     let dir = fixture_path("cross_file_go_handler_exec");
@@ -335,7 +335,7 @@ fn cross_file_java_sqli() {
 }
 
 /// TypeScript: router.ts reads req.query.url and forwards it to
-/// fetchRemote() in httpClient.ts, which passes it to fetch() — SSRF.
+/// fetchRemote() in httpClient.ts, which passes it to fetch(), SSRF.
 #[test]
 fn cross_file_ts_ssrf() {
     let dir = fixture_path("cross_file_ts_ssrf");
@@ -374,7 +374,7 @@ fn cross_file_js_sqli() {
     validate_expectations(&diags, &dir);
 }
 
-/// Python: 3-file chain — os.environ in input_reader.py → passthrough in
+/// Python: 3-file chain, os.environ in input_reader.py → passthrough in
 /// transform.py → subprocess.call in executor.py.  Taint must survive two
 /// inter-file hops with no sanitisation.
 #[test]
@@ -384,7 +384,7 @@ fn cross_file_py_nested_chain() {
     validate_expectations(&diags, &dir);
 }
 
-/// Python: object attribute carries taint across files — JobRequest.cmd is
+/// Python: object attribute carries taint across files, JobRequest.cmd is
 /// populated from os.environ in models.py; handler.py reads req.cmd and
 /// passes it to subprocess.call.
 #[test]
@@ -397,7 +397,7 @@ fn cross_file_py_object_field() {
 // --- True negatives ---------------------------------------------------------
 
 /// Python: shlex.quote (SHELL_ESCAPE sanitiser) is defined in shell_utils.py
-/// and called from handler.py before subprocess.call — no finding expected.
+/// and called from handler.py before subprocess.call, no finding expected.
 #[test]
 fn cross_file_py_shlex_sanitizer() {
     let dir = fixture_path("cross_file_py_shlex_sanitizer");
@@ -406,7 +406,7 @@ fn cross_file_py_shlex_sanitizer() {
 }
 
 /// JavaScript: xss() HTML sanitiser defined in security.js is applied before
-/// document.write in app.js — no taint-unsanitised-flow expected.
+/// document.write in app.js, no taint-unsanitised-flow expected.
 #[test]
 fn cross_file_js_html_sanitized() {
     let dir = fixture_path("cross_file_js_html_sanitized");
@@ -415,7 +415,7 @@ fn cross_file_js_html_sanitized() {
 }
 
 /// Python: constants.py returns a hardcoded string literal; runner.py uses it
-/// in subprocess.call — no taint source exists, so no finding expected.
+/// in subprocess.call, no taint source exists, so no finding expected.
 #[test]
 fn cross_file_py_const_passthrough() {
     let dir = fixture_path("cross_file_py_const_passthrough");
@@ -424,7 +424,7 @@ fn cross_file_py_const_passthrough() {
 }
 
 /// Go: validation.go converts r.FormValue("id") with strconv.Atoi (Cap::all
-/// sanitiser) before handler.go calls db.QueryRow — no SQL taint expected.
+/// sanitiser) before handler.go calls db.QueryRow, no SQL taint expected.
 #[test]
 fn cross_file_go_int_validated() {
     let dir = fixture_path("cross_file_go_int_validated");
@@ -434,10 +434,10 @@ fn cross_file_go_int_validated() {
 
 // --- Near-miss cases --------------------------------------------------------
 
-/// Python near miss — TRUE POSITIVE:
+/// Python near miss, TRUE POSITIVE:
 /// html_guard.py applies html.escape (HTML_ESCAPE cap) before a SQL
 /// concatenation in app.py.  The HTML sanitiser does not cover SQL_QUERY
-/// capability, so the flow is still vulnerable — Nyx should detect it.
+/// capability, so the flow is still vulnerable, Nyx should detect it.
 /// Tests that the engine does not over-sanitise with the wrong cap type.
 #[test]
 fn cross_file_near_miss_wrong_sanitizer() {
@@ -446,7 +446,7 @@ fn cross_file_near_miss_wrong_sanitizer() {
     validate_expectations(&diags, &dir);
 }
 
-/// JavaScript near miss — TRUE NEGATIVE:
+/// JavaScript near miss, TRUE NEGATIVE:
 /// session.js stores user input in `lastUser` but getDefaultQuery() returns
 /// the constant `defaultQuery`.  app.js passes the result to pool.query().
 /// A coarse analysis might falsely flag this; a precise one should not.
@@ -458,12 +458,12 @@ fn cross_file_near_miss_field_isolation() {
     validate_expectations(&diags, &dir);
 }
 
-/// Same-file identity collision — ADVERSARIAL.
+/// Same-file identity collision, ADVERSARIAL.
 /// `runTask` is defined as a free function (shell-exec sink) AND as a
 /// method on multiple classes in the same file with conflicting
 /// security behaviours.  A bare `runTask(tainted)` top-level call MUST
 /// resolve to the free function (its summary carries a SHELL_ESCAPE
-/// sink) — the pre-fix resolver returned Ambiguous for this call and
+/// sink), the pre-fix resolver returned Ambiguous for this call and
 /// silently dropped the finding.  Regression guard for the bare-call
 /// free-function preference (resolve_callee step 5.5).
 #[test]
@@ -476,7 +476,7 @@ fn same_name_collisions_js() {
 // ── New sink coverage fixtures ────────────────────────────────────────────
 
 /// JS: execAsync wraps child_process.exec; user input flows through the
-/// wrapper to the inner exec call — SHELL_ESCAPE finding expected.
+/// wrapper to the inner exec call, SHELL_ESCAPE finding expected.
 #[test]
 fn exec_async_wrapper() {
     let dir = fixture_path("exec_async_wrapper");
@@ -484,7 +484,7 @@ fn exec_async_wrapper() {
     validate_expectations(&diags, &dir);
 }
 
-/// JS: res.download(path.join(root, req.query.path)) — path traversal
+/// JS: res.download(path.join(root, req.query.path)), path traversal
 /// via Express res.download FILE_IO sink.
 #[test]
 fn path_traversal_download() {
@@ -493,7 +493,7 @@ fn path_traversal_download() {
     validate_expectations(&diags, &dir);
 }
 
-/// JS: md5(password) and crypto.createHash("sha1") — weak hash patterns.
+/// JS: md5(password) and crypto.createHash("sha1"), weak hash patterns.
 #[test]
 fn weak_hash_password() {
     let dir = fixture_path("weak_hash_password");
@@ -698,7 +698,7 @@ fn cross_file_info_leak() {
     validate_expectations(&diags, &dir);
 }
 
-/// Python `subprocess.run(cmd, shell=True)` where `cmd` is user-controlled —
+/// Python `subprocess.run(cmd, shell=True)` where `cmd` is user-controlled ,
 /// the multi-kwarg SHELL_ESCAPE gate activates.  Validates end-to-end wiring
 /// of `CallMeta.kwargs` through `classify_gated_sink`'s `dangerous_kwargs`
 /// path (presence-aware shell=True → dangerous).
@@ -709,7 +709,7 @@ fn python_subprocess_shell_true_tainted() {
     validate_expectations(&diags, &dir);
 }
 
-/// Python `subprocess.run([cmd], shell=False)` — shell kwarg present but not
+/// Python `subprocess.run([cmd], shell=False)`, shell kwarg present but not
 /// dangerous.  The gate must not fire and no taint flow should be reported.
 #[test]
 fn python_subprocess_shell_false_safe() {
@@ -718,7 +718,7 @@ fn python_subprocess_shell_false_safe() {
     validate_expectations(&diags, &dir);
 }
 
-/// Python `subprocess.run([cmd])` — no shell kwarg (default shell=False).
+/// Python `subprocess.run([cmd])`, no shell kwarg (default shell=False).
 /// The gate must not fire and no taint flow should be reported.
 #[test]
 fn python_subprocess_shell_default_safe() {
@@ -736,7 +736,7 @@ fn python_subprocess_shell_default_safe() {
 // into five categories so a single regression cannot silently erase a
 // whole category's coverage.
 
-/// FP guard — sanitizer edge case: hand-rolled HTML escape covers
+/// FP guard, sanitizer edge case: hand-rolled HTML escape covers
 /// document.write sink.
 #[test]
 fn fp_guard_sanitizer_html_escape_js() {
@@ -745,7 +745,7 @@ fn fp_guard_sanitizer_html_escape_js() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — sanitizer edge case: shlex.quote with shell metacharacters.
+/// FP guard, sanitizer edge case: shlex.quote with shell metacharacters.
 #[test]
 fn fp_guard_sanitizer_shlex_quote_py() {
     let dir = fixture_path("fp_guards/sanitizer_shlex_quote_py");
@@ -753,7 +753,7 @@ fn fp_guard_sanitizer_shlex_quote_py() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — sanitizer edge case: encodeURIComponent on a URL argument.
+/// FP guard, sanitizer edge case: encodeURIComponent on a URL argument.
 #[test]
 fn fp_guard_sanitizer_url_encode_js() {
     let dir = fixture_path("fp_guards/sanitizer_url_encode_js");
@@ -761,7 +761,7 @@ fn fp_guard_sanitizer_url_encode_js() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — sanitizer edge case: multi-step chain (`.strip()` then
+/// FP guard, sanitizer edge case: multi-step chain (`.strip()` then
 /// `shlex.quote`) preserves the final SHELL_ESCAPE cap.
 #[test]
 fn fp_guard_sanitizer_multi_step_py() {
@@ -770,7 +770,7 @@ fn fp_guard_sanitizer_multi_step_py() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — type-driven suppression: `int()` parse of env port
+/// FP guard, type-driven suppression: `int()` parse of env port
 /// before `socket.bind`.
 #[test]
 fn fp_guard_types_int_port_py() {
@@ -779,7 +779,7 @@ fn fp_guard_types_int_port_py() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — type-driven suppression: `int()` parse guarantees SQL
+/// FP guard, type-driven suppression: `int()` parse guarantees SQL
 /// concat is decimal-only.
 #[test]
 fn fp_guard_types_int_id_sql_py() {
@@ -788,7 +788,7 @@ fn fp_guard_types_int_id_sql_py() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — type-driven suppression: Go `strconv.Atoi` covers
+/// FP guard, type-driven suppression: Go `strconv.Atoi` covers
 /// Cap::all on the resulting int.
 #[test]
 fn fp_guard_types_parse_int_go() {
@@ -797,7 +797,7 @@ fn fp_guard_types_parse_int_go() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — type-driven suppression: bool comparison never reaches
+/// FP guard, type-driven suppression: bool comparison never reaches
 /// a string-context sink.
 #[test]
 fn fp_guard_types_bool_flag_py() {
@@ -806,7 +806,7 @@ fn fp_guard_types_bool_flag_py() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — struct-field isolation: JS object `safeField` used at
+/// FP guard, struct-field isolation: JS object `safeField` used at
 /// sink, tainted `unsafeField` unused.
 #[test]
 fn fp_guard_fields_object_isolation_js() {
@@ -815,7 +815,7 @@ fn fp_guard_fields_object_isolation_js() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — struct-field isolation: Python class attributes — only
+/// FP guard, struct-field isolation: Python class attributes, only
 /// the hardcoded attribute flows to the sink.
 #[test]
 fn fp_guard_fields_class_attr_py() {
@@ -824,7 +824,7 @@ fn fp_guard_fields_class_attr_py() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — struct-field isolation: Python dict keys — only the
+/// FP guard, struct-field isolation: Python dict keys, only the
 /// constant key flows to the sink.
 #[test]
 fn fp_guard_fields_dict_key_py() {
@@ -833,7 +833,7 @@ fn fp_guard_fields_dict_key_py() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — struct-field isolation: nested JS objects — sibling path
+/// FP guard, struct-field isolation: nested JS objects, sibling path
 /// isolation at `cfg.auth.*`.
 #[test]
 fn fp_guard_fields_nested_object_js() {
@@ -842,7 +842,7 @@ fn fp_guard_fields_nested_object_js() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — cross-call-site specialization: same callee, two callers
+/// FP guard, cross-call-site specialization: same callee, two callers
 /// (one tainted, one constant).  Required finding only from the
 /// tainted caller.
 #[test]
@@ -852,7 +852,7 @@ fn fp_guard_call_site_specialization_py() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — cross-call-site specialization: JS helper called with a
+/// FP guard, cross-call-site specialization: JS helper called with a
 /// literal SQL string must not inherit taint.
 #[test]
 fn fp_guard_call_site_specialization_js() {
@@ -861,7 +861,7 @@ fn fp_guard_call_site_specialization_js() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — cross-call-site specialization: helper called with a
+/// FP guard, cross-call-site specialization: helper called with a
 /// shlex.quote-sanitised value, inline analysis sees SHELL_ESCAPE cap.
 #[test]
 fn fp_guard_call_site_sanitized_caller_py() {
@@ -870,8 +870,8 @@ fn fp_guard_call_site_sanitized_caller_py() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — cross-call-site specialization: polymorphic caller
-/// (int branch and constant branch) — neither carries a payload.
+/// FP guard, cross-call-site specialization: polymorphic caller
+/// (int branch and constant branch), neither carries a payload.
 #[test]
 fn fp_guard_call_site_polymorphic_py() {
     let dir = fixture_path("fp_guards/call_site_polymorphic_py");
@@ -879,7 +879,7 @@ fn fp_guard_call_site_polymorphic_py() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — framework-safe pattern: Rails `sanitize` before render.
+/// FP guard, framework-safe pattern: Rails `sanitize` before render.
 #[test]
 fn fp_guard_framework_rails_sanitize() {
     let dir = fixture_path("fp_guards/framework_rails_sanitize");
@@ -887,7 +887,7 @@ fn fp_guard_framework_rails_sanitize() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — framework-safe pattern: Flask + MarkupSafe `escape`.
+/// FP guard, framework-safe pattern: Flask + MarkupSafe `escape`.
 #[test]
 fn fp_guard_framework_flask_escape() {
     let dir = fixture_path("fp_guards/framework_flask_escape");
@@ -895,7 +895,7 @@ fn fp_guard_framework_flask_escape() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — framework-safe pattern: Express `res.json` with a
+/// FP guard, framework-safe pattern: Express `res.json` with a
 /// constant payload is not an XSS sink.
 #[test]
 fn fp_guard_framework_express_res_json() {
@@ -904,7 +904,21 @@ fn fp_guard_framework_express_res_json() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — framework-safe pattern: JDBC PreparedStatement.setString
+/// FP guard, FastAPI `dependencies=[Depends(requires_access_*)]`
+/// route-level guard short-circuits `auth_check_covers_subject` so
+/// the handler body's path-param ORM calls and row-variable method
+/// calls do not trip `py.auth.missing_ownership_check`.  Pinned by
+/// the `is_route_level` flag on `AuthCheck` plus the kind-aware
+/// `function_params_route_handler` that includes id-like Python
+/// typed params (`dag_id: str`) in `unit.params`.
+#[test]
+fn fp_guard_framework_fastapi_route_level_auth() {
+    let dir = fixture_path("fp_guards/framework_fastapi_route_level_auth");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard, framework-safe pattern: JDBC PreparedStatement.setString
 /// covers SQL_QUERY on the bound parameter.
 #[test]
 fn fp_guard_framework_prepared_stmt_java() {
@@ -913,7 +927,7 @@ fn fp_guard_framework_prepared_stmt_java() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — JPA parameterised execute chain
+/// FP guard, JPA parameterised execute chain
 /// (`em.createQuery(LITERAL).setParameter(...).executeUpdate()`).
 /// Pinned from a 150-finding cluster in keycloak's
 /// `JpaEventStoreProvider.java`.  The engine walks the receiver chain
@@ -928,7 +942,24 @@ fn fp_guard_framework_jpa_parameterised_execute() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — composer / PSR-4 autoloader closure includes a parameter.
+/// FP guard, Strapi-style ORM accessor chain
+/// (`<obj>.db.query(MODEL_UID).<orm_method>(...)`).  Pinned from a
+/// ~98-finding `cfg-unguarded-sink` + 40-finding `taint-unsanitised-flow`
+/// cluster across strapi services (api-token, transfer/token, user,
+/// release, …).  When the chain shape `*.query(LITERAL).<orm_method>` ,
+/// `findOne|findMany|findFirst|findUnique|find|create|createMany|update|
+/// updateMany|upsert|delete|deleteMany|count|aggregate|distinct|save` ,
+/// is detected, a same-node `Sanitizer(SQL_QUERY)` is synthesised that
+/// reflexively dominates the sink.  Bare `connection.query(...)` and
+/// chained `.then` (Promise method) are not affected.
+#[test]
+fn fp_guard_framework_strapi_db_query_chain() {
+    let dir = fixture_path("fp_guards/framework_strapi_db_query_chain");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard, composer / PSR-4 autoloader closure includes a parameter.
 /// Pinned from a 32-finding cluster in nextcloud's vendored
 /// `composer/composer/ClassLoader.php` plus three further methods
 /// (Router::requireRouteFile, Installer::includeAppScript,
@@ -943,7 +974,7 @@ fn fp_guard_php_include_param_passthrough() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — `unserialize($x, ['allowed_classes' => …])` PHP 7+
+/// FP guard, `unserialize($x, ['allowed_classes' => …])` PHP 7+
 /// structural mitigation against object injection.  Pinned from
 /// nextcloud's profiler / DAV custom-properties / queue-bus call sites
 /// where `allowed_classes` is set to `false`, an array literal, or a
@@ -955,7 +986,28 @@ fn fp_guard_php_unserialize_allowed_classes() {
     validate_expectations(&diags, &dir);
 }
 
-/// FP guard — C/C++ buffer-overflow pattern rules
+/// FP guard, JS / TS local-collection receivers.  Pinned from the
+/// excalidraw element-manipulation cluster (66 → ~9 on
+/// `js.auth.missing_ownership_check` over the repo).  The fix lives at
+/// the deepest representable layer: SSA `TypeFacts::constructor_type`
+/// recognises `new Map()` / `new Set()` / `new WeakMap()` /
+/// `new WeakSet()` / `new Array()` as `TypeKind::LocalCollection`;
+/// `cfg::params::ts_type_to_local_collection` extends
+/// `classify_param_type_ts` so explicitly-typed params resolve to
+/// `LocalCollection` independent of NestJS decorator presence;
+/// `cfg::dto::collect_type_alias_local_collections` populates a
+/// per-file `TYPE_ALIAS_LC` set so same-file `type X = Map<...>`
+/// aliases also resolve.  The auth analyser already exempts
+/// `LocalCollection`-typed receivers via
+/// `auth_analysis::sink_class_for_type → InMemoryLocal`.
+#[test]
+fn fp_guard_auth_local_collection_receiver() {
+    let dir = fixture_path("fp_guards/auth_local_collection_receiver");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard, C/C++ buffer-overflow pattern rules
 /// (`c.memory.strcpy`, `strcat`, `sprintf`) over-fire when the source /
 /// format-string argument is a literal whose contributed length is
 /// statically bounded.  Pinned from a 938-finding cluster across postgres
@@ -966,6 +1018,74 @@ fn fp_guard_php_unserialize_allowed_classes() {
 #[test]
 fn fp_guard_c_buffer_literal_src() {
     let dir = fixture_path("fp_guards/c_buffer_literal_src");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard, `rs.auth.missing_ownership_check` over-fires on Rust
+/// helpers when (a) a parameter's TYPE annotation contains an
+/// identifier whose lower-case form matches the framework-request-name
+/// allow-list (`path`, `req`, `request`, `ctx`, `body`, …), e.g.
+/// `dst: &std::path::Path` contributes the `Path` ident, or (b) a
+/// receiver typed as an in-memory container (`RoaringBitmap`,
+/// `HashMap<K, V>`, `HashSet<T>`) is treated as a `DbMutation` because
+/// the verb-name dispatch (`is_mutation: insert/remove`) doesn't see
+/// the type.  Both clusters surfaced from meilisearch's
+/// `index-scheduler` crate
+/// (`scheduler/process_snapshot_creation.rs::remove_tasks` for (a),
+/// `scheduler/enterprise_edition/network.rs::balance_shards` for (b)).
+///
+/// Engine fixes:
+/// * `src/auth_analysis/extract/common.rs::collect_param_names` ,
+///   added a Rust `parameter` arm that descends only into the
+///   `pattern` field, never the `type` field.  Type-segment idents
+///   no longer pollute `unit.params` and the
+///   `unit_has_user_input_evidence` gate stays closed on internal
+///   helpers whose true params carry no user-input shape.
+/// * `src/cfg/params.rs::rust_type_to_local_collection` (new) +
+///   `classify_param_type_rust` rewire, Rust function-parameter
+///   type annotations naming a known local-collection type
+///   (`Vec`/`HashMap`/`HashSet`/`BTreeMap`/`BTreeSet`/`VecDeque`/
+///   `BinaryHeap`/`LinkedList`/`IndexMap`/`IndexSet`/`SmallVec`/
+///   `DashMap`/`DashSet`/`FxHashMap`/`FxHashSet`/`RoaringBitmap`/
+///   `RoaringTreemap`, plus `[T; N]` / `[T]` array-and-slice
+///   shorthand) classify the receiver as `TypeKind::LocalCollection`,
+///   which `auth_analysis::sink_class_for_type` maps to
+///   `SinkClass::InMemoryLocal` (non-auth-relevant).
+/// * `src/ssa/type_facts.rs::is_rust_local_collection_constructor` ,
+///   `RoaringBitmap` / `RoaringTreemap` added to the constructor-type
+///   table so `let s = RoaringBitmap::new(); s.insert(...)` also
+///   classifies correctly.
+///
+/// Persistent-store types like heed `Database<...>` / `sled::Db` /
+/// `Mutex<HashMap<...>>` deliberately stay `None` so real IDOR
+/// detection on persistent-store calls is preserved (covered by the
+/// `unsafe_handler_local_collection_does_not_blanket_suppress.rs`
+/// vulnerable counterpart).
+#[test]
+fn fp_guard_auth_rust_param_typed_local_collection() {
+    let dir = fixture_path("fp_guards/auth_rust_param_typed_local_collection");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Panic guard, CFG condition-text truncation (and symex display
+/// truncation) must round byte cuts down to the nearest UTF-8 char
+/// boundary.  Reproduces the gogs scan crash where
+/// `public/plugins/codemirror-5.17.0/mode/gherkin/gherkin.js` ships a
+/// long localised regex (Gurmukhi `ਖ`, Devanagari, CJK, Cyrillic…) inside
+/// a boolean sub-condition; byte 256 landed inside `'ਖ'` (3-byte UTF-8)
+/// and `t[..MAX_CONDITION_TEXT_LEN].to_string()` panicked the rayon
+/// worker.  Engine fix:
+/// `src/utils/snippet.rs::truncate_at_char_boundary`, applied at three
+/// CFG sites (`src/cfg/conditions.rs::push_condition_node`,
+/// `emit_rust_match_guard_if`, `src/cfg/mod.rs::extract_condition`) and
+/// two symex display sites (`src/symex/value.rs::Display`).  Invariant:
+/// scanning this file must terminate without panicking, regardless of
+/// where byte 256 lands inside the regex literal.
+#[test]
+fn fp_guard_cfg_utf8_long_condition() {
+    let dir = fixture_path("fp_guards/cfg_utf8_long_condition");
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }

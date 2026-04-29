@@ -24,21 +24,14 @@ pub struct BlockId(pub u32);
 pub struct FieldId(pub u32);
 
 impl FieldId {
-    /// Pointer-Phase 4 sentinel for the abstract "any element of a
-    /// container" field.  Steensgaard-grade precision: every numeric
-    /// or dynamic index access (`arr[i]`, `arr.shift()`, `map[k]`)
-    /// projects through the same `Field(pt(container), ELEM)` cell so
-    /// per-element taint propagation is independent of the SSA value
-    /// referencing the container.
-    ///
-    /// `u32::MAX` is reserved by convention; the per-body
-    /// [`FieldInterner`] never assigns it because interning is
-    /// monotone-ascending from `0` and bodies don't approach 4 billion
-    /// fields.  Consumers should compare with `==` rather than reach
-    /// into the wrapped `u32`.
+    /// Sentinel for the abstract "any element of a container" field.
+    /// Every numeric or dynamic index access (`arr[i]`, `arr.shift()`,
+    /// `map[k]`) projects through the same `Field(pt(container), ELEM)`
+    /// cell. `u32::MAX` is reserved; the per-body interner never
+    /// assigns it.
     pub const ELEM: FieldId = FieldId(u32::MAX);
 
-    /// "Tainted at every field" wildcard sentinel — distinct from
+    /// "Tainted at every field" wildcard sentinel, distinct from
     /// [`Self::ELEM`] (which is container-element semantics: every
     /// numeric/dynamic index access projects through it).
     /// `ANY_FIELD` represents the case where a writeback-shaped sink
@@ -91,17 +84,14 @@ impl FieldInterner {
     /// Read-only lookup: returns the [`FieldId`] for `name` if it has
     /// already been interned, or `None` otherwise.
     ///
-    /// Used by cross-call resolvers (Pointer-Phase 5 / W3) to avoid
-    /// growing the caller's interner with field names introduced
-    /// solely by the callee summary — such IDs would never be referenced
-    /// by any other instruction in the caller's body, so the cells
-    /// would be write-only and consume space without contributing
-    /// to taint flow.
+    /// Used by cross-call resolvers to avoid growing the caller's
+    /// interner with field names introduced solely by callee summaries
+    ///, such cells would be write-only.
     pub fn lookup(&self, name: &str) -> Option<FieldId> {
         // Walk `names` directly so we don't require the post-deserialise
         // `ensure_lookup()` rebuild before this method is callable.
-        // Callers usually own `&SsaBody` — interning was either done at
-        // lowering time or via `ensure_lookup` post-deserialise — so the
+        // Callers usually own `&SsaBody`, interning was either done at
+        // lowering time or via `ensure_lookup` post-deserialise, so the
         // hot path goes through the `lookup` table; the linear walk is
         // a fallback for the (small) deserialised-but-not-rebuilt case.
         if let Some(&id) = self.lookup.get(name) {
@@ -168,7 +158,7 @@ pub enum SsaOp {
     Call {
         callee: String,
         /// Original textual full path when SSA decomposed a chained receiver.
-        /// `None` when the callee was not rewritten — `callee` already holds
+        /// `None` when the callee was not rewritten, `callee` already holds
         /// the source-level textual form.
         ///
         /// **Debug / display only.** Analysis code must walk the SSA receiver
@@ -188,7 +178,7 @@ pub enum SsaOp {
     /// Models member-access expressions (`obj.field`) as a first-class SSA
     /// op.  Lowering walks the receiver tree so chained accesses like
     /// `c.writer.header` produce a chain of `FieldProj` ops with explicit
-    /// per-step receivers — eliminating the textual-prefix parsing that
+    /// per-step receivers, eliminating the textual-prefix parsing that
     /// previously misclassified deep receivers (the gin/context.go FP).
     ///
     /// `field` is interned in the owning [`SsaBody`]'s [`FieldInterner`].
@@ -223,7 +213,7 @@ pub enum SsaOp {
     ///
     /// Emitted by SSA lowering as a synthesized instruction in the entry
     /// block and referenced from phi operands whose incoming edge does
-    /// not carry a definition of the phi's variable — e.g. a try/catch
+    /// not carry a definition of the phi's variable, e.g. a try/catch
     /// rejoin where a variable is only defined on the normal path, or
     /// an early-return branch on a later-defined variable.
     ///
@@ -269,7 +259,7 @@ pub enum Terminator {
     /// `targets` lists the per-case successor blocks (order matches the
     /// source-order of cases in the switch); `default` is the fallback
     /// branch taken when no case matches. Block `succs` remain the
-    /// authoritative flow set — the terminator is a structured summary.
+    /// authoritative flow set, the terminator is a structured summary.
     ///
     /// Emitted only for switch-like dispatch whose semantics are
     /// guaranteed-exclusive across cases (e.g. Go `switch`, Java
@@ -285,11 +275,11 @@ pub enum Terminator {
         ///
         /// `Some(c)` records the constant value the scrutinee must equal for
         /// the corresponding target to be taken. `None` means the literal is
-        /// unknown — emitted for synthetic ≥3-way CFG fanouts or for case
+        /// unknown, emitted for synthetic ≥3-way CFG fanouts or for case
         /// patterns that aren't plain literals (OR-patterns, ranges, guards).
         ///
         /// When omitted/empty (length zero), all targets behave as "unknown
-        /// literal" — preserves backward compatibility with consumers that
+        /// literal", preserves backward compatibility with consumers that
         /// only inspect `targets`/`default`.
         #[serde(default)]
         case_values: SmallVec<[Option<ConstValue>; 4]>,
@@ -342,19 +332,17 @@ pub struct SsaBody {
     pub exception_edges: Vec<(BlockId, BlockId)>,
     /// Per-body interner for [`SsaOp::FieldProj`] field names.
     ///
-    /// Empty until the lowering phase emits FieldProj ops (Phase 2 of the
-    /// field-projections rollout).  Cross-body callers (cross-file
-    /// summaries, debug serialization) MUST resolve interned ids through
-    /// this interner before transporting field references to other bodies.
+    /// Empty until lowering emits FieldProj ops. Cross-body callers
+    /// (cross-file summaries, debug serialization) MUST resolve interned
+    /// ids through this interner before transporting field references
+    /// to other bodies.
     #[serde(default)]
     pub field_interner: FieldInterner,
-    /// Pointer-Phase 3 / W1: side-table mapping a synthetic base-update
-    /// [`SsaOp::Assign`]'s defined value back to the `(receiver, field)`
-    /// pair it represents.  Populated by SSA lowering at the
-    /// `obj.f = rhs` synthesis point so the taint engine can recognise
-    /// the synthetic assign as a structural field WRITE — the assigned
-    /// value is the new "obj" value, the use is the rhs, and the side-
-    /// table records `(prior_obj_value, FieldId("f"))`.
+    /// Side-table mapping a synthetic base-update [`SsaOp::Assign`]'s
+    /// defined value back to the `(receiver, field)` pair it
+    /// represents. Populated by lowering at the `obj.f = rhs` synthesis
+    /// point so the taint engine can treat the synthetic assign as a
+    /// structural field WRITE.
     ///
     /// Empty by default; only synthetic assigns whose enclosing source
     /// statement was a dotted-path assignment (`a.b.c = …`) appear here.
@@ -505,10 +493,10 @@ mod tests {
         assert_eq!(uses, vec![SsaValue(1)]);
     }
 
-    /// Pointer-Phase 4 / A6 audit: the [`FieldId::ELEM`] sentinel is
+    /// the [`FieldId::ELEM`] sentinel is
     /// reserved for "any element of a container".  The interner assigns
     /// IDs monotonically from `0`, so the sentinel `u32::MAX` can only
-    /// collide if the body declares ~4 billion fields — a corner case
+    /// collide if the body declares ~4 billion fields, a corner case
     /// no realistic codebase reaches.  Pin the contract with a stress
     /// loop so future implementation drift can't silently shift IDs to
     /// the sentinel value.
@@ -526,7 +514,7 @@ mod tests {
         // Lookup of the sentinel name (used by W3 to round-trip
         // container-element flow through summary) must NOT match a
         // real interned name even when the same name is interned.
-        // The wire-format keeps `<elem>` as a *string marker* — it
+        // The wire-format keeps `<elem>` as a *string marker*, it
         // never goes through `intern`.  Instead, callers compare
         // explicitly against `FieldId::ELEM`.
         assert_ne!(interner.intern("<elem>"), FieldId::ELEM);

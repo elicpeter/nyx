@@ -444,7 +444,7 @@ fn js_fs_use_after_close() {
 fn java_twr_no_false_leak() {
     // Java try-with-resources guarantees AutoCloseable.close() is called.
     // The managed_resource flag on the acquire node suppresses false leaks.
-    // The fixture also contains unsafeManual() which genuinely leaks —
+    // The fixture also contains unsafeManual() which genuinely leaks ,
     // only verify that the TWR function's acquire (line 5) doesn't leak.
     let findings = state_diags_for("java_try_with_resources.java");
     let twr_leaks: Vec<_> = findings
@@ -459,7 +459,7 @@ fn java_twr_no_false_leak() {
             .map(|d| (&d.id, d.line))
             .collect::<Vec<_>>()
     );
-    // unsafeManual (lines 10-13) is a genuine leak — verify it's detected
+    // unsafeManual (lines 10-13) is a genuine leak, verify it's detected
     assert!(
         findings
             .iter()
@@ -493,7 +493,7 @@ fn java_db_connection_leak() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// (8c) Go resource lifecycle — defer
+// (8c) Go resource lifecycle, defer
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -505,18 +505,18 @@ fn go_defer_close_no_findings() {
 
 #[test]
 fn go_defer_missing_leak() {
-    // No close at all — should produce resource leak.
+    // No close at all, should produce resource leak.
     assert_has_prefix("go_defer_missing.go", "state-resource-leak");
 }
 
 #[test]
 fn go_no_defer_manual_close_clean() {
-    // Manual close at end of function — no leak.
+    // Manual close at end of function, no leak.
     assert_no_state_findings("go_no_defer_manual_close.go");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// (9) Auth — unauthed access detection
+// (9) Auth, unauthed access detection
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -538,7 +538,7 @@ fn auth_not_a_handler_no_finding() {
 
 #[test]
 fn auth_negated_condition_does_not_elevate() {
-    // if (!is_authenticated) { exec(...) } — negated condition.
+    // if (!is_authenticated) { exec(...) }, negated condition.
     // True branch is the unauthenticated path; auth must NOT be elevated.
     assert_has("auth_negated_condition.js", "state-unauthed-access");
 }
@@ -569,7 +569,7 @@ fn auth_substring_in_condition_no_false_elevate() {
 
 #[test]
 fn rust_raii_file_no_leak() {
-    // File::open uses RAII drop — managed_resource suppresses leak.
+    // File::open uses RAII drop, managed_resource suppresses leak.
     assert_no_state_findings("rust_raii_file_no_leak.rs");
 }
 
@@ -581,19 +581,19 @@ fn rust_box_owned_no_leak() {
 
 #[test]
 fn rust_explicit_drop_no_leak() {
-    // drop(f) is an explicit release — no leak.
+    // drop(f) is an explicit release, no leak.
     assert_no_state_findings("rust_explicit_drop.rs");
 }
 
 #[test]
 fn rust_unsafe_alloc_clean() {
-    // alloc + dealloc — properly paired, no findings.
+    // alloc + dealloc, properly paired, no findings.
     assert_no_state_findings("rust_unsafe_alloc_clean.rs");
 }
 
 #[test]
 fn rust_unsafe_alloc_leak() {
-    // alloc without dealloc — NOT RAII-managed, leak expected.
+    // alloc without dealloc, NOT RAII-managed, leak expected.
     assert_has_prefix("rust_unsafe_alloc_leak.rs", "state-resource-leak");
 }
 
@@ -621,13 +621,13 @@ fn cpp_smart_ptr_no_leak() {
 
 #[test]
 fn cpp_smart_ptr_scope_exit() {
-    // make_unique with return — RAII cleanup at scope exit.
+    // make_unique with return, RAII cleanup at scope exit.
     assert_no_state_findings("cpp_smart_ptr_scope_exit.cpp");
 }
 
 #[test]
 fn cpp_unique_ptr_from_raw() {
-    // unique_ptr(new int(42)) — the constructor wraps a raw new.
+    // unique_ptr(new int(42)), the constructor wraps a raw new.
     // The unique_ptr constructor is not a tracked acquire, so no leak
     // from the outer call.  The inner `new` might or might not be visible
     // depending on callee extraction depth.  At minimum: no false alarm.
@@ -648,7 +648,7 @@ fn cpp_unique_ptr_from_raw() {
 
 #[test]
 fn cpp_alias_before_delete() {
-    // p = new; q = p; delete q — tests ownership transfer semantics.
+    // p = new; q = p; delete q, tests ownership transfer semantics.
     // The assignment transfer moves lifecycle from p to q.
     // After delete q, the resource is closed.
     // At exit: q = CLOSED, p = MOVED → no leak.
@@ -820,13 +820,13 @@ fn resource_as_function_arg_still_leaks() {
 
 #[test]
 fn resource_returned_from_factory() {
-    // Factory function: fopen result is returned to caller — not a leak.
+    // Factory function: fopen result is returned to caller, not a leak.
     assert_no_state_findings("resource_returned.c");
 }
 
 #[test]
 fn returned_on_one_path_leaked_on_another() {
-    // Resource returned on one branch, leaked on another — still a finding.
+    // Resource returned on one branch, leaked on another, still a finding.
     assert_has(
         "returned_on_one_path_leaked_on_another.c",
         "state-resource-leak-possible",
@@ -835,13 +835,13 @@ fn returned_on_one_path_leaked_on_another() {
 
 #[test]
 fn returned_on_all_success_paths() {
-    // Resource returned on all exit paths — no finding.
+    // Resource returned on all exit paths, no finding.
     assert_no_state_findings("returned_on_all_success_paths.c");
 }
 
 #[test]
 fn return_null_after_open_without_close() {
-    // Opens resource then returns NULL — definite leak.
+    // Opens resource then returns NULL, definite leak.
     assert_has(
         "return_null_after_open_without_close.c",
         "state-resource-leak",
@@ -850,13 +850,13 @@ fn return_null_after_open_without_close() {
 
 #[test]
 fn factory_leak_not_returned() {
-    // Opens resource, returns integer — resource leaked.
+    // Opens resource, returns integer, resource leaked.
     assert_has_prefix("factory_leak_not_returned.c", "state-resource-leak");
 }
 
 #[test]
 fn loop_reopen_clean() {
-    // Each loop iteration opens and closes the file — clean at exit.
+    // Each loop iteration opens and closes the file, clean at exit.
     assert_no_state_findings("loop_reopen.c");
 }
 
@@ -935,13 +935,13 @@ fn ruby_tempfile_leak() {
 
 #[test]
 fn auth_false_positive_token() {
-    // generateToken() is NOT an auth check — finding should fire
+    // generateToken() is NOT an auth check, finding should fire
     assert_has("auth_false_positive_token.js", "state-unauthed-access");
 }
 
 #[test]
 fn auth_decode_token_not_auth() {
-    // decodeToken() parses but does not enforce auth — finding should fire
+    // decodeToken() parses but does not enforce auth, finding should fire
     assert_has("auth_decode_token_not_auth.js", "state-unauthed-access");
 }
 
@@ -965,7 +965,7 @@ fn auth_require_role_protected() {
 
 #[test]
 fn auth_decorator_python_login_required() {
-    // @login_required seeds AuthLevel::Authed at function entry — the
+    // @login_required seeds AuthLevel::Authed at function entry, the
     // privileged sink inside should not trip state-unauthed-access.
     assert_absent(
         "auth_decorator_python_login_required.py",
@@ -990,21 +990,21 @@ fn auth_decorator_python_admin_suppresses() {
 
 #[test]
 fn auth_decorator_python_non_auth_still_fires() {
-    // @app.route / @functools.lru_cache are NOT auth markers — the finding
+    // @app.route / @functools.lru_cache are NOT auth markers, the finding
     // must still fire on the unprotected handler.
     assert_has("auth_decorator_python_non_auth.py", "state-unauthed-access");
 }
 
 #[test]
 fn auth_decorator_js_use_guards() {
-    // @UseGuards(AuthGuard) — AuthGuard in the argument list is the real
+    // @UseGuards(AuthGuard), AuthGuard in the argument list is the real
     // auth marker, matched by JS_AUTH matchers.
     assert_absent("auth_decorator_js_use_guards.ts", "state-unauthed-access");
 }
 
 #[test]
 fn auth_decorator_js_non_auth_still_fires() {
-    // @Injectable / @Get are routing/DI decorators — not auth markers.
+    // @Injectable / @Get are routing/DI decorators, not auth markers.
     assert_has("auth_decorator_js_non_auth.ts", "state-unauthed-access");
 }
 
@@ -1039,7 +1039,7 @@ fn auth_decorator_ruby_no_filter_still_fires() {
 
 #[test]
 fn auth_decorator_ruby_before_action_only_excludes() {
-    // `before_action :auth, only: [:create]` — method `index` is NOT in the
+    // `before_action :auth, only: [:create]`, method `index` is NOT in the
     // only-list, so the filter does not apply and the sink fires.
     assert_has(
         "auth_decorator_ruby_before_action_only.rb",
@@ -1049,7 +1049,7 @@ fn auth_decorator_ruby_before_action_only_excludes() {
 
 #[test]
 fn auth_decorator_ruby_before_action_only_includes() {
-    // Same filter — method `create` IS in the only-list, so the filter
+    // Same filter, method `create` IS in the only-list, so the filter
     // applies and the sink does not fire.
     assert_absent(
         "auth_decorator_ruby_before_action_only_match.rb",
@@ -1059,7 +1059,7 @@ fn auth_decorator_ruby_before_action_only_includes() {
 
 #[test]
 fn auth_decorator_ruby_before_action_except_fires() {
-    // `before_action :auth, except: [:index]` — method `index` IS in the
+    // `before_action :auth, except: [:index]`, method `index` IS in the
     // except-list, so the filter is skipped and the sink fires.
     assert_has(
         "auth_decorator_ruby_before_action_except.rb",
@@ -1069,7 +1069,7 @@ fn auth_decorator_ruby_before_action_except_fires() {
 
 #[test]
 fn auth_decorator_ruby_before_action_except_absent() {
-    // Same filter — method `create` is NOT in the except-list, so the filter
+    // Same filter, method `create` is NOT in the except-list, so the filter
     // applies and the sink does not fire.
     assert_absent(
         "auth_decorator_ruby_before_action_except_other.rb",

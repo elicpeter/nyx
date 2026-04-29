@@ -204,7 +204,7 @@ fn tier_a_patterns_have_no_heuristic_in_description() {
         }
     }
 
-    // Warn but don't fail — descriptions are informational
+    // Warn but don't fail, descriptions are informational
     if !violations.is_empty() {
         eprintln!(
             "WARNING: Tier A patterns with heuristic-like descriptions:\n  {}",
@@ -277,6 +277,9 @@ fn positive_java() {
             "java.reflection.method_invoke",
             "java.sqli.execute_concat",
             "java.crypto.insecure_random",
+            // CVE-2022-1471 SnakeYAML / CVE-2022-42889 Text4Shell.
+            "java.deser.snakeyaml_unsafe_constructor",
+            "java.code_exec.text4shell_interpolator",
         ],
     );
 }
@@ -293,6 +296,11 @@ fn positive_python() {
             "py.cmdi.os_popen",
             "py.deser.pickle_loads",
             "py.deser.yaml_load",
+            // CVE-2025-69662 / CVE-2025-24793 motivated f-string SQLi.
+            // py.sqli.execute_format must fire on the f-string shape and
+            // py.sqli.text_format must fire on the SQLAlchemy text() shape.
+            "py.sqli.execute_format",
+            "py.sqli.text_format",
         ],
     );
 }

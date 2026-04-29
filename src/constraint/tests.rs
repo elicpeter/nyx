@@ -156,7 +156,7 @@ fn valuefact_widen_stable_bound() {
     b.lo = Some(0);
     b.lo_strict = true;
     let w = a.widen(&b);
-    assert_eq!(w.lo, Some(0)); // stable — preserved
+    assert_eq!(w.lo, Some(0)); // stable, preserved
     assert!(w.lo_strict);
 }
 
@@ -357,7 +357,7 @@ fn pathenv_max_refine_per_block() {
     let v = SsaValue(0);
     // Reset counter
     env.reset_refine_count();
-    // Refine many times — should stop after MAX_REFINE_PER_BLOCK
+    // Refine many times, should stop after MAX_REFINE_PER_BLOCK
     for _ in 0..(MAX_REFINE_PER_BLOCK + 50) {
         let mut f = ValueFact::top();
         f.null = Nullability::NonNull;

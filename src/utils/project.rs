@@ -84,7 +84,7 @@ fn read_bounded(path: &Path) -> Option<String> {
 ///
 /// Intentionally a coarse byte-level substring check against the quoted module
 /// specifier (e.g. `'fastify'`, `"github.com/labstack/echo/v4"`,
-/// `'sinatra'`). Only the first 8 KiB of the file are inspected — imports /
+/// `'sinatra'`). Only the first 8 KiB of the file are inspected, imports /
 /// requires live at the top. Returns an empty list for languages without a
 /// framework detection policy here.
 pub fn detect_in_file_frameworks(bytes: &[u8], lang_slug: &str) -> Vec<DetectedFramework> {
@@ -147,7 +147,7 @@ pub fn detect_frameworks(root: &Path) -> FrameworkContext {
     // ── Node.js (package.json) ──
     if let Some(content) = read_bounded(&root.join("package.json")) {
         // Crude substring search in the "dependencies" block area.
-        // Good enough for detection — no JSON parsing overhead.
+        // Good enough for detection, no JSON parsing overhead.
         if content.contains("\"express\"") {
             fws.push(DetectedFramework::Express);
         }

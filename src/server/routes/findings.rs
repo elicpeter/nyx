@@ -73,7 +73,7 @@ fn load_latest_findings_internal(state: &AppState) -> LoadedFindings {
 /// Build (or fetch from cache) the per-scan derived views.
 ///
 /// Returns clones of `Arc`s so callers can drop the lock immediately and work
-/// without contention. Triage state is *not* baked into the cached views — it
+/// without contention. Triage state is *not* baked into the cached views, it
 /// changes on a different cadence and is overlaid per request.
 fn cached_for_latest(state: &AppState) -> CachedFindings {
     let loaded = load_latest_findings_internal(state);
@@ -85,7 +85,7 @@ fn cached_for_latest(state: &AppState) -> CachedFindings {
         }
     }
 
-    // Slow path: rebuild. Guard against concurrent rebuilds of the same key —
+    // Slow path: rebuild. Guard against concurrent rebuilds of the same key ,
     // a second writer that finds the cache already populated for our key
     // simply returns it.
     let mut guard = state.findings_cache.write();

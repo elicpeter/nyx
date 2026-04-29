@@ -42,6 +42,14 @@ def trigger_yaml(data):
 def trigger_sql_concat(cursor, user):
     cursor.execute("SELECT * FROM users WHERE name = '" + user + "'")
 
+# py.sqli.execute_format (f-string variant)
+def trigger_sql_fstring(cursor, user):
+    cursor.execute(f"SELECT * FROM users WHERE name = '{user}'")
+
+# py.sqli.text_format
+def trigger_sqlalchemy_text_fstring(connection, user):
+    connection.execute(text(f"SELECT * FROM users WHERE name = '{user}'"))
+
 # py.crypto.md5
 def trigger_md5(data):
     hashlib.md5(data)

@@ -1,7 +1,7 @@
 // Phase 6 D06 (negative): same DTO shape as
 // `safe_dto_int_field_axum.rs` but the flow uses the `doc_id` field
 // whose declared type is `String`.  Phase 6 must NOT exempt the
-// member-access subject — String DTO fields can carry an injection
+// member-access subject, String DTO fields can carry an injection
 // payload, so the auth rule must continue to fire.
 use axum::extract::Json;
 

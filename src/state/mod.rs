@@ -1,3 +1,5 @@
+#![doc = include_str!(concat!(env!("OUT_DIR"), "/state.md"))]
+
 pub mod domain;
 pub mod engine;
 pub mod facts;
@@ -27,7 +29,7 @@ pub fn classify_auth_decorators(lang: Lang, decorators: &[String]) -> AuthLevel 
     let mut level = AuthLevel::Unauthed;
     for dec in decorators {
         let d = dec.to_ascii_lowercase();
-        // Admin patterns — match the same static list used by the call-site
+        // Admin patterns, match the same static list used by the call-site
         // transfer so decorators and runtime checks agree on privilege.
         if d.contains("admin") || d.contains("hasrole") || d.contains("superuser") {
             return AuthLevel::Admin;
@@ -73,7 +75,7 @@ pub fn run_state_analysis(
     // PointsToFacts.  When present, the proxy-acquire transfer suppresses
     // SymbolId attribution on field-aliased receivers (`m := c.mu;
     // m.Lock()`) and routes them through `chain_proxies` instead.  Pass
-    // `None` to disable — strict-additive.
+    // `None` to disable, strict-additive.
     ptr_proxy_hints: Option<&std::collections::HashMap<String, crate::pointer::PtrProxyHint>>,
 ) -> Vec<StateFinding> {
     let _span = tracing::debug_span!("run_state_analysis").entered();
@@ -119,7 +121,7 @@ pub fn run_state_analysis(
 
 /// Build resource method summaries by pre-scanning all method bodies for known
 /// resource acquire/release operations. Only creates summaries for methods whose
-/// bodies actually contain matching operations — never infers from names alone.
+/// bodies actually contain matching operations, never infers from names alone.
 pub fn build_resource_method_summaries(
     bodies: &[crate::cfg::BodyCfg],
     lang: Lang,
@@ -140,7 +142,7 @@ pub fn build_resource_method_summaries(
         };
 
         for (_, info) in body.graph.node_references() {
-            // Check both Call and Seq (Assignment) nodes — resource operations
+            // Check both Call and Seq (Assignment) nodes, resource operations
             // can appear as RHS of assignments (e.g., `this.fd = fs.openSync(...)`).
             if !matches!(
                 info.kind,

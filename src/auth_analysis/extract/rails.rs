@@ -137,7 +137,14 @@ fn maybe_collect_controller(
         let line = child.start_position().row + 1;
         let middleware_calls = applicable_filters(&filter_directives, &action_name);
         for call in &middleware_calls {
-            if let Some(check) = auth_check_from_call_site(call, line, rules) {
+            if let Some(mut check) = auth_check_from_call_site(call, line, rules) {
+                // Rails `before_action :authorize_user`-style filter
+                // callbacks run before the action and authorize the
+                // entire request, same shape as FastAPI / Flask
+                // `dependencies=[Depends(...)]`.  Mark route-level so
+                // `auth_check_covers_subject` covers the row-fetches
+                // and downstream sinks the action body performs.
+                check.is_route_level = true;
                 unit.auth_checks.push(check);
             }
         }

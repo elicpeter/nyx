@@ -39,7 +39,7 @@ fn load_with_local(dir: &Path, contents: &str) -> Result<Config, NyxError> {
 fn syntactically_invalid_toml_returns_parse_error() {
     let tmp = tempfile::tempdir().unwrap();
 
-    // `foo = [[` is an unterminated array-of-tables header — pure syntax
+    // `foo = [[` is an unterminated array-of-tables header, pure syntax
     // error at the lexer level.
     let result = load_with_local(tmp.path(), "foo = [[\n");
 
@@ -62,7 +62,7 @@ fn syntactically_invalid_toml_returns_parse_error() {
 fn type_mismatch_in_known_field_returns_error() {
     let tmp = tempfile::tempdir().unwrap();
 
-    // `performance.worker_threads` is typed `Option<usize>` — a bare string
+    // `performance.worker_threads` is typed `Option<usize>`, a bare string
     // is unambiguously wrong and must be rejected.
     let contents = "\
 [performance]\n\
@@ -74,7 +74,7 @@ worker_threads = \"auto\"\n\
         Err(NyxError::Toml(e)) => {
             let msg = e.to_string();
             // Deserialisation errors should name either the field or the
-            // expected type — be lenient on exact wording.
+            // expected type, be lenient on exact wording.
             assert!(
                 msg.contains("worker_threads")
                     || msg.to_lowercase().contains("integer")
@@ -91,7 +91,7 @@ worker_threads = \"auto\"\n\
 /// A semantically-invalid config (e.g. `server.port = 0`) must be caught by
 /// `Config::validate`, surfacing as a `ConfigValidation` error that lists
 /// the offending section and field.  This is a second layer of defence past
-/// deserialisation — types parse fine, but values are out of range.
+/// deserialisation, types parse fine, but values are out of range.
 #[test]
 fn out_of_range_value_fails_validation() {
     let tmp = tempfile::tempdir().unwrap();
@@ -120,7 +120,7 @@ port = 0\n\
 /// (e.g. switching to strict mode) is explicit rather than surprising.
 ///
 /// If strict-mode is later desired, this test should be flipped to assert
-/// the error path — but in either case the behaviour is explicit.
+/// the error path, but in either case the behaviour is explicit.
 #[test]
 fn unknown_top_level_section_is_tolerated_today() {
     let tmp = tempfile::tempdir().unwrap();
@@ -157,7 +157,7 @@ bogus_unknown_field = 42\n\
     ));
 }
 
-/// Empty `nyx.local` (zero-byte file) must load cleanly — the merge overlays
+/// Empty `nyx.local` (zero-byte file) must load cleanly, the merge overlays
 /// nothing onto defaults.
 #[test]
 fn empty_user_config_uses_defaults() {

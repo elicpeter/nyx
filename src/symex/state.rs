@@ -34,14 +34,14 @@ pub struct SymbolicState {
     values: HashMap<SsaValue, SymbolicValue>,
     /// Branch constraints collected along the path.
     path_constraints: Vec<PathConstraint>,
-    /// SSA values known to carry taint. Eagerly propagated during transfer —
+    /// SSA values known to carry taint. Eagerly propagated during transfer ,
     /// no recursive expression-tree walking needed.
     tainted_roots: HashSet<SsaValue>,
     /// Field-sensitive symbolic heap.
     heap: SymbolicHeap,
     /// Exception context for catch-path symbolic execution.
     /// When `Some`, the next `CatchParam` instruction consumes this value and
-    /// marks itself tainted. This is NOT a faithful model of the thrown value —
+    /// marks itself tainted. This is NOT a faithful model of the thrown value ,
     /// it is a taint carrier that signals "this CatchParam was reached via an
     /// exception edge and should be treated as tainted." The symbolic value is
     /// `Unknown` because we do not model the exception object's structure.
@@ -143,7 +143,7 @@ impl SymbolicState {
         let block_data = &ssa.blocks[block.0 as usize];
         for phi in &block_data.phis {
             self.values.insert(phi.value, SymbolicValue::Unknown);
-            // PRESERVE taint — do NOT remove from tainted_roots.
+            // PRESERVE taint, do NOT remove from tainted_roots.
         }
         // Widen heap: degrade field symbolic precision, preserve taint.
         self.heap.widen();
@@ -163,7 +163,7 @@ impl SymbolicState {
                 ConstLattice::Str(s) => {
                     self.values.insert(v, SymbolicValue::ConcreteStr(s.clone()));
                 }
-                _ => {} // Bool, Null, Top, Varying — not modeled
+                _ => {} // Bool, Null, Top, Varying, not modeled
             }
         }
     }
@@ -343,6 +343,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
         let ssa = SsaBody {
             blocks: vec![],
@@ -382,6 +383,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
         let ssa = SsaBody {
             blocks: vec![],
@@ -418,6 +420,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
         let ssa = SsaBody {
             blocks: vec![],

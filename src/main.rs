@@ -69,7 +69,7 @@ fn main() -> NyxResult<()> {
     let quiet = config.output.quiet || cli.command.is_structured_output(&config);
 
     // Print config note before scanning (human-readable mode only).  Pure
-    // informational commands suppress it too — their output is usually
+    // informational commands suppress it too, their output is usually
     // piped or grepped and the preamble is noise.
     if let Some(note) = config_note.filter(|_| !quiet && !is_info) {
         eprint!("{note}");

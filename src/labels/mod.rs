@@ -32,7 +32,7 @@ pub struct LabelRule {
 /// expands it to `(0..arity)` using the actual call arity.
 ///
 /// The value `usize::MAX` is used because `args.get(usize::MAX)` is a guaranteed
-/// miss for any real argument list — an accidental direct-lookup would be a no-op
+/// miss for any real argument list, an accidental direct-lookup would be a no-op
 /// rather than silently aliasing position 0.
 pub const ALL_ARGS_PAYLOAD: &[usize] = &[usize::MAX];
 
@@ -54,7 +54,7 @@ pub enum GateActivation {
     /// arg selects the MIME type).
     ValueMatch,
     /// Destination-bearing flow activation.  The gate fires when taint reaches
-    /// a declared destination location at the call site — no literal
+    /// a declared destination location at the call site, no literal
     /// inspection, no prefix heuristic.
     ///
     /// For callees whose destination is a positional argument (e.g. `fetch`'s
@@ -80,7 +80,7 @@ pub enum GateActivation {
 }
 
 /// Argument-sensitive sink activation.  Whether a call becomes a sink is
-/// determined by the gate's [`GateActivation`] mode — literal-value matching
+/// determined by the gate's [`GateActivation`] mode, literal-value matching
 /// for traditional role-selector APIs, or destination-flow activation for
 /// outbound HTTP clients and other APIs where a specific location in the
 /// call carries the attacker-controlled destination.
@@ -144,6 +144,13 @@ bitflags! {
         /// carrier cap for folding `auth_analysis` into the SSA/taint
         /// engine.
         const UNAUTHORIZED_ID = 0b0001_0000_0000_0000;  // bit 12
+        /// Cross-boundary data-exfiltration: tainted sensitive data flowing
+        /// into outbound request bodies, headers, or other payload-bearing
+        /// fields of network egress APIs.  Distinct from `SSRF` (attacker
+        /// control over the destination URL), `DATA_EXFIL` fires when the
+        /// destination is fixed but attacker-influenced data leaves the
+        /// process via the request payload.
+        const DATA_EXFIL      = 0b0010_0000_0000_0000;  // bit 13
     }
 }
 
@@ -192,7 +199,7 @@ pub enum Kind {
     /// reachability does not depend on sibling-case execution order.
     Switch,
     Trivia,
-    /// Simple sequential expression (e.g. cast/type-assertion) — treated like
+    /// Simple sequential expression (e.g. cast/type-assertion), treated like
     /// any other sequential statement in the CFG but explicitly classified so
     /// code that inspects `Kind` can recognise it.
     Seq,
@@ -472,9 +479,9 @@ pub enum SourceKind {
     FileSystem,
     /// Database query results
     Database,
-    /// Caught exception — may carry user-controlled data
+    /// Caught exception, may carry user-controlled data
     CaughtException,
-    /// Could not determine — treat conservatively
+    /// Could not determine, treat conservatively
     Unknown,
 }
 
@@ -511,7 +518,7 @@ pub fn infer_source_kind(caps: Cap, callee: &str) -> SourceKind {
 
     // File system patterns
     if cl.contains("read") || cl.contains("fopen") || cl.contains("open") {
-        // Distinguish from db reads — file reads typically have FILE_IO cap
+        // Distinguish from db reads, file reads typically have FILE_IO cap
         if caps.contains(Cap::FILE_IO) {
             return SourceKind::FileSystem;
         }
@@ -570,6 +577,7 @@ pub fn parse_cap(s: &str) -> Option<Cap> {
         "code_exec" => Some(Cap::CODE_EXEC),
         "crypto" => Some(Cap::CRYPTO),
         "unauthorized_id" => Some(Cap::UNAUTHORIZED_ID),
+        "data_exfil" | "data_exfiltration" => Some(Cap::DATA_EXFIL),
         "all" => Some(Cap::all()),
         _ => None,
     }
@@ -621,7 +629,7 @@ pub fn build_lang_rules(
         Vec::new()
     };
 
-    // Phase C: fold `auth_analysis` into the taint engine by injecting
+    // fold `auth_analysis` into the taint engine by injecting
     // `Cap::UNAUTHORIZED_ID` sink/sanitizer rules.  Gated by config; default
     // OFF so the standalone `auth_analysis` subsystem remains authoritative.
     if config.scanner.enable_auth_as_taint {
@@ -636,7 +644,7 @@ pub fn build_lang_rules(
     }
 }
 
-/// Return Phase C auth-as-taint rules for a given language (currently Rust-only).
+/// Return the auth-as-taint rules for a given language (Rust-only).
 fn phase_c_auth_rules_for_lang(lang_slug: &str) -> Vec<RuntimeLabelRule> {
     match lang_slug {
         "rust" | "rs" => rust::phase_c_auth_rules(),
@@ -718,7 +726,7 @@ fn match_suffix_cs(text: &[u8], matcher: &[u8], case_sensitive: bool) -> bool {
         if exact_only {
             // `=foo` matchers fire only when `text` IS `foo` (no `Mod.foo`,
             // `Class::foo`, or any preceding namespace).  Lets a label rule
-            // distinguish bare `Kernel#open` from `File.open` — the former
+            // distinguish bare `Kernel#open` from `File.open`, the former
             // shells out on `|cmd`, the latter never does (CVE-2020-8130).
             start == 0
         } else {
@@ -731,7 +739,7 @@ fn match_suffix_cs(text: &[u8], matcher: &[u8], case_sensitive: bool) -> bool {
 
 /// Strip an optional `=` "exact-match" sigil from the start of a matcher.
 /// Matchers prefixed with `=` (e.g. `"=open"`) only fire when the candidate
-/// text equals the matcher exactly — the boundary-`.`-or-`:` allowance is
+/// text equals the matcher exactly, the boundary-`.`-or-`:` allowance is
 /// suppressed.  Used to distinguish bare-callee Ruby/Python builtins from
 /// methods of the same name on a typed receiver.
 #[inline]
@@ -767,7 +775,7 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
     let full_normalized = normalize_chained_call(text);
     let full_norm_bytes = full_normalized.as_bytes();
 
-    // ── Check runtime (config) rules first — they take priority ──────
+    // ── Check runtime (config) rules first, they take priority ──────
     if let Some(extras) = extra {
         // Pass 1: exact / suffix
         for rule in extras {
@@ -865,7 +873,7 @@ pub fn classify_all(
         }
     }
 
-    // ── Check runtime (config) rules first — they take priority ──────
+    // ── Check runtime (config) rules first, they take priority ──────
     if let Some(extras) = extra {
         // Pass 1: exact / suffix
         for rule in extras {
@@ -941,7 +949,7 @@ pub fn classify_all(
 /// (or [`ALL_ARGS_PAYLOAD`] for dynamic-activation conservative fallback).
 /// `object_destination_fields`, when non-empty, restricts sink-taint checks
 /// to identifiers found under those field names within an object-literal
-/// positional argument — used by destination-aware outbound-HTTP gates so
+/// positional argument, used by destination-aware outbound-HTTP gates so
 /// `fetch({url, body})` fires only when taint reaches `url`, not `body`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GateMatch {
@@ -952,9 +960,13 @@ pub struct GateMatch {
 
 /// Classify a call against gated sink rules.
 ///
-/// Returns `Some(GateMatch)` if the callee matches a gated rule AND the
-/// activation conditions fire.  Returns `None` if the callee doesn't match
-/// any gated rule, or matches but the activation is provably safe.
+/// Returns every gate whose callee matches AND whose activation conditions
+/// fire.  An empty result means the callee did not match any gated rule, or
+/// every match was provably safe.  Multiple matches are possible when the
+/// same callee carries gates for different sink classes, e.g. `fetch` is
+/// both an SSRF gate (URL flow) and a `DATA_EXFIL` gate (body / headers /
+/// json flow); each gate carries its own [`GateMatch`] so downstream code
+/// can attribute findings per-cap.
 ///
 /// `const_arg_at` extracts positional argument values.
 /// `const_keyword_arg` extracts keyword argument values (for languages like Python).
@@ -964,11 +976,15 @@ pub fn classify_gated_sink(
     const_arg_at: impl Fn(usize) -> Option<String>,
     const_keyword_arg: impl Fn(&str) -> Option<String>,
     kwarg_present: impl Fn(&str) -> bool,
-) -> Option<GateMatch> {
-    let gates = GATED_REGISTRY.get(lang).or_else(|| {
+) -> SmallVec<[GateMatch; 2]> {
+    let mut out: SmallVec<[GateMatch; 2]> = SmallVec::new();
+    let gates = match GATED_REGISTRY.get(lang).or_else(|| {
         let key = lang.to_ascii_lowercase();
         GATED_REGISTRY.get(key.as_str())
-    })?;
+    }) {
+        Some(g) => g,
+        None => return out,
+    };
 
     let callee_bytes = callee_text.as_bytes();
 
@@ -985,11 +1001,12 @@ pub fn classify_gated_sink(
             object_destination_fields,
         } = gate.activation
         {
-            return Some(GateMatch {
+            out.push(GateMatch {
                 label: gate.label,
                 payload_args: gate.payload_args,
                 object_destination_fields,
             });
+            continue;
         }
 
         // ── ValueMatch activation (legacy) ───────────────────────────────
@@ -1012,7 +1029,7 @@ pub fn classify_gated_sink(
                             any_dangerous = true;
                             break;
                         }
-                        // Present with a safe literal — continue checking other kwargs.
+                        // Present with a safe literal, continue checking other kwargs.
                     }
                     None => {
                         any_dynamic_present = true;
@@ -1020,23 +1037,25 @@ pub fn classify_gated_sink(
                 }
             }
             if any_dangerous {
-                return Some(GateMatch {
+                out.push(GateMatch {
                     label: gate.label,
                     payload_args: gate.payload_args,
                     object_destination_fields: &[],
                 });
+                continue;
             }
             if any_dynamic_present {
-                // Dynamic kwarg value — we can't prove safe. Conservatively
+                // Dynamic kwarg value, we can't prove safe. Conservatively
                 // flag every positional arg so the activation pathway isn't
                 // silently narrowed to the gate's declared `payload_args`.
-                return Some(GateMatch {
+                out.push(GateMatch {
                     label: gate.label,
                     payload_args: ALL_ARGS_PAYLOAD,
                     object_destination_fields: &[],
                 });
+                continue;
             }
-            return None; // all listed kwargs absent or safe-literal → suppress
+            continue; // all listed kwargs absent or safe-literal → suppress
         }
 
         // Single-kwarg / positional gate path (original semantics).
@@ -1058,22 +1077,22 @@ pub fn classify_gated_sink(
                         .iter()
                         .any(|p| lower.starts_with(&p.to_ascii_lowercase()));
                 if is_dangerous {
-                    return Some(GateMatch {
+                    out.push(GateMatch {
                         label: gate.label,
                         payload_args: gate.payload_args,
                         object_destination_fields: &[],
                     });
                 }
-                return None; // safe constant → suppress
+                // safe constant → suppress (no push)
             }
             // Unknown / dynamic activation arg: the gate fires conservatively,
             // but we can't prove that only the declared `payload_args` carry
-            // risk — a tainted activation arg (e.g. `setAttribute(userAttr, …)`
+            // risk, a tainted activation arg (e.g. `setAttribute(userAttr, …)`
             // where `userAttr` is user-controlled) is itself a vulnerability
             // path. Return ALL_ARGS_PAYLOAD so downstream sink scanning
             // considers every positional argument.
             None => {
-                return Some(GateMatch {
+                out.push(GateMatch {
                     label: gate.label,
                     payload_args: ALL_ARGS_PAYLOAD,
                     object_destination_fields: &[],
@@ -1081,7 +1100,7 @@ pub fn classify_gated_sink(
             }
         }
     }
-    None
+    out
 }
 
 /// Public wrapper for [`normalize_chained_call`] so callers outside the module
@@ -1090,25 +1109,11 @@ pub fn normalize_chained_call_for_classify(text: &str) -> String {
     normalize_chained_call(text)
 }
 
-/// Return the bare method-name segment of a callee text.
-///
-/// Centralised replacement for the textual `callee.rsplit('.').next().unwrap_or(callee)`
-/// pattern that used to be scattered across the codebase.
-///
-/// Behaviour-preserving across the Phase 2 SSA chain decomposition rollout:
-/// - When SSA lowering rewrites a chained-receiver call (`c.mu.Lock()` →
-///   `Call("Lock", [v_mu])`), the call's `callee` is already the bare method
-///   name, so this helper is a no-op pass-through.
-/// - For 1-dot callees (`obj.method`) and for languages where Phase 2 lowering
-///   doesn't run yet (PHP/Ruby) the helper still extracts the trailing method
-///   from the textual form, exactly as the old per-callsite split did.
-/// - For bare callees (no dot), it returns the input unchanged.
-///
-/// Use this helper when you need the *terminal* method name from a callee
-/// string regardless of whether the call had a chained receiver. When you
-/// have an `SsaOp::Call` in hand, prefer reading `callee` directly and
-/// walking `receiver` through `FieldProj` ops — that's the precise path.
-/// This helper is the textual fallback for callsites that only see a `&str`.
+/// Return the bare method-name segment of a callee text. Returns the
+/// input unchanged for bare callees. When you have an `SsaOp::Call`,
+/// prefer reading `callee` directly and walking `receiver` through
+/// `FieldProj` ops, this helper is the textual fallback for callsites
+/// that only see a `&str`.
 pub fn bare_method_name(callee: &str) -> &str {
     callee.rsplit('.').next().unwrap_or(callee)
 }
@@ -1314,19 +1319,15 @@ mod tests {
     fn bare_method_name_strips_chain() {
         // No-dot input → returned as-is.
         assert_eq!(bare_method_name("foo"), "foo");
-        // 1-dot → trailing segment (Phase 2 leaves these alone in SSA).
+        // 1-dot → trailing segment.
         assert_eq!(bare_method_name("obj.method"), "method");
-        // Multi-dot → trailing segment (matches AST-only callees from
-        // PHP/Ruby and any pre-Phase-2 textual paths kept around in
-        // `callee_text` for display).
+        // Multi-dot → trailing segment.
         assert_eq!(bare_method_name("a.b.c.method"), "method");
-        // Trailing dot → empty trailing segment, matching the legacy
-        // `rsplit('.').next()` behaviour bit-for-bit.
+        // Trailing dot → empty trailing segment.
         assert_eq!(bare_method_name("foo."), "");
         // Empty input.
         assert_eq!(bare_method_name(""), "");
-        // Phase 2 invariant: when SSA decomposed a chain, `callee` is
-        // the bare method already and the helper is a no-op.
+        // SSA-decomposed chains pass through untouched.
         assert_eq!(bare_method_name("Lock"), "Lock");
     }
 
@@ -1399,7 +1400,7 @@ mod tests {
 
     #[test]
     fn classify_bare_href_is_none() {
-        // Bare "href" should NOT be a sink — only "location.href" and variants
+        // Bare "href" should NOT be a sink, only "location.href" and variants
         let result = classify("javascript", "href", None);
         assert_eq!(result, None);
     }
@@ -1497,7 +1498,7 @@ mod tests {
     #[test]
     fn classify_go_user_client_get_is_not_ssrf_sink() {
         // `client.Get` on a user-named *http.Client variable should NOT
-        // match — the Go SSRF set is restricted to the stdlib package
+        // match, the Go SSRF set is restricted to the stdlib package
         // helper `http.DefaultClient`. Type-aware resolution would be the
         // path to a broader rule, not a bare-name match.
         let result = classify("go", "client.Get", None);
@@ -1530,7 +1531,7 @@ mod tests {
 
     #[test]
     fn classify_ruby_io_open_is_not_shell_escape_sink() {
-        // `IO.open` takes a file descriptor — never pipes.  The bare-
+        // `IO.open` takes a file descriptor, never pipes.  The bare-
         // open CMDI rule must leave it alone.
         let result = classify("ruby", "IO.open", None);
         assert_ne!(result, Some(DataLabel::Sink(Cap::SHELL_ESCAPE)));
@@ -1572,7 +1573,7 @@ mod tests {
 
     #[test]
     fn classify_cpp_sto_family_is_sanitizer() {
-        // Phase 1: full `std::sto*` family (including 64-bit and `long
+        // full `std::sto*` family (including 64-bit and `long
         // double` variants) clears every taint cap that flows through it,
         // matching the existing `std::stoi`/`std::stol` rule.
         for callee in [
@@ -1621,6 +1622,16 @@ mod tests {
         false
     }
 
+    /// Find the first matching gate whose label sink-caps overlap `caps`.
+    /// Lets tests target a specific gate when a callee carries multiple
+    /// (e.g. `fetch` is both an SSRF and a `DATA_EXFIL` gate).
+    fn find_match_with_caps(matches: &[GateMatch], caps: Cap) -> Option<GateMatch> {
+        matches
+            .iter()
+            .find(|m| matches!(m.label, DataLabel::Sink(c) if c.intersects(caps)))
+            .copied()
+    }
+
     #[test]
     fn gated_sink_dangerous_exact() {
         let result = classify_gated_sink(
@@ -1631,12 +1642,12 @@ mod tests {
             no_kw_present,
         );
         assert_eq!(
-            result,
-            Some(GateMatch {
+            result.as_slice(),
+            &[GateMatch {
                 label: DataLabel::Sink(Cap::HTML_ESCAPE),
                 payload_args: [1usize].as_slice(),
                 object_destination_fields: &[],
-            })
+            }]
         );
     }
 
@@ -1650,12 +1661,12 @@ mod tests {
             no_kw_present,
         );
         assert_eq!(
-            result,
-            Some(GateMatch {
+            result.as_slice(),
+            &[GateMatch {
                 label: DataLabel::Sink(Cap::HTML_ESCAPE),
                 payload_args: [1usize].as_slice(),
                 object_destination_fields: &[],
-            })
+            }]
         );
     }
 
@@ -1668,24 +1679,24 @@ mod tests {
             no_kw,
             no_kw_present,
         );
-        assert_eq!(result, None);
+        assert!(result.is_empty());
     }
 
     #[test]
     fn gated_sink_dynamic_conservative() {
         // Dynamic activation (e.g. `setAttribute(attrVar, val)`) returns the
         // ALL_ARGS_PAYLOAD sentinel so callers expand payload tracking to
-        // every positional arg — the activation arg itself is a vulnerability
+        // every positional arg, the activation arg itself is a vulnerability
         // path when attacker-controlled.
         let result =
             classify_gated_sink("javascript", "setAttribute", |_| None, no_kw, no_kw_present);
         assert_eq!(
-            result,
-            Some(GateMatch {
+            result.as_slice(),
+            &[GateMatch {
                 label: DataLabel::Sink(Cap::HTML_ESCAPE),
                 payload_args: ALL_ARGS_PAYLOAD,
                 object_destination_fields: &[],
-            })
+            }]
         );
     }
 
@@ -1698,7 +1709,7 @@ mod tests {
             no_kw,
             no_kw_present,
         );
-        assert_eq!(result, None);
+        assert!(result.is_empty());
     }
 
     #[test]
@@ -1711,7 +1722,7 @@ mod tests {
             no_kw,
             no_kw_present,
         );
-        assert_eq!(result.unwrap().payload_args, &[1]);
+        assert_eq!(result[0].payload_args, &[1]);
 
         // parseFromString: payload is arg 0
         let result = classify_gated_sink(
@@ -1727,7 +1738,7 @@ mod tests {
             no_kw,
             no_kw_present,
         );
-        assert_eq!(result.unwrap().payload_args, &[0]);
+        assert_eq!(result[0].payload_args, &[0]);
     }
 
     #[test]
@@ -1745,7 +1756,7 @@ mod tests {
             no_kw,
             no_kw_present,
         );
-        assert_eq!(result, None);
+        assert!(result.is_empty());
     }
 
     #[test]
@@ -1764,12 +1775,12 @@ mod tests {
             |kw| kw == "shell",
         );
         assert_eq!(
-            result,
-            Some(GateMatch {
+            result.as_slice(),
+            &[GateMatch {
                 label: DataLabel::Sink(Cap::SHELL_ESCAPE),
                 payload_args: [0usize].as_slice(),
                 object_destination_fields: &[],
-            })
+            }]
         );
     }
 
@@ -1788,7 +1799,7 @@ mod tests {
             },
             |kw| kw == "shell",
         );
-        assert_eq!(result, None);
+        assert!(result.is_empty());
     }
 
     #[test]
@@ -1797,12 +1808,12 @@ mod tests {
         // literal available → unknown activation → ALL_ARGS_PAYLOAD sentinel.
         let result = classify_gated_sink("python", "Popen", |_| None, |_| None, no_kw_present);
         assert_eq!(
-            result,
-            Some(GateMatch {
+            result.as_slice(),
+            &[GateMatch {
                 label: DataLabel::Sink(Cap::SHELL_ESCAPE),
                 payload_args: ALL_ARGS_PAYLOAD,
                 object_destination_fields: &[],
-            })
+            }]
         );
     }
 
@@ -1825,12 +1836,12 @@ mod tests {
             |kw| kw == "shell",
         );
         assert_eq!(
-            result,
-            Some(GateMatch {
+            result.as_slice(),
+            &[GateMatch {
                 label: DataLabel::Sink(Cap::SHELL_ESCAPE),
                 payload_args: [0usize].as_slice(),
                 object_destination_fields: &[],
-            })
+            }]
         );
     }
 
@@ -1850,7 +1861,7 @@ mod tests {
             },
             |kw| kw == "shell",
         );
-        assert_eq!(result, None);
+        assert!(result.is_empty());
     }
 
     /// `subprocess.run(cmd)` → no shell kwarg → presence-aware gate suppresses.
@@ -1864,7 +1875,7 @@ mod tests {
             |_| None,
             no_kw_present,
         );
-        assert_eq!(result, None);
+        assert!(result.is_empty());
     }
 
     /// `subprocess.run(cmd, shell=flag)` → shell kwarg present but dynamic →
@@ -1880,12 +1891,12 @@ mod tests {
             |kw| kw == "shell",
         );
         assert_eq!(
-            result,
-            Some(GateMatch {
+            result.as_slice(),
+            &[GateMatch {
                 label: DataLabel::Sink(Cap::SHELL_ESCAPE),
                 payload_args: ALL_ARGS_PAYLOAD,
                 object_destination_fields: &[],
-            })
+            }]
         );
     }
 
@@ -1893,18 +1904,18 @@ mod tests {
     /// verbatim for the caller to apply object-literal field filtering.
     #[test]
     fn gated_sink_destination_positional_always_fires() {
-        // `fetch(url)` — arg 0 is the URL (positional destination) OR an
+        // `fetch(url)`, arg 0 is the URL (positional destination) OR an
         // object with a `url` field. The gate fires unconditionally, with
         // `url` declared as the object-literal destination-field for the
         // `fetch({url, body})` shape.
         let result = classify_gated_sink(
             "javascript",
             "fetch",
-            |_| None, // no literal — Destination mode doesn't inspect it
+            |_| None, // no literal, Destination mode doesn't inspect it
             no_kw,
             no_kw_present,
         );
-        let m = result.expect("fetch gate should fire");
+        let m = find_match_with_caps(&result, Cap::SSRF).expect("fetch SSRF gate should fire");
         assert_eq!(m.label, DataLabel::Sink(Cap::SSRF));
         assert_eq!(m.payload_args, &[0]);
         assert_eq!(m.object_destination_fields, &["url"]);
@@ -1914,10 +1925,13 @@ mod tests {
     /// the CFG caller to drive object-literal field filtering.
     #[test]
     fn gated_sink_destination_object_fields_surfaced() {
-        // `http.request(opts, cb)` — opts is an object with destination fields.
+        // `http.request(opts, cb)`, opts is an object with destination fields.
         let result =
             classify_gated_sink("javascript", "http.request", |_| None, no_kw, no_kw_present);
-        let m = result.expect("http.request gate should fire");
+        let m = result
+            .first()
+            .copied()
+            .expect("http.request gate should fire");
         assert_eq!(m.label, DataLabel::Sink(Cap::SSRF));
         assert_eq!(m.payload_args, &[0]);
         assert!(
@@ -1926,6 +1940,27 @@ mod tests {
                 .any(|&f| f == "host" || f == "hostname"),
             "expected host/hostname in destination fields, got {:?}",
             m.object_destination_fields,
+        );
+    }
+
+    /// `fetch` carries both SSRF (URL flow) and `DATA_EXFIL` (body / headers /
+    /// json flow) gates. Both must fire from a single classify call so the
+    /// downstream CFG can build per-cap filters.
+    #[test]
+    fn gated_sink_fetch_emits_ssrf_and_data_exfil() {
+        let result = classify_gated_sink("javascript", "fetch", |_| None, no_kw, no_kw_present);
+        let ssrf = find_match_with_caps(&result, Cap::SSRF).expect("SSRF gate fires");
+        assert_eq!(ssrf.label, DataLabel::Sink(Cap::SSRF));
+        assert_eq!(ssrf.payload_args, &[0]);
+        assert_eq!(ssrf.object_destination_fields, &["url"]);
+
+        let exfil = find_match_with_caps(&result, Cap::DATA_EXFIL).expect("DATA_EXFIL gate fires");
+        assert_eq!(exfil.label, DataLabel::Sink(Cap::DATA_EXFIL));
+        assert_eq!(exfil.payload_args, &[1]);
+        assert!(
+            exfil.object_destination_fields.contains(&"body"),
+            "expected body in DATA_EXFIL destination fields, got {:?}",
+            exfil.object_destination_fields,
         );
     }
 

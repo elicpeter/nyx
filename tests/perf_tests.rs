@@ -91,7 +91,7 @@ fn bench_indexed(fixture_dir: &Path, iterations: usize) -> (u64, u64) {
         let _ = scan_with_index_parallel("bench", Arc::clone(&pool), &cfg, false, fixture_dir);
         cold_durations.push(start.elapsed().as_millis() as u64);
 
-        // Warm: second scan on same index — files unchanged
+        // Warm: second scan on same index, files unchanged
         let start = Instant::now();
         let _ = scan_with_index_parallel("bench", Arc::clone(&pool), &cfg, false, fixture_dir);
         warm_durations.push(start.elapsed().as_millis() as u64);
@@ -126,7 +126,7 @@ fn run_fixture_bench(name: &str) {
         // Shared GitHub Actions runners have unpredictable CPU contention;
         // give "lenient" fixtures 2x headroom so a slow-but-passing scanner
         // does not flake the build. "strict" fixtures still keep a small
-        // cushion — regressions at that level are real.
+        // cushion, regressions at that level are real.
         let multiplier = if perf.ci_mode == "lenient" { 2.0 } else { 1.25 };
         let max_no_index = (perf.max_ms_no_index as f64 * multiplier) as u64;
         let max_cold = (perf.max_ms_index_cold as f64 * multiplier) as u64;

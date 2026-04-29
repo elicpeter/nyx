@@ -632,7 +632,7 @@ pub struct HealthScore {
 pub struct HealthComponent {
     /// Human label (e.g. "Severity pressure", "Trend", "Triage").
     pub label: String,
-    /// 0–100 — already inverted so higher = healthier.
+    /// 0–100, already inverted so higher = healthier.
     pub score: u8,
     /// Weight applied when blending into the final score (0.0–1.0).
     pub weight: f64,
@@ -662,7 +662,7 @@ pub struct BacklogStats {
     pub median_age_days: Option<u32>,
     /// Findings older than 30 days that remain open.
     pub stale_count: usize,
-    /// Histogram buckets (label, count) — fixed 5 buckets.
+    /// Histogram buckets (label, count), fixed 5 buckets.
     pub age_buckets: Vec<OverviewCount>,
 }
 
@@ -691,12 +691,12 @@ pub struct ConfidenceDistribution {
 pub struct ScannerQuality {
     pub files_scanned: u64,
     pub files_skipped: u64,
-    /// 0.0–1.0 — files_scanned / (files_scanned + files_skipped).
+    /// 0.0–1.0, files_scanned / (files_scanned + files_skipped).
     pub parse_success_rate: f64,
     pub functions_analyzed: u64,
     pub call_edges: u64,
     pub unresolved_calls: u64,
-    /// 0.0–1.0 — call_edges / (call_edges + unresolved_calls).
+    /// 0.0–1.0, call_edges / (call_edges + unresolved_calls).
     pub call_resolution_rate: f64,
     /// % of taint findings that received a symbolic verdict (Confirmed|Infeasible|Inconclusive).
     pub symex_verified_rate: f64,
@@ -712,7 +712,7 @@ pub struct IssueCategoryBucket {
     pub count: usize,
 }
 
-/// "Hot sink" — a single callee that absorbs many findings.
+/// "Hot sink", a single callee that absorbs many findings.
 #[derive(Debug, Clone, Serialize)]
 pub struct HotSink {
     /// Callee name (best-effort; from flow_steps last Sink).
@@ -723,7 +723,7 @@ pub struct HotSink {
 /// One OWASP Top-10 (2021) bucket.
 #[derive(Debug, Clone, Serialize)]
 pub struct OwaspBucket {
-    /// "A01:2021 — Broken Access Control" etc.
+    /// "A01:2021, Broken Access Control" etc.
     pub code: String,
     pub label: String,
     pub count: usize,

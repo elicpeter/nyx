@@ -698,7 +698,7 @@ fn cross_file_sink_finding_carries_primary_location() {
     );
     let finding = &findings[0];
     // Note: `uses_summary == false` here because the source (env::var) is
-    // local — only the *sink* was summary-resolved.  That's the case the
+    // local, only the *sink* was summary-resolved.  That's the case the
     // `primary_location` / `uses_summary` independence comment on
     // [`super::Finding::primary_location`] documents.
     let loc = finding
@@ -925,7 +925,7 @@ fn multi_file_sink_in_another_file() {
         }
     "#;
 
-    // File B: env::var → exec_cmd() — sink is cross-file.
+    // File B: env::var → exec_cmd(), sink is cross-file.
     let caller_src = br#"
         use std::env;
         fn main() {
@@ -956,7 +956,7 @@ fn multi_file_sink_in_another_file() {
 fn multi_file_passthrough_preserves_taint() {
     use crate::summary::FuncSummary;
 
-    // identity() just returns its argument — it propagates taint but has no
+    // identity() just returns its argument, it propagates taint but has no
     // source/sanitizer/sink caps of its own.
     let mut global = GlobalSummaries::new();
     let key = FuncKey {
@@ -1071,7 +1071,7 @@ fn multi_file_chain_source_sanitize_sink_across_files() {
 fn sanitizer_strips_only_matching_bits() {
     // Source(ALL) → shell_escape → sink_html (HTML sink).
     // shell_escape strips SHELL_ESCAPE but not HTML_ESCAPE.
-    // sink_html is an HTML sink — HTML_ESCAPE bit is still set → 1 finding.
+    // sink_html is an HTML sink, HTML_ESCAPE bit is still set → 1 finding.
     let src = br#"
         use std::env;
         fn sink_html(s: &str) {}
@@ -1142,7 +1142,7 @@ fn taint_through_variable_reassignment() {
 
 #[test]
 fn untainted_variable_at_sink_is_safe() {
-    // A string literal (not from a source) passed to Command — no finding.
+    // A string literal (not from a source) passed to Command, no finding.
     let src = br#"
         use std::process::Command;
         fn main() {
@@ -1585,7 +1585,7 @@ fn cpp_source_to_sink() {
     );
 }
 
-/// Phase 2 (cpp-precision): `c_str()` is a const accessor on `std::string`
+/// `c_str()` is a const accessor on `std::string`
 /// that returns a pointer to the same buffer.  It must propagate taint from
 /// the receiver to the result so the downstream sink fires.
 #[test]
@@ -1597,12 +1597,12 @@ fn cpp_c_str_propagates_taint() {
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
     assert!(
         !findings.is_empty(),
-        "C++: tainted s.c_str() into system() must fire (Phase 2 c_str passthrough)",
+        "C++: tainted s.c_str() into system() must fire",
     );
 }
 
-/// Phase 2: `std::move(x)` returns its argument unchanged in terms of
-/// data flow — the rvalue cast is a representation move, not a sanitiser.
+/// `std::move(x)` returns its argument unchanged in terms of
+/// data flow, the rvalue cast is a representation move, not a sanitiser.
 /// Default propagation collects argument taint into the result.
 #[test]
 fn cpp_std_move_propagates_taint() {
@@ -1617,7 +1617,7 @@ fn cpp_std_move_propagates_taint() {
     );
 }
 
-/// Phase 2: `static_cast<T>(x)` is parsed as a call expression by
+/// `static_cast<T>(x)` is parsed as a call expression by
 /// tree-sitter-cpp; default propagation transports taint from the casted
 /// argument to the result.
 #[test]
@@ -1633,7 +1633,7 @@ fn cpp_static_cast_propagates_taint() {
     );
 }
 
-/// Phase 5 (cpp-precision): a fluent builder chain whose host
+/// a fluent builder chain whose host
 /// argument is tainted should fire on the terminal `.connect()`
 /// SSRF sink.  The chained `.host(...)` / `.port(...)` calls return
 /// the receiver, and default Call-arg propagation puts the tainted
@@ -1647,12 +1647,12 @@ fn cpp_builder_chain_user_host_fires() {
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
     assert!(
         !findings.is_empty(),
-        "C++: tainted host through fluent builder chain must reach terminal connect() (Phase 5)",
+        "C++: tainted host through fluent builder chain must reach terminal connect()",
     );
 }
 
-/// Phase 5: a fluent builder chain with a hardcoded host literal
-/// must NOT fire on the terminal connect() sink — the chain carries
+/// a fluent builder chain with a hardcoded host literal
+/// must NOT fire on the terminal connect() sink, the chain carries
 /// no taint.
 #[test]
 fn cpp_builder_chain_const_host_silent() {
@@ -1663,11 +1663,11 @@ fn cpp_builder_chain_const_host_silent() {
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
     assert!(
         findings.is_empty(),
-        "C++: builder chain with literal host must NOT fire (Phase 5 negative)",
+        "C++: builder chain with literal host must NOT fire (Negative)",
     );
 }
 
-/// Phase 4 (cpp-precision): inline member-function bodies inside a
+/// inline member-function bodies inside a
 /// `class_specifier` must be extracted as separate functions and
 /// intra-file calls must resolve to their bodies. Pre-Phase-4, the
 /// `class_specifier` AST kind was unmapped in cpp KINDS, so the CFG
@@ -1682,11 +1682,11 @@ fn cpp_inline_class_method_resolves() {
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
     assert!(
         !findings.is_empty(),
-        "C++: tainted arg through inline class method must reach system() (Phase 4)",
+        "C++: tainted arg through inline class method must reach system()",
     );
 }
 
-/// Phase 3 (cpp-precision): a tainted argument passed through an
+/// a tainted argument passed through an
 /// identity-style lambda (`auto echo = [](const char* s) { return s; }`)
 /// must reach the downstream sink. This is handled by the same default
 /// Call-arg propagation as `std::move`/`static_cast`; pinning the
@@ -1705,7 +1705,7 @@ fn cpp_identity_lambda_propagates_taint() {
     );
 }
 
-/// Phase 2: `std::vector<char>::data()` is a Load-style container op that
+/// `std::vector<char>::data()` is a Load-style container op that
 /// returns a pointer to the underlying buffer; `system(v.data())` should
 /// fire when `v` is tainted.
 #[test]
@@ -1801,7 +1801,7 @@ fn ruby_source_to_sink() {
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Cross-language resolution now requires explicit InteropEdge declarations.
-// Without an edge, functions from different languages are never resolved —
+// Without an edge, functions from different languages are never resolved ,
 // this prevents false positives from name collisions across languages.
 
 /// Extract cross-file summaries from any language's source bytes.
@@ -1984,7 +1984,7 @@ fn cross_lang_rust_sanitizer_in_js_via_interop() {
         None,
     );
     // eval uses Cap::all(), so a SHELL_ESCAPE sanitizer alone does NOT
-    // neutralise taint — shell-escape is semantically wrong for code injection.
+    // neutralise taint, shell-escape is semantically wrong for code injection.
     // The finding should still be reported.
     assert!(
         !findings.is_empty(),
@@ -2481,7 +2481,7 @@ fn cross_lang_summary_preserves_lang_metadata() {
 
     let global = merge_summaries(vec![py_summary, js_summary], None);
 
-    // They are now separate entries — not merged
+    // They are now separate entries, not merged
     let py_matches = global.lookup_same_lang(Lang::Python, "helper");
     let js_matches = global.lookup_same_lang(Lang::JavaScript, "helper");
 
@@ -2609,7 +2609,7 @@ fn ambiguous_resolution_returns_none() {
         );
     }
 
-    // Caller from c.rs calls helper() — ambiguous (two matches, neither is caller's namespace)
+    // Caller from c.rs calls helper(), ambiguous (two matches, neither is caller's namespace)
     let src = br#"
         use std::process::Command;
         fn main() {
@@ -2855,7 +2855,7 @@ fn validate_and_early_return() {
     let summaries = &file_cfg.summaries;
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
-    // Validated findings are now suppressed — validate() guard means the
+    // Validated findings are now suppressed, validate() guard means the
     // sink is on the safe path, so no finding should be emitted.
     assert_eq!(findings.len(), 0, "validated finding should be suppressed");
 }
@@ -2888,7 +2888,7 @@ fn validate_in_if_else_path_validated() {
     let summaries = &file_cfg.summaries;
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
-    // Validated findings are now suppressed — sink is in the validated
+    // Validated findings are now suppressed, sink is in the validated
     // branch, so no finding should be emitted.
     assert_eq!(findings.len(), 0, "validated finding should be suppressed");
 }
@@ -2932,7 +2932,7 @@ fn contradictory_null_check_pruned() {
 
     // Inner branch is infeasible: if x.is_none() then x cannot also be is_none().
     // After early return on is_none(), the fall-through path has polarity=false
-    // for NullCheck. The inner `if x.is_none()` True branch has polarity=true —
+    // for NullCheck. The inner `if x.is_none()` True branch has polarity=true ,
     // contradiction.
     let src = br#"
         use std::env; use std::process::Command;
@@ -3045,7 +3045,7 @@ fn path_state_budget_graceful() {
     let summaries = &file_cfg.summaries;
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
-    // Should still detect the flow — truncation shouldn't cause false negatives.
+    // Should still detect the flow, truncation shouldn't cause false negatives.
     assert_eq!(
         findings.len(),
         1,
@@ -3080,7 +3080,7 @@ fn unknown_predicate_not_pruned() {
     let summaries = &file_cfg.summaries;
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
-    // Comparison is not in the whitelist — the path should NOT be pruned.
+    // Comparison is not in the whitelist, the path should NOT be pruned.
     assert_eq!(
         findings.len(),
         1,
@@ -3096,7 +3096,7 @@ fn duplicate_null_guard_prunes_unreachable_sink() {
     // After `if y.is_none() { return; }`, the false arm proves
     // `y.is_none() == false` on the only surviving path.  A second
     // `if y.is_none() { sink }` then adds `y.is_none() == true` on the
-    // body's True arm — a per-symbol PredicateSummary contradiction
+    // body's True arm, a per-symbol PredicateSummary contradiction
     // (known_true & known_false on bit NullCheck).  The body is
     // structurally unreachable; the sink must not fire.
     //
@@ -3573,7 +3573,7 @@ fn js_two_level_converges_no_mutation() {
 
 #[test]
 fn catch_param_to_sink_has_caught_exception_source_kind() {
-    // Catch param flows to a sink — the finding source_kind must be
+    // Catch param flows to a sink, the finding source_kind must be
     // CaughtException, not Unknown.
     let src = b"
         const { exec } = require('child_process');
@@ -3743,7 +3743,7 @@ fn assert_ssa_integration(src: &[u8]) {
     // High-level path (per-body analysis)
     let high_level = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
-    // Direct SSA path — use the first function body (fn main), not top-level
+    // Direct SSA path, use the first function body (fn main), not top-level
     let body = if file_cfg.bodies.len() > 1 {
         &file_cfg.bodies[1]
     } else {
@@ -4654,7 +4654,7 @@ fn ssa_induction_var_no_taint() {
 
 #[test]
 fn ssa_loop_tainted_var_not_induction() {
-    // `x` is tainted and transformed in a loop — NOT an induction variable
+    // `x` is tainted and transformed in a loop, NOT an induction variable
     let src = br#"
         use std::{env, process::Command};
         fn main() {
@@ -4766,7 +4766,7 @@ fn ssa_phi_path_sensitive_both_branches_validated() {
     let summaries = &file_cfg.summaries;
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
-    // Validated findings are now suppressed — sink is in the validated
+    // Validated findings are now suppressed, sink is in the validated
     // branch, so no finding should be emitted.
     assert_eq!(findings.len(), 0, "validated finding should be suppressed");
 }
@@ -5116,7 +5116,7 @@ fn abstract_ssrf_prefix_linear_suppression() {
 /// Two predecessor blocks produce string concat values with different safe
 /// prefixes ("https://api.example.com/users/" and "https://api.example.com/admins/").
 /// A phi merges them. The LCP of the prefixes is "https://api.example.com/" which
-/// still has scheme://host/ — so SSRF suppression should fire.
+/// still has scheme://host/, so SSRF suppression should fire.
 ///
 /// Before the phi replay fix, collect_block_events did NOT replay abstract phis,
 /// leaving the phi result's abstract value as Top (stale). The SSRF suppression
@@ -5255,7 +5255,7 @@ fn phi_validated_must_requires_all_paths() {
     use tree_sitter::Language;
 
     // Path A validates x, path B does NOT validate x.
-    // The phi for x after the merge must NOT get validated_must — only
+    // The phi for x after the merge must NOT get validated_must, only
     // validated_may (since at least one path validated). The sink after
     // the merge must still fire because the must-analysis says "not
     // definitely validated on all paths".
@@ -5324,7 +5324,7 @@ fn inline_return_constant_with_internal_source_produces_no_finding() {
         None,
     );
 
-    // transform() returns a constant — no taint should leak to caller
+    // transform() returns a constant, no taint should leak to caller
     assert_eq!(
         findings.len(),
         0,
@@ -5386,7 +5386,7 @@ fn inline_return_taint_internal_source_does_not_widen_caps() {
     // Callee has an internal source (document.location) alongside a tainted
     // param. The explicit return value is the param. Without the C-1 fix,
     // extract_inline_return_taint would union ALL live tainted values' caps
-    // — the internal source's derived-caps would override the param-caps
+    //, the internal source's derived-caps would override the param-caps
     // (derived takes priority in the extraction logic). With the fix, only
     // the return value's taint is collected, so param taint is returned
     // correctly.
@@ -5420,7 +5420,7 @@ fn inline_return_taint_internal_source_does_not_widen_caps() {
         None,
     );
 
-    // The callee returns cmd (tainted param) — 1 finding expected.
+    // The callee returns cmd (tainted param), 1 finding expected.
     // The internal document.location() should NOT widen the return taint.
     assert_eq!(
         findings.len(),
@@ -5435,7 +5435,7 @@ fn inline_return_taint_internal_source_does_not_widen_caps() {
 ///
 /// Two class methods share the leaf name `process` in the same file.  If the
 /// summary map were keyed by bare name (or raw file-path namespace), the
-/// second lowering would overwrite the first — both methods would end up
+/// second lowering would overwrite the first, both methods would end up
 /// pointing at whichever summary was extracted last.
 ///
 /// With canonical `FuncKey` identity (`container` discriminates them) both
@@ -5483,7 +5483,7 @@ class Worker {
         summaries.keys().collect::<Vec<_>>(),
     );
 
-    // Same invariant on the cached-bodies map — inline analysis depends on
+    // Same invariant on the cached-bodies map, inline analysis depends on
     // being able to fetch the correct body by full FuncKey.
     let mut body_containers: Vec<String> = bodies
         .iter()
@@ -5593,6 +5593,7 @@ fn make_finding_for_link_test(
         path_hash,
         finding_id: String::new(),
         alternative_finding_ids: smallvec::SmallVec::new(),
+        effective_sink_caps: crate::labels::Cap::empty(),
     }
 }
 
@@ -5628,7 +5629,7 @@ fn finding_id_encodes_validation_and_path_hash() {
     );
 
     // Differing path_hash produces a different ID even with the same
-    // (body, source, sink, validated) — the whole point of the path
+    // (body, source, sink, validated), the whole point of the path
     // component in the dedup key.
     let mut u2 = make_finding_for_link_test(1, 3, 7, 0xdead_beef_0000_0002, false);
     u2.finding_id = super::make_finding_id(&u2);
@@ -5639,7 +5640,7 @@ fn finding_id_encodes_validation_and_path_hash() {
 }
 
 /// `link_alternative_paths` must cross-link findings that share
-/// `(body_id, sink, source)` — so a validated flow and an unvalidated
+/// `(body_id, sink, source)`, so a validated flow and an unvalidated
 /// flow on the same source/sink pair each list the other's ID.
 #[test]
 fn link_alternative_paths_cross_references_same_body_sink_source() {
@@ -5668,18 +5669,18 @@ fn link_alternative_paths_cross_references_same_body_sink_source() {
 }
 
 /// Findings that differ on `(body_id, sink, source)` are independent
-/// vulnerabilities — they must **not** end up cross-linked as
+/// vulnerabilities, they must **not** end up cross-linked as
 /// alternatives, otherwise the "alternative path" framing becomes
 /// noise.
 #[test]
 fn link_alternative_paths_does_not_link_distinct_sink_source() {
     let mut findings = vec![
         make_finding_for_link_test(1, 3, 7, 0x1111, false),
-        // Different sink — independent finding, not an alternative.
+        // Different sink, independent finding, not an alternative.
         make_finding_for_link_test(1, 3, 8, 0x1111, false),
-        // Different source — also independent.
+        // Different source, also independent.
         make_finding_for_link_test(1, 4, 7, 0x1111, false),
-        // Different body — also independent.
+        // Different body, also independent.
         make_finding_for_link_test(2, 3, 7, 0x1111, false),
     ];
     for f in &mut findings {
@@ -5697,7 +5698,7 @@ fn link_alternative_paths_does_not_link_distinct_sink_source() {
 
 /// When the same `(body, sink, source)` has three sibling findings
 /// (e.g. validated, unvalidated-path-A, unvalidated-path-B), each
-/// finding must list the other two — the group is symmetric and
+/// finding must list the other two, the group is symmetric and
 /// complete rather than a chain.
 #[test]
 fn link_alternative_paths_three_way_group() {
@@ -5726,14 +5727,14 @@ fn link_alternative_paths_three_way_group() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Typed call-graph devirtualisation — Phase 2 (typed_call_receivers)
+//  Typed call-graph devirtualisation (typed_call_receivers)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Phase 2: when a method call's receiver was constructed from a known
+/// when a method call's receiver was constructed from a known
 /// constructor (`File::open` → `FileHandle`), the SSA-extraction
 /// pipeline must record `(call_ordinal, "FileHandle")` on the
 /// caller's [`crate::summary::ssa_summary::SsaFuncSummary::typed_call_receivers`]
-/// so Phase 3 can devirtualise the cross-file edge.
+/// so build_call_graph can devirtualise the cross-file edge.
 ///
 /// Uses Java because `FileInputStream` / `FileOutputStream` are part
 /// of the [`crate::ssa::type_facts::constructor_type`] table for Java
@@ -5779,14 +5780,14 @@ class Reader {
     );
 }
 
-/// Phase 2 negative control: free-function calls (no receiver) must
+/// Negative control: free-function calls (no receiver) must
 /// never appear in `typed_call_receivers`.  Even when the callee is a
 /// known type-producing constructor, it sits in the body as a Call
 /// with `receiver = None` and is not a candidate for devirtualisation.
 #[test]
 fn typed_call_receivers_skips_free_function_calls() {
     // `new FileInputStream(...)` is a constructor invocation with no
-    // receiver — exactly the shape we want to ignore.
+    // receiver, exactly the shape we want to ignore.
     let src = br#"
 class Maker {
     void make() {
@@ -5808,10 +5809,10 @@ class Maker {
 
     // make() has zero parameters and no fresh-allocation return, so the
     // generic insertion gate skips it.  The phase-2 patch only force-
-    // inserts when `typed_call_receivers` is non-empty — which it
+    // inserts when `typed_call_receivers` is non-empty, which it
     // isn't here, since `new FileInputStream(...)` is a free-function-
     // shaped constructor call (no SSA receiver).  So either the
-    // summary is absent, or — if some other side effect inserted it —
+    // summary is absent, or, if some other side effect inserted it ,
     // its `typed_call_receivers` is empty.  Both forms prove no
     // spurious typed entry was recorded.
     let typed = summaries
@@ -5829,7 +5830,7 @@ class Maker {
 /// Regression: nested arrow functions inside `return new Promise((res,rej)
 /// => { ... })` must be lifted as separate bodies. Before the Kind::Return
 /// arm in cfg/mod.rs called `collect_nested_function_nodes`, only the
-/// outer function (`downloadFromUri`) was extracted — the executor and
+/// outer function (`downloadFromUri`) was extracted, the executor and
 /// its inner callbacks were silently swallowed, hiding the inner gated
 /// http.get sink from classification. Motivated by CVE-2025-64430.
 #[test]
@@ -5972,7 +5973,7 @@ const handler = (req) => {
 /// The augment pass populates `downloadFromUri.summary.param_to_sink:
 /// [(0, SSRF)]` (single-hop closure-capture lift). For the handler's
 /// `helper(req.body)` call to fire, `helper.summary.param_to_sink` must
-/// also contain `[(0, SSRF)]` — but that requires `helper`'s probe to
+/// also contain `[(0, SSRF)]`, but that requires `helper`'s probe to
 /// see `downloadFromUri`'s augmented summary at resolution time.
 ///
 /// Because the probe currently runs with `ssa_summaries=None`,
@@ -6065,11 +6066,198 @@ const handler = (req) => {
 /// `middle.summary.param_to_sink`, then handler's call site picks it up.
 ///
 /// Today the second-pass runs only once (no fixed-point), so depth-3+
-/// is expected to NOT fire — guards against accidental fixed-point
+/// is expected to NOT fire, guards against accidental fixed-point
 /// regression that would mask an over-eager rewrite.  Marked
 /// `#[ignore]` so it documents the depth limit without breaking CI.
 /// Motivated by CVE-2025-64430 corner case; remove the `#[ignore]` and
 /// any guarding `assert!` polarity if a fixed-point is added later.
+/// Indirect-validator branch narrowing: when an if-condition is a
+/// bare result variable whose reaching SSA def is a Call to a
+/// callee classified by `classify_input_validator_callee` (e.g.
+/// `validateUrlSsrf`, `verifyToken`, `isValidUrl`), the validator's
+/// argument is treated as validated on the success branch.
+///
+/// This pins the SSA-level
+/// `apply_input_validator_branch_narrowing` regardless of whether
+/// downstream consumers (sink-arg taint, cfg-unguarded-sink) honor
+/// `validated_must`.  Test asserts the symbol-keyed validation flag
+/// is set on the analysis exit state.
+///
+/// Direct-flow shape (no helper indirection); the helper-summary
+/// case still has open architectural gaps (validated_must doesn't
+/// propagate through `param_to_sink` summaries, same gap blocks
+/// AllowlistCheck-in-helper, see CVE_DEFERRED.md GHSA-4x48-cgf9-q33f).
+///
+/// Motivated by Novu CVE GHSA-4x48-cgf9-q33f
+/// (`const ssrfError = await validateUrlSsrf(child.webhookUrl); if (ssrfError) throw …;`).
+#[test]
+fn indirect_validator_narrowing_marks_arg_validated() {
+    let src = br#"
+async function handler(req) {
+  const target = req.query.url;
+  const ssrfError = await validateUrlSsrf(target);
+  if (ssrfError) {
+    throw new Error('blocked');
+  }
+  await axios.get(target);
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    // Direct-flow: validator narrowing should clear axios.get's taint event.
+    assert!(
+        findings.is_empty(),
+        "validator narrowing should suppress direct-flow SSRF; got {} finding(s)",
+        findings.len()
+    );
+}
+
+/// Regression: `extract_ssa_func_summary` must skip `all_validated`
+/// events when populating `param_to_sink` / `param_to_sink_param`.
+///
+/// Helper bodies whose validator-call branch narrowing fired produce
+/// per-param probe events flagged `all_validated=true`.  Without
+/// summary-extract suppression, callers would still see the helper
+/// in their summary's sink set and refire on `helper(taintedArg)`
+/// even though the validator inside the helper proved the path
+/// safe.  The caller can't see the validator (it's behind the
+/// summary), so the gap manifests as a precision miss only when
+/// helper + caller are in the same file.
+///
+/// Closes the helper-summary half of Novu CVE GHSA-4x48-cgf9-q33f.
+#[test]
+fn helper_with_validator_does_not_propagate_to_caller_via_summary() {
+    let src = br#"
+async function getWebhookResponse(child) {
+    const ssrfError = await validateUrlSsrf(child.webhookUrl);
+    if (ssrfError) {
+        throw new Error('blocked');
+    }
+    return await axios.post(child.webhookUrl, {});
+}
+
+async function handler(req) {
+    const child = req.body.filter;
+    const r = await getWebhookResponse(child);
+    return r;
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "helper-with-validator should not propagate sink via summary; got {} finding(s)",
+        findings.len()
+    );
+}
+
+/// Companion: same shape WITHOUT the validator inside the helper
+/// must still fire so the precision gain is targeted.  Asserts
+/// `all_validated` skip doesn't accidentally suppress unsafe helpers.
+#[test]
+fn helper_without_validator_still_propagates_to_caller_via_summary() {
+    let src = br#"
+async function getWebhookResponse(child) {
+    return await axios.post(child.webhookUrl, {});
+}
+
+async function handler(req) {
+    const child = req.body.filter;
+    const r = await getWebhookResponse(child);
+    return r;
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "helper-without-validator must still flag the cross-fn SSRF path",
+    );
+}
+
+/// Regression: `validate*`-named callees match
+/// `InputValidatorPolarity::ErrorReturning`, bare `if (err) throw`
+/// guards the success branch (false branch).  `is_valid*`/`is_safe*`
+/// callees match `InputValidatorPolarity::BooleanTrueIsValid`, bare
+/// `if (!ok) throw` guards the success branch (true branch via
+/// `condition_negated`).
+#[test]
+fn classify_input_validator_callee_polarity_buckets() {
+    use crate::ssa::type_facts::{InputValidatorPolarity, classify_input_validator_callee};
+
+    // ErrorReturning bucket
+    assert_eq!(
+        classify_input_validator_callee("validateUrlSsrf"),
+        Some(InputValidatorPolarity::ErrorReturning)
+    );
+    assert_eq!(
+        classify_input_validator_callee("verifyToken"),
+        Some(InputValidatorPolarity::ErrorReturning)
+    );
+    assert_eq!(
+        classify_input_validator_callee("validate_url"),
+        Some(InputValidatorPolarity::ErrorReturning)
+    );
+
+    // BooleanTrueIsValid bucket
+    assert_eq!(
+        classify_input_validator_callee("isValidUrl"),
+        Some(InputValidatorPolarity::BooleanTrueIsValid)
+    );
+    assert_eq!(
+        classify_input_validator_callee("is_valid_email"),
+        Some(InputValidatorPolarity::BooleanTrueIsValid)
+    );
+    assert_eq!(
+        classify_input_validator_callee("isSafe"),
+        Some(InputValidatorPolarity::BooleanTrueIsValid)
+    );
+
+    // Negative, names that look like validators but are auth-flavored
+    // (`checkPermissions`, `is_authorized`) are intentionally not
+    // matched here; they have separate semantics in the auth pipeline.
+    assert_eq!(classify_input_validator_callee("checkPermissions"), None);
+    assert_eq!(classify_input_validator_callee("is_authorized"), None);
+    assert_eq!(classify_input_validator_callee("randomThing"), None);
+
+    // Path-prefix peeling: `obj.validateXxx` should classify the same
+    // as the bare callee.
+    assert_eq!(
+        classify_input_validator_callee("validator.validateUrlSsrf"),
+        Some(InputValidatorPolarity::ErrorReturning)
+    );
+}
+
 #[test]
 #[ignore]
 fn cve_2025_64430_three_hop_transitive_documents_depth_limit() {

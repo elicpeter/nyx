@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::process::Command;
 
-/// Infrastructure provisioning tool — Rust core.
+/// Infrastructure provisioning tool, Rust core.
 /// Reads infrastructure config from environment and executes provisioning commands.
 
 struct InfraConfig {
@@ -56,7 +56,7 @@ fn apply_terraform() {
         .unwrap();
 }
 
-/// Destroys infrastructure — reads target from env.
+/// Destroys infrastructure, reads target from env.
 /// VULN: env var flows into Command
 fn destroy_cluster() {
     let cluster = env::var("DESTROY_TARGET").unwrap();

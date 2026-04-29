@@ -6,24 +6,24 @@
 //! The four fixtures under `tests/fixtures/cross_file_context_*` cover
 //! the documented precision wins and guardrails:
 //!
-//! * `cross_file_context_two_call_sites` (Python) — two calls to the same
+//! * `cross_file_context_two_call_sites` (Python), two calls to the same
 //!   cross-file helper, one tainted and one with a constant literal.
 //!   Asserts the tainted call still produces a finding.
-//! * `cross_file_context_callback` (JS) — cross-file helper invokes a
+//! * `cross_file_context_callback` (JS), cross-file helper invokes a
 //!   caller-side function passed as a callback.  Inline re-analysis of
 //!   the helper must resolve the callback binding and surface the
 //!   flow through `child_process.exec`.
-//! * `cross_file_context_sanitizer` (JS) — cross-file sanitizer applied
+//! * `cross_file_context_sanitizer` (JS), cross-file sanitizer applied
 //!   before an HTML sink.  Regression guard: cross-file inline must not
 //!   introduce a taint finding when the sanitiser is recognised.
-//! * `cross_file_context_deep_chain` (Python) — A -> B -> C chain with
+//! * `cross_file_context_deep_chain` (Python), A -> B -> C chain with
 //!   the sink in C.  k=1 means B->C resolves via summary; the end-to-end
 //!   finding must still surface so callers cannot lose recall on deep
 //!   chains.
 //!
 //! The `bodies_by_key_populated_for_cross_file_fixtures` test is a
 //! direct `GlobalSummaries`-level assertion that pass 1 loaded cross-file
-//! SSA bodies for each fixture — i.e. the cross-file inline path has
+//! SSA bodies for each fixture, i.e. the cross-file inline path has
 //! something to consult.  If this assertion flips to zero, cross-file
 //! inline would silently fall back to summary resolution and every
 //! expectations.json check above would be driven by the less precise
@@ -65,7 +65,7 @@ fn test_config() -> Config {
 /// Walk a fixture directory and replay the pass-1 body collection that
 /// `scan_filesystem` does, returning the merged `GlobalSummaries`.
 ///
-/// This is used purely for the availability assertion — the actual
+/// This is used purely for the availability assertion, the actual
 /// scans under test go through the regular `scan_no_index` entry point.
 fn pass1_bodies(root: &Path) -> GlobalSummaries {
     let cfg = test_config();
@@ -132,7 +132,7 @@ fn cross_file_context_sanitizer() {
 }
 
 /// Three-file deep chain (A -> B -> C) with the sink in C.  The
-/// end-to-end flow must still surface — k=1 depth cap on inline does
+/// end-to-end flow must still surface, k=1 depth cap on inline does
 /// not drop recall because B -> C resolves via summary.
 #[test]
 fn cross_file_context_deep_chain() {

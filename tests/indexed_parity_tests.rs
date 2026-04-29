@@ -15,7 +15,7 @@
 //!
 //! Path-dependent fields (absolute path, rank_score derived from ordering,
 //! evidence snippets that cite absolute paths) are excluded from the
-//! fingerprint because they are not expected to diverge in meaning — only
+//! fingerprint because they are not expected to diverge in meaning, only
 //! in representation.
 //!
 //! If an engine change is justified in making indexed and non-indexed diverge,
@@ -49,10 +49,10 @@ use std::sync::Arc;
 ///    if those match, confidence matches.
 ///
 /// **Does** include:
-///  - `(line, col)` — where the finding is reported.
-///  - `severity` — the analyst-visible triage axis.
-///  - `rule_id` — which detector fired.
-///  - `path_validated` — semantic axis used by triage UIs.
+///  - `(line, col)`, where the finding is reported.
+///  - `severity`, the analyst-visible triage axis.
+///  - `rule_id`, which detector fired.
+///  - `path_validated`, semantic axis used by triage UIs.
 ///
 /// If any of these differ between paths, the engine has genuinely produced
 /// different *findings*, not just different metadata.
@@ -113,7 +113,7 @@ fn scan_indexed_cold(fixture_root: &Path, mode: AnalysisMode) -> (Vec<Diag>, Pat
     // Keep tempdir alive by returning the db_path; actually return ownership of td.
     // We leak by forgetting the tempdir since the caller only needs the diags.
     // (Leaving tempdir scope drops it; we want it cleaned up, so we *don't* forget.)
-    // The tempdir drops here and removes the file — diags are already owned.
+    // The tempdir drops here and removes the file, diags are already owned.
     std::mem::drop(td);
     (diags, db_path)
 }
@@ -146,7 +146,7 @@ fn format_fingerprint_set_diff(
     label_b: &str,
     b: &[Fingerprint],
 ) -> String {
-    // Count multiplicity of each fingerprint — divergence can be a changed
+    // Count multiplicity of each fingerprint, divergence can be a changed
     // *count* even when both sides contain the same key.
     let mut count_a: BTreeMap<&Fingerprint, usize> = BTreeMap::new();
     let mut count_b: BTreeMap<&Fingerprint, usize> = BTreeMap::new();
@@ -279,7 +279,7 @@ fn run_parity_warm(fixture_name: &str, mode: AnalysisMode) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Fixtures under parity contract — Full mode
+//  Fixtures under parity contract, Full mode
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Representative mix covering all 10 supported languages plus cross-file
@@ -423,7 +423,7 @@ fn parity_full_route_registration_noise() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Non-Full analysis modes — the Taint-mode filter divergence lives here
+//  Non-Full analysis modes, the Taint-mode filter divergence lives here
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Taint mode is the narrowest CFG-capable mode.  Historically the indexed
@@ -462,7 +462,7 @@ fn parity_ast_mode_patterns() {
 /// `auth.*`).  These are produced by `run_cfg_analyses` under *any* CFG-
 /// capable mode, including Taint-only.  A historical filter in the indexed
 /// path dropped everything that wasn't `taint*`/`cfg-*` from Taint-mode
-/// output, silently swallowing state findings — this test pins that fix.
+/// output, silently swallowing state findings, this test pins that fix.
 #[test]
 fn parity_taint_state_fixture() {
     run_parity("state", AnalysisMode::Taint);
@@ -479,7 +479,7 @@ fn parity_ast_state_fixture() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Warm-scan parity — detects caching bugs in the indexed path
+//  Warm-scan parity, detects caching bugs in the indexed path
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -540,5 +540,5 @@ fn parity_full_sweep_all_fixtures() {
 //
 // None. Release-critical modes (Full, Taint, Cfg, Ast) must match bit-for-bit
 // on the finding fingerprint.  If you think you need to add an exception,
-// the test above should be the primary gate — don't loosen parity without
+// the test above should be the primary gate, don't loosen parity without
 // writing a test that demonstrates *why* the divergence is acceptable.

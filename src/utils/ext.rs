@@ -5,7 +5,7 @@ pub fn lowercase_ext(path: &std::path::Path) -> Option<&'static str> {
         // Real-world C++ codebases overwhelmingly use `.cc` / `.cxx` /
         // `.hpp` / `.hh` / `.h++` rather than the `.cpp` synthetic-fixture
         // extension.  All map to the same tree-sitter-cpp grammar.  `.h`
-        // is intentionally NOT mapped — it's also valid C and
+        // is intentionally NOT mapped, it's also valid C and
         // disambiguating without a build system is brittle.
         "cpp" | "c++" | "cc" | "cxx" | "hpp" | "hxx" | "hh" | "h++" => Some("cpp"),
         "java" => Some("java"),

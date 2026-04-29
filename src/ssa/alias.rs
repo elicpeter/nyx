@@ -59,7 +59,7 @@ impl BaseAliasResult {
 ///
 /// For each entry `(dst_val, src_val)` where copy prop replaced `dst` with
 /// `src`, looks up the original variable names.  If both are plain identifiers
-/// (no dots — i.e. not field paths), they are registered as base aliases.
+/// (no dots, i.e. not field paths), they are registered as base aliases.
 /// Transitive closure is computed so `b = a; c = b` yields group `{a, b, c}`.
 pub fn compute_base_aliases(
     copy_map: &HashMap<SsaValue, SsaValue>,
@@ -103,7 +103,7 @@ pub fn compute_base_aliases(
         let ra = find(parent, a);
         let rb = find(parent, b);
         if ra != rb {
-            // Arbitrary root choice — alphabetically smaller becomes root
+            // Arbitrary root choice, alphabetically smaller becomes root
             // for determinism.
             if ra < rb {
                 parent.insert(rb, ra);
@@ -130,7 +130,7 @@ pub fn compute_base_aliases(
             None => continue,
         };
 
-        // Only alias plain idents — dotted paths (field accesses) are tracked
+        // Only alias plain idents, dotted paths (field accesses) are tracked
         // independently in SSA and handled by field-aware suppression.
         if dst_name.contains('.') || src_name.contains('.') {
             continue;

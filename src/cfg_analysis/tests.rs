@@ -127,7 +127,7 @@ fn unreachable_code_detection_runs_without_panic() {
 
 #[test]
 fn all_branches_reachable_no_findings() {
-    // All branches reachable — no unreachable-code findings
+    // All branches reachable, no unreachable-code findings
     let src = br#"
         use std::process::Command;
         fn main() {
@@ -282,7 +282,7 @@ fn ssa_const_prop_preserves_sink_on_dynamic_source_arg() {
 
 #[test]
 fn unguarded_sink_detected() {
-    // Sink with no validation — should be flagged
+    // Sink with no validation, should be flagged
     let src = br#"
         use std::process::Command;
         fn main() {
@@ -331,6 +331,90 @@ fn guarded_sink_with_sanitizer_not_flagged() {
     assert!(
         guard_findings.is_empty(),
         "Guarded sink should not be flagged; got {:?}",
+        guard_findings
+    );
+}
+
+/// Regression: `cond_indirect_validator_callee` used to pick the
+/// textually-last call defining the condition variable across the
+/// whole function, including reassignments that occur **after** the
+/// `if`.  When that later call wasn't a recognised validator, the
+/// validator pattern was missed and the downstream sink was
+/// (incorrectly) flagged as `cfg-unguarded-sink`.
+///
+/// Pattern:
+///   let err = validateInput(cmd);  // real validator, before the if
+///   if (err) throw …;              // sink-guarding branch
+///   eval(cmd);                     // sink dominated by the guard
+///   err = recordMetric();          // later reassignment, NOT a validator
+///
+/// The defining call reaching the `if` is `validateInput`; the
+/// `recordMetric` reassignment is downstream of the use and must not
+/// shadow it.
+#[test]
+fn indirect_validator_ignores_reassignment_after_if() {
+    let src = br#"
+async function handler(req) {
+    const cmd = req.query.cmd;
+    let err = await validateInput(cmd);
+    if (err) {
+        throw new Error('blocked');
+    }
+    eval(cmd);
+    err = recordMetric();
+}
+"#;
+
+    let findings = parse_and_analyse(
+        &guards::UnguardedSink,
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+
+    let guard_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        guard_findings.is_empty(),
+        "later non-validator reassignment must not shadow the real validator def reaching the if; got {:?}",
+        guard_findings
+    );
+}
+
+/// Companion sanity check for `indirect_validator_ignores_reassignment_after_if`:
+/// without the trailing reassignment the same pattern is already
+/// suppressed by `cond_indirect_validator_callee`.  Pinned so a future
+/// change to the indirect-validator recognition can't silently regress
+/// this baseline alongside the regression case above.
+#[test]
+fn indirect_validator_baseline_suppresses_dominated_sink() {
+    let src = br#"
+async function handler(req) {
+    const cmd = req.query.cmd;
+    const err = await validateInput(cmd);
+    if (err) {
+        throw new Error('blocked');
+    }
+    eval(cmd);
+}
+"#;
+
+    let findings = parse_and_analyse(
+        &guards::UnguardedSink,
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+
+    let guard_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        guard_findings.is_empty(),
+        "indirect-validator pattern (no reassignment) must suppress dominated sink; got {:?}",
         guard_findings
     );
 }
@@ -397,7 +481,7 @@ fn auth_check_before_sink_no_finding() {
 #[test]
 fn error_fallthrough_analysis_runs_on_go() {
     // Go pattern: err check without return, followed by dangerous call.
-    // This is a heuristic analysis — we verify it runs without panicking.
+    // This is a heuristic analysis, we verify it runs without panicking.
     let src = br#"
         package main
         import "os/exec"
@@ -422,7 +506,7 @@ fn error_fallthrough_analysis_runs_on_go() {
 
 #[test]
 fn proper_error_return_no_finding_go() {
-    // Go pattern: err check with return — should not flag error fallthrough.
+    // Go pattern: err check with return, should not flag error fallthrough.
     let src = br#"
         package main
         import "os/exec"
@@ -820,6 +904,7 @@ fn taint_and_unguarded_sink_deduped() {
         path_hash: 0,
         finding_id: String::new(),
         alternative_finding_ids: smallvec::SmallVec::new(),
+        effective_sink_caps: crate::labels::Cap::empty(),
     }];
 
     let findings = parse_and_run_all_with_taint(
@@ -949,7 +1034,7 @@ function readFile() {
 
 #[test]
 fn js_throw_terminates_block() {
-    // throw should act as a terminator — code directly after throw in the same
+    // throw should act as a terminator, code directly after throw in the same
     // block should be unreachable.
     let src = br#"
         function fail() {
@@ -1031,7 +1116,7 @@ fn configured_terminator_stops_flow() {
             "eval should be unreachable after process.exit terminator"
         );
     }
-    // If eval_nodes is empty it means the node wasn't created (also acceptable —
+    // If eval_nodes is empty it means the node wasn't created (also acceptable ,
     // it's after a terminator so the CFG may not even emit it)
 }
 
@@ -1480,7 +1565,7 @@ void process() {
 
     let reachable = dominators::reachable_set(cfg, entry);
 
-    // All nodes should be reachable — the preproc recovery should prevent
+    // All nodes should be reachable, the preproc recovery should prevent
     // the dangling-else from orphaning downstream code.
     let unreachable_count = cfg.node_count() - reachable.len();
     assert!(
@@ -1515,7 +1600,7 @@ void process() {
 
     let reachable = dominators::reachable_set(cfg, entry);
 
-    // All nodes should be reachable — break exits the loop and post-loop
+    // All nodes should be reachable, break exits the loop and post-loop
     // code (free(x)) should be connected.
     let unreachable_count = cfg.node_count() - reachable.len();
     assert!(
@@ -1878,7 +1963,7 @@ def run():
 
 #[test]
 fn python_one_hop_constant_still_suppressed() {
-    // cmd = "ls"; os.system(cmd) — `all_args_literal` is false (identifier arg),
+    // cmd = "ls"; os.system(cmd), `all_args_literal` is false (identifier arg),
     // but should still be suppressed via existing one-hop constant trace in cfg_analysis.
     let src = br#"
 import os
@@ -1959,7 +2044,7 @@ def run():
 
 #[test]
 fn python_constant_receiver_tainted_arg_produces_finding() {
-    // safe_obj.system(user_input) — constant receiver is irrelevant, tainted arg must report
+    // safe_obj.system(user_input), constant receiver is irrelevant, tainted arg must report
     let src = br#"
 import os
 import sys

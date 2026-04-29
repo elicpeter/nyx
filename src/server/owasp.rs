@@ -1,15 +1,15 @@
 //! Static rule-id → OWASP Top-10 (2021) mapping for the dashboard.
 //!
 //! Rule IDs follow the convention `{lang}.{family}.{name}` (e.g. `js.xss.outer_html`).
-//! The family segment is what determines the bucket. Conservative — when in doubt,
+//! The family segment is what determines the bucket. Conservative, when in doubt,
 //! map to the closest fit; rules with no obvious bucket are left unbucketed.
 
 use crate::server::models::OwaspBucket;
 use std::collections::HashMap;
 
 /// Extract the family token from a rule ID. Handles two ID shapes:
-///   1. `lang.family.name` — typical (e.g. `js.xss.outer_html`)
-///   2. `family-subname` or single-segment — engine-emitted (e.g.
+///   1. `lang.family.name`, typical (e.g. `js.xss.outer_html`)
+///   2. `family-subname` or single-segment, engine-emitted (e.g.
 ///      `state-resource-leak`, `taint-unsanitised-flow`, `cfg-error-fallthrough`)
 fn extract_family(rule_id: &str) -> &str {
     if let Some(idx) = rule_id.find('.') {
@@ -33,23 +33,23 @@ pub fn owasp_bucket_for(rule_id: &str) -> Option<(&'static str, &'static str)> {
     }
 
     Some(match family {
-        // A01 — Broken Access Control
+        // A01, Broken Access Control
         "auth" | "csrf" | "mass_assign" | "path" | "redirect" => ("A01", "Broken Access Control"),
-        // A02 — Cryptographic Failures
+        // A02, Cryptographic Failures
         "crypto" | "secrets" => ("A02", "Cryptographic Failures"),
-        // A03 — Injection (covers SQLi, XSS, command, code-eval, template, NoSQL, LDAP, reflection,
+        // A03, Injection (covers SQLi, XSS, command, code-eval, template, NoSQL, LDAP, reflection,
         // and engine-level taint findings without a more specific family tag).
         "sqli" | "xss" | "cmdi" | "code_exec" | "template" | "nosql" | "ldap" | "reflection"
         | "taint" => ("A03", "Injection"),
-        // A05 — Security Misconfiguration (TLS verify off, cookie flags, prototype pollution)
+        // A05, Security Misconfiguration (TLS verify off, cookie flags, prototype pollution)
         "config" | "transport" | "prototype" => ("A05", "Security Misconfiguration"),
-        // A08 — Software and Data Integrity Failures
+        // A08, Software and Data Integrity Failures
         "deser" => ("A08", "Software and Data Integrity Failures"),
-        // A09 — Logging & Monitoring Failures
+        // A09, Logging & Monitoring Failures
         "log" => ("A09", "Logging and Monitoring Failures"),
-        // A10 — SSRF
+        // A10, SSRF
         "ssrf" => ("A10", "Server-Side Request Forgery"),
-        // Memory-safety + state-machine resource lifecycle bugs — closest OWASP fit is
+        // Memory-safety + state-machine resource lifecycle bugs, closest OWASP fit is
         // A04 Insecure Design (defensive depth).
         "memory" | "state" => ("A04", "Insecure Design"),
         // Quality findings (e.g. rs.quality.unwrap) and CFG structural issues
@@ -162,7 +162,7 @@ mod tests {
     fn malformed_rule_returns_none() {
         // single-segment "not" → family "not" → unmapped → None
         assert_eq!(owasp_bucket_for("not-a-rule"), None);
-        // "js.onlytwo" — family is "onlytwo" which is unmapped
+        // "js.onlytwo", family is "onlytwo" which is unmapped
         assert_eq!(owasp_bucket_for("js.onlytwo"), None);
     }
 

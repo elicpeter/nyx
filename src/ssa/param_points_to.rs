@@ -6,13 +6,13 @@
 //! 1. **Param → Param field writes.**  An `obj.field = val` where `obj`
 //!    traces back to parameter `b` and `val` traces back to parameter `a`
 //!    emits a `Param(a) → Param(b)` `MayAlias` edge.  This captures the
-//!    `mutating_helper` pattern — the callee mutates a shared heap cell
+//!    `mutating_helper` pattern, the callee mutates a shared heap cell
 //!    through one parameter and the caller observes the mutation through
 //!    its argument for that parameter.
 //!
 //! 2. **Param → Return aliases.**  `Terminator::Return(v)` where `v`
 //!    traces back to a parameter emits a `Param(i) → Return` edge.  This
-//!    captures the `returned_alias` pattern — the callee returns its
+//!    captures the `returned_alias` pattern, the callee returns its
 //!    argument unchanged and the caller treats the result as aliasing the
 //!    input.
 //!
@@ -25,7 +25,7 @@
 //!
 //! The analysis is **flow-insensitive** and **bounded**: it does not
 //! reason about path feasibility, and it stops adding edges once the
-//! summary's [`MAX_ALIAS_EDGES`] cap is reached — the overflow flag is
+//! summary's [`MAX_ALIAS_EDGES`] cap is reached, the overflow flag is
 //! the conservative fallback that callers honour.
 
 use std::collections::{HashMap, HashSet};
@@ -39,7 +39,7 @@ use super::ir::{SsaBody, SsaOp, SsaValue, Terminator};
 
 /// Map an SSA value back to its defining instruction's op.
 ///
-/// Local to this module — the taint engine has its own `build_inst_map`
+/// Local to this module, the taint engine has its own `build_inst_map`
 /// that also carries receiver info we do not need, and duplicating it
 /// keeps this analysis independent of that private helper's shape.
 fn build_op_map(ssa: &SsaBody) -> HashMap<SsaValue, SsaOp> {
@@ -73,7 +73,7 @@ struct ParamHit {
     /// The `SsaOp::Param` index as lowered.
     ssa_index: usize,
     /// The parameter's variable name (from [`SsaInst::var_name`]).  Used
-    /// to map back to the formal-declaration position — the caller's
+    /// to map back to the formal-declaration position, the caller's
     /// `args[i]` slot is keyed by declaration position, not by SSA
     /// index, and the two can disagree when a formal parameter is
     /// skipped from SSA lowering (e.g., pure-output params).
@@ -83,7 +83,7 @@ struct ParamHit {
 /// Walk Assign/Phi chains to find a backing `Param { index }` SSA op.
 ///
 /// Returns the `SsaOp::Param`'s index *and* its var_name so callers can
-/// resolve the formal-positional index via the name lookup table — the
+/// resolve the formal-positional index via the name lookup table, the
 /// two indices can disagree when SSA lowering skips a formal parameter
 /// (never used as a read), shifting subsequent param indices down.
 fn trace_to_param_hit(
@@ -144,7 +144,7 @@ fn param_hit_to_formal_index(hit: &ParamHit, params_by_name: &HashMap<String, us
 /// * `"obj.list[2].name"` → `"obj"`
 ///
 /// Used to decide whether a field-style Assign's LHS base names a
-/// parameter variable — we strip everything after the first separator
+/// parameter variable, we strip everything after the first separator
 /// and compare the remainder to the recorded param names.
 fn base_of_path(name: &str) -> &str {
     let dot = name.find('.');
@@ -170,7 +170,7 @@ fn is_receiver_name_local(name: &str) -> bool {
 /// Returns `true` the first time a qualifying allocation is found.
 /// Parameter-terminated paths, `Call` ops that are not container
 /// constructors, and constants that are not container literals all
-/// return `false` — soundly under-approximating, since the caller will
+/// return `false`, soundly under-approximating, since the caller will
 /// simply fall back to the existing `Param(i) → Return` / store-into-
 /// heap channels when the flag is absent.
 fn trace_to_fresh_alloc(
@@ -225,7 +225,7 @@ fn returns_fresh_allocation(
 ///
 /// `param_info` carries one `(param_index, param_name, param_ssa_value)`
 /// tuple per formal parameter that was emitted as [`SsaOp::Param`] in the
-/// lowered body.  The receiver is intentionally excluded — this table
+/// lowered body.  The receiver is intentionally excluded, this table
 /// captures positional parameters only.
 ///
 /// `formal_param_names`, when supplied, is the authoritative list of
@@ -261,7 +261,7 @@ pub fn analyse_param_points_to(
     //     container constructor for `lang` (`ArrayList`, `dict`, …).
     //
     // When at least one return path matches, the callee produces a
-    // caller-visible fresh heap identity on that path — callers
+    // caller-visible fresh heap identity on that path, callers
     // synthesise a `HeapObjectId` keyed on the call result so later
     // container operations have a stable heap cell.  Traces that reach a
     // parameter are handled by the edge-based `Param(i) → Return` channel
@@ -278,7 +278,7 @@ pub fn analyse_param_points_to(
         return summary;
     }
     // Build the name→positional-index map.  Summary param indices are
-    // *positional* — they match the call-site `args[i]` position, which
+    // *positional*, they match the call-site `args[i]` position, which
     // excludes the receiver (`self`/`this`).  When `formal_param_names`
     // contains a leading receiver, skip it so the remaining names align
     // with the SSA `SsaOp::Param { index }` convention.
@@ -344,7 +344,7 @@ pub fn analyse_param_points_to(
                     continue;
                 }
                 if src_idx == target_idx {
-                    // Self-alias is uninformative — the caller's
+                    // Self-alias is uninformative, the caller's
                     // arg-to-itself propagation is already covered by
                     // `param_to_return`/`param_to_sink`.
                     continue;
@@ -532,7 +532,7 @@ mod tests {
             (5usize, "capture".to_string(), SsaValue(0)),
             (1usize, "b".to_string(), SsaValue(1)),
         ];
-        // formal_param_count = 2 — index 5 is out of range.
+        // formal_param_count = 2, index 5 is out of range.
         let s = analyse_param_points_to(&body, &pinfo, 2, None, None);
         assert!(
             s.is_empty(),
@@ -570,7 +570,7 @@ mod tests {
             .map(|i| (i, format!("p{i}"), SsaValue(i as u32)))
             .collect();
         // Only the first traced param is emitted (trace_to_param short-
-        // circuits on first match), so overflow is not expected — we
+        // circuits on first match), so overflow is not expected, we
         // instead verify the bounded behaviour: a single edge.
         let s = analyse_param_points_to(&body, &pinfo, n as usize, None, None);
         assert!(!s.overflow);

@@ -53,13 +53,13 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::URL_ENCODE),
         case_sensitive: false,
     },
-    // OWASP ESAPI input validator — validates and canonicalizes input
+    // OWASP ESAPI input validator, validates and canonicalizes input
     LabelRule {
         matchers: &["Validator.getValidInput"],
         label: DataLabel::Sanitizer(Cap::all()),
         case_sensitive: false,
     },
-    // Type-check sanitizers — parsing to a primitive erases taint
+    // Type-check sanitizers, parsing to a primitive erases taint
     LabelRule {
         matchers: &[
             "Integer.parseInt",
@@ -99,7 +99,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::CODE_EXEC),
         case_sensitive: false,
     },
-    // HTTP response sinks — println/print are broad (also match System.out)
+    // HTTP response sinks, println/print are broad (also match System.out)
     // but necessary to catch response.getWriter().println() via suffix matching.
     LabelRule {
         matchers: &["println", "print"],
@@ -107,7 +107,7 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     // openConnection() is the standard java.net.URL API for initiating a connection.
-    // It is the correct interception point — the URL is already set on the object.
+    // It is the correct interception point, the URL is already set on the object.
     LabelRule {
         matchers: &[
             "openConnection",
@@ -153,9 +153,9 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: true,
     },
-    // NOTE: Java logging (logger.info, log.warn, etc.) removed as sinks —
+    // NOTE: Java logging (logger.info, log.warn, etc.) removed as sinks ,
     // logging format injection is not a real security vulnerability in Java.
-    // String.format also removed — it builds strings in memory (not a sink);
+    // String.format also removed, it builds strings in memory (not a sink);
     // the real sink is wherever the formatted string is used (SQL, HTTP, etc.).
     // ─── JNDI injection sinks ───
     LabelRule {
