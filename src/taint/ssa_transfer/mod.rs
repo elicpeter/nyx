@@ -6587,8 +6587,7 @@ fn collect_tainted_sink_values(
     // of the listed destination field identifiers. This silences
     // `fetch({url: fixed, body: tainted})` while still firing on
     // `fetch({url: tainted, body: fixed})`.
-    let positions: Option<&[usize]> =
-        positions_override.or(info.call.sink_payload_args.as_deref());
+    let positions: Option<&[usize]> = positions_override.or(info.call.sink_payload_args.as_deref());
     let destination_filter: Option<&[String]> =
         destination_override.or(info.call.destination_uses.as_deref());
     if let Some(positions) = positions {

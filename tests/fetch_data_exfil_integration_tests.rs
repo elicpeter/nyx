@@ -23,9 +23,7 @@ fn js_fixture_dir() -> PathBuf {
 fn diags_for(file: &str) -> Vec<Diag> {
     let dir = js_fixture_dir();
     let all = scan_fixture_dir(&dir, AnalysisMode::Full);
-    all.into_iter()
-        .filter(|d| d.path.ends_with(file))
-        .collect()
+    all.into_iter().filter(|d| d.path.ends_with(file)).collect()
 }
 
 #[test]
@@ -46,7 +44,8 @@ fn fetch_body_data_exfil_emits_data_exfil_not_ssrf() {
         diags.iter().map(|d| &d.id).collect::<Vec<_>>(),
     );
     assert_eq!(
-        plain_taint, 0,
+        plain_taint,
+        0,
         "fixed-URL fetch with tainted body must NOT emit SSRF \
          (taint-unsanitised-flow), got {plain_taint}.\n\
          Diags: {:#?}",
@@ -72,7 +71,8 @@ fn fetch_ssrf_url_tainted_emits_ssrf_not_data_exfil() {
         diags.iter().map(|d| &d.id).collect::<Vec<_>>(),
     );
     assert_eq!(
-        exfil, 0,
+        exfil,
+        0,
         "tainted-URL fetch must NOT emit DATA_EXFIL, got {exfil}.\n\
          Diags: {:#?}",
         diags.iter().map(|d| &d.id).collect::<Vec<_>>(),
@@ -90,10 +90,7 @@ fn sarif_distinguishes_data_exfil_rule_id_from_ssrf() {
     let rules = sarif["runs"][0]["tool"]["driver"]["rules"]
         .as_array()
         .expect("SARIF rules array");
-    let rule_ids: Vec<&str> = rules
-        .iter()
-        .filter_map(|r| r["id"].as_str())
-        .collect();
+    let rule_ids: Vec<&str> = rules.iter().filter_map(|r| r["id"].as_str()).collect();
 
     assert!(
         rule_ids.contains(&"taint-data-exfiltration"),

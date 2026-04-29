@@ -1948,22 +1948,17 @@ mod tests {
     /// downstream CFG can build per-cap filters.
     #[test]
     fn gated_sink_fetch_emits_ssrf_and_data_exfil() {
-        let result =
-            classify_gated_sink("javascript", "fetch", |_| None, no_kw, no_kw_present);
+        let result = classify_gated_sink("javascript", "fetch", |_| None, no_kw, no_kw_present);
         let ssrf = find_match_with_caps(&result, Cap::SSRF).expect("SSRF gate fires");
         assert_eq!(ssrf.label, DataLabel::Sink(Cap::SSRF));
         assert_eq!(ssrf.payload_args, &[0]);
         assert_eq!(ssrf.object_destination_fields, &["url"]);
 
-        let exfil =
-            find_match_with_caps(&result, Cap::DATA_EXFIL).expect("DATA_EXFIL gate fires");
+        let exfil = find_match_with_caps(&result, Cap::DATA_EXFIL).expect("DATA_EXFIL gate fires");
         assert_eq!(exfil.label, DataLabel::Sink(Cap::DATA_EXFIL));
         assert_eq!(exfil.payload_args, &[1]);
         assert!(
-            exfil
-                .object_destination_fields
-                .iter()
-                .any(|&f| f == "body"),
+            exfil.object_destination_fields.iter().any(|&f| f == "body"),
             "expected body in DATA_EXFIL destination fields, got {:?}",
             exfil.object_destination_fields,
         );

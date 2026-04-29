@@ -1762,18 +1762,17 @@ pub(super) fn push_node<'a>(
                 for gm in &matches {
                     labels.push(gm.label);
 
-                    let payload_vec: Vec<usize> = if gm.payload_args
-                        == crate::labels::ALL_ARGS_PAYLOAD
-                    {
-                        // Dynamic-activation sentinel: every positional arg is
-                        // conservatively a payload.  Expand using the actual
-                        // call arity so `collect_tainted_sink_values` checks
-                        // each one.
-                        let arity = extract_arg_uses(cn, code).len();
-                        (0..arity).collect()
-                    } else {
-                        gm.payload_args.to_vec()
-                    };
+                    let payload_vec: Vec<usize> =
+                        if gm.payload_args == crate::labels::ALL_ARGS_PAYLOAD {
+                            // Dynamic-activation sentinel: every positional arg is
+                            // conservatively a payload.  Expand using the actual
+                            // call arity so `collect_tainted_sink_values` checks
+                            // each one.
+                            let arity = extract_arg_uses(cn, code).len();
+                            (0..arity).collect()
+                        } else {
+                            gm.payload_args.to_vec()
+                        };
 
                     // Destination-aware gates: when the gate declares
                     // destination-bearing object fields and a payload-position
@@ -1821,8 +1820,7 @@ pub(super) fn push_node<'a>(
                 // per-position filters live in `gate_filters` and the legacy
                 // field is intentionally left `None`.
                 if gate_filters.len() == 1 {
-                    destination_uses =
-                        gate_filters[0].destination_uses.clone();
+                    destination_uses = gate_filters[0].destination_uses.clone();
                 }
             }
         }
