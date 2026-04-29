@@ -1958,7 +1958,7 @@ mod tests {
         assert_eq!(exfil.label, DataLabel::Sink(Cap::DATA_EXFIL));
         assert_eq!(exfil.payload_args, &[1]);
         assert!(
-            exfil.object_destination_fields.iter().any(|&f| f == "body"),
+            exfil.object_destination_fields.contains(&"body"),
             "expected body in DATA_EXFIL destination fields, got {:?}",
             exfil.object_destination_fields,
         );

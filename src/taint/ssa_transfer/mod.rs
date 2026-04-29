@@ -2737,7 +2737,7 @@ fn apply_cached_shape(
 ///   [`crate::pointer::extract_field_points_to`].
 /// * Any other field name is *looked up* (read-only) in the caller's
 ///   [`FieldInterner`].  Names the caller never referenced are skipped
-///  , no FieldProj read in the caller could observe such a cell.
+///   , no FieldProj read in the caller could observe such a cell.
 /// * `pt(arg)` saturated to `{Top}` is conservatively skipped (matches
 ///   the W1/W2 hooks' over-approximation policy).
 ///

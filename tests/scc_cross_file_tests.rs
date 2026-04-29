@@ -15,7 +15,7 @@
 //!   actually exercised the SCC fix-point loop rather than resolving
 //!   via topological order).
 //! * Sanitised cross-file cycles do not produce a finding at the caller
-//!  , the joint convergence carries the sanitizer fact back across the
+//!   , the joint convergence carries the sanitizer fact back across the
 //!   cycle.
 
 mod common;
