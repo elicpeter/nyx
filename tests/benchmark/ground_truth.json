@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 455
+    "corpus_size": 458
   },
   "cases": [
     {
@@ -14045,6 +14045,89 @@
       ],
       "disabled": false,
       "notes": "Negative counterpart for the LocalUserView recogniser: handler takes the typed extractor but mutates a row by `req.target_user_id` (foreign id) without any ownership check \u2014 must still flag.  Guards against an over-broad recogniser that would treat any handler with a self-actor extractor as authorised by default."
+    },
+    {
+      "case_id": "rs-auth-realrepo-011",
+      "file": "rust/auth/safe_param_type_segment_idents.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-29",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "Rust `parameter` arm in `collect_param_names` keeps type-segment idents (`std`, `path`, `Path`) out of `unit.params` so `dst: &std::path::Path` doesn't gate `unit_has_user_input_evidence` open via the framework-name allow-list (`path`).  Surfaced from meilisearch/index-scheduler/scheduler/process_snapshot_creation.rs::remove_tasks where `dst: &std::path::Path` made every `db.delete(task.uid)` fire missing-ownership-check."
+    },
+    {
+      "case_id": "rs-auth-realrepo-012",
+      "file": "rust/auth/safe_local_collection_param_types.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-04-29",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "Rust function-parameter type annotations naming an in-memory container (`RoaringBitmap`, `HashMap<K,V>`, `HashSet<T>`, `BTreeSet<T>`) classify the receiver as `TypeKind::LocalCollection` \u2192 `SinkClass::InMemoryLocal`, suppressing the verb-name dispatch's DbMutation classification.  Surfaced from meilisearch/index-scheduler/scheduler/enterprise_edition/network.rs::balance_shards (`unsharded: RoaringBitmap`).  Mirrors the JS/TS `ts_type_to_local_collection` fix from 2026-04-29."
+    },
+    {
+      "case_id": "rs-auth-realrepo-013",
+      "file": "rust/auth/unsafe_handler_local_collection_does_not_blanket_suppress.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-285",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "High",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "positive",
+        "real-repo-precision-2026-04-29"
+      ],
+      "disabled": false,
+      "notes": "Negative-counterpart guard for the LocalCollection / parameter-name fixes: handler takes a HashMap typed param (in-memory bookkeeping) but ALSO calls `db.update_owner(req.target_user_id, ...)` (real DbMutation).  The cache mutation must not blanket-suppress the persistent-store mutation \u2014 the rule must still fire on `db.update_owner`."
     },
     {
       "case_id": "ruby-safe-ar-query-shapes-001",

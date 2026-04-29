@@ -424,6 +424,15 @@ fn is_rust_local_collection_constructor(base: &str) -> bool {
         "FxHashSet",
         "DashMap",
         "DashSet",
+        // `roaring` crate — RoaringBitmap / RoaringTreemap are
+        // in-memory bitset / bitmap containers (set-of-u32 /
+        // set-of-u64).  Used heavily by indexing systems
+        // (meilisearch's index-scheduler) for `task_ids`,
+        // `docids`, and similar local-collection bookkeeping.
+        // Mutations (`insert` / `remove` / `clear`) are container
+        // ops, not data-layer writes.
+        "RoaringBitmap",
+        "RoaringTreemap",
     ];
     const VERBS: &[&str] = &[
         "new",

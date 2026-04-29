@@ -707,7 +707,119 @@ fn classify_param_type_rust<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeK
     }
     let type_node = param.child_by_field_name("type")?;
     let type_text = text_of(type_node, code)?;
+
+    // LocalCollection is a *receiver-shape* claim, not a
+    // framework-validated-input claim — Hard Rule 3's "bare primitives
+    // don't count" gate doesn't apply (mirrors `classify_param_type_ts`
+    // for the same reason).  Captures `unsharded: RoaringBitmap`,
+    // `docids: &mut RoaringBitmap`, `params: HashMap<String, String>`,
+    // `new_shard_docids: &'a mut hashbrown::HashMap<...>` shapes from
+    // meilisearch/index-scheduler's bitmap bookkeeping where the
+    // verb-name dispatch (`is_mutation: insert/remove`) would otherwise
+    // classify these as DB writes.
+    if let Some(k) = rust_type_to_local_collection(&type_text) {
+        return Some(k);
+    }
+
     rust_type_to_kind(&type_text)
+}
+
+/// Strip Rust reference markers, lifetimes, and `mut` from the head of
+/// a type-text fragment so the underlying type name is exposed for
+/// matching.  Handles `&T`, `&mut T`, `&'a T`, `&'a mut T`, and
+/// repeated `&` prefixes (e.g. `&&mut T`).
+fn strip_rust_ref_markers(t: &str) -> &str {
+    let mut s = t.trim();
+    loop {
+        if let Some(rest) = s.strip_prefix('&') {
+            let rest = rest.trim_start();
+            // Optional lifetime label: `'a`, `'static`, `'_`.
+            let rest = if let Some(after) = rest.strip_prefix('\'') {
+                let end = after
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .unwrap_or(after.len());
+                after[end..].trim_start()
+            } else {
+                rest
+            };
+            // Optional `mut` keyword.
+            let rest = rest.strip_prefix("mut ").unwrap_or(rest).trim_start();
+            s = rest;
+            continue;
+        }
+        if let Some(rest) = s.strip_prefix("mut ") {
+            s = rest.trim_start();
+            continue;
+        }
+        break;
+    }
+    s
+}
+
+/// Map a Rust parameter / variable type-text to
+/// [`TypeKind::LocalCollection`] when the head names a known
+/// in-memory container.  Strips reference / lifetime / `mut` markers,
+/// drops module-path prefixes (`std::collections::`, `hashbrown::`,
+/// `roaring::`), then matches the head against std and ecosystem
+/// collection types.
+///
+/// Recognises:
+///   * Std: `Vec`, `HashMap`, `HashSet`, `BTreeMap`, `BTreeSet`,
+///     `VecDeque`, `BinaryHeap`, `LinkedList`.
+///   * Ecosystem: `IndexMap`, `IndexSet` (indexmap), `SmallVec`
+///     (smallvec), `DashMap`, `DashSet` (dashmap), `FxHashMap`,
+///     `FxHashSet` (rustc-hash / fxhash), `RoaringBitmap`,
+///     `RoaringTreemap` (roaring).
+///   * Array / slice shorthand: `[T; N]`, `[T]` (covered by the
+///     leading-`[` check after ref-stripping).
+///
+/// Returns `None` for `Database<...>` (heed/sled — persistent KV
+/// store, NOT a local collection — keeping this `None` preserves
+/// real IDOR detection on persistent-store calls), `Mutex<...>` /
+/// `RwLock<...>` (synchronisation wrappers, not sink-shape claims),
+/// and bare primitives.
+pub(super) fn rust_type_to_local_collection(t: &str) -> Option<TypeKind> {
+    let stripped = strip_rust_ref_markers(t);
+
+    // Array / slice shorthand: `[T; N]` or `[T]` (the `&` was
+    // already stripped).
+    if stripped.starts_with('[') {
+        return Some(TypeKind::LocalCollection);
+    }
+
+    // Drop module-path prefix: keep only the last segment before `<`
+    // or end (`std::collections::HashMap<K, V>` → `HashMap`).
+    let head_with_generics = stripped.rsplit("::").next().unwrap_or(stripped);
+    let head = head_with_generics
+        .split('<')
+        .next()
+        .unwrap_or(head_with_generics)
+        .trim();
+
+    const TYPES: &[&str] = &[
+        "Vec",
+        "VecDeque",
+        "BinaryHeap",
+        "LinkedList",
+        "HashMap",
+        "HashSet",
+        "BTreeMap",
+        "BTreeSet",
+        "IndexMap",
+        "IndexSet",
+        "SmallVec",
+        "DashMap",
+        "DashSet",
+        "FxHashMap",
+        "FxHashSet",
+        "RoaringBitmap",
+        "RoaringTreemap",
+    ];
+    if TYPES.contains(&head) {
+        Some(TypeKind::LocalCollection)
+    } else {
+        None
+    }
 }
 
 fn rust_type_to_kind(t: &str) -> Option<TypeKind> {
@@ -859,7 +971,8 @@ pub(super) fn is_configured_terminator(
 mod typed_extractor_tests {
     use super::{
         contains_fastapi_marker, java_type_to_kind, python_primitive_to_kind, python_type_to_kind,
-        rust_primitive_to_kind, rust_type_to_kind, ts_type_to_local_collection,
+        rust_primitive_to_kind, rust_type_to_kind, rust_type_to_local_collection,
+        ts_type_to_local_collection,
     };
     use crate::ssa::type_facts::TypeKind;
 
@@ -1065,5 +1178,129 @@ mod typed_extractor_tests {
         assert!(contains_fastapi_marker("str, Query(max_length=5)"));
         assert!(contains_fastapi_marker("bytes, File()"));
         assert!(!contains_fastapi_marker("int, str"));
+    }
+
+    // ── Rust local-collection types ──────────────────────────────────────
+
+    #[test]
+    fn rust_std_collections_map_to_local_collection() {
+        for ty in [
+            "Vec<u32>",
+            "HashMap<String, u32>",
+            "HashSet<u64>",
+            "BTreeMap<u32, String>",
+            "BTreeSet<u32>",
+            "VecDeque<u8>",
+            "BinaryHeap<u32>",
+            "LinkedList<i32>",
+        ] {
+            assert_eq!(
+                rust_type_to_local_collection(ty),
+                Some(TypeKind::LocalCollection),
+                "{ty} should map to LocalCollection"
+            );
+        }
+    }
+
+    #[test]
+    fn rust_ecosystem_collections_map_to_local_collection() {
+        for ty in [
+            "IndexMap<String, u32>",
+            "IndexSet<u64>",
+            "SmallVec<[u32; 4]>",
+            "DashMap<String, u32>",
+            "DashSet<u64>",
+            "FxHashMap<String, u32>",
+            "FxHashSet<u64>",
+            "RoaringBitmap",
+            "RoaringTreemap",
+        ] {
+            assert_eq!(
+                rust_type_to_local_collection(ty),
+                Some(TypeKind::LocalCollection),
+                "{ty} should map to LocalCollection"
+            );
+        }
+    }
+
+    #[test]
+    fn rust_module_qualified_collections_map_to_local_collection() {
+        // Module-path prefixes: keep only the last segment for matching.
+        assert_eq!(
+            rust_type_to_local_collection("std::collections::HashMap<K, V>"),
+            Some(TypeKind::LocalCollection)
+        );
+        assert_eq!(
+            rust_type_to_local_collection("hashbrown::HashMap<String, RoaringBitmap>"),
+            Some(TypeKind::LocalCollection)
+        );
+        assert_eq!(
+            rust_type_to_local_collection("roaring::RoaringBitmap"),
+            Some(TypeKind::LocalCollection)
+        );
+    }
+
+    #[test]
+    fn rust_reference_and_lifetime_markers_stripped() {
+        // `&T`, `&mut T`, `&'a T`, `&'a mut T`, `&'static T`,
+        // repeated `&` prefixes — all reach the underlying type head.
+        for ty in [
+            "&RoaringBitmap",
+            "&mut RoaringBitmap",
+            "&'a RoaringBitmap",
+            "&'a mut RoaringBitmap",
+            "&'static RoaringBitmap",
+            "&&mut RoaringBitmap",
+            "&'a mut hashbrown::HashMap<String, RoaringBitmap>",
+        ] {
+            assert_eq!(
+                rust_type_to_local_collection(ty),
+                Some(TypeKind::LocalCollection),
+                "{ty} should map to LocalCollection after ref stripping"
+            );
+        }
+    }
+
+    #[test]
+    fn rust_array_and_slice_shorthand_map_to_local_collection() {
+        // `[T; N]` arrays and `[T]` slices are local containers.
+        assert_eq!(
+            rust_type_to_local_collection("[u32; 4]"),
+            Some(TypeKind::LocalCollection)
+        );
+        assert_eq!(
+            rust_type_to_local_collection("[u8]"),
+            Some(TypeKind::LocalCollection)
+        );
+        assert_eq!(
+            rust_type_to_local_collection("&[u32]"),
+            Some(TypeKind::LocalCollection)
+        );
+        assert_eq!(
+            rust_type_to_local_collection("&mut [u32]"),
+            Some(TypeKind::LocalCollection)
+        );
+    }
+
+    #[test]
+    fn rust_persistent_db_and_sync_wrappers_return_none() {
+        // heed / sled / rocksdb persistent-store handles are NOT local
+        // collections — preserves IDOR detection on real DB calls.
+        assert_eq!(
+            rust_type_to_local_collection("Database<BEU32, SerdeJson<Task>>"),
+            None
+        );
+        assert_eq!(rust_type_to_local_collection("heed::Database<K, V>"), None);
+        assert_eq!(rust_type_to_local_collection("sled::Db"), None);
+        // Sync wrappers don't claim a sink shape.
+        assert_eq!(rust_type_to_local_collection("Mutex<HashMap<K, V>>"), None);
+        assert_eq!(rust_type_to_local_collection("RwLock<Vec<u32>>"), None);
+        // Bare primitives.
+        assert_eq!(rust_type_to_local_collection("u32"), None);
+        assert_eq!(rust_type_to_local_collection("&str"), None);
+        assert_eq!(rust_type_to_local_collection("String"), None);
+        // Unrelated user types.
+        assert_eq!(rust_type_to_local_collection("MyDao<User>"), None);
+        assert_eq!(rust_type_to_local_collection("Connection"), None);
     }
 }

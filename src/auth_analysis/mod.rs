@@ -1,3 +1,5 @@
+#![doc = include_str!(concat!(env!("OUT_DIR"), "/auth_analysis.md"))]
+
 pub mod checks;
 pub mod config;
 pub mod extract;

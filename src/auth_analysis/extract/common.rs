@@ -3188,6 +3188,35 @@ fn collect_param_names(
                 out.push(name);
             }
         }
+        // Rust `parameter` node: descend ONLY into the `pattern` field so
+        // type-segment identifiers don't pollute the param-name set.
+        // Without this scope, `dst: &std::path::Path` contributes `std`,
+        // `path`, and `Path` to `unit.params`, and `path` then matches
+        // the framework-request-name allow-list in
+        // `is_external_input_param_name` — gating
+        // `unit_has_user_input_evidence` open on internal helpers whose
+        // real params (`dst`, `tasks`, `index_base_map_size`) carry no
+        // user-facing shape.  Cluster surfaced from
+        // meilisearch/index-scheduler/src/scheduler/process_snapshot_creation.rs::remove_tasks
+        // where `dst: &std::path::Path` made every `db.delete(task.uid)`
+        // call inside the snapshot cleanup loop fire
+        // `missing_ownership_check`.  Same shape would over-fire for
+        // `req: &Request<...>` / `ctx: &Context<T>` / similar typed
+        // helpers.
+        "parameter" => {
+            if let Some(pattern) = node.child_by_field_name("pattern") {
+                collect_param_names(pattern, bytes, include_id_like_typed, out);
+                return;
+            }
+            // Fallback (no `pattern` field): descend into named children
+            // generically, mirroring the default arm.
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                collect_param_names(child, bytes, include_id_like_typed, out);
+            }
+        }
         "default_parameter" | "typed_parameter" | "typed_default_parameter" => {
             // tree-sitter-python's `typed_parameter` rule does not
             // expose a `name` field (the identifier is the wrapper's
@@ -4322,5 +4351,85 @@ mod tests {
         // `current_user.<x>` — unambiguous chain root, fires regardless.
         assert!(msc(&v(&["current_user", "id"])));
         assert!(msc(&v(&["current_user", "preferences"])));
+    }
+
+    /// Rust `parameter` nodes carry both a `pattern` field (the
+    /// binding) and a `type` field (the annotation).  Until the
+    /// `parameter` arm in `collect_param_names`, the recursive default
+    /// arm collected identifiers from the `type` subtree as well —
+    /// turning `dst: &std::path::Path` into the param name set
+    /// `["dst", "std", "path", "Path"]`.  `path` then matched the
+    /// framework-request-name allow-list in `is_external_input_param_name`,
+    /// gating `unit_has_user_input_evidence` open on internal helpers
+    /// that take a filesystem-path argument and re-firing
+    /// `missing_ownership_check` at every id-shaped operation
+    /// downstream.  The arm restricts descent to the `pattern` field
+    /// for Rust parameters so only true binding names reach
+    /// `unit.params`.  Real-repo motivation:
+    /// meilisearch/index-scheduler/src/scheduler/process_snapshot_creation.rs::remove_tasks
+    /// (`dst: &std::path::Path` made every `db.delete(task.uid)` call
+    /// fire missing-ownership-check).  Same shape would also fire for
+    /// Rust functions taking `req: &Request<...>`,
+    /// `ctx: &Context<T>`, etc., where the type tail matches the
+    /// framework name list but the binding is unrelated.
+    #[test]
+    fn collect_param_names_rust_skips_type_segment_idents() {
+        use super::function_params;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter::Language::from(tree_sitter_rust::LANGUAGE))
+            .unwrap();
+        let src = b"unsafe fn remove_tasks(tasks: &[Task], dst: &std::path::Path, sz: usize) {}";
+        let tree = parser.parse(src.as_slice(), None).unwrap();
+        let func = tree
+            .root_node()
+            .child(0)
+            .expect("source_file should have a function");
+        let params = function_params(func, src);
+        assert_eq!(
+            params,
+            vec!["tasks".to_string(), "dst".to_string(), "sz".to_string()],
+            "type-segment idents (`std`, `path`, `Path`) must NOT pollute the param-name set"
+        );
+    }
+
+    #[test]
+    fn collect_param_names_rust_handles_request_typed_params() {
+        // `req: &Request<Body>` — `Request` and `Body` lowercase to
+        // `request` and `body`, both in the framework name list.  The
+        // binding `req` is the only legitimate param name.
+        use super::function_params;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter::Language::from(tree_sitter_rust::LANGUAGE))
+            .unwrap();
+        let src = b"fn handle(req: &Request<Body>, state: AppState) -> Response { todo!() }";
+        let tree = parser.parse(src.as_slice(), None).unwrap();
+        let func = tree.root_node().child(0).expect("function");
+        let params = function_params(func, src);
+        assert_eq!(
+            params,
+            vec!["req".to_string(), "state".to_string()],
+            "type idents `Request`/`Body`/`Response`/`AppState` must not leak as params"
+        );
+    }
+
+    #[test]
+    fn collect_param_names_rust_destructured_pattern_picks_up_bindings() {
+        // Tuple-pattern binding: `((a, b)): (u32, u32)` should yield
+        // both bound names from the pattern subtree, but NOT the type
+        // segment `u32`.
+        use super::function_params;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter::Language::from(tree_sitter_rust::LANGUAGE))
+            .unwrap();
+        let src = b"fn split((a, b): (u32, u32)) {}";
+        let tree = parser.parse(src.as_slice(), None).unwrap();
+        let func = tree.root_node().child(0).expect("function");
+        let params = function_params(func, src);
+        assert!(params.contains(&"a".to_string()), "got {:?}", params);
+        assert!(params.contains(&"b".to_string()), "got {:?}", params);
+        assert!(!params.contains(&"u32".to_string()), "got {:?}", params);
     }
 }

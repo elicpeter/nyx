@@ -1022,6 +1022,53 @@ fn fp_guard_c_buffer_literal_src() {
     validate_expectations(&diags, &dir);
 }
 
+/// FP guard — `rs.auth.missing_ownership_check` over-fires on Rust
+/// helpers when (a) a parameter's TYPE annotation contains an
+/// identifier whose lower-case form matches the framework-request-name
+/// allow-list (`path`, `req`, `request`, `ctx`, `body`, …) — e.g.
+/// `dst: &std::path::Path` contributes the `Path` ident — or (b) a
+/// receiver typed as an in-memory container (`RoaringBitmap`,
+/// `HashMap<K, V>`, `HashSet<T>`) is treated as a `DbMutation` because
+/// the verb-name dispatch (`is_mutation: insert/remove`) doesn't see
+/// the type.  Both clusters surfaced from meilisearch's
+/// `index-scheduler` crate
+/// (`scheduler/process_snapshot_creation.rs::remove_tasks` for (a),
+/// `scheduler/enterprise_edition/network.rs::balance_shards` for (b)).
+///
+/// Engine fixes:
+/// * `src/auth_analysis/extract/common.rs::collect_param_names` —
+///   added a Rust `parameter` arm that descends only into the
+///   `pattern` field, never the `type` field.  Type-segment idents
+///   no longer pollute `unit.params` and the
+///   `unit_has_user_input_evidence` gate stays closed on internal
+///   helpers whose true params carry no user-input shape.
+/// * `src/cfg/params.rs::rust_type_to_local_collection` (new) +
+///   `classify_param_type_rust` rewire — Rust function-parameter
+///   type annotations naming a known local-collection type
+///   (`Vec`/`HashMap`/`HashSet`/`BTreeMap`/`BTreeSet`/`VecDeque`/
+///   `BinaryHeap`/`LinkedList`/`IndexMap`/`IndexSet`/`SmallVec`/
+///   `DashMap`/`DashSet`/`FxHashMap`/`FxHashSet`/`RoaringBitmap`/
+///   `RoaringTreemap`, plus `[T; N]` / `[T]` array-and-slice
+///   shorthand) classify the receiver as `TypeKind::LocalCollection`,
+///   which `auth_analysis::sink_class_for_type` maps to
+///   `SinkClass::InMemoryLocal` (non-auth-relevant).
+/// * `src/ssa/type_facts.rs::is_rust_local_collection_constructor` —
+///   `RoaringBitmap` / `RoaringTreemap` added to the constructor-type
+///   table so `let s = RoaringBitmap::new(); s.insert(...)` also
+///   classifies correctly.
+///
+/// Persistent-store types like heed `Database<...>` / `sled::Db` /
+/// `Mutex<HashMap<...>>` deliberately stay `None` so real IDOR
+/// detection on persistent-store calls is preserved (covered by the
+/// `unsafe_handler_local_collection_does_not_blanket_suppress.rs`
+/// vulnerable counterpart).
+#[test]
+fn fp_guard_auth_rust_param_typed_local_collection() {
+    let dir = fixture_path("fp_guards/auth_rust_param_typed_local_collection");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 /// Panic guard — CFG condition-text truncation (and symex display
 /// truncation) must round byte cuts down to the nearest UTF-8 char
 /// boundary.  Reproduces the gogs scan crash where

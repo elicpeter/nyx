@@ -1,4 +1,5 @@
 #![allow(clippy::collapsible_if, clippy::too_many_arguments)]
+#![doc = include_str!(concat!(env!("OUT_DIR"), "/taint.md"))]
 
 pub mod backwards;
 pub mod domain;

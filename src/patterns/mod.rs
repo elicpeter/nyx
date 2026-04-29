@@ -1,42 +1,4 @@
-//! # AST Pattern Conventions
-//!
-//! Each language file exports a `PATTERNS` slice of [`Pattern`] structs.
-//!
-//! ## ID format
-//!
-//! `<lang>.<category>.<specific>` — e.g. `java.deser.readobject`, `py.cmdi.os_system`.
-//!
-//! Language prefixes: `rs`, `java`, `py`, `js`, `ts`, `c`, `cpp`, `go`, `php`, `rb`.
-//!
-//! ## Tiers
-//!
-//! * **Tier A** — structural presence is high-signal (e.g. `gets()`, `eval()`).
-//! * **Tier B** — requires a heuristic guard in the query (e.g. SQL with concatenated
-//!   arg, format-string with variable first arg).
-//!
-//! ## Severity
-//!
-//! * **High** — command exec, deserialization, banned C functions.
-//! * **Medium** — SQL concat, reflection, XSS sinks, casts.
-//! * **Low** — weak crypto, insecure randomness, code-quality (`unwrap`/`expect`/`panic`).
-//!
-//! Note: the default `min_severity` filter skips Low patterns; they only appear when
-//! the user explicitly lowers the threshold.
-//!
-//! ## No-duplicate rule
-//!
-//! If a vulnerability class is already detected by taint analysis (e.g. `eval` as a
-//! sink, `system` as a sink), the AST pattern is still kept for `--ast-only` mode but
-//! uses a distinct ID namespace (`js.code_exec.eval` vs `taint-unsanitised-flow`).
-//! The dedup pass in `ast.rs` prevents exact-duplicate findings at the same location.
-//!
-//! ## Adding a new pattern
-//!
-//! 1. Pick the language file under `src/patterns/<lang>.rs`.
-//! 2. Choose tier, category, severity per the rules above.
-//! 3. Write the tree-sitter query — test with `cargo test --test pattern_tests`.
-//! 4. Add a snippet to `tests/fixtures/patterns/<lang>/positive.<ext>`.
-//! 5. Add the ID to the positive test assertion in `tests/pattern_tests.rs`.
+#![doc = include_str!(concat!(env!("OUT_DIR"), "/patterns.md"))]
 
 pub mod c;
 pub mod cpp;

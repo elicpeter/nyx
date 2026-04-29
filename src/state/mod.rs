@@ -1,3 +1,5 @@
+#![doc = include_str!(concat!(env!("OUT_DIR"), "/state.md"))]
+
 pub mod domain;
 pub mod engine;
 pub mod facts;
