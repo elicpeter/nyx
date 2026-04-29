@@ -465,7 +465,7 @@ export function FindingsPage() {
         },
       );
     },
-    [addSuppression],
+    [addSuppression, toast],
   );
 
   // ── Sort handler ──
