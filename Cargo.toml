@@ -13,34 +13,22 @@ keywords = ["security", "vulnerability", "scanner", "static-analysis", "cli"]
 categories = ["security", "command-line-utilities", "development-tools", "parser-implementations", "text-processing"]
 readme = "README.md"
 default-run = "nyx"
-exclude = [
-    "assets/",
-    "frontend/node_modules/",
-    ".github/",
-    "CLAUDE.md",
-    ".claude/",
-    ".idea/",
-    "tests/",
-    "benches/",
-    "docs/",
-    ".DS_Store",
-    ".nyx/",
-    ".z3-trace",
-    "target/",
-    "book/",
+include = [
+    "/src/**",
+    "/tools/**",
+    "/build.rs",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE",
+    "/THIRDPARTY-LICENSES.html",
+    "/default-nyx.conf",
 ]
 
 autoexamples = false
 
-# `cargo binstall nyx-scanner` resolves binaries from the GitHub
-# release archives produced by `.github/workflows/release-build.yml`.
-# Naming must match `BIN-{target}.zip` and the binary path inside the
-# zip (`target/{target}/release/{bin}{binary-ext}`). Bump
-# `release-build.yml` together with this block if either changes.
+
 [package.metadata.binstall]
-# Crate is `nyx-scanner` but the release archives are produced as
-# `nyx-{target}.zip` (BIN_NAME in release-build.yml). Hardcode the
-# stem rather than using `{ name }`.
 pkg-url = "{ repo }/releases/download/v{ version }/nyx-{ target }{ archive-suffix }"
 pkg-fmt = "zip"
 bin-dir = "target/{ target }/release/{ bin }{ binary-ext }"
@@ -50,10 +38,6 @@ default = ["serve"]
 serve = ["dep:axum", "dep:tokio", "dep:tokio-stream", "dep:tower-http"]
 smt = ["dep:z3", "z3/bundled"]
 smt-system-z3 = ["dep:z3"]
-# Build switch for the internal `nyx-docgen` tool. Empty on purpose: it
-# only gates the [[bin]] target so consumers of `cargo install nyx-scanner`
-# don't pick up the docgen binary. Maintainers run it via
-# `cargo run --features docgen --bin nyx-docgen`.
 docgen = []
 
 [lib]

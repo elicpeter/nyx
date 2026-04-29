@@ -236,6 +236,41 @@ jobs:
       - name: Rust tests (beta)
         run: cargo nextest run --all-features
 
+  cargo-package:
+    name: cargo-package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify dist embedded in package
+        run: |
+          for f in src/server/assets/dist/index.html src/server/assets/dist/app.js src/server/assets/dist/style.css src/server/assets/favicon.svg default-nyx.conf build.rs; do
+            if ! cargo package --list --allow-dirty | grep -qx "$f"; then
+              echo "::error::missing from cargo package: $f"
+              exit 1
+            fi
+          done
+
+      - name: cargo package (verify build)
+        run: cargo package --allow-dirty
+
   benchmark-gate:
     name: benchmark-gate
     runs-on: ubuntu-latest
