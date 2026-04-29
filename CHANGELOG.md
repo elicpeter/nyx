@@ -6,7 +6,7 @@ All notable changes to Nyx are documented here. The format is based on [Keep a C
 
 _No changes yet._
 
-## [0.5.0] — 2026-04-24
+## [0.5.0] - 2026-04-29
 
 The biggest release since launch. The taint engine was rebuilt on top of an SSA IR, cross-file analysis was deepened across the board, and Nyx now ships a local web UI for triaging findings without leaving your machine.
 
@@ -24,13 +24,13 @@ The biggest release since launch. The taint engine was rebuilt on top of an SSA 
 ### Engine
 
 - SSA IR with dominance-frontier phi insertion. The optimization pipeline runs constant propagation, branch pruning, copy propagation, alias analysis, DCE, type facts, and points-to in sequence.
-- Multi-label classification — a single API can carry both Source and Sink labels (e.g. PHP `file_get_contents`, Java `readObject`).
-- Gated sinks — `setAttribute`, `parseFromString`, etc. only activate when the constant attribute argument is dangerous, and only the payload argument is treated as taint-bearing.
+- Multi-label classification. A single API can carry both Source and Sink labels (e.g. PHP `file_get_contents`, Java `readObject`).
+- Gated sinks. `setAttribute`, `parseFromString`, etc. only activate when the constant attribute argument is dangerous, and only the payload argument is treated as taint-bearing.
 - Container taint with per-index precision and bounded points-to. Aliased containers share heap identity correctly.
 - Loop-aware analysis: induction-variable pruning, widening at loop heads, bounded unrolling in symex.
 - Path-sensitive phi evaluation propagates validation when all tainted predecessors are guarded.
 - Per-return-path summaries decompose function effects when paths produce different taint behavior.
-- Cross-file SCC fixed-point — mutually recursive functions across files now reach a joint convergence.
+- Cross-file SCC fixed-point. Mutually recursive functions across files now reach a joint convergence.
 - Demand-driven backwards analysis (off by default) annotates findings with cutoff diagnostics.
 - Direction-aware engine notes (`UnderReport`, `OverReport`, `Bail`) flow into confidence scoring, ranking, and the new `--require-converged` strict mode.
 
@@ -56,11 +56,11 @@ The biggest release since launch. The taint engine was rebuilt on top of an SSA 
 
 ### CLI & Output
 
-- `nyx serve` — local web UI on `localhost` only (refuses non-loopback binds).
+- `nyx serve`: local web UI on `localhost` only (refuses non-loopback binds).
 - `--require-converged` filters out findings where the engine bailed early.
 - Analysis-engine toggles graduated from `NYX_*` env vars to first-class flags and `[analysis.engine]` config: `--constraint-solving`, `--abstract-interp`, `--context-sensitive`, `--symex`, `--cross-file-symex`, `--symex-interproc`, `--smt`, `--parse-timeout-ms`. Old env vars still work when Nyx is consumed as a library.
 - Confidence (`High`/`Medium`/`Low`) shown on every finding, including console headers.
-- Engine notes surfaced in console (`[capped: N notes — over-report]`), JSON (`engine_notes`, `confidence_capped`), and SARIF (`result.properties.loss_direction`).
+- Engine notes surfaced in console (`[capped: N notes, over-report]`), JSON (`engine_notes`, `confidence_capped`), and SARIF (`result.properties.loss_direction`).
 - Flow paths reconstructed step-by-step with file/line/snippet for each hop.
 - Concrete attack witness strings synthesized by the symbolic executor.
 - Primary sink locations now point at the callee's real sink line; caller call sites are preserved as flow steps.
@@ -95,7 +95,7 @@ The biggest release since launch. The taint engine was rebuilt on top of an SSA 
 - Legacy BFS taint engine, `TaintTransfer`, `TaintState`, and the `NYX_LEGACY` fallback.
 - Legacy vanilla-JS frontend (`app.js`).
 
-## [0.4.0] — 2025-02-25
+## [0.4.0] - 2026-02-25
 
 A precision and ergonomics release. Findings are now ranked, lower-noise by default, and easier to triage in CI.
 
@@ -126,19 +126,19 @@ A precision and ergonomics release. Findings are now ranked, lower-noise by defa
 
 ### Breaking
 
-- Config and data directory renamed from `dev.ecpeter23.nyx` to `nyx`. Existing config and SQLite indexes at the old path won't be picked up — copy them across or re-run `nyx scan`.
+- Config and data directory renamed from `dev.ecpeter23.nyx` to `nyx`. Existing config and SQLite indexes at the old path won't be picked up. Copy them across or re-run `nyx scan`.
 - `Severity::from_str` now returns `Err` for unknown values instead of silently defaulting to Low.
 
 ### Notable Fixes
 
 - KINDS-map audit across all 10 languages: 89 missing tree-sitter node types added. Switch/case, try/catch/finally, class bodies, lambdas, closures, and namespaces are no longer silently dropped.
-- `else_clause` mapping fixed for C, C++, Rust, JS, TS, Python, PHP — code inside else blocks was being dropped from the CFG.
+- `else_clause` mapping fixed for C, C++, Rust, JS, TS, Python, PHP. Code inside else blocks was being dropped from the CFG.
 - Rust `if let` / `while let` taint propagation now works.
 - Taint BFS non-termination on large JS files (the BFS engine has since been replaced).
 - C++ `popen` pattern ID collision with C.
 - Constant-arg sink suppression for AST patterns.
 
-## [0.3.0] — 2026-02-25
+## [0.3.0] - 2026-02-25
 
 Configurability, SARIF, and an aggressive false-positive purge.
 
@@ -176,7 +176,7 @@ Configurability, SARIF, and an aggressive false-positive purge.
 - `freopen` no longer matches `fopen` acquire patterns.
 - Struct-field, linked-list, and global assignment recognized as ownership transfers.
 
-## [0.2.0] — 2026-02-24
+## [0.2.0] - 2026-02-24
 
 The cross-file release.
 
@@ -192,19 +192,19 @@ The cross-file release.
 - Performance: read-once/hash-once via `_from_bytes` variants, lock-free rayon, SQLite WAL + 8 MB cache + 256 MB mmap.
 - Tracing instrumentation on all pipeline stages; criterion benchmark suite.
 
-## [0.2.0-alpha] — 2025-06-28
+## [0.2.0-alpha] - 2025-06-28
 
 - Experimental intra-procedural CFG + taint analysis for Rust. Builds a CFG, applies dataflow, and flags unsanitised Source → Sink paths (e.g. `env::var` → `Command::new`).
 - O(1) node-kind lookup via per-language PHF tables.
 - Debug channel `target=cfg` (`RUST_LOG=nyx::cfg=debug`) to inspect generated graphs.
 - Fixed Windows release pipeline (PowerShell has no `zip` command).
 
-## [0.1.1-alpha] — 2025-06-25
+## [0.1.1-alpha] - 2025-06-25
 
 - Fixed `scan --no-index` not respecting the `max_results` config setting (#1).
 - Integration tests covering indexing and scanning pipelines (#3, #4, #5, #8).
 
-## [0.1.0-alpha] — 2025-06-25
+## [0.1.0-alpha] - 2025-06-25
 
 Initial alpha release.
 

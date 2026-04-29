@@ -1,0 +1,75 @@
+name: Bug report
+description: Report a crash, incorrect output, or other broken behavior in Nyx.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. **Please do not file security vulnerabilities here** — use the private advisory link in SECURITY.md.
+
+        For false positives or missed detections (rule quality), this is the right place — those are quality bugs.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing what's wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal source snippet or repo + the exact `nyx` command you ran. The smaller, the better — ideally a single file.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the finding (or lack of finding), error output, or stack trace.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Nyx version
+      description: Output of `nyx --version`.
+      placeholder: "nyx 0.5.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / arch
+      placeholder: "macOS 14.5 arm64"
+    validations:
+      required: true
+  - type: dropdown
+    id: language
+    attributes:
+      label: Target language (if applicable)
+      options:
+        - "n/a"
+        - JavaScript / TypeScript
+        - Python
+        - Java
+        - Go
+        - Ruby
+        - PHP
+        - Rust
+        - C / C++
+        - Other
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Logs, screenshots, related issues — anything else that helps.

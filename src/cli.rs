@@ -32,6 +32,22 @@ impl Commands {
     pub fn is_serve(&self) -> bool {
         matches!(self, Commands::Serve { .. })
     }
+
+    /// Pure read-only / informational commands that should run without the
+    /// "note: Using …" config preamble or the trailing "Finished in …"
+    /// timing line.  These commands' output is often piped or grepped; the
+    /// surrounding chrome is noise.
+    pub fn is_informational(&self) -> bool {
+        match self {
+            Commands::Scan { explain_engine, .. } => *explain_engine,
+            Commands::List { .. } => true,
+            Commands::Config { action } => {
+                matches!(action, ConfigAction::Show { .. } | ConfigAction::Path)
+            }
+            Commands::Index { action } => matches!(action, IndexAction::Status { .. }),
+            _ => false,
+        }
+    }
 }
 
 /// Output format for scan results.
@@ -167,11 +183,11 @@ pub enum Commands {
         path: String,
 
         /// Index mode: auto (default), off (no index), rebuild (force rebuild)
-        #[arg(long, value_enum, default_value_t = IndexMode::Auto)]
+        #[arg(long, value_enum, default_value_t = IndexMode::Auto, help_heading = "Analysis")]
         index: IndexMode,
 
         /// Output format (defaults to config's default_format, or "console")
-        #[arg(short, long, value_enum)]
+        #[arg(short, long, value_enum, help_heading = "Output")]
         format: Option<OutputFormat>,
 
         /// Severity filter expression: HIGH, HIGH,MEDIUM, or >=MEDIUM
@@ -179,30 +195,30 @@ pub enum Commands {
         /// Filters findings AFTER all severity normalization (e.g. nonprod
         /// downgrades). Only findings matching the expression are emitted.
         /// Case-insensitive. Shell-quote expressions containing ">".
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         severity: Option<String>,
 
         /// Analysis mode: full (default), ast, cfg, taint
-        #[arg(long, value_enum, default_value_t = ScanMode::Full)]
+        #[arg(long, value_enum, default_value_t = ScanMode::Full, help_heading = "Analysis")]
         mode: ScanMode,
 
         /// Named scan profile to apply (e.g. quick, full, ci, taint_only, conservative_large_repo)
         ///
         /// Profiles override scan-related config settings. CLI flags still
         /// take precedence over profile values.
-        #[arg(long)]
+        #[arg(long, help_heading = "Analysis")]
         profile: Option<String>,
 
         /// Engine-depth shortcut: fast, balanced, or deep.  Sets the full
         /// stack of analysis toggles at once; individual engine flags still
         /// override this after application.
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, help_heading = "Analysis")]
         engine_profile: Option<EngineProfile>,
 
         /// Print the effective engine configuration and exit without
         /// scanning.  Useful for understanding how CLI flags and config
         /// values resolve together.
-        #[arg(long)]
+        #[arg(long, help_heading = "Analysis")]
         explain_engine: bool,
 
         /// Scan all targets (alias for --mode full)
@@ -213,57 +229,57 @@ pub enum Commands {
         ///
         /// By default, findings in non-production paths are downgraded by one
         /// severity tier. This flag preserves original severity.
-        #[arg(long, alias = "include-nonprod")]
+        #[arg(long, alias = "include-nonprod", help_heading = "Output")]
         keep_nonprod_severity: bool,
 
         /// Suppress all human-readable status output
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         quiet: bool,
 
         /// Exit with code 1 if any finding meets or exceeds this severity
         ///
         /// Useful for CI gating. Example: --fail-on HIGH
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         fail_on: Option<String>,
 
         /// Disable state-model analysis (resource lifecycle, auth state)
-        #[arg(long)]
+        #[arg(long, help_heading = "Analysis")]
         no_state: bool,
 
         /// Disable attack-surface ranking (findings are sorted by exploitability by default)
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         no_rank: bool,
 
         /// Show inline-suppressed findings (dimmed, tagged [SUPPRESSED])
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         show_suppressed: bool,
 
         /// Show all findings: disables category filtering, rollups, and LOW budgets
-        #[arg(long = "all")]
+        #[arg(long = "all", help_heading = "Output")]
         show_all: bool,
 
         /// Include Quality findings (excluded by default)
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         include_quality: bool,
 
         /// Maximum total LOW findings to show
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = 20, help_heading = "Output")]
         max_low: u32,
 
         /// Maximum LOW findings per file
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = 1, help_heading = "Output")]
         max_low_per_file: u32,
 
         /// Maximum LOW findings per rule
-        #[arg(long, default_value_t = 10)]
+        #[arg(long, default_value_t = 10, help_heading = "Output")]
         max_low_per_rule: u32,
 
         /// Number of example locations in rollup findings
-        #[arg(long, default_value_t = 5)]
+        #[arg(long, default_value_t = 5, help_heading = "Output")]
         rollup_examples: u32,
 
         /// Show all instances for a specific rule (bypasses rollup for that rule)
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         show_instances: Option<String>,
 
         /// Minimum attack-surface score to include in output
@@ -271,89 +287,97 @@ pub enum Commands {
         /// Findings with a rank score below this threshold are suppressed.
         /// Requires ranking to be enabled (has no effect with --no-rank).
         /// Example: --min-score 50
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         min_score: Option<u32>,
 
         /// Minimum confidence level to include in output
         ///
         /// Values: low, medium, high. Findings below this level are dropped.
         /// JSON/SARIF include all unless filtered.
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         min_confidence: Option<String>,
 
         /// Drop findings emitted from capped / widened / bailed analysis
         ///
         /// Suppresses any finding whose engine provenance notes indicate
         /// over-reporting (predicate/path widening) or analysis bail
-        /// (SSA lowering failure, parse timeout).  Under-report notes —
-        /// where the emitted finding is still a real flow but the
-        /// result set is a lower bound — are kept.
+        /// (SSA lowering failure, parse timeout).  Under-report notes
+        /// (where the emitted finding is still a real flow but the
+        /// result set is a lower bound) are kept.
         ///
         /// Intended for strict CI gates where a finding from non-converged
         /// analysis is worse than no finding.  Applied after ranking and
         /// before the `max_results` truncation.
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         require_converged: bool,
 
         // ── Analysis engine toggles (override [analysis.engine] config) ───
         /// Enable path-constraint solving (default: on)
-        #[arg(long, overrides_with = "no_constraint_solving")]
+        #[arg(
+            long,
+            overrides_with = "no_constraint_solving",
+            help_heading = "Engine"
+        )]
         constraint_solving: bool,
         /// Disable path-constraint solving
-        #[arg(long, overrides_with = "constraint_solving")]
+        #[arg(long, overrides_with = "constraint_solving", help_heading = "Engine")]
         no_constraint_solving: bool,
 
         /// Enable abstract interpretation (default: on)
-        #[arg(long, overrides_with = "no_abstract_interp")]
+        #[arg(long, overrides_with = "no_abstract_interp", help_heading = "Engine")]
         abstract_interp: bool,
         /// Disable abstract interpretation
-        #[arg(long, overrides_with = "abstract_interp")]
+        #[arg(long, overrides_with = "abstract_interp", help_heading = "Engine")]
         no_abstract_interp: bool,
 
         /// Enable k=1 context-sensitive callee inlining (default: on)
-        #[arg(long, overrides_with = "no_context_sensitive")]
+        #[arg(long, overrides_with = "no_context_sensitive", help_heading = "Engine")]
         context_sensitive: bool,
         /// Disable context-sensitive callee inlining
-        #[arg(long, overrides_with = "context_sensitive")]
+        #[arg(long, overrides_with = "context_sensitive", help_heading = "Engine")]
         no_context_sensitive: bool,
 
         /// Enable the symex pipeline (default: on)
-        #[arg(long, overrides_with = "no_symex")]
+        #[arg(long, overrides_with = "no_symex", help_heading = "Symex")]
         symex: bool,
         /// Disable the symex pipeline entirely
-        #[arg(long, overrides_with = "symex")]
+        #[arg(long, overrides_with = "symex", help_heading = "Symex")]
         no_symex: bool,
 
         /// Enable cross-file symbolic body execution (default: on)
-        #[arg(long, overrides_with = "no_cross_file_symex")]
+        #[arg(long, overrides_with = "no_cross_file_symex", help_heading = "Symex")]
         cross_file_symex: bool,
         /// Disable cross-file symbolic body execution
-        #[arg(long, overrides_with = "cross_file_symex")]
+        #[arg(long, overrides_with = "cross_file_symex", help_heading = "Symex")]
         no_cross_file_symex: bool,
 
         /// Enable interprocedural symex frame stack (default: on)
-        #[arg(long, overrides_with = "no_symex_interproc")]
+        #[arg(long, overrides_with = "no_symex_interproc", help_heading = "Symex")]
         symex_interproc: bool,
         /// Disable interprocedural symex
-        #[arg(long, overrides_with = "symex_interproc")]
+        #[arg(long, overrides_with = "symex_interproc", help_heading = "Symex")]
         no_symex_interproc: bool,
 
         /// Enable SMT solver backend when nyx is built with the `smt` feature (default: on)
-        #[arg(long, overrides_with = "no_smt")]
+        #[arg(long, overrides_with = "no_smt", help_heading = "Symex")]
         smt: bool,
         /// Disable SMT solver backend
-        #[arg(long, overrides_with = "smt")]
+        #[arg(long, overrides_with = "smt", help_heading = "Symex")]
         no_smt: bool,
 
         /// Enable demand-driven backwards analysis (default: off)
-        #[arg(long, overrides_with = "no_backwards_analysis")]
+        #[arg(
+            long,
+            overrides_with = "no_backwards_analysis",
+            help_heading = "Engine"
+        )]
         backwards_analysis: bool,
         /// Disable demand-driven backwards analysis
-        #[arg(long, overrides_with = "backwards_analysis")]
+        #[arg(long, overrides_with = "backwards_analysis", help_heading = "Engine")]
         no_backwards_analysis: bool,
 
         /// Override per-file tree-sitter parse timeout (ms). 0 disables the cap.
-        #[arg(long)]
+        #[arg(long, help_heading = "Limits")]
         parse_timeout_ms: Option<u64>,
 
         /// Maximum taint origins retained per lattice value (default: 32).
@@ -363,7 +387,7 @@ pub enum Commands {
         /// `OriginsTruncated` engine note is recorded on affected findings.
         /// Raise for very wide codebases where truncation is observed;
         /// lower only when lattice width is a measured bottleneck.
-        #[arg(long)]
+        #[arg(long, help_heading = "Limits")]
         max_origins: Option<u32>,
 
         /// Maximum abstract heap objects retained per points-to set (default: 32).
@@ -373,7 +397,7 @@ pub enum Commands {
         /// `PointsToTruncated` engine note is recorded on affected findings.
         /// Raise for factory-heavy codebases where truncation is observed;
         /// lower only when points-to width is a measured bottleneck.
-        #[arg(long)]
+        #[arg(long, help_heading = "Limits")]
         max_pointsto: Option<u32>,
 
         // ── Deprecated aliases (hidden) ─────────────────────────────────
@@ -449,8 +473,15 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum ConfigAction {
-    /// Print effective merged configuration as TOML
-    Show,
+    /// Print configuration as TOML.  By default shows only the values
+    /// that differ from built-in defaults.  Pass `--all` for the full
+    /// effective configuration.
+    Show {
+        /// Print the full effective configuration instead of just
+        /// the user's overrides.
+        #[arg(long)]
+        all: bool,
+    },
 
     /// Print configuration directory path
     Path,

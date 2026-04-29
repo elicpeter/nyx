@@ -1,8 +1,11 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useFindingsURLState } from '../hooks/useFindingsURLState';
 import { useDebounce } from '../hooks/useDebounce';
+import { usePageTitle } from '../hooks/usePageTitle';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
+import { useToast } from '../contexts/ToastContext';
 import {
   useFindings,
   useFindingFilters,
@@ -11,9 +14,12 @@ import {
 import { useBulkTriage, useAddSuppression } from '../api/mutations/triage';
 import { Pagination } from '../components/ui/Pagination';
 import { Dropdown, DropdownItem } from '../components/ui/Dropdown';
+import { LoadingState } from '../components/ui/LoadingState';
+import { ErrorState } from '../components/ui/ErrorState';
 import { CopyMarkdownButton } from '../components/CopyMarkdownButton';
 import { truncPath } from '../utils/truncPath';
 import { findingsToMarkdown } from '../utils/findingMarkdown';
+import { ApiError } from '../api/client';
 import type { FindingView, FilterValues } from '../api/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -279,8 +285,10 @@ function SortableTh({
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export function FindingsPage() {
+  usePageTitle('Findings');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const { state, updateState, resetFilters, hasActiveFilters } =
     useFindingsURLState();
 
@@ -388,10 +396,22 @@ export function FindingsPage() {
       if (fingerprints.length === 0) return;
       bulkTriage.mutate(
         { fingerprints, state: triageState, note: '' },
-        { onSuccess: () => setSelected(new Set()) },
+        {
+          onSuccess: () => {
+            setSelected(new Set());
+            toast.success(
+              `Marked ${fingerprints.length} finding${fingerprints.length === 1 ? '' : 's'} as ${triageState.replace('_', ' ')}`,
+            );
+          },
+          onError: (err) =>
+            toast.error(
+              err instanceof Error ? err.message : 'Bulk triage failed',
+              'Could not update findings',
+            ),
+        },
       );
     },
-    [getSelectedFingerprints, bulkTriage],
+    [getSelectedFingerprints, bulkTriage, toast],
   );
 
   const handleSuppressByPattern = useCallback(() => {
@@ -435,7 +455,13 @@ export function FindingsPage() {
           onSuccess: () => {
             setSuppressModalOpen(false);
             setSelected(new Set());
+            toast.success(`Added suppression by ${by}`);
           },
+          onError: (err) =>
+            toast.error(
+              err instanceof Error ? err.message : 'Suppression failed',
+              'Could not add suppression',
+            ),
         },
       );
     },
@@ -470,15 +496,61 @@ export function FindingsPage() {
     [navigate],
   );
 
+  // ── Keyboard navigation: j/k row cursor + / search + Enter to open ──
+
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const [cursor, setCursor] = useState(-1);
+
+  // Reset cursor whenever the visible page changes.
+  useEffect(() => {
+    setCursor(-1);
+  }, [data]);
+
+  const shortcuts = useMemo(
+    () => [
+      {
+        key: '/',
+        description: 'Focus search',
+        handler: () => searchInputRef.current?.focus(),
+      },
+      {
+        key: 'j',
+        description: 'Next finding',
+        handler: () => {
+          if (!data || data.findings.length === 0) return;
+          setCursor((c) => Math.min(c + 1, data.findings.length - 1));
+        },
+      },
+      {
+        key: 'k',
+        description: 'Previous finding',
+        handler: () => {
+          if (!data || data.findings.length === 0) return;
+          setCursor((c) => Math.max(c - 1, 0));
+        },
+      },
+      {
+        key: 'Enter',
+        description: 'Open highlighted finding',
+        handler: () => {
+          const f = data?.findings[cursor];
+          if (f) navigate(`/findings/${f.index}`);
+        },
+      },
+    ],
+    [data, cursor, navigate],
+  );
+
+  useKeyboardShortcuts(shortcuts);
+
   // ── Render ──
 
   if (isLoading) {
-    return <div className="loading">Loading findings...</div>;
+    return <LoadingState message="Loading findings..." />;
   }
 
   if (isError) {
-    const msg = error instanceof Error ? error.message : 'Unknown error';
-    if (msg.includes('404')) {
+    if (error instanceof ApiError && error.status === 404) {
       return (
         <div className="empty-state">
           <h3>No scan results yet</h3>
@@ -486,12 +558,7 @@ export function FindingsPage() {
         </div>
       );
     }
-    return (
-      <div className="error-state">
-        <h3>Error</h3>
-        <p>{msg}</p>
-      </div>
-    );
+    return <ErrorState title="Error" error={error} />;
   }
 
   if (!data) return null;
@@ -513,6 +580,7 @@ export function FindingsPage() {
       <div className="filter-bar">
         <input
           type="text"
+          ref={searchInputRef}
           placeholder="Search findings... (/)"
           className="search-input"
           value={searchInput}
@@ -654,10 +722,11 @@ export function FindingsPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.findings.map((f) => (
+                {data.findings.map((f, i) => (
                   <tr
                     key={f.index}
-                    className={`clickable${selected.has(f.index) ? ' selected' : ''}`}
+                    className={`clickable${selected.has(f.index) ? ' selected' : ''}${i === cursor ? ' cursor' : ''}`}
+                    aria-current={i === cursor ? 'true' : undefined}
                     onClick={(e) => handleRowClick(e, f)}
                   >
                     <td className="col-checkbox">

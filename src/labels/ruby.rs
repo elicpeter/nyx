@@ -73,6 +73,19 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
     },
+    // Bare `Kernel#open(path)` interprets a path beginning with `|` as a
+    // shell command (`open("|cmd")` runs `cmd`).  `=open` exact-matcher
+    // syntax limits this rule to the bare call — `File.open`, `IO.open`,
+    // `URI.open` etc. each have their own non-pipe semantics and are
+    // covered by their own labels (or intentionally not labeled as CMDI).
+    // CVE-2020-8130 (rake `Rake::FileList#egrep`) was the canonical
+    // exploit: an attacker-supplied filename starting with `|` ran through
+    // `open(fn, "r")`.  The fix replaced the call with `File.open(fn, "r")`.
+    LabelRule {
+        matchers: &["=open"],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
+    },
     // Backtick shell execution: tree-sitter-ruby represents `` `cmd` `` as a
     // `subshell` node with no callee field. push_node normalises the synthetic
     // callee name to "subshell" and extract_arg_uses lifts interpolation
@@ -225,6 +238,60 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     ident_fields: &["name"],
 };
 
+/// ActiveRecord query methods that the static [`RULES`] table classifies as
+/// `Sink(Cap::SQL_QUERY)`.  These are SQL injection vectors only when arg 0
+/// is a string with interpolation (`#{x}`) or a non-literal identifier — the
+/// hash form (`where(id: x)`) and the parameterised form (`where("a = ?", x)`)
+/// are intrinsically safe because Rails escapes the values.
+const AR_QUERY_METHOD_NAMES: &[&str] = &["where", "order", "group", "having", "joins", "pluck"];
+
+/// Tree-sitter argument-0 node kinds that mark an ActiveRecord query call as
+/// shape-safe.  Hash literals (`pair`, `hash`), symbol literals
+/// (`simple_symbol`, `hash_key_symbol`), array literals (`array`), and pure
+/// string literals without `#{...}` interpolation are all safe.  Strings WITH
+/// interpolation and identifiers / method calls are *not* in this list —
+/// callers must check `has_interpolation` and the kind separately.
+const AR_QUERY_SAFE_ARG0_KINDS: &[&str] = &[
+    "pair",
+    "hash",
+    "simple_symbol",
+    "hash_key_symbol",
+    "array",
+    "string",
+    "string_literal",
+];
+
+/// Returns `true` when a Ruby `call` node is an ActiveRecord query method
+/// (`where`, `order`, `pluck`, …) whose argument 0 has a parameter-safe shape.
+///
+/// Used by [`crate::cfg`] to synthesise a `Sanitizer(SQL_QUERY)` label on
+/// the same node as the `Sink(SQL_QUERY)` label, suppressing both
+/// `taint-unsanitised-flow` (sanitiser sees taint at the sink) and
+/// `cfg-unguarded-sink` (sanitiser dominates the sink reflexively).
+///
+/// Real-world FP shapes this closes (redmine, mastodon, diaspora):
+/// * `Issue.where(:id => params[:id])` — hash form
+/// * `Model.where(id: x, name: y)` — keyword-shorthand pairs
+/// * `Project.order(:created_at)` — symbol literal
+/// * `Issue.pluck(:id, :name)` — symbol literals
+/// * `Model.where("active = ?", x)` — parameterised string
+///
+/// Real-world TPs preserved:
+/// * `User.where("name = '#{name}'")` — string with interpolation
+/// * `Model.where(some_string_var)` — dynamic identifier (conservative)
+pub fn ar_query_safe_shape(callee_text: &str, arg0_kind: &str, has_interpolation: bool) -> bool {
+    // Match the callee's last segment ("Model.where" → "where", "where" → "where").
+    let leaf = callee_text.rsplit(['.', ':']).next().unwrap_or(callee_text);
+    if !AR_QUERY_METHOD_NAMES.contains(&leaf) {
+        return false;
+    }
+    // Strings are safe only when they don't contain `#{...}` interpolation.
+    if matches!(arg0_kind, "string" | "string_literal") && has_interpolation {
+        return false;
+    }
+    AR_QUERY_SAFE_ARG0_KINDS.contains(&arg0_kind)
+}
+
 /// Framework-conditional rules for Ruby.
 pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
     let mut rules = Vec::new();
@@ -248,4 +315,62 @@ pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
     }
 
     rules
+}
+
+#[cfg(test)]
+mod ar_query_tests {
+    use super::ar_query_safe_shape;
+
+    #[test]
+    fn hash_form_is_safe() {
+        // Model.where(:id => x)  — pair node directly in argument_list
+        assert!(ar_query_safe_shape("Model.where", "pair", false));
+        // Model.where(id: x)
+        assert!(ar_query_safe_shape("where", "pair", false));
+    }
+
+    #[test]
+    fn symbol_form_is_safe() {
+        assert!(ar_query_safe_shape("Project.order", "simple_symbol", false));
+        assert!(ar_query_safe_shape("Issue.pluck", "simple_symbol", false));
+        assert!(ar_query_safe_shape("Model.joins", "simple_symbol", false));
+    }
+
+    #[test]
+    fn parameterised_string_is_safe() {
+        // Model.where("a = ?", x)  — first arg is a string literal w/o interpolation
+        assert!(ar_query_safe_shape("where", "string", false));
+        assert!(ar_query_safe_shape("where", "string_literal", false));
+    }
+
+    #[test]
+    fn interpolated_string_is_dangerous() {
+        // Model.where("a = #{x}")  — string node WITH interpolation child
+        assert!(!ar_query_safe_shape("where", "string", true));
+    }
+
+    #[test]
+    fn dynamic_identifier_is_dangerous() {
+        // Model.where(some_var) — kind is identifier, not in safe list
+        assert!(!ar_query_safe_shape("where", "identifier", false));
+    }
+
+    #[test]
+    fn array_form_is_safe() {
+        // Model.pluck([:id, :name]) — uncommon but valid
+        assert!(ar_query_safe_shape("pluck", "array", false));
+    }
+
+    #[test]
+    fn non_ar_method_is_never_suppressed() {
+        // find_by_sql is a real raw-SQL sink — never suppress.
+        assert!(!ar_query_safe_shape("find_by_sql", "string", false));
+        assert!(!ar_query_safe_shape("connection.execute", "pair", false));
+    }
+
+    #[test]
+    fn callee_with_module_path_resolves_leaf() {
+        assert!(ar_query_safe_shape("Foo::Bar.where", "pair", false));
+        assert!(ar_query_safe_shape("a.b.c.where", "pair", false));
+    }
 }

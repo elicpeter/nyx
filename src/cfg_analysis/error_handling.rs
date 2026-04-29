@@ -4,6 +4,32 @@ use crate::patterns::Severity;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 
+/// Strict err-identifier match for cfg-error-fallthrough.
+///
+/// The previous heuristic `lower.contains("err")` over-matched method
+/// names like Java `logger.isErrorEnabled()` (the camelCase identifier
+/// `isErrorEnabled` matched because it contains `err`).  The rule's
+/// real target is a variable / field that holds an error value.
+///
+/// Returns true if the identifier is exactly `err` / `error` or a
+/// snake-case error name (`err_x`, `error_x`, `x_err`, `x_error`).
+/// CamelCase names (`isErrorEnabled`, `getError`, `errorMsg`) are
+/// rejected — the cost is occasional FNs on Java-style error fields,
+/// which is acceptable for a precision fix.
+fn is_error_var_ident(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if lower == "err" || lower == "error" {
+        return true;
+    }
+    if lower.starts_with("err_") || lower.starts_with("error_") {
+        return true;
+    }
+    if lower.ends_with("_err") || lower.ends_with("_error") {
+        return true;
+    }
+    false
+}
+
 /// Does the condition text contain a unary `!` (logical-not, NOT `!=`)
 /// applied to an identifier or member chain whose name contains "err"?
 ///
@@ -137,14 +163,31 @@ fn terminates_on_all_paths(
     true
 }
 
-/// Find successor nodes after an If node merges (nodes reachable from both branches).
+/// Find successor nodes after an If node merges.
+///
+/// Walks **only** the False edge of the if (and Seq edges from there),
+/// so that sinks inside the True body are NOT counted as "post-if"
+/// fallthrough sinks.  The False edge represents the no-error branch,
+/// which is the path the rule wants to scan for "did execution fall
+/// through past an unhandled error?".
+///
+/// For `if err != nil { warn(); }` with no statement after the if,
+/// the False edge leads to the function exit and no sinks are found.
+/// For `if err != nil { warn(); } sink(x)`, the False edge leads to
+/// `sink(x)` and the rule fires correctly.
 fn find_post_if_sinks(cfg: &crate::cfg::Cfg, if_node: NodeIndex) -> Vec<NodeIndex> {
     let mut sinks_after = Vec::new();
-
-    // Get all successors of the if node's merge point
-    // Walk through successors looking for sinks
     let mut visited = std::collections::HashSet::new();
-    let mut stack: Vec<NodeIndex> = cfg.neighbors(if_node).collect();
+
+    // Seed from the False edge only.  If the if has no explicit False
+    // edge (some CFG shapes omit it for one-branch ifs), fall back to
+    // Seq edges from the if node — but never follow True edges, which
+    // lead into the body.
+    let mut stack: Vec<NodeIndex> = cfg
+        .edges(if_node)
+        .filter(|e| matches!(e.weight(), EdgeKind::False | EdgeKind::Seq))
+        .map(|e| e.target())
+        .collect();
 
     while let Some(current) = stack.pop() {
         if !visited.insert(current) {
@@ -156,13 +199,13 @@ fn find_post_if_sinks(cfg: &crate::cfg::Cfg, if_node: NodeIndex) -> Vec<NodeInde
             sinks_after.push(current);
         }
 
-        for succ in cfg.neighbors(current) {
-            let is_back_edge = cfg
-                .edges(current)
-                .any(|e| e.target() == succ && matches!(e.weight(), EdgeKind::Back));
-            if !is_back_edge {
-                stack.push(succ);
+        for edge in cfg.edges(current) {
+            let succ = edge.target();
+            // Don't follow back edges (loops) or exception edges.
+            if matches!(edge.weight(), EdgeKind::Back | EdgeKind::Exception) {
+                continue;
             }
+            stack.push(succ);
         }
     }
 
@@ -193,10 +236,7 @@ impl CfgAnalysis for IncompleteErrorHandling {
                 continue;
             }
 
-            let mentions_err = info.condition_vars.iter().any(|u| {
-                let lower = u.to_ascii_lowercase();
-                lower == "err" || lower == "error" || lower.contains("err")
-            });
+            let mentions_err = info.condition_vars.iter().any(|u| is_error_var_ident(u));
 
             if !mentions_err {
                 continue;
@@ -287,5 +327,47 @@ mod negation_tests {
         assert!(!contains_negated_err_identifier("err != null"));
         assert!(!contains_negated_err_identifier("response.error"));
         assert!(!contains_negated_err_identifier("hasError(x)"));
+    }
+}
+
+#[cfg(test)]
+mod err_ident_tests {
+    use super::is_error_var_ident;
+
+    #[test]
+    fn matches_canonical_error_vars() {
+        assert!(is_error_var_ident("err"));
+        assert!(is_error_var_ident("error"));
+        assert!(is_error_var_ident("ERR"));
+        assert!(is_error_var_ident("Error"));
+    }
+
+    #[test]
+    fn matches_snake_case_error_vars() {
+        assert!(is_error_var_ident("err_resp"));
+        assert!(is_error_var_ident("error_msg"));
+        assert!(is_error_var_ident("response_err"));
+        assert!(is_error_var_ident("parse_error"));
+    }
+
+    #[test]
+    fn rejects_camelcase_method_names() {
+        // Spring `logger.isErrorEnabled()` lifts `isErrorEnabled` into
+        // `condition_vars`; under the old `lower.contains("err")` check
+        // this fired the rule.  The new strict check rejects it — the
+        // condition is asking "is logging enabled", not "is there an
+        // error".
+        assert!(!is_error_var_ident("isErrorEnabled"));
+        assert!(!is_error_var_ident("getError"));
+        assert!(!is_error_var_ident("hasError"));
+        assert!(!is_error_var_ident("errorMsg"));
+        assert!(!is_error_var_ident("errCode"));
+    }
+
+    #[test]
+    fn rejects_unrelated_idents() {
+        assert!(!is_error_var_ident("user"));
+        assert!(!is_error_var_ident("merry"));
+        assert!(!is_error_var_ident("perform"));
     }
 }

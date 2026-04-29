@@ -48,6 +48,7 @@ impl fmt::Display for SsaBody {
                         callee,
                         args,
                         receiver,
+                        ..
                     } => {
                         if let Some(rv) = receiver {
                             write!(f, "v{}.{callee}(", rv.0)?;
@@ -63,6 +64,20 @@ impl fmt::Display for SsaBody {
                             })
                             .collect();
                         write!(f, "{})", arg_strs.join(", "))?;
+                    }
+                    SsaOp::FieldProj {
+                        receiver,
+                        field,
+                        projected_type,
+                    } => {
+                        // Resolve the field name through the body's interner
+                        // so display output matches the original source field.
+                        let name = self.field_interner.resolve(*field);
+                        if let Some(ty) = projected_type {
+                            write!(f, "field_proj(v{}, {name:?}) :: {ty:?}", receiver.0)?;
+                        } else {
+                            write!(f, "field_proj(v{}, {name:?})", receiver.0)?;
+                        }
                     }
                     SsaOp::Source => write!(f, "source()")?,
                     SsaOp::Const(val) => {

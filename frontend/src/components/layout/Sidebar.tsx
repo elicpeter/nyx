@@ -8,7 +8,6 @@ import {
   ConfigIcon,
   ExplorerIcon,
   DebugIcon,
-  SettingsIcon,
   FolderIcon,
   TagIcon,
 } from '../icons/Icons';
@@ -62,13 +61,6 @@ const NAV_SECTIONS: NavItem[] = [
     group: 'primary',
   },
   {
-    id: 'config',
-    label: 'Config',
-    path: '/config',
-    Icon: ConfigIcon,
-    group: 'secondary',
-  },
-  {
     id: 'explorer',
     label: 'Explorer',
     path: '/explorer',
@@ -83,10 +75,10 @@ const NAV_SECTIONS: NavItem[] = [
     group: 'secondary',
   },
   {
-    id: 'settings',
-    label: 'Settings',
-    path: '/settings',
-    Icon: SettingsIcon,
+    id: 'config',
+    label: 'Config',
+    path: '/config',
+    Icon: ConfigIcon,
     group: 'footer',
   },
 ];

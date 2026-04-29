@@ -1,4 +1,5 @@
 use crate::auth_analysis::model::SinkClass;
+use crate::labels::bare_method_name;
 use crate::utils::config::Config;
 
 #[derive(Debug, Clone)]
@@ -175,7 +176,7 @@ impl AuthAnalysisRules {
     /// receiver — `someElement.addEventListener` is just as
     /// categorically client-side as `document.addEventListener`.
     pub fn callee_has_non_sink_method(&self, callee: &str) -> bool {
-        let last = callee.rsplit('.').next().unwrap_or(callee);
+        let last = bare_method_name(callee);
         let last = last.rsplit("::").next().unwrap_or(last);
         if last.is_empty() {
             return false;
@@ -244,11 +245,29 @@ impl AuthAnalysisRules {
         if self.receiver_matches_any_prefix(first, &self.cache_receiver_prefixes) {
             return Some(SinkClass::CacheCrossTenant);
         }
-        if self.is_mutation(callee) {
-            return Some(SinkClass::DbMutation);
-        }
-        if self.is_read(callee) {
-            return Some(SinkClass::DbCrossTenantRead);
+        // Verb-name fallback (`is_mutation` / `is_read`) is the loosest
+        // dispatch: it prefix-matches the bare method name against
+        // generic verbs (`Get`, `Save`, `Find`, …) regardless of the
+        // receiver.  When the receiver chain itself contains a call
+        // expression (`w.Header().Get(..)`, `r.URL.Query().Get(..)`,
+        // `db.Tx(..).Query(..)`), the receiver is the *return value of
+        // another call* — its type is opaque to the auth analyser and
+        // the bare verb match is too speculative to assume a data-layer
+        // sink.  The realtime/outbound/cache prefix dispatches above
+        // already match by the chain root; if none of them claimed the
+        // receiver, dropping the verb-name fallback for chained-call
+        // shapes prevents the entire `w.Header().Get` /
+        // `r.URL.Query().Get` cluster from masquerading as a
+        // `DbCrossTenantRead`.  A canonical data-layer call still has a
+        // bare-identifier receiver (`repo.Find(id)`, `db.Query(..)`)
+        // and is unaffected.
+        if !receiver_is_chained_call(callee) {
+            if self.is_mutation(callee) {
+                return Some(SinkClass::DbMutation);
+            }
+            if self.is_read(callee) {
+                return Some(SinkClass::DbCrossTenantRead);
+            }
         }
         None
     }
@@ -596,6 +615,38 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "verify_access!".into(),
                 "can_access?".into(),
                 "can?".into(),
+                // Rails per-record permission predicates — the canonical
+                // "load by id, then check on the loaded record" idiom
+                // (see redmine `app/controllers/issues_controller.rb`,
+                // mastodon controllers, diaspora ApplicationController).
+                // Combined with `row_population_data` reverse-walk, this
+                // recognises the post-fetch ownership check that is
+                // textually after the find call.
+                "visible?".into(),
+                "editable?".into(),
+                "editable_by?".into(),
+                "deletable?".into(),
+                "deletable_by?".into(),
+                "destroyable?".into(),
+                "destroyable_by?".into(),
+                "commentable?".into(),
+                "commentable_by?".into(),
+                "permitted?".into(),
+                "accessible?".into(),
+                "accessible_by?".into(),
+                "authorized?".into(),
+                "allowed_to?".into(),
+                "allowed?".into(),
+                "viewable?".into(),
+                "viewable_by?".into(),
+                "writable?".into(),
+                "writable_by?".into(),
+                "readable?".into(),
+                "readable_by?".into(),
+                "manageable?".into(),
+                "manageable_by?".into(),
+                "owned_by?".into(),
+                "belongs_to?".into(),
             ],
             mutation_indicator_names: vec![
                 "update".into(),
@@ -1294,13 +1345,32 @@ pub fn first_receiver_segment(callee: &str) -> &str {
     callee.split('.').next().unwrap_or(callee)
 }
 
+/// True when the callee's receiver chain contains a call expression —
+/// i.e. the LAST segment is being invoked on the *return value* of an
+/// earlier call (`w.Header().Get`, `r.URL.Query().Get`,
+/// `db.Tx(opts).Query`).  Detected as: the substring before the last
+/// `.` contains a `(`.
+///
+/// `classify_sink_class` consults this to suppress the loose verb-name
+/// fallback (`is_read` / `is_mutation`) for chained-call shapes whose
+/// receiver type is opaque to the analyser.
+pub fn receiver_is_chained_call(callee: &str) -> bool {
+    let Some((receiver, _method)) = callee.rsplit_once('.') else {
+        return false;
+    };
+    receiver.contains('(')
+}
+
 /// Recognise `require_<resource>_<role>` / `ensure_<resource>_<role>`
 /// shapes where `<role>` is a closed-vocabulary authorization noun
 /// (`member`, `owner`, `admin`, `access`, `permission`, `manager`,
-/// `editor`, `viewer`).  The resource segment is project-specific
-/// (`trip`, `doc`, `project`, `workspace`, …) and cannot be enumerated
-/// in the static defaults — but the prefix+role pattern is unambiguous
-/// enough that recognising it as an authorization check is safe.
+/// `editor`, `viewer`, `user`, `mod`).  The resource segment is
+/// project-specific (`trip`, `doc`, `project`, `community`, …) and
+/// cannot be enumerated in the static defaults — but the
+/// prefix+role pattern is unambiguous enough that recognising it as
+/// an authorization check is safe.  Also accepts `is_<role>` /
+/// `is_<role>_(or|and)_<role>...` predicate forms (`is_admin`,
+/// `is_mod_or_admin`).
 ///
 /// Strips path-namespace and method prefixes before matching:
 /// `authz::require_trip_member` → `require_trip_member`;
@@ -1309,23 +1379,60 @@ fn is_require_resource_role_call(name: &str) -> bool {
     let last = name.rsplit("::").next().unwrap_or(name);
     let last = last.rsplit('.').next().unwrap_or(last);
     let lower = last.to_ascii_lowercase();
-    let after_prefix = if let Some(rest) = lower.strip_prefix("require_") {
-        rest
-    } else if let Some(rest) = lower.strip_prefix("ensure_") {
-        rest
-    } else {
-        return false;
-    };
-    let Some(last_underscore) = after_prefix.rfind('_') else {
-        return false;
-    };
-    // Must have at least one resource char before the role and a
-    // non-empty role after.  Rejects degenerate `require__member`,
-    // `require_member` (no resource).
-    if last_underscore == 0 || last_underscore == after_prefix.len() - 1 {
-        return false;
+
+    // Pattern 1: `<verb>_<resource>_<role>[_<context>]?` where
+    // <verb> ∈ {require, ensure, check, assert, verify} and
+    // <context> ∈ {action, allowed, valid} (a small closed suffix
+    // set that wraps the role, e.g. `check_community_mod_action`).
+    if let Some(after_prefix) = strip_auth_verb_prefix(&lower) {
+        let core = strip_role_context_suffix(after_prefix);
+        if let Some(last_underscore) = core.rfind('_')
+            && last_underscore > 0
+            && last_underscore < core.len() - 1
+        {
+            let role = &core[last_underscore + 1..];
+            if is_known_auth_role(role) {
+                return true;
+            }
+        }
     }
-    let role = &after_prefix[last_underscore + 1..];
+
+    // Pattern 2: `is_<role>` and `is_<role>_(or|and)_<role>...`.
+    // Conservative role list — excludes `user` / `staff` to avoid
+    // matching ambiguous predicates like `is_user`.
+    if let Some(rest) = lower.strip_prefix("is_")
+        && !rest.is_empty()
+        && all_tokens_are_predicate_roles(rest)
+    {
+        return true;
+    }
+
+    false
+}
+
+fn strip_auth_verb_prefix(lower: &str) -> Option<&str> {
+    for verb in ["require_", "ensure_", "check_", "assert_", "verify_"] {
+        if let Some(rest) = lower.strip_prefix(verb) {
+            return Some(rest);
+        }
+    }
+    None
+}
+
+/// Strip a single trailing `_<context>` suffix where <context> wraps
+/// a role word with extra noise (`_action` / `_allowed` / `_valid`).
+/// Does NOT strip `_access` / `_permission` because those are
+/// themselves valid role suffixes (`require_doc_access`).
+fn strip_role_context_suffix(s: &str) -> &str {
+    for suffix in ["_action", "_allowed", "_valid"] {
+        if let Some(stripped) = s.strip_suffix(suffix) {
+            return stripped;
+        }
+    }
+    s
+}
+
+fn is_known_auth_role(role: &str) -> bool {
     matches!(
         role,
         "member"
@@ -1344,7 +1451,53 @@ fn is_require_resource_role_call(name: &str) -> bool {
             | "viewer"
             | "viewers"
             | "role"
+            | "user"
+            | "mod"
+            | "mods"
+            | "moderator"
+            | "moderators"
     )
+}
+
+/// `is_<role>` predicate role set.  Tighter than the
+/// `<verb>_<resource>_<role>` set because predicates lack the
+/// resource segment that disambiguates ambiguous role nouns
+/// (`is_user` could be a typeof check, not an authorization check).
+fn is_predicate_auth_role(role: &str) -> bool {
+    matches!(
+        role,
+        "admin"
+            | "admins"
+            | "owner"
+            | "owners"
+            | "member"
+            | "members"
+            | "manager"
+            | "managers"
+            | "moderator"
+            | "moderators"
+            | "mod"
+            | "mods"
+            | "editor"
+            | "editors"
+    )
+}
+
+/// Returns `true` iff every `_or_` / `_and_`-separated token in `rest`
+/// is a known predicate auth role.  E.g. `mod_or_admin` → true,
+/// `mod_or_owner_and_admin` → true, `mod_or_logged_in` → false.
+fn all_tokens_are_predicate_roles(rest: &str) -> bool {
+    let mut tokens: Vec<&str> = vec![rest];
+    for sep in &["_or_", "_and_"] {
+        let mut next: Vec<&str> = Vec::new();
+        for t in &tokens {
+            for piece in t.split(sep) {
+                next.push(piece);
+            }
+        }
+        tokens = next;
+    }
+    !tokens.is_empty() && tokens.iter().all(|t| is_predicate_auth_role(t))
 }
 
 pub fn matches_name(name: &str, pattern: &str) -> bool {
@@ -1522,6 +1675,51 @@ mod tests {
     }
 
     #[test]
+    fn receiver_is_chained_call_detects_intermediate_calls() {
+        use super::receiver_is_chained_call;
+        // Chained-call shape: receiver chain contains a `(`.
+        assert!(receiver_is_chained_call("w.Header().Get"));
+        assert!(receiver_is_chained_call("r.URL.Query().Get"));
+        assert!(receiver_is_chained_call("db.Tx(opts).Query"));
+        assert!(receiver_is_chained_call("client.WithToken(t).Get"));
+        // Pure field/identifier chain — no `(` anywhere.
+        assert!(!receiver_is_chained_call("repo.Find"));
+        assert!(!receiver_is_chained_call("c.Fs.Create"));
+        assert!(!receiver_is_chained_call("globalBatchJobsMetrics.save"));
+        assert!(!receiver_is_chained_call("self.cache.insert"));
+        // Bare callee with no receiver.
+        assert!(!receiver_is_chained_call("Get"));
+        assert!(!receiver_is_chained_call("HashMap::new"));
+    }
+
+    #[test]
+    fn classify_sink_class_suppresses_chained_call_verb_fallback() {
+        use crate::auth_analysis::model::SinkClass;
+        use std::collections::HashSet;
+        let cfg = Config::default();
+        let rules = build_auth_rules(&cfg, "go");
+        let empty: HashSet<String> = HashSet::new();
+
+        // Chained-call receiver: verb-name fallback is suppressed.
+        // The minio `w.Header().Get(constName)` cluster — `Get` would
+        // match the `Get` read indicator on a bare receiver but the
+        // chained-call shape masks the receiver type.
+        assert_eq!(rules.classify_sink_class("w.Header().Get", &empty), None);
+        assert_eq!(rules.classify_sink_class("r.URL.Query().Get", &empty), None);
+        // Bare-identifier receiver: verb-name fallback still fires.
+        // Pin the regression guard so this fix doesn't over-suppress
+        // canonical data-layer shapes.
+        assert_eq!(
+            rules.classify_sink_class("repo.Find", &empty),
+            Some(SinkClass::DbCrossTenantRead)
+        );
+        assert_eq!(
+            rules.classify_sink_class("repo.Save", &empty),
+            Some(SinkClass::DbMutation)
+        );
+    }
+
+    #[test]
     fn sink_class_is_auth_relevant_only_for_non_local_classes() {
         use crate::auth_analysis::model::SinkClass;
         assert!(SinkClass::DbMutation.is_auth_relevant());
@@ -1613,5 +1811,51 @@ mod tests {
         // unambiguous.
         assert!(!rules.is_authorization_check("require_member"));
         assert!(!rules.is_authorization_check("require_owner"));
+    }
+
+    /// Phase A4 — broader verb / role / context-suffix shapes seen in
+    /// real-world Rust apps.  `check_<resource>_<role>_action` is the
+    /// canonical lemmy idiom; verifying the `is_<role>` predicate
+    /// recogniser closes `is_mod_or_admin` style checks.
+    #[test]
+    fn is_authorization_check_recognises_check_action_and_predicate_shapes() {
+        let cfg = Config::default();
+        let rules = build_auth_rules(&cfg, "rust");
+
+        // `check_<resource>_<role>_action` (lemmy `check_community_*_action`)
+        assert!(rules.is_authorization_check("check_community_user_action"));
+        assert!(rules.is_authorization_check("check_community_mod_action"));
+        assert!(rules.is_authorization_check("check_community_admin_action"));
+        assert!(rules.is_authorization_check("check_post_owner_action"));
+        // Verb variants
+        assert!(rules.is_authorization_check("assert_post_owner"));
+        assert!(rules.is_authorization_check("verify_doc_editor"));
+        // `_allowed` / `_valid` context suffix wrapping the role
+        assert!(rules.is_authorization_check("require_trip_member_allowed"));
+        assert!(rules.is_authorization_check("ensure_doc_owner_valid"));
+        // Path-namespaced
+        assert!(rules.is_authorization_check("authz::check_community_user_action"));
+        assert!(rules.is_authorization_check("self.check_community_mod_action"));
+
+        // `is_<role>` and `is_<role>_(or|and)_<role>` predicates.
+        assert!(rules.is_authorization_check("is_admin"));
+        assert!(rules.is_authorization_check("is_owner"));
+        assert!(rules.is_authorization_check("is_member"));
+        assert!(rules.is_authorization_check("is_moderator"));
+        assert!(rules.is_authorization_check("is_mod_or_admin"));
+        assert!(rules.is_authorization_check("is_owner_or_admin"));
+        assert!(rules.is_authorization_check("is_admin_or_moderator"));
+        assert!(rules.is_authorization_check("is_member_and_owner"));
+
+        // Negatives — predicates whose tokens are NOT known auth roles.
+        assert!(!rules.is_authorization_check("is_user"));
+        assert!(!rules.is_authorization_check("is_logged_in"));
+        assert!(!rules.is_authorization_check("is_active"));
+        assert!(!rules.is_authorization_check("is_visible"));
+        assert!(!rules.is_authorization_check("is_admin_or_logged_in"));
+        // `_action` / `_allowed` / `_valid` suffix without preceding
+        // role still rejects.
+        assert!(!rules.is_authorization_check("check_db_action"));
+        assert!(!rules.is_authorization_check("check_session_valid"));
     }
 }

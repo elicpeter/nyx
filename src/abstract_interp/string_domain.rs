@@ -76,32 +76,54 @@ impl StringFact {
 
     /// Exact known string value: prefix and suffix are the full string, and
     /// the finite domain is `{s}`.
+    ///
+    /// Empty prefix/suffix are normalised to `None` because "starts/ends with
+    /// the empty string" carries no constraint — keeping `Some("")` would
+    /// break join idempotence (`Some("")` ⊔ `Some("")` collapses to `None`).
     pub fn exact(s: &str) -> Self {
         let prefix = truncate_prefix(s);
         let suffix = truncate_suffix(s);
         Self {
-            prefix: Some(prefix),
-            suffix: Some(suffix),
+            prefix: if prefix.is_empty() {
+                None
+            } else {
+                Some(prefix)
+            },
+            suffix: if suffix.is_empty() {
+                None
+            } else {
+                Some(suffix)
+            },
             domain: Some(vec![s.to_string()]),
             is_bottom: false,
         }
     }
 
-    /// Known prefix only.
+    /// Known prefix only. Empty `p` normalises to no-prefix-info (`None`).
     pub fn from_prefix(p: &str) -> Self {
+        let prefix = truncate_prefix(p);
         Self {
-            prefix: Some(truncate_prefix(p)),
+            prefix: if prefix.is_empty() {
+                None
+            } else {
+                Some(prefix)
+            },
             suffix: None,
             domain: None,
             is_bottom: false,
         }
     }
 
-    /// Known suffix only.
+    /// Known suffix only. Empty `s` normalises to no-suffix-info (`None`).
     pub fn from_suffix(s: &str) -> Self {
+        let suffix = truncate_suffix(s);
         Self {
             prefix: None,
-            suffix: Some(truncate_suffix(s)),
+            suffix: if suffix.is_empty() {
+                None
+            } else {
+                Some(suffix)
+            },
             domain: None,
             is_bottom: false,
         }
@@ -386,25 +408,31 @@ fn truncate_suffix(s: &str) -> String {
     }
 }
 
-/// Longest common prefix of two strings.
+/// Longest common prefix of two strings, char-aligned.
+///
+/// Iterates by `char` rather than `byte` so multi-byte UTF-8 code points are
+/// either kept whole or dropped — a byte-wise comparison would slice into the
+/// middle of a code point and produce mojibake (`x as char` on a UTF-8
+/// continuation byte yields a garbage Latin-1 character).
 pub fn longest_common_prefix(a: &str, b: &str) -> String {
-    a.bytes()
-        .zip(b.bytes())
+    a.chars()
+        .zip(b.chars())
         .take_while(|(x, y)| x == y)
-        .map(|(x, _)| x as char)
+        .map(|(x, _)| x)
         .collect()
 }
 
-/// Longest common suffix of two strings.
+/// Longest common suffix of two strings, char-aligned.
 pub fn longest_common_suffix(a: &str, b: &str) -> String {
-    let lcs: String = a
-        .bytes()
+    let mut lcs: Vec<char> = a
+        .chars()
         .rev()
-        .zip(b.bytes().rev())
+        .zip(b.chars().rev())
         .take_while(|(x, y)| x == y)
-        .map(|(x, _)| x as char)
+        .map(|(x, _)| x)
         .collect();
-    lcs.chars().rev().collect()
+    lcs.reverse();
+    lcs.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -674,5 +702,257 @@ mod tests {
         assert!(
             !StringFact::finite_set(vec!["ls".into(), "rm;reboot".into()]).is_finite_shell_safe()
         );
+    }
+
+    /// `concat("", x)` and `concat(x, "")` must round-trip the
+    /// non-empty operand's prefix/suffix. The current `concat` keeps
+    /// LHS prefix and RHS suffix verbatim. After empty-string
+    /// normalisation, `exact("")` carries no prefix/suffix info, so
+    /// the LHS prefix is `None` (unknown) and only the RHS suffix
+    /// survives.
+    #[test]
+    fn concat_empty_string_lhs_preserves_rhs_suffix() {
+        let empty = StringFact::exact("");
+        let rhs = StringFact::exact("x");
+        let r = empty.concat(&rhs);
+        assert_eq!(r.prefix, None);
+        assert_eq!(r.suffix.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn concat_empty_string_rhs_preserves_lhs_prefix() {
+        let lhs = StringFact::exact("x");
+        let empty = StringFact::exact("");
+        let r = lhs.concat(&empty);
+        assert_eq!(r.prefix.as_deref(), Some("x"));
+        assert_eq!(r.suffix, None);
+    }
+
+    /// Bottom is concat-absorbing: concat with bottom in either
+    /// position yields bottom (no flow can reach the call site).
+    #[test]
+    fn concat_with_bottom_is_bottom() {
+        let bot = StringFact::bottom();
+        let any = StringFact::exact("anything");
+        assert!(bot.concat(&any).is_bottom());
+        assert!(any.concat(&bot).is_bottom());
+    }
+
+    /// Joining two distinct URL prefixes must reduce to their LCP, not
+    /// fall through to `None`. This is the property SSRF prefix-lock
+    /// suppression depends on at phi nodes.
+    #[test]
+    fn join_distinct_urls_reduces_to_lcp() {
+        let a = StringFact::from_prefix("https://api.example.com/");
+        let b = StringFact::from_prefix("https://db.example.com/");
+        let r = a.join(&b);
+        // Common prefix is "https://" — anything past that diverges.
+        assert_eq!(
+            r.prefix.as_deref(),
+            Some("https://"),
+            "join must compute LCP, not drop the prefix entirely"
+        );
+    }
+
+    /// Meet of two prefix-locks with no overlap must collapse to
+    /// bottom (it represents an unsatisfiable conjunction).
+    #[test]
+    fn meet_disjoint_prefixes_is_bottom() {
+        let a = StringFact::from_prefix("/var/");
+        let b = StringFact::from_prefix("/etc/");
+        let r = a.meet(&b);
+        assert!(
+            r.is_bottom(),
+            "meet of disjoint prefix-locks must be bottom"
+        );
+    }
+
+    // ── Additional lattice algebra laws ──────────────────────────────
+
+    fn sample_strings() -> Vec<StringFact> {
+        vec![
+            StringFact::bottom(),
+            StringFact::top(),
+            StringFact::exact(""),
+            StringFact::exact("hello"),
+            StringFact::from_prefix("https://"),
+            StringFact::from_suffix(".com"),
+            StringFact::finite_set(vec!["a".into(), "b".into()]),
+        ]
+    }
+
+    /// `x ⊔ x = x` — join is idempotent across all sample shapes.
+    #[test]
+    fn join_idempotent_string() {
+        for a in sample_strings() {
+            assert_eq!(a.join(&a), a, "join not idempotent for {:?}", a);
+        }
+    }
+
+    /// `x ⊔ y = y ⊔ x` — join is commutative.
+    #[test]
+    fn join_commutative_string() {
+        let xs = sample_strings();
+        for a in &xs {
+            for b in &xs {
+                assert_eq!(
+                    a.join(b),
+                    b.join(a),
+                    "join not commutative for {:?} / {:?}",
+                    a,
+                    b
+                );
+            }
+        }
+    }
+
+    /// `x ⊓ x = x` — meet is idempotent.
+    #[test]
+    fn meet_idempotent_string() {
+        for a in sample_strings() {
+            assert_eq!(a.meet(&a), a, "meet not idempotent for {:?}", a);
+        }
+    }
+
+    /// `x ⊓ y = y ⊓ x` — meet is commutative.
+    #[test]
+    fn meet_commutative_string() {
+        let xs = sample_strings();
+        for a in &xs {
+            for b in &xs {
+                assert_eq!(
+                    a.meet(b),
+                    b.meet(a),
+                    "meet not commutative for {:?} / {:?}",
+                    a,
+                    b
+                );
+            }
+        }
+    }
+
+    /// `x ⊓ ⊤ = x` and `x ⊓ ⊥ = ⊥`.
+    #[test]
+    fn meet_identity_string() {
+        for a in sample_strings() {
+            assert_eq!(a.meet(&StringFact::top()), a, "x ⊓ ⊤ failed for {:?}", a);
+            assert!(
+                a.meet(&StringFact::bottom()).is_bottom(),
+                "x ⊓ ⊥ failed for {:?}",
+                a
+            );
+        }
+    }
+
+    /// `x ⊑ x` — leq is reflexive.
+    #[test]
+    fn leq_reflexive_string() {
+        for a in sample_strings() {
+            assert!(a.leq(&a), "x ⊑ x failed for {:?}", a);
+        }
+    }
+
+    /// **Soundness**: `widen(a, b) ⊒ join(a, b)` — widening must
+    /// over-approximate join, otherwise dataflow loses information.
+    #[test]
+    fn widen_over_approximates_join_string() {
+        let xs = sample_strings();
+        for a in &xs {
+            for b in &xs {
+                let j = a.join(b);
+                let w = a.widen(b);
+                assert!(
+                    j.leq(&w),
+                    "widen({:?}, {:?}) = {:?} does not over-approximate join = {:?}",
+                    a,
+                    b,
+                    w,
+                    j
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn widen_idempotent_string() {
+        for a in sample_strings() {
+            assert_eq!(a.widen(&a), a, "widen(x, x) failed for {:?}", a);
+        }
+    }
+
+    /// Join is upper bound: `a ⊑ a ⊔ b` and `b ⊑ a ⊔ b`.
+    #[test]
+    fn join_is_upper_bound_string() {
+        let xs = sample_strings();
+        for a in &xs {
+            for b in &xs {
+                let j = a.join(b);
+                assert!(
+                    a.leq(&j),
+                    "a ⊑ a ⊔ b failed for {:?}, {:?} (join={:?})",
+                    a,
+                    b,
+                    j
+                );
+                assert!(
+                    b.leq(&j),
+                    "b ⊑ a ⊔ b failed for {:?}, {:?} (join={:?})",
+                    a,
+                    b,
+                    j
+                );
+            }
+        }
+    }
+
+    /// Empty-string exact value must distinguish from Top — it is a
+    /// singleton (`{""}`), not unconstrained. After the empty-prefix
+    /// normalisation, prefix/suffix are `None` (carry no extra info)
+    /// but the `domain` field still pins the value to exactly `""`.
+    #[test]
+    fn exact_empty_string_is_not_top() {
+        let e = StringFact::exact("");
+        assert!(!e.is_top(), "exact(\"\") must not be Top");
+        assert!(!e.is_bottom(), "exact(\"\") must not be Bottom");
+        assert_eq!(e.prefix, None, "empty prefix normalised to None");
+        assert_eq!(e.suffix, None, "empty suffix normalised to None");
+        assert_eq!(e.domain.as_deref(), Some(&[String::new()][..]));
+    }
+
+    /// LCP/LCS with multi-byte UTF-8 chars must not split a code point
+    /// (would produce invalid UTF-8 strings or panic).
+    #[test]
+    fn lcp_lcs_unicode_safe() {
+        // Both start with é (2-byte char in UTF-8).
+        let a = StringFact::exact("éclair");
+        let b = StringFact::exact("éclat");
+        let j = a.join(&b);
+        // LCP should be "écla" (still valid UTF-8). At minimum it must
+        // be a valid Rust string and not panic.
+        let prefix = j.prefix.as_deref().unwrap_or("");
+        assert!(prefix.is_char_boundary(prefix.len()));
+        assert!(prefix.starts_with('é'));
+
+        // Suffix with multibyte: "café" vs "naïvé" share "é" suffix?
+        // Simpler: both end with "好" (3-byte CJK).
+        let a = StringFact::exact("你好");
+        let b = StringFact::exact("您好");
+        let j = a.join(&b);
+        let suffix = j.suffix.as_deref().unwrap_or("");
+        assert!(suffix.is_char_boundary(0) && suffix.is_char_boundary(suffix.len()));
+        assert!(suffix.ends_with('好'));
+    }
+
+    /// Concat with empty-string `exact("")` should preserve the other
+    /// side's prefix/suffix knowledge (empty is the identity).
+    #[test]
+    fn concat_with_empty_exact_preserves_other() {
+        let s = StringFact::exact("hello");
+        let e = StringFact::exact("");
+        let r = s.concat(&e);
+        // Concat should preserve prefix from `s`.
+        assert_eq!(r.prefix.as_deref(), Some("hello"));
+        let r2 = e.concat(&s);
+        assert_eq!(r2.suffix.as_deref(), Some("hello"));
     }
 }

@@ -1033,6 +1033,41 @@ fn auth_analysis_does_not_run_in_cfg_mode() {
     );
 }
 
+/// Real-repo precision (2026-04-27, JS slice 2): TRPC handler
+/// Options-typed parameter exempts `ctx.user.<id-like>` subjects from
+/// `js.auth.missing_ownership_check` via the dynamic
+/// `self_scoped_session_bases` set.
+#[test]
+fn trpc_ctx_user_options_does_not_flag() {
+    assert_absent(
+        "trpc_ctx_user_options.ts",
+        "js.auth.missing_ownership_check",
+    );
+}
+
+/// Real-repo precision (2026-04-27, JS slice 2): destructured
+/// `const { user } = ctx.session` recognises the local as
+/// self-actor; `user.id` does not flag.
+#[test]
+fn destructured_session_user_does_not_flag() {
+    assert_absent(
+        "destructured_session_user.ts",
+        "js.auth.missing_ownership_check",
+    );
+}
+
+/// Real-repo precision (2026-04-27, hugo follow-up): a Go method's
+/// own receiver (`func (c *Cache) ...`) seeds `non_sink_vars`, so
+/// `c.foo(...)` and `c.field.bar(...)` route through
+/// `SinkClass::InMemoryLocal` and don't fire missing-ownership.
+#[test]
+fn go_self_method_receiver_does_not_flag() {
+    assert_absent(
+        "go_self_method_receiver.go",
+        "go.auth.missing_ownership_check",
+    );
+}
+
 #[test]
 fn auth_analysis_does_not_run_in_taint_mode() {
     let cfg = common::test_config(AnalysisMode::Taint);

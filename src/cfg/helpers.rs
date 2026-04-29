@@ -328,13 +328,21 @@ pub(crate) fn member_expr_text(n: Node, code: &[u8]) -> Option<String> {
 pub(crate) fn member_expr_text_inner(n: Node, code: &[u8]) -> Option<String> {
     match n.kind() {
         "member_expression" | "attribute" | "selector_expression" => {
+            // Tree-sitter exposes the receiver under `object` (JS/TS, Python),
+            // `value` (Rust field_expression — handled in the matching arm
+            // above), or `operand` (Go selector_expression).  Without the
+            // `operand` fallback, Go member access like `r.Body` collapsed to
+            // just the trailing field (`Body`), so source rules keyed on the
+            // dotted form (e.g. Go's `r.Body`) would never match.
             let obj = n
                 .child_by_field_name("object")
                 .or_else(|| n.child_by_field_name("value"))
+                .or_else(|| n.child_by_field_name("operand"))
                 .and_then(|o| member_expr_text_inner(o, code))
                 .or_else(|| {
                     n.child_by_field_name("object")
                         .or_else(|| n.child_by_field_name("value"))
+                        .or_else(|| n.child_by_field_name("operand"))
                         .and_then(|o| text_of(o, code))
                 });
             let prop = n
@@ -699,4 +707,80 @@ pub(crate) fn collect_idents(n: Node, code: &[u8], out: &mut Vec<String>) {
             }
         }
     }
+}
+
+/// Pointer-Phase 6 / W5: AST kind names for subscript / index expressions
+/// across the languages whose container-element flow we model.
+///
+/// JS/TS use `subscript_expression`; Python uses `subscript`; Go uses
+/// `index_expression`.  Other languages either lower indexing through
+/// method calls (Rust slice indexing) or are out of scope for the
+/// initial W5 rollout (Java/Ruby/PHP/C/C++).
+#[inline]
+pub(crate) fn is_subscript_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "subscript_expression" | "subscript" | "index_expression"
+    )
+}
+
+/// Pointer-Phase 6 / W5: when the LHS of an assignment statement is a
+/// subscript / index expression (or a single-element wrapper around
+/// one), return that node.  Returns `None` for multi-target Go
+/// `expression_list`s, identifier LHSs, member-expression LHSs, etc.
+pub(crate) fn subscript_lhs_node<'a>(lhs: Node<'a>, lang: &str) -> Option<Node<'a>> {
+    if is_subscript_kind(lhs.kind()) {
+        return Some(lhs);
+    }
+    // Go: `assignment_statement.left` is an `expression_list`; for
+    // single-target subscript writes (`m[k] = v`) it has exactly one
+    // named child which is `index_expression`.
+    if lang == "go" && lhs.kind() == "expression_list" {
+        let mut cursor = lhs.walk();
+        let named: Vec<Node> = lhs.named_children(&mut cursor).collect();
+        if named.len() == 1 && is_subscript_kind(named[0].kind()) {
+            return Some(named[0]);
+        }
+    }
+    None
+}
+
+/// Pointer-Phase 6 / W5: extract `(array_text, index_text)` from a
+/// subscript / index AST node.
+///
+/// Returns `None` when the array operand is not a plain identifier — we
+/// only synthesise `__index_get__` / `__index_set__` calls when the
+/// receiver resolves cleanly to a SSA-renamed local, since the W2/W4
+/// container hooks need a stable receiver var_name to drive
+/// `pt(receiver)`.
+pub(crate) fn subscript_components<'a>(n: Node<'a>, code: &'a [u8]) -> Option<(String, String)> {
+    if !is_subscript_kind(n.kind()) {
+        return None;
+    }
+    let arr = n
+        .child_by_field_name("object")
+        .or_else(|| n.child_by_field_name("operand"))
+        .or_else(|| n.child_by_field_name("value"))
+        .or_else(|| n.child(0))?;
+    let idx = n
+        .child_by_field_name("index")
+        .or_else(|| n.child_by_field_name("subscript"))
+        .or_else(|| {
+            // Fallback: take the second named child after the array.
+            let mut cur = n.walk();
+            n.named_children(&mut cur).nth(1)
+        })?;
+    let arr_kind = arr.kind();
+    // Only proceed when the array is a plain identifier — otherwise
+    // we can't bind a stable receiver name for the synth Call.
+    if !matches!(
+        arr_kind,
+        "identifier" | "variable_name" | "simple_identifier"
+    ) {
+        return None;
+    }
+    let arr_text = text_of(arr, code)?;
+    // PHP-style `$x` strip not needed here — Go/JS/Python don't use it.
+    let idx_text = text_of(idx, code)?;
+    Some((arr_text, idx_text))
 }

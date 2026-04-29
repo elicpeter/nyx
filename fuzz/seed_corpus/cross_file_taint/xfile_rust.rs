@@ -1,0 +1,7 @@
+fn main() {
+    let x = nyx_taint_source();
+    nyx_dangerous_sink(x);
+    let y = nyx_taint_source();
+    let z = nyx_sanitize(y);
+    nyx_dangerous_sink(z);
+}

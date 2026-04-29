@@ -5,7 +5,7 @@ mod java;
 mod javascript;
 mod php;
 mod python;
-mod ruby;
+pub(crate) mod ruby;
 mod rust;
 mod typescript;
 
@@ -689,9 +689,13 @@ fn ends_with_cs(haystack: &[u8], needle: &[u8], case_sensitive: bool) -> bool {
     }
 }
 
-/// Prefix check with configurable case sensitivity.
+/// Prefix check with configurable case sensitivity.  The `=` exact-match
+/// sigil is meaningless for prefix matchers (which by definition match many
+/// suffixes); it is stripped if present so a malformed matcher like
+/// `=foo_` still behaves predictably.
 #[inline]
 fn starts_with_cs(haystack: &[u8], needle: &[u8], case_sensitive: bool) -> bool {
+    let (needle, _) = unpack_matcher(needle);
     if needle.len() > haystack.len() {
         return false;
     }
@@ -708,11 +712,34 @@ fn starts_with_cs(haystack: &[u8], needle: &[u8], case_sensitive: bool) -> bool 
 /// Word-boundary suffix match with configurable case sensitivity.
 #[inline]
 fn match_suffix_cs(text: &[u8], matcher: &[u8], case_sensitive: bool) -> bool {
-    if ends_with_cs(text, matcher, case_sensitive) {
-        let start = text.len() - matcher.len();
-        start == 0 || matches!(text[start - 1], b'.' | b':')
+    let (m, exact_only) = unpack_matcher(matcher);
+    if ends_with_cs(text, m, case_sensitive) {
+        let start = text.len() - m.len();
+        if exact_only {
+            // `=foo` matchers fire only when `text` IS `foo` (no `Mod.foo`,
+            // `Class::foo`, or any preceding namespace).  Lets a label rule
+            // distinguish bare `Kernel#open` from `File.open` — the former
+            // shells out on `|cmd`, the latter never does (CVE-2020-8130).
+            start == 0
+        } else {
+            start == 0 || matches!(text[start - 1], b'.' | b':')
+        }
     } else {
         false
+    }
+}
+
+/// Strip an optional `=` "exact-match" sigil from the start of a matcher.
+/// Matchers prefixed with `=` (e.g. `"=open"`) only fire when the candidate
+/// text equals the matcher exactly — the boundary-`.`-or-`:` allowance is
+/// suppressed.  Used to distinguish bare-callee Ruby/Python builtins from
+/// methods of the same name on a typed receiver.
+#[inline]
+fn unpack_matcher(matcher: &[u8]) -> (&[u8], bool) {
+    if matcher.first() == Some(&b'=') {
+        (&matcher[1..], true)
+    } else {
+        (matcher, false)
     }
 }
 
@@ -1063,6 +1090,29 @@ pub fn normalize_chained_call_for_classify(text: &str) -> String {
     normalize_chained_call(text)
 }
 
+/// Return the bare method-name segment of a callee text.
+///
+/// Centralised replacement for the textual `callee.rsplit('.').next().unwrap_or(callee)`
+/// pattern that used to be scattered across the codebase.
+///
+/// Behaviour-preserving across the Phase 2 SSA chain decomposition rollout:
+/// - When SSA lowering rewrites a chained-receiver call (`c.mu.Lock()` →
+///   `Call("Lock", [v_mu])`), the call's `callee` is already the bare method
+///   name, so this helper is a no-op pass-through.
+/// - For 1-dot callees (`obj.method`) and for languages where Phase 2 lowering
+///   doesn't run yet (PHP/Ruby) the helper still extracts the trailing method
+///   from the textual form, exactly as the old per-callsite split did.
+/// - For bare callees (no dot), it returns the input unchanged.
+///
+/// Use this helper when you need the *terminal* method name from a callee
+/// string regardless of whether the call had a chained receiver. When you
+/// have an `SsaOp::Call` in hand, prefer reading `callee` directly and
+/// walking `receiver` through `FieldProj` ops — that's the precise path.
+/// This helper is the textual fallback for callsites that only see a `&str`.
+pub fn bare_method_name(callee: &str) -> &str {
+    callee.rsplit('.').next().unwrap_or(callee)
+}
+
 /// Normalize a chained method call: strip `()` between `.` segments.
 /// e.g. `r.URL.Query().Get` → `r.URL.Query.Get`
 /// e.g. `r.URL.Query().Get("host")` → `r.URL.Query.Get`
@@ -1261,6 +1311,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bare_method_name_strips_chain() {
+        // No-dot input → returned as-is.
+        assert_eq!(bare_method_name("foo"), "foo");
+        // 1-dot → trailing segment (Phase 2 leaves these alone in SSA).
+        assert_eq!(bare_method_name("obj.method"), "method");
+        // Multi-dot → trailing segment (matches AST-only callees from
+        // PHP/Ruby and any pre-Phase-2 textual paths kept around in
+        // `callee_text` for display).
+        assert_eq!(bare_method_name("a.b.c.method"), "method");
+        // Trailing dot → empty trailing segment, matching the legacy
+        // `rsplit('.').next()` behaviour bit-for-bit.
+        assert_eq!(bare_method_name("foo."), "");
+        // Empty input.
+        assert_eq!(bare_method_name(""), "");
+        // Phase 2 invariant: when SSA decomposed a chain, `callee` is
+        // the bare method already and the helper is a no-op.
+        assert_eq!(bare_method_name("Lock"), "Lock");
+    }
+
+    #[test]
     fn handler_param_names_exact_and_prefix() {
         // Exact names still match.
         assert!(is_js_ts_handler_param_name("cmd"));
@@ -1376,6 +1446,115 @@ mod tests {
         assert_eq!(result, None);
     }
 
+    // CVE Hunt Session 2 (Go CVE-2024-31450 Owncast path traversal):
+    // mutating filesystem helpers (`os.Remove`, `os.WriteFile`,
+    // `os.RemoveAll`, `ioutil.WriteFile`) sink path-traversal flows that
+    // the prior Go ruleset only saw on the read side (`os.Open`,
+    // `os.ReadFile`).
+    #[test]
+    fn classify_go_os_remove_is_file_io_sink() {
+        let result = classify("go", "os.Remove", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::FILE_IO)));
+    }
+
+    #[test]
+    fn classify_go_os_write_file_is_file_io_sink() {
+        let result = classify("go", "os.WriteFile", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::FILE_IO)));
+    }
+
+    #[test]
+    fn classify_go_os_remove_all_is_file_io_sink() {
+        let result = classify("go", "os.RemoveAll", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::FILE_IO)));
+    }
+
+    // CVE Hunt Session 2 (Go CVE-2023-3188 Owncast SSRF):
+    // `http.DefaultClient.Get/Post/Head/Do/PostForm` is the idiomatic Go
+    // SSRF sink shape (`http.DefaultClient` is the package-level shared
+    // `*http.Client`). Bare `Get`/`Post` matchers would over-match
+    // unrelated method names; the explicit `http.DefaultClient.*` matcher
+    // restricts the suffix-match to the stdlib helper while leaving
+    // user-defined `myClient.Get` alone (no false positives).
+    #[test]
+    fn classify_go_http_default_client_get_is_ssrf_sink() {
+        let result = classify("go", "http.DefaultClient.Get", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::SSRF)));
+    }
+
+    #[test]
+    fn classify_go_http_default_client_post_is_ssrf_sink() {
+        let result = classify("go", "http.DefaultClient.Post", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::SSRF)));
+    }
+
+    #[test]
+    fn classify_go_http_default_client_do_is_ssrf_sink() {
+        let result = classify("go", "http.DefaultClient.Do", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::SSRF)));
+    }
+
+    #[test]
+    fn classify_go_user_client_get_is_not_ssrf_sink() {
+        // `client.Get` on a user-named *http.Client variable should NOT
+        // match — the Go SSRF set is restricted to the stdlib package
+        // helper `http.DefaultClient`. Type-aware resolution would be the
+        // path to a broader rule, not a bare-name match.
+        let result = classify("go", "client.Get", None);
+        assert_eq!(result, None);
+    }
+
+    // CVE Hunt Session 3 (Ruby CVE-2020-8130 rake `Kernel#open` CMDI):
+    // bare `open(path)` interprets a leading `|` as a shell pipe.  The
+    // `=` exact-match sigil distinguishes the dangerous bare-callee form
+    // from `File.open` / `IO.open` / `URI.open`, each of which has its
+    // own non-piping semantics.  Without the sigil, the suffix-with-
+    // boundary matcher would over-fire on every `X.open` call.
+    #[test]
+    fn classify_ruby_bare_open_is_shell_escape_sink() {
+        let result = classify("ruby", "open", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::SHELL_ESCAPE)));
+    }
+
+    #[test]
+    fn classify_ruby_file_open_is_not_shell_escape_sink() {
+        // The exact-match sigil on `=open` must NOT fire on `File.open`.
+        // `File.open` is a separate FILE_IO sink (existing rule); the
+        // CMDI rule must not double-classify it.
+        let result = classify_all("ruby", "File.open", None);
+        // FILE_IO from the existing `File.open` matcher is allowed.
+        assert!(result.contains(&DataLabel::Sink(Cap::FILE_IO)));
+        // SHELL_ESCAPE from the new bare-`open` matcher must NOT appear.
+        assert!(!result.contains(&DataLabel::Sink(Cap::SHELL_ESCAPE)));
+    }
+
+    #[test]
+    fn classify_ruby_io_open_is_not_shell_escape_sink() {
+        // `IO.open` takes a file descriptor — never pipes.  The bare-
+        // open CMDI rule must leave it alone.
+        let result = classify("ruby", "IO.open", None);
+        assert_ne!(result, Some(DataLabel::Sink(Cap::SHELL_ESCAPE)));
+    }
+
+    #[test]
+    fn classify_ruby_uri_open_remains_ssrf_sink() {
+        // `URI.open` is the existing SSRF sink.  Adding `=open` as a
+        // CMDI rule must not break or shadow it.
+        let result = classify("ruby", "URI.open", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::SSRF)));
+    }
+
+    #[test]
+    fn unpack_matcher_strips_exact_sigil() {
+        let (m, exact) = unpack_matcher(b"=open");
+        assert_eq!(m, b"open");
+        assert!(exact);
+
+        let (m, exact) = unpack_matcher(b"open");
+        assert_eq!(m, b"open");
+        assert!(!exact);
+    }
+
     #[test]
     fn classify_case_sensitive_suffix_boundary() {
         let extras = vec![RuntimeLabelRule {
@@ -1389,6 +1568,29 @@ mod tests {
         // Wrong case does NOT match
         let result = classify("javascript", "db.runquery", Some(&extras));
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn classify_cpp_sto_family_is_sanitizer() {
+        // Phase 1: full `std::sto*` family (including 64-bit and `long
+        // double` variants) clears every taint cap that flows through it,
+        // matching the existing `std::stoi`/`std::stol` rule.
+        for callee in [
+            "std::stoi",
+            "std::stol",
+            "std::stoll",
+            "std::stoul",
+            "std::stoull",
+            "std::stof",
+            "std::stod",
+            "std::stold",
+        ] {
+            assert_eq!(
+                classify("cpp", callee, None),
+                Some(DataLabel::Sanitizer(Cap::all())),
+                "{callee} should be a Cap::all() sanitizer",
+            );
+        }
     }
 
     #[test]

@@ -14,7 +14,6 @@ use crate::state;
 use crate::summary::ssa_summary::SsaFuncSummary;
 use crate::summary::{FuncSummary, GlobalSummaries};
 use crate::symbol::{Lang, normalize_namespace};
-use crate::taint::analyse_file;
 use crate::utils::config::AnalysisMode;
 use crate::utils::ext::lowercase_ext;
 use crate::utils::{Config, query_cache};
@@ -122,30 +121,7 @@ fn byte_offset_to_point(tree: &tree_sitter::Tree, byte: usize) -> tree_sitter::P
         .unwrap_or_else(|| tree_sitter::Point { row: 0, column: 0 })
 }
 
-/// Extract the source line containing `byte_offset`, trimmed and capped at 120 chars.
-fn extract_line_snippet(src: &[u8], byte_offset: usize) -> Option<String> {
-    if byte_offset >= src.len() {
-        return None;
-    }
-    let line_start = src[..byte_offset]
-        .iter()
-        .rposition(|&b| b == b'\n')
-        .map_or(0, |p| p + 1);
-    let line_end = src[byte_offset..]
-        .iter()
-        .position(|&b| b == b'\n')
-        .map_or(src.len(), |p| byte_offset + p);
-    let line = std::str::from_utf8(&src[line_start..line_end]).ok()?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed.len() > 120 {
-        Some(format!("{}...", &trimmed[..120]))
-    } else {
-        Some(trimmed.to_string())
-    }
-}
+use crate::utils::snippet::line_snippet as extract_line_snippet;
 
 /// Resolve a `file_rel` (relative to `scan_root` per
 /// [`normalize_namespace`] convention) back to the absolute path the
@@ -474,12 +450,28 @@ fn build_taint_diag(
     diag
 }
 
+/// Resolve a file extension to a language slug (e.g. `"rust"`,
+/// `"javascript"`).  Public façade over [`lang_for_path`] for callers
+/// that only need the slug — used by the debug API to look up
+/// per-language rule enablement without re-parsing the file.
+pub fn lang_slug_for_path(path: &Path) -> Option<&'static str> {
+    lang_for_path(path).map(|(_, slug)| slug)
+}
+
 /// Resolve a file extension to a (tree‑sitter Language, slug) pair.
 fn lang_for_path(path: &Path) -> Option<(Language, &'static str)> {
     match lowercase_ext(path) {
         Some("rs") => Some((Language::from(tree_sitter_rust::LANGUAGE), "rust")),
         Some("c") => Some((Language::from(tree_sitter_c::LANGUAGE), "c")),
-        Some("cpp") => Some((Language::from(tree_sitter_cpp::LANGUAGE), "cpp")),
+        // Real-world C++ codebases (gRPC, rocksdb, LLVM, …) overwhelmingly
+        // use `.cc` / `.cxx` / `.hpp` / `.hh` / `.h++` rather than the
+        // `.cpp` synthetic-fixture extension.  Without these mappings,
+        // the scanner silently skipped them.  Headers (`.h` is omitted
+        // intentionally — it's also valid C and disambiguating without a
+        // build system is brittle).
+        Some("cpp" | "cc" | "cxx" | "c++" | "hpp" | "hxx" | "hh" | "h++") => {
+            Some((Language::from(tree_sitter_cpp::LANGUAGE), "cpp"))
+        }
         Some("java") => Some((Language::from(tree_sitter_java::LANGUAGE), "java")),
         Some("go") => Some((Language::from(tree_sitter_go::LANGUAGE), "go")),
         Some("php") => Some((Language::from(tree_sitter_php::LANGUAGE_PHP), "php")),
@@ -731,6 +723,56 @@ impl<'a> ParsedSource<'a> {
                     {
                         continue;
                     }
+                    // Layer B: PHP `include $var` where $var is a formal parameter
+                    // of the immediately enclosing function/method/closure and is
+                    // not reassigned before the include.  This is the canonical
+                    // PHP autoloader / scope-isolated-include shape (composer's
+                    // ClassLoader, PSR-4 loaders, route-file loaders); the
+                    // pattern rule is heuristic without taint and over-fires
+                    // here.  A taint-aware sink check (the engine's
+                    // taint-unsanitised-flow rule) still catches the case where
+                    // a tainted value reaches the parameter at the call site.
+                    if cq.meta.id == "php.path.include_variable"
+                        && self.lang_slug == "php"
+                        && is_php_include_param_passthrough(cap.node, self.bytes)
+                    {
+                        continue;
+                    }
+                    // Layer C: PHP `unserialize($x, ['allowed_classes' => [...]])`
+                    // or `unserialize($x, ['allowed_classes' => false])` —
+                    // PHP 7+ structural mitigation against object injection.
+                    // When the call passes an `allowed_classes` option set to
+                    // either `false` (no class instantiation) or an array
+                    // literal of explicit class names, the deserialised data
+                    // cannot construct arbitrary user classes.  Skip
+                    // `allowed_classes => true` (the unsafe default) and
+                    // dynamic / variable values (let those fire).
+                    if cq.meta.id == "php.deser.unserialize"
+                        && self.lang_slug == "php"
+                        && is_php_unserialize_allowed_classes_restricted(cap.node, self.bytes)
+                    {
+                        continue;
+                    }
+                    // Layer D: C/C++ buffer-overflow pattern rules
+                    // (`{c,cpp}.memory.strcpy`, `strcat`, `sprintf`) fire
+                    // syntactically on every call regardless of argument
+                    // bounds.  The pattern's stated danger ("no bounds
+                    // checking on destination buffer" / "no length limit on
+                    // output buffer") is only realisable when the source /
+                    // format-string contributes attacker-controlled length.
+                    // When the source argument is a string literal (or a
+                    // ternary of two string literals), the contributed length
+                    // is statically bounded — there is no overflow vector
+                    // for an attacker even if the destination buffer is
+                    // mis-sized.  Same principle for `sprintf` when the
+                    // format string is a literal containing no bare `%s`
+                    // (only width-bounded numeric / char specifiers, or
+                    // precision-bounded `%.<N>s` / `%.*s`).
+                    if (self.lang_slug == "c" || self.lang_slug == "cpp")
+                        && is_c_buffer_call_literal_safe(cq.meta.id, cap.node, self.bytes)
+                    {
+                        continue;
+                    }
                     let point = cap.node.start_position();
                     out.push(Diag {
                         path: self.path.to_string_lossy().into_owned(),
@@ -889,6 +931,20 @@ impl<'a> ParsedFile<'a> {
             self.source.lang_slug,
         );
 
+        // Phase 6 (typed call-graph subtype awareness): every
+        // `FuncSummary` exported from this file carries a copy of the
+        // file's `hierarchy_edges` so the inheritance / impl /
+        // implements relationships persist through SQLite round-trips
+        // and re-merge into `crate::callgraph::TypeHierarchyIndex` at
+        // call-graph build time.  Cheap (one clone per summary) and
+        // strictly additive — `merge_summaries` deduplicates downstream.
+        if !self.file_cfg.hierarchy_edges.is_empty() {
+            let edges = self.file_cfg.hierarchy_edges.clone();
+            for s in &mut out {
+                s.hierarchy_edges = edges.clone();
+            }
+        }
+
         // Rust-specific enrichment: derive the crate-relative module path for
         // this file and parse every top-level `use` declaration into an alias
         // map. The information lets the call graph resolve same-name functions
@@ -965,12 +1021,110 @@ impl<'a> ParsedFile<'a> {
         (summaries.into_iter().collect(), bodies)
     }
 
+    /// Lower every function body in this file to SSA exactly once.  Used by
+    /// [`analyse_file_fused`] to share the result between the taint engine
+    /// ([`run_cfg_analyses_with_lowered`]) and the SSA artifact filter
+    /// ([`build_eligible_bodies_from_lowered`]) — the prior code path lowered
+    /// twice (once inside `analyse_file`, once inside
+    /// `extract_ssa_artifacts_from_file_cfg`) and accounted for ~24% of the
+    /// pass-2 wall-clock on the bench corpus.
+    ///
+    /// # Locator policy
+    ///
+    /// Lowering does **not** attach a [`crate::summary::SinkSiteLocator`].
+    /// Per the same-file rationale documented on [`crate::taint::analyse_file`]:
+    /// pass-2 intra-file summaries are transient and behavior depends on
+    /// `SinkSite.cap` only, which is always populated.  Attaching a locator
+    /// here populates `param_to_sink` with concrete coordinates that the
+    /// emission path then promotes into `Finding.primary_location`,
+    /// causing the same-file summary-resolved sink to be reported at the
+    /// callee-internal sink line instead of the call site — which both
+    /// duplicates the intraprocedural finding the taint engine already
+    /// emits at that exact line and re-attributes the flow finding away
+    /// from the user-visible call site.  Closure-capture, lambda, and
+    /// helper-with-internal-sink fixtures all expect call-site emission;
+    /// the standalone [`crate::taint::analyse_file`] entry point already
+    /// passes `None` here for the same reason.
+    ///
+    /// Cross-file primary attribution is unaffected: the artifact-extraction
+    /// path that persists summaries to SQLite for cross-file consumption
+    /// runs through [`crate::taint::extract_ssa_artifacts_from_file_cfg`]
+    /// which threads its own locator-equipped lowering separately.
+    fn lower_ssa_for_fused(
+        &self,
+        global_summaries: Option<&GlobalSummaries>,
+        scan_root: Option<&Path>,
+    ) -> (
+        std::collections::HashMap<
+            crate::symbol::FuncKey,
+            crate::summary::ssa_summary::SsaFuncSummary,
+        >,
+        std::collections::HashMap<
+            crate::symbol::FuncKey,
+            crate::taint::ssa_transfer::CalleeSsaBody,
+        >,
+    ) {
+        let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
+        let scan_root_str = scan_root.map(|p| p.to_string_lossy());
+        let namespace = normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
+        crate::taint::lower_all_functions_from_bodies(
+            &self.file_cfg,
+            caller_lang,
+            &namespace,
+            self.local_summaries(),
+            global_summaries,
+            None,
+        )
+    }
+
     /// Run taint analysis, CFG structural analyses, and state-model analysis.
+    ///
+    /// Wrapper around [`run_cfg_analyses_with_lowered`] that lowers SSA
+    /// internally (the standalone path).  Callers that already hold a
+    /// pre-lowered result (today: only [`analyse_file_fused`]) should use
+    /// the `_with_lowered` variant directly to avoid the duplicate
+    /// lowering.
     fn run_cfg_analyses(
         &self,
         cfg: &Config,
         global_summaries: Option<&GlobalSummaries>,
         scan_root: Option<&Path>,
+    ) -> Vec<Diag> {
+        // Reset before lowering: probes during lowering may publish
+        // path-safe-suppressed sink spans that state analysis consumes,
+        // and the SSA engine may publish all-validated sink spans that
+        // AST-pattern suppression consumes.  See the equivalent resets
+        // in `analyse_file_fused`.
+        crate::taint::ssa_transfer::reset_path_safe_suppressed_spans();
+        crate::taint::ssa_transfer::reset_all_validated_spans();
+        let (ssa_summaries, callee_bodies) = self.lower_ssa_for_fused(global_summaries, scan_root);
+        self.run_cfg_analyses_with_lowered(
+            cfg,
+            global_summaries,
+            scan_root,
+            &ssa_summaries,
+            &callee_bodies,
+        )
+    }
+
+    /// Like [`run_cfg_analyses`] but takes pre-lowered SSA summaries +
+    /// callee bodies and threads them into [`taint::analyse_file_with_lowered`].
+    /// Used by [`analyse_file_fused`] to share the lowering with the SSA
+    /// artifact extractor.
+    #[allow(clippy::too_many_arguments)]
+    fn run_cfg_analyses_with_lowered(
+        &self,
+        cfg: &Config,
+        global_summaries: Option<&GlobalSummaries>,
+        scan_root: Option<&Path>,
+        ssa_summaries: &std::collections::HashMap<
+            crate::symbol::FuncKey,
+            crate::summary::ssa_summary::SsaFuncSummary,
+        >,
+        callee_bodies: &std::collections::HashMap<
+            crate::symbol::FuncKey,
+            crate::taint::ssa_transfer::CalleeSsaBody,
+        >,
     ) -> Vec<Diag> {
         let mut out = Vec::new();
         let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
@@ -985,7 +1139,7 @@ impl<'a> ParsedFile<'a> {
         } else {
             Some(self.lang_rules.extra_labels.as_slice())
         };
-        let taint_results = analyse_file(
+        let taint_results = crate::taint::analyse_file_with_lowered(
             &self.file_cfg,
             self.local_summaries(),
             global_summaries,
@@ -993,6 +1147,8 @@ impl<'a> ParsedFile<'a> {
             &namespace,
             &[],
             extra,
+            ssa_summaries,
+            callee_bodies,
         );
         // Drain the path-safe-suppressed sink-span set published by the
         // SSA taint engine.  Used below by the state-analysis pass to
@@ -1107,6 +1263,20 @@ impl<'a> ParsedFile<'a> {
                 state::build_resource_method_summaries(&self.file_cfg.bodies, caller_lang);
             let mut all_state_findings = Vec::new();
             for body in &self.file_cfg.bodies {
+                // Phase 2 of the pointer-analysis rollout: when
+                // `NYX_POINTER_ANALYSIS=1` is set, derive a `var_name →
+                // PtrProxyHint` map from the body's points-to facts so
+                // the proxy-acquire transfer can suppress SymbolId
+                // attribution on field-aliased receivers (e.g. `m :=
+                // c.mu; m.Lock()`).  Strict-additive — `None` when the
+                // env-var is unset and behaviour matches today exactly.
+                let body_pointer_hints = cfg_analysis::build_body_const_facts(body, caller_lang)
+                    .as_ref()
+                    .and_then(|f| {
+                        f.pointer_facts
+                            .as_ref()
+                            .map(|pf| pf.name_proxy_hints(&f.ssa))
+                    });
                 let state_findings = state::run_state_analysis(
                     &body.graph,
                     body.entry,
@@ -1118,6 +1288,7 @@ impl<'a> ParsedFile<'a> {
                     &resource_method_summaries,
                     &body.meta.auth_decorators,
                     &path_safe_suppressed_spans,
+                    body_pointer_hints.as_ref(),
                 );
 
                 for sf in &state_findings {
@@ -1319,6 +1490,163 @@ pub fn build_cfg_for_file(path: &Path, cfg: &Config) -> NyxResult<Option<(FileCf
     Ok(Some((parsed.file_cfg, lang)))
 }
 
+/// Parse a file and return its `AuthorizationModel` for debug inspection.
+///
+/// Runs only the auth-extraction pipeline — no taint, no CFG construction.
+/// Returns `None` for binary files or unsupported languages.  Used by the
+/// `/api/debug/auth` route to surface the structured authorization model
+/// (routes, units, sensitive operations, auth checks) in the debug UI.
+pub fn extract_auth_model_for_debug(
+    path: &Path,
+    cfg: &Config,
+) -> NyxResult<Option<auth_analysis::model::AuthorizationModel>> {
+    let bytes = std::fs::read(path)?;
+    let Some(source) = ParsedSource::try_new(&bytes, path)? else {
+        return Ok(None);
+    };
+    let rules = auth_analysis::config::build_auth_rules(cfg, source.lang_slug);
+    if !rules.enabled {
+        return Ok(Some(auth_analysis::model::AuthorizationModel::default()));
+    }
+    let model = auth_analysis::extract::extract_authorization_model(
+        source.lang_slug,
+        cfg.framework_ctx.as_ref(),
+        &source.tree,
+        source.bytes,
+        source.path,
+        &rules,
+    );
+    Ok(Some(model))
+}
+
+/// Production-equivalent fused-path stage timing.
+///
+/// Returns `[parse+CFG, shared_lower, taint_flow, build_eligible,
+///           ast_queries, suppression, auth, run_cfg_state]` in µs, plus
+/// the per-substage breakdown of `shared_lower` from the thread-local
+/// timers in `taint::perf_lower_timings_*`.
+///
+/// Mirrors `analyse_file_fused`'s control flow so each chunk is timed
+/// without the double-lowering overcount that `perf_stage_breakdown`
+/// suffers (the latter calls `run_cfg_analyses` and
+/// `extract_ssa_artifacts` separately, both of which lower).
+#[doc(hidden)]
+pub fn perf_stage_breakdown_fused(
+    bytes: &[u8],
+    path: &Path,
+    cfg: &Config,
+    global_summaries: Option<&crate::summary::GlobalSummaries>,
+    scan_root: Option<&Path>,
+) -> Option<([u128; 8], [u128; 7])> {
+    use std::time::Instant;
+    let s_parse = Instant::now();
+    let source = ParsedSource::try_new(bytes, path).ok()??;
+    let parsed = ParsedFile::from_source(source, cfg);
+    let t_parse_cfg = s_parse.elapsed().as_micros();
+
+    crate::taint::ssa_transfer::reset_path_safe_suppressed_spans();
+    crate::taint::ssa_transfer::reset_all_validated_spans();
+    crate::taint::perf_lower_timings_start();
+
+    let s_lower = Instant::now();
+    let (lowered_summaries, lowered_bodies) =
+        parsed.lower_ssa_for_fused(global_summaries, scan_root);
+    let t_lower = s_lower.elapsed().as_micros();
+    let lower_breakdown = crate::taint::perf_lower_timings_take().unwrap_or([0; 7]);
+
+    let s_taint = Instant::now();
+    let taint_diags = parsed.run_cfg_analyses_with_lowered(
+        cfg,
+        global_summaries,
+        scan_root,
+        &lowered_summaries,
+        &lowered_bodies,
+    );
+    let t_taint_flow = s_taint.elapsed().as_micros();
+
+    let s_eligible = Instant::now();
+    let _ = crate::taint::build_eligible_bodies(&parsed.file_cfg, lowered_bodies);
+    let t_eligible = s_eligible.elapsed().as_micros();
+
+    let s_ast = Instant::now();
+    let ast_findings = parsed.source.run_ast_queries(cfg);
+    let t_ast = s_ast.elapsed().as_micros();
+
+    let s_suppr = Instant::now();
+    let suppression =
+        TaintSuppressionCtx::build(&parsed.file_cfg, &parsed.source.tree, &taint_diags);
+    let _filtered: Vec<_> = ast_findings
+        .into_iter()
+        .filter(|d| !suppression.should_suppress(&d.id, d.line))
+        .collect();
+    let t_suppr = s_suppr.elapsed().as_micros();
+
+    let s_auth = Instant::now();
+    let _ = parsed.run_auth_analyses(cfg, global_summaries, scan_root);
+    let t_auth = s_auth.elapsed().as_micros();
+
+    // 8th slot reserved (state-analysis breakdown if needed later);
+    // currently included in t_taint_flow.
+    let t_state = 0u128;
+
+    Some((
+        [
+            t_parse_cfg,
+            t_lower,
+            t_taint_flow,
+            t_eligible,
+            t_ast,
+            t_suppr,
+            t_auth,
+            t_state,
+        ],
+        lower_breakdown,
+    ))
+}
+
+/// Diagnostic stage-timing helper for the perf audit.
+///
+/// Times each stage of pass 2 internally and returns µs counts.  Returns
+/// `None` for unsupported languages.  Not used in production — just for
+/// `tests/perf_breakdown.rs` to attribute time inside `run_rules_on_bytes`
+/// without touching the hot path.
+#[doc(hidden)]
+pub fn perf_stage_breakdown(
+    bytes: &[u8],
+    path: &Path,
+    cfg: &Config,
+    global_summaries: Option<&crate::summary::GlobalSummaries>,
+    scan_root: Option<&Path>,
+) -> Option<[u128; 6]> {
+    use std::time::Instant;
+    let s_parse = Instant::now();
+    let source = ParsedSource::try_new(bytes, path).ok()??;
+    let parsed = ParsedFile::from_source(source, cfg);
+    let t_parse_cfg = s_parse.elapsed().as_micros();
+
+    let s_taint = Instant::now();
+    let taint = parsed.run_cfg_analyses(cfg, global_summaries, scan_root);
+    let t_taint = s_taint.elapsed().as_micros();
+
+    let s_suppr = Instant::now();
+    let _ = TaintSuppressionCtx::build(&parsed.file_cfg, &parsed.source.tree, &taint);
+    let t_suppr = s_suppr.elapsed().as_micros();
+
+    let s_ast = Instant::now();
+    let _ast_findings = parsed.source.run_ast_queries(cfg);
+    let t_ast = s_ast.elapsed().as_micros();
+
+    let s_auth = Instant::now();
+    let _ = parsed.run_auth_analyses(cfg, global_summaries, scan_root);
+    let t_auth = s_auth.elapsed().as_micros();
+
+    let s_ssa = Instant::now();
+    let _ = parsed.extract_ssa_artifacts(global_summaries, scan_root);
+    let t_ssa = s_ssa.elapsed().as_micros();
+
+    Some([t_parse_cfg, t_taint, t_suppr, t_ast, t_auth, t_ssa])
+}
+
 /// Extract both `FuncSummary` and `SsaFuncSummary` from pre-read bytes.
 ///
 /// This is the shared pass-1 pipeline for indexed scans: parses once, builds
@@ -1505,6 +1833,609 @@ fn is_literal_node(node: tree_sitter::Node, bytes: &[u8]) -> bool {
     }
 }
 
+/// PHP-only: returns `true` when the captured `include_expression` node is
+/// `include $var` (or `require $var`, etc.) and `$var` is a formal parameter
+/// of the immediately enclosing function / method / closure / arrow function,
+/// with no assignment to `$var` between the function body start and the
+/// include site.  This is the canonical PHP autoloader / scope-isolated
+/// `Closure::bind(static function ($file) { include $file; }, ...)` shape;
+/// composer's `ClassLoader::initializeIncludeClosure`, PSR-4 loaders, and
+/// route-file loaders all match this.  The pattern rule is intentionally
+/// heuristic (no taint), so a parameter pass-through is the broadest
+/// safe-suppression boundary; if the caller passes a tainted value, the
+/// engine's separate taint-unsanitised-flow rule still fires.
+fn is_php_include_param_passthrough(include_node: tree_sitter::Node, bytes: &[u8]) -> bool {
+    // tree-sitter-php shape:
+    //   include_expression
+    //     variable_name
+    //       name "<param>"
+    let var_node = include_node.named_child(0);
+    let Some(var_node) = var_node else {
+        return false;
+    };
+    if var_node.kind() != "variable_name" {
+        return false;
+    }
+    let name_node = var_node.named_child(0);
+    let Some(name_node) = name_node else {
+        return false;
+    };
+    let var_name = match std::str::from_utf8(&bytes[name_node.byte_range()]) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    // Walk up to the enclosing function/method/closure.
+    let mut cur = include_node;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "method_declaration"
+            | "function_definition"
+            | "anonymous_function"
+            | "anonymous_function_creation_expression"
+            | "arrow_function" => {
+                let params = parent
+                    .child_by_field_name("parameters")
+                    .or_else(|| find_named_child_of_kind(parent, "formal_parameters"));
+                let Some(params) = params else {
+                    return false;
+                };
+                if !param_list_contains_name(params, var_name, bytes) {
+                    return false;
+                }
+                // Reassignment guard: if the variable is reassigned inside the
+                // function body before the include, the parameter-pass-through
+                // assumption breaks down.
+                let body = parent
+                    .child_by_field_name("body")
+                    .or_else(|| find_named_child_of_kind(parent, "compound_statement"));
+                let body_start = body.map(|b| b.start_byte()).unwrap_or(parent.start_byte());
+                if is_var_reassigned_before(
+                    body.unwrap_or(parent),
+                    var_name,
+                    include_node.start_byte(),
+                    body_start,
+                    bytes,
+                ) {
+                    return false;
+                }
+                return true;
+            }
+            // Stop at class/program scope without a matching function — bare
+            // top-level `include $var` does not benefit from this guard.
+            "program" | "class_declaration" | "trait_declaration" | "interface_declaration" => {
+                return false;
+            }
+            _ => {}
+        }
+        cur = parent;
+    }
+    false
+}
+
+fn find_named_child_of_kind<'a>(
+    parent: tree_sitter::Node<'a>,
+    kind: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    for i in 0..parent.named_child_count() as u32 {
+        if let Some(child) = parent.named_child(i)
+            && child.kind() == kind
+        {
+            return Some(child);
+        }
+    }
+    None
+}
+
+fn param_list_contains_name(params: tree_sitter::Node, target_name: &str, bytes: &[u8]) -> bool {
+    for i in 0..params.named_child_count() as u32 {
+        let Some(param) = params.named_child(i) else {
+            continue;
+        };
+        if !matches!(
+            param.kind(),
+            "simple_parameter"
+                | "variadic_parameter"
+                | "property_promotion_parameter"
+                | "promoted_constructor_parameter"
+        ) {
+            continue;
+        }
+        // simple_parameter has a `variable_name` child whose `name` child is the bare ident.
+        let var_node = param
+            .child_by_field_name("name")
+            .or_else(|| find_named_child_of_kind(param, "variable_name"));
+        let Some(var_node) = var_node else {
+            continue;
+        };
+        let name_node = if var_node.kind() == "variable_name" {
+            var_node.named_child(0)
+        } else {
+            Some(var_node)
+        };
+        let Some(name_node) = name_node else {
+            continue;
+        };
+        if let Ok(name) = std::str::from_utf8(&bytes[name_node.byte_range()])
+            && name == target_name
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Walk the function body looking for any `assignment_expression` whose LHS
+/// names `target_name`, between `body_start` (inclusive) and `before_byte`
+/// (exclusive).  Crosses nested scopes (closures inside the function are
+/// rare in this idiom, and reassignment inside them wouldn't shadow the
+/// outer parameter).
+fn is_var_reassigned_before(
+    root: tree_sitter::Node,
+    target_name: &str,
+    before_byte: usize,
+    body_start: usize,
+    bytes: &[u8],
+) -> bool {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.start_byte() >= before_byte {
+            continue;
+        }
+        if node.end_byte() <= body_start {
+            continue;
+        }
+        if node.kind() == "assignment_expression" {
+            // LHS is the first named child (or the `left` field in newer grammars).
+            let lhs = node
+                .child_by_field_name("left")
+                .or_else(|| node.named_child(0));
+            if let Some(lhs) = lhs
+                && lhs.kind() == "variable_name"
+                && let Some(n) = lhs.named_child(0)
+                && let Ok(s) = std::str::from_utf8(&bytes[n.byte_range()])
+                && s == target_name
+            {
+                return true;
+            }
+        }
+        for i in 0..node.named_child_count() as u32 {
+            if let Some(c) = node.named_child(i) {
+                stack.push(c);
+            }
+        }
+    }
+    false
+}
+
+/// PHP-only: returns `true` when the captured `function_call_expression`
+/// node is `unserialize($x, [..., 'allowed_classes' => <ARRAY|false>, ...])`.
+/// This is the canonical PHP 7+ structural mitigation against object
+/// injection — explicitly restricting which classes the deserialiser may
+/// instantiate.  Only suppress when the option is either:
+///
+///   - `'allowed_classes' => false`           (no class instantiation), or
+///   - `'allowed_classes' => [Foo::class]`    (an array literal allow-list).
+///
+/// `'allowed_classes' => true` (the unsafe default) and dynamic values
+/// (`'allowed_classes' => $opts`) leave the finding in place.
+fn is_php_unserialize_allowed_classes_restricted(
+    cap_node: tree_sitter::Node,
+    bytes: &[u8],
+) -> bool {
+    // The pattern captures `@n` (the function name) at index 0, so walk up
+    // to the enclosing function_call_expression.
+    let call_node = if cap_node.kind() == "function_call_expression" {
+        cap_node
+    } else {
+        let mut cur = cap_node;
+        let mut found = None;
+        for _ in 0..4 {
+            if cur.kind() == "function_call_expression" {
+                found = Some(cur);
+                break;
+            }
+            match cur.parent() {
+                Some(p) => cur = p,
+                None => break,
+            }
+        }
+        match found {
+            Some(c) => c,
+            None => return false,
+        }
+    };
+    let arg_list = find_named_child_of_kind(call_node, "arguments");
+    let Some(arg_list) = arg_list else {
+        return false;
+    };
+    // arg 0 is the data; arg 1 is the options array.
+    let mut args = Vec::new();
+    for i in 0..arg_list.named_child_count() as u32 {
+        if let Some(c) = arg_list.named_child(i)
+            && c.kind() == "argument"
+        {
+            args.push(c);
+        }
+    }
+    if args.len() < 2 {
+        return false;
+    }
+    // Unwrap the `argument` wrapper to its inner expression.
+    let opts = args[1].named_child(0);
+    let Some(opts) = opts else { return false };
+    if opts.kind() != "array_creation_expression" {
+        return false;
+    }
+    // Walk array_element_initializer children looking for the
+    // 'allowed_classes' key.
+    for i in 0..opts.named_child_count() as u32 {
+        let Some(elem) = opts.named_child(i) else {
+            continue;
+        };
+        if elem.kind() != "array_element_initializer" {
+            continue;
+        }
+        // Two named children: key, value.
+        if elem.named_child_count() < 2 {
+            continue;
+        }
+        let key = elem.named_child(0);
+        let value = elem.named_child(1);
+        let (Some(key), Some(value)) = (key, value) else {
+            continue;
+        };
+        if !is_string_literal_with_text(key, "allowed_classes", bytes) {
+            continue;
+        }
+        // Accept structural mitigation forms.  The intent signal is
+        // "developer explicitly set allowed_classes to something other than
+        // `true`":
+        //   - boolean `false`             — no class instantiation at all
+        //   - array literal               — explicit allow-list
+        //   - class-constant reference    — `self::ALLOWED_CLASSES` /
+        //                                    `Foo::CONSTANTS` resolved to
+        //                                    a const array; engine cannot
+        //                                    statically inspect, but the
+        //                                    explicit option already
+        //                                    distinguishes safe usage from
+        //                                    the unsafe default.
+        match value.kind() {
+            "boolean" => {
+                if let Ok(s) = std::str::from_utf8(&bytes[value.byte_range()])
+                    && s.eq_ignore_ascii_case("false")
+                {
+                    return true;
+                }
+            }
+            "array_creation_expression"
+            | "class_constant_access_expression"
+            | "scoped_property_access_expression" => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// C/C++-only Layer D: structural suppression of buffer-overflow pattern
+/// rules when the source / format-string argument is a literal whose
+/// contributed length is statically bounded.
+///
+/// **Policy (vulnerability detection, not style):** Nyx flags
+/// `c.memory.strcpy` / `c.memory.strcat` / `c.memory.sprintf` (and the
+/// `cpp.memory.*` mirrors) when the source argument can carry
+/// attacker-controlled length.  Calls whose source is a string literal
+/// have a compile-time bound and cannot overflow due to attacker input
+/// — a too-small destination is a fixed developer bug (caught by
+/// compiler warnings / `-fstack-protector` / clang-tidy / ASan), not an
+/// exploitable channel.  Suppressing these literal-source calls is a
+/// deliberate noise / false-positive reduction aligned with Nyx's scope
+/// (vulnerability detection over style enforcement).
+///
+/// **Test coverage convention:**
+/// - Negative cases (suppression correct) live alongside other state /
+///   lifecycle fixtures and are recorded as soft expectations
+///   (`must_match: false`) in `*.expect.json`.  The notes there
+///   reference this function so future authors can trace why the AST
+///   pattern doesn't fire.  Examples:
+///     - `tests/fixtures/real_world/c/state/malloc_lifecycle.expect.json`
+///     - `tests/fixtures/real_world/cpp/state/new_delete.expect.json`
+///     - `tests/fixtures/real_world/cpp/state/malloc_branches.expect.json`
+/// - Positive cases (suppression must NOT fire — source is a parameter
+///   or other attacker-reachable value) live as hard expectations
+///   (`must_match: true`) in the taint fixtures:
+///     - `tests/fixtures/real_world/c/taint/buffer_overflow.c`
+///     - `tests/fixtures/real_world/cpp/taint/gets_strcpy.cpp`
+///
+/// Removing this function or weakening its predicate would be caught by
+/// neither — it would be caught by the unit tests below.
+///
+/// Pattern rules `c.memory.strcpy` / `c.memory.strcat` / `c.memory.sprintf`
+/// (and the `cpp.memory.*` mirrors) flag the call syntactically; their
+/// stated danger is "no bounds checking on destination buffer" / "no length
+/// limit on output buffer".  That danger is realised only when the source
+/// argument can carry attacker-controlled length.  When the source is a
+/// string literal the bound is fixed at compile time, so the call cannot
+/// overflow due to attacker input (a too-small destination is a fixed
+/// developer bug, not an exploitable channel).
+///
+/// Shapes recognised:
+///   - `strcpy(dst, "literal")`            → suppress
+///   - `strcpy(dst, COND ? "a" : "b")`     → suppress (ternary of two
+///     string-literal branches; the postgres `formatting.c` shape)
+///   - `strcat(dst, "literal")`            → same
+///   - `sprintf(dst, "format")` where the format string is a literal
+///     containing no bare `%s` (only width/precision-bounded specifiers
+///     like `%d`, `%lld`, `%c`, `%.*s`, `%.5s`)
+///     → suppress
+///
+/// Conservative refusals:
+///   - source / format is an identifier (could be tainted, e.g.
+///     `sprintf(buf, fmt, …)`) → keep firing
+///   - format is `concatenated_string` containing identifier macros (e.g.
+///     `"%" PRId64`) — we cannot statically expand the macro, so refuse
+///   - bare `%s` in format → keep firing (could read unbounded length)
+fn is_c_buffer_call_literal_safe(rule_id: &str, cap_node: tree_sitter::Node, bytes: &[u8]) -> bool {
+    let kind = match rule_id {
+        "c.memory.strcpy" | "cpp.memory.strcpy" => CBufferRule::StrcpyOrCat,
+        "c.memory.strcat" | "cpp.memory.strcat" => CBufferRule::StrcpyOrCat,
+        "c.memory.sprintf" | "cpp.memory.sprintf" => CBufferRule::Sprintf,
+        _ => return false,
+    };
+    let call = find_enclosing_call(cap_node);
+    let Some(call) = call else { return false };
+    let arg_list = find_arg_list(call);
+    let Some(arg_list) = arg_list else {
+        return false;
+    };
+    let mut args = Vec::new();
+    for i in 0..arg_list.named_child_count() as u32 {
+        if let Some(c) = arg_list.named_child(i) {
+            args.push(c);
+        }
+    }
+    if args.len() < 2 {
+        return false;
+    }
+    let src = args[1];
+    match kind {
+        CBufferRule::StrcpyOrCat => is_c_string_literal_or_lit_ternary(src, bytes),
+        CBufferRule::Sprintf => {
+            // Format must be a single string literal with safe specifiers.
+            // Refuse identifiers and concatenated_string (PRI* macros).
+            if !matches!(
+                src.kind(),
+                "string_literal" | "raw_string_literal" | "string"
+            ) {
+                return false;
+            }
+            let Some(text) = c_string_literal_payload(src, bytes) else {
+                return false;
+            };
+            sprintf_format_is_safe(&text)
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+enum CBufferRule {
+    StrcpyOrCat,
+    Sprintf,
+}
+
+/// True for: a C/C++ string literal, OR a `conditional_expression` whose
+/// consequence + alternative are both either string literals or ALL_CAPS
+/// identifiers (the canonical preprocessor-macro naming convention for
+/// string-constant `#define`s — `P_M_STR`, `A_M_STR`, `BG_NAME`, etc., used
+/// pervasively in postgres' `formatting.c::DCH_a_m`).  Parenthesised forms
+/// are unwrapped.
+///
+/// The ALL_CAPS heuristic recognises identifiers whose every character is
+/// in `[A-Z0-9_]` and which contain at least one alphabetic letter.
+/// Variables in C/C++ are conventionally lower / camelCase; macros are
+/// SHOUTING_SNAKE.  False acceptance of an actual variable is possible but
+/// extraordinarily rare in real codebases.
+fn is_c_string_literal_or_lit_ternary(node: tree_sitter::Node, bytes: &[u8]) -> bool {
+    let n = unwrap_c_paren(node);
+    match n.kind() {
+        "string_literal" | "raw_string_literal" | "string" => true,
+        "conditional_expression" => {
+            // tree-sitter-c shape: condition, consequence, alternative as
+            // named children.  Accept when BOTH branches are string
+            // literals or ALL_CAPS identifiers.
+            let mut branches: Vec<tree_sitter::Node> = Vec::new();
+            for i in 0..n.named_child_count() as u32 {
+                if let Some(c) = n.named_child(i) {
+                    branches.push(c);
+                }
+            }
+            if branches.len() < 3 {
+                return false;
+            }
+            // first child is the condition; the next two are the branches.
+            let conseq = unwrap_c_paren(branches[1]);
+            let alt = unwrap_c_paren(branches[2]);
+            is_c_lit_or_macro_branch(conseq, bytes) && is_c_lit_or_macro_branch(alt, bytes)
+        }
+        _ => false,
+    }
+}
+
+fn is_c_lit_or_macro_branch(node: tree_sitter::Node, bytes: &[u8]) -> bool {
+    match node.kind() {
+        "string_literal" | "raw_string_literal" | "string" => true,
+        "identifier" => {
+            let Ok(name) = std::str::from_utf8(&bytes[node.byte_range()]) else {
+                return false;
+            };
+            is_all_caps_macro_name(name)
+        }
+        _ => false,
+    }
+}
+
+fn is_all_caps_macro_name(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut has_alpha = false;
+    for ch in s.chars() {
+        if ch.is_ascii_uppercase() {
+            has_alpha = true;
+        } else if ch == '_' || ch.is_ascii_digit() {
+            // ok
+        } else {
+            return false;
+        }
+    }
+    has_alpha
+}
+
+fn unwrap_c_paren(mut node: tree_sitter::Node) -> tree_sitter::Node {
+    for _ in 0..4 {
+        if node.kind() == "parenthesized_expression"
+            && let Some(inner) = node.named_child(0)
+        {
+            node = inner;
+            continue;
+        }
+        break;
+    }
+    node
+}
+
+/// Extract the textual payload of a C/C++ string literal node, stripping
+/// the surrounding double-quotes and the optional encoding prefix
+/// (`L"..."`, `u8"..."`, `R"(...)"`).  Returns `None` if the bytes are not
+/// valid UTF-8 or the literal cannot be decoded.
+fn c_string_literal_payload(node: tree_sitter::Node, bytes: &[u8]) -> Option<String> {
+    // Prefer a `string_content` child if tree-sitter exposes one.
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(c) = node.named_child(i)
+            && c.kind() == "string_content"
+            && let Ok(s) = std::str::from_utf8(&bytes[c.byte_range()])
+        {
+            return Some(s.to_string());
+        }
+    }
+    // Fall back: strip the surrounding quotes from the full literal text.
+    let raw = std::str::from_utf8(&bytes[node.byte_range()]).ok()?;
+    let trimmed = raw.trim();
+    // Drop optional encoding prefix.
+    let after_prefix = trimmed
+        .trim_start_matches('L')
+        .trim_start_matches("u8")
+        .trim_start_matches('u')
+        .trim_start_matches('U');
+    let s = after_prefix
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'));
+    s.map(|s| s.to_string())
+}
+
+/// Returns `true` when a `printf`-family format string can never overflow a
+/// destination buffer due to attacker-controlled length.  Walks every `%`
+/// specifier in the format and refuses if any bare `%s` is present.
+/// Width-bounded `%5s` is unbounded (width is a *minimum*), but
+/// precision-bounded `%.5s` / `%.*s` is safe (precision caps the maximum).
+pub(crate) fn sprintf_format_is_safe(fmt: &str) -> bool {
+    let bytes = fmt.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'%' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if i >= bytes.len() {
+            // trailing `%` — malformed, refuse to suppress
+            return false;
+        }
+        if bytes[i] == b'%' {
+            i += 1;
+            continue;
+        }
+        // Skip flags
+        while i < bytes.len() && matches!(bytes[i], b'-' | b'+' | b'#' | b' ' | b'0' | b'\'') {
+            i += 1;
+        }
+        // Skip width (digits or `*`)
+        if i < bytes.len() && bytes[i] == b'*' {
+            i += 1;
+        } else {
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+        }
+        // Optional precision
+        let mut has_precision = false;
+        if i < bytes.len() && bytes[i] == b'.' {
+            has_precision = true;
+            i += 1;
+            if i < bytes.len() && bytes[i] == b'*' {
+                i += 1;
+            } else {
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+            }
+        }
+        // Length modifiers: h hh l ll L q z j t
+        while i < bytes.len() && matches!(bytes[i], b'h' | b'l' | b'L' | b'q' | b'z' | b'j' | b't')
+        {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return false;
+        }
+        let conv = bytes[i];
+        i += 1;
+        match conv {
+            // Numeric / char / pointer specifiers — bounded output for any input
+            b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'c' | b'e' | b'E' | b'f' | b'F' | b'g'
+            | b'G' | b'a' | b'A' | b'p' | b'n' => continue,
+            // String specifier: only safe when precision-bounded
+            b's' => {
+                if !has_precision {
+                    return false;
+                }
+            }
+            // Unknown conversion (e.g. `%S` wide-char on Windows is
+            // unbounded) → conservative refuse.
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn is_string_literal_with_text(node: tree_sitter::Node, text: &str, bytes: &[u8]) -> bool {
+    if node.kind() != "string" && node.kind() != "encapsed_string" {
+        return false;
+    }
+    // Look for a single string_content / string_value child.
+    let mut payload = None;
+    for i in 0..node.named_child_count() as u32 {
+        if let Some(c) = node.named_child(i)
+            && (c.kind() == "string_content" || c.kind() == "string_value")
+        {
+            payload = Some(c);
+            break;
+        }
+    }
+    let Some(payload) = payload else {
+        // Fall back: PHP single-quoted strings sometimes inline the content.
+        if let Ok(s) = std::str::from_utf8(&bytes[node.byte_range()]) {
+            let trimmed = s.trim_matches(|c| c == '\'' || c == '"');
+            return trimmed == text;
+        }
+        return false;
+    };
+    if let Ok(s) = std::str::from_utf8(&bytes[payload.byte_range()]) {
+        return s == text;
+    }
+    false
+}
+
 /// Check if a string node contains interpolation (e.g., PHP `"Hello $name"`).
 fn has_interpolation(node: tree_sitter::Node) -> bool {
     for i in 0..node.child_count() as u32 {
@@ -1548,10 +2479,53 @@ fn pattern_category_cap(pattern_id: &str) -> Option<Cap> {
 struct TaintSuppressionCtx {
     /// For each function scope, the set of lines containing Source-labeled nodes.
     source_lines_by_func: HashMap<Option<String>, HashSet<usize>>,
+    /// For each function scope, the set of lines containing Sanitizer-labeled
+    /// nodes.  Presence of an explicit sanitizer is the structural signal
+    /// that taint analysis successfully evaluated (and cleared) the flow,
+    /// so AST-pattern suppression is safe even when no taint findings
+    /// fired in the function.
+    sanitizer_lines_by_func: HashMap<Option<String>, HashSet<usize>>,
     /// For each sink node line, its enclosing function scope.
     sink_func_at_line: HashMap<usize, Option<String>>,
     /// Lines where taint emitted a `taint-unsanitised-flow` finding.
     taint_finding_lines: HashSet<usize>,
+    /// Per-function set of taint-finding lines.  Used by Condition 4 of
+    /// [`should_suppress`] alongside [`sanitizer_lines_by_func`] to
+    /// distinguish "taint proved safe" from "taint failed to track".
+    taint_finding_lines_by_func: HashMap<Option<String>, HashSet<usize>>,
+    /// Functions where the SSA engine emitted at least one
+    /// `all_validated` event — every tainted input to *some* sink in
+    /// the function passed through a recognised validation/
+    /// sanitisation predicate.  Drained from
+    /// `take_all_validated_spans`; positive evidence that the engine
+    /// reached a sink in this function and proved safety, even when no
+    /// `taint-unsanitised-flow` finding fired and no Sanitizer label
+    /// is present.  Covers validation, dominator-based pruning,
+    /// early-return guards, type-check predicates, and interprocedural
+    /// sanitiser wrappers — all of which legitimately clear taint via
+    /// SSA branch-narrowing rather than a labelled sanitiser node.
+    engine_validated_funcs: HashSet<Option<String>>,
+    /// Functions where some Source's defining variable is later
+    /// rebound to a literal RHS (carries `TaintMeta.const_text`) in
+    /// the same scope, with no Source label on the rebinding node.
+    /// Positive evidence that the engine's SSA renaming structurally
+    /// kills the source's taint before any sink can read it — covers
+    /// `cmd = getenv(); cmd = "echo hello"; system(cmd)` patterns
+    /// where the rebind is what makes the code safe but the engine
+    /// has no `Sanitizer` label or `taint-unsanitised-flow` finding to
+    /// witness it.
+    source_killed_funcs: HashSet<Option<String>>,
+    /// Functions that call a same-file helper which itself contains a
+    /// labelled Sanitizer node.  Positive evidence that the engine's
+    /// interprocedural analysis cleared the flow through a
+    /// user-defined wrapper (e.g. `def sanitize(s): return
+    /// shlex.quote(s)`).  The current per-function `Sanitizer` check
+    /// only sees direct sanitisers in the *caller's* scope — without
+    /// this signal, every helper-wrapped sanitiser fires as an
+    /// AST-pattern FP because the engine cleared the value via Phase
+    /// 11 inline analysis but the sink's enclosing scope has no
+    /// labelled Sanitizer of its own.
+    interproc_sanitizer_callers: HashSet<Option<String>>,
 }
 
 impl TaintSuppressionCtx {
@@ -1562,32 +2536,185 @@ impl TaintSuppressionCtx {
     /// nodes inside function bodies are visible for suppression decisions.
     fn build(file_cfg: &FileCfg, tree: &tree_sitter::Tree, taint_diags: &[Diag]) -> Self {
         let mut source_lines_by_func: HashMap<Option<String>, HashSet<usize>> = HashMap::new();
+        let mut sanitizer_lines_by_func: HashMap<Option<String>, HashSet<usize>> = HashMap::new();
         let mut sink_func_at_line: HashMap<usize, Option<String>> = HashMap::new();
+        // Per-function (var_name, source_line) pairs for Source nodes whose
+        // `defines` is set.  Used below to detect SSA source kills via
+        // const reassignment (`cmd = getenv(); cmd = "echo hello"`).
+        let mut source_var_defs_by_func: HashMap<Option<String>, Vec<(String, usize)>> =
+            HashMap::new();
+        // Per-function (var_name, line) pairs for nodes that bind a
+        // variable to a literal RHS (carry `TaintMeta.const_text`).
+        // Used to match against `source_var_defs_by_func` for kill
+        // detection.
+        let mut const_def_var_by_func: HashMap<Option<String>, Vec<(String, usize)>> =
+            HashMap::new();
+        // Set of `enclosing_func` names whose body contains at least
+        // one labelled Sanitizer.  These are user-defined sanitiser
+        // wrappers callable from other functions in the same file
+        // (e.g. `def sanitize(s): return shlex.quote(s)`).
+        let mut sanitizer_funcs: HashSet<String> = HashSet::new();
+        // Per-function set of bare callee names invoked from this
+        // function's body.  Bare = last `.`-separated segment, so
+        // `this.sanitize`, `obj.sanitize`, and `sanitize` all collapse
+        // to the same key for matching against `sanitizer_funcs`.
+        let mut callees_by_func: HashMap<Option<String>, HashSet<String>> = HashMap::new();
 
         for body in &file_cfg.bodies {
             for idx in body.graph.node_indices() {
                 let info = &body.graph[idx];
                 let mut has_source = false;
                 let mut has_sink = false;
+                let mut has_sanitizer = false;
                 for label in &info.taint.labels {
                     match label {
                         DataLabel::Source(_) => has_source = true,
                         DataLabel::Sink(_) => has_sink = true,
-                        _ => {}
+                        DataLabel::Sanitizer(_) => has_sanitizer = true,
                     }
                 }
+                // Skip synthetic source nodes emitted by `pre_emit_arg_source_nodes`
+                // (`__nyx_src_*` / `__nyx_chainsrc_*`).  These are a CFG-level
+                // synthesis that hoists a source-labeled member-expression into
+                // its own Source node so taint can see a definition; absence of
+                // a downstream taint finding through such a synth source does
+                // NOT prove safety, it can also mean the engine couldn't
+                // propagate the taint (e.g. `&req` with `var req struct{}`
+                // where points-to doesn't track the address-of of a stack
+                // variable).  Treating synth sources as "real" sources here
+                // would silently silence AST-pattern findings on every Go
+                // CRUD handler whose Decode destination is an `&req`-style
+                // address-of-local.
+                let is_synth_source = info.taint.defines.as_deref().is_some_and(|d| {
+                    d.starts_with("__nyx_src_") || d.starts_with("__nyx_chainsrc_")
+                });
                 let byte = info.classification_span().0;
                 let point = byte_offset_to_point(tree, byte);
                 let line = point.row + 1;
-                if has_source {
+                if has_source && !is_synth_source {
                     source_lines_by_func
                         .entry(info.ast.enclosing_func.clone())
                         .or_default()
                         .insert(line);
+                    if let Some(var) = info.taint.defines.as_deref() {
+                        source_var_defs_by_func
+                            .entry(info.ast.enclosing_func.clone())
+                            .or_default()
+                            .push((var.to_string(), line));
+                    }
+                }
+                if has_sanitizer {
+                    sanitizer_lines_by_func
+                        .entry(info.ast.enclosing_func.clone())
+                        .or_default()
+                        .insert(line);
+                    if let Some(func_name) = info.ast.enclosing_func.as_deref() {
+                        sanitizer_funcs.insert(func_name.to_string());
+                    }
                 }
                 if has_sink {
                     sink_func_at_line.insert(line, info.ast.enclosing_func.clone());
                 }
+                // Const-rebind detection: a node that defines a variable
+                // from a literal RHS and carries no Source label is a
+                // candidate kill site.  Skip nodes that are themselves
+                // Sources (a literal-init source like `cmd := "ls"` is
+                // not a kill).
+                if !has_source
+                    && let (Some(var), Some(_)) = (
+                        info.taint.defines.as_deref(),
+                        info.taint.const_text.as_ref(),
+                    )
+                {
+                    const_def_var_by_func
+                        .entry(info.ast.enclosing_func.clone())
+                        .or_default()
+                        .push((var.to_string(), line));
+                }
+                // Per-function callee inventory for interprocedural
+                // sanitiser detection.  `bare_method_name` collapses
+                // `this.sanitize` / `obj.sanitize` / `sanitize` to the
+                // same key so receiver-prefixed Java/Ruby/etc. calls
+                // match a bare-named helper definition.  Also include
+                // `arg_callees` so `println(... + sanitize(name) +
+                // ...)` recognises the inline sanitiser call buried
+                // inside the sink's argument expression.
+                let bare_inserts: Vec<&str> = info
+                    .call
+                    .callee
+                    .as_deref()
+                    .into_iter()
+                    .chain(info.arg_callees.iter().filter_map(|c| c.as_deref()))
+                    .collect();
+                if !bare_inserts.is_empty() {
+                    let entry = callees_by_func
+                        .entry(info.ast.enclosing_func.clone())
+                        .or_default();
+                    for callee in bare_inserts {
+                        let bare = crate::labels::bare_method_name(callee);
+                        if !bare.is_empty() {
+                            entry.insert(bare.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Source-kill detection: a function is "source-killed" when at
+        // least one of its Source-defined variables is re-bound to a
+        // literal at a later line in the same scope.  Captures
+        // `safe_reassigned`-style fixtures: the SSA engine renames the
+        // sink-read SSA value to a clean constant before any sink can
+        // observe taint, but neither a `Sanitizer` label nor a
+        // `taint-unsanitised-flow` finding fires to witness the kill.
+        let mut source_killed_funcs: HashSet<Option<String>> = HashSet::new();
+        for (func, src_defs) in &source_var_defs_by_func {
+            let Some(kills) = const_def_var_by_func.get(func) else {
+                continue;
+            };
+            for (src_var, src_line) in src_defs {
+                if kills
+                    .iter()
+                    .any(|(kill_var, kill_line)| kill_var == src_var && kill_line > src_line)
+                {
+                    source_killed_funcs.insert(func.clone());
+                    break;
+                }
+            }
+        }
+
+        // Interprocedural sanitiser caller detection: a function is
+        // an "interproc sanitiser caller" when its body invokes any
+        // helper whose own body contains a labelled Sanitizer.  This
+        // handles wrappers like `def sanitize(s): return
+        // shlex.quote(s)` — the engine clears taint via Phase 11
+        // inline analysis, but the caller's scope has no labelled
+        // Sanitizer of its own to satisfy Condition 4(b).
+        let mut interproc_sanitizer_callers: HashSet<Option<String>> = HashSet::new();
+        if !sanitizer_funcs.is_empty() {
+            for (func, callees) in &callees_by_func {
+                if callees.iter().any(|c| sanitizer_funcs.contains(c)) {
+                    interproc_sanitizer_callers.insert(func.clone());
+                }
+            }
+        }
+
+        // Drain the SSA engine's all-validated sink spans, attribute
+        // each to its enclosing function via `sink_func_at_line`, and
+        // record the function as "engine-validated".  The set was
+        // populated by `ssa_events_to_findings` whenever the engine
+        // emitted an `SsaTaintEvent { all_validated: true, .. }` —
+        // i.e. the engine reached a sink and proved every tainted
+        // input passed validation.  This is the broadest form of
+        // engine-success evidence, covering predicate validation
+        // (`if !allowed[x]`), dominator early-return, type-check
+        // (`Atoi` / `typeof`), and interprocedural sanitiser
+        // wrappers.
+        let mut engine_validated_funcs: HashSet<Option<String>> = HashSet::new();
+        for (start, _end) in crate::taint::ssa_transfer::take_all_validated_spans() {
+            let line = byte_offset_to_point(tree, start).row + 1;
+            if let Some(func) = sink_func_at_line.get(&line) {
+                engine_validated_funcs.insert(func.clone());
             }
         }
 
@@ -1597,10 +2724,29 @@ impl TaintSuppressionCtx {
             .map(|d| d.line)
             .collect();
 
+        // Per-function partition of taint findings.  Maps each finding's
+        // line to the enclosing function scope by reusing
+        // `sink_func_at_line` (the same span/function mapping the Sink-side
+        // of taint analysis populated above).
+        let mut taint_finding_lines_by_func: HashMap<Option<String>, HashSet<usize>> =
+            HashMap::new();
+        for line in &taint_finding_lines {
+            let func = sink_func_at_line.get(line).cloned().unwrap_or(None);
+            taint_finding_lines_by_func
+                .entry(func)
+                .or_default()
+                .insert(*line);
+        }
+
         Self {
             source_lines_by_func,
+            sanitizer_lines_by_func,
             sink_func_at_line,
             taint_finding_lines,
+            taint_finding_lines_by_func,
+            engine_validated_funcs,
+            source_killed_funcs,
+            interproc_sanitizer_callers,
         }
     }
 
@@ -1614,21 +2760,78 @@ impl TaintSuppressionCtx {
         // at an EARLIER line (upstream in control flow). This prevents suppression
         // when the only Source is co-located (dual-label) or downstream from the
         // sink, since taint couldn't have evaluated a flow that doesn't exist.
-        if let Some(func) = self.sink_func_at_line.get(&line) {
-            match self.source_lines_by_func.get(func) {
-                Some(source_lines) => {
-                    if !source_lines.iter().any(|&sl| sl < line) {
-                        return false;
-                    }
+        let func = match self.sink_func_at_line.get(&line) {
+            Some(f) => f,
+            None => return false, // No CFG sink at this line — taint had no opportunity to evaluate
+        };
+        match self.source_lines_by_func.get(func) {
+            Some(source_lines) => {
+                if !source_lines.iter().any(|&sl| sl < line) {
+                    return false;
                 }
-                None => return false,
             }
-        } else {
-            // No CFG sink at this line — taint had no opportunity to evaluate
-            return false;
+            None => return false,
         }
         // Condition 3: no taint finding at this line (taint found it safe)
-        !self.taint_finding_lines.contains(&line)
+        if self.taint_finding_lines.contains(&line) {
+            return false;
+        }
+        // Condition 4: distinguish "taint proved safe" from "taint failed
+        // to track".  Suppress only when there's a structural signal that
+        // taint analysis actually evaluated this flow:
+        //   (a) the function fired at least one taint-unsanitised-flow
+        //       finding (engine ran successfully and reached *some* sink),
+        //       OR
+        //   (b) the function contains an explicit Sanitizer node (the
+        //       canonical mechanism by which a flow is cleared, e.g.
+        //       `escapeshellarg` between $_GET and `system`),
+        //       OR
+        //   (c) the SSA engine emitted at least one `all_validated`
+        //       event in this function (engine reached *some* sink and
+        //       proved every tainted input was validated — covers
+        //       predicate validation, dominator early-return,
+        //       type-check predicates, and interprocedural sanitiser
+        //       wrappers that don't carry an explicit Sanitizer
+        //       label),
+        //       OR
+        //   (d) the function rebinds a Source's defining variable to
+        //       a literal RHS at a later line (engine's SSA renaming
+        //       structurally kills taint before any sink reads it —
+        //       covers `cmd = getenv(); cmd = "echo"; system(cmd)`),
+        //       OR
+        //   (e) the function calls a same-file helper whose body
+        //       contains a labelled Sanitizer (interprocedural
+        //       sanitiser wrapper — covers `def sanitize(s): return
+        //       shlex.quote(s)` patterns where the engine clears
+        //       taint via Phase 11 inline analysis but the caller's
+        //       scope has no Sanitizer label of its own).
+        //
+        // When none hold, we can't distinguish silent engine failure
+        // from real safety — e.g. Go points-to limitation on `&local`
+        // Decode destinations leaves the chain writeback fired but the
+        // field-cell propagation dead, suppressing legitimate
+        // AST-pattern findings on every Go CRUD handler whose Decode
+        // destination is a stack-local address-of.
+        let func_has_taint_finding = self
+            .taint_finding_lines_by_func
+            .get(func)
+            .is_some_and(|s| !s.is_empty());
+        let func_has_sanitizer = self
+            .sanitizer_lines_by_func
+            .get(func)
+            .is_some_and(|s| !s.is_empty());
+        let func_engine_validated = self.engine_validated_funcs.contains(func);
+        let func_source_killed = self.source_killed_funcs.contains(func);
+        let func_interproc_sanitizer = self.interproc_sanitizer_callers.contains(func);
+        if !func_has_taint_finding
+            && !func_has_sanitizer
+            && !func_engine_validated
+            && !func_source_killed
+            && !func_interproc_sanitizer
+        {
+            return false;
+        }
+        true
     }
 }
 
@@ -1790,8 +2993,34 @@ pub fn analyse_file_fused(
     );
 
     let (ssa_summaries, ssa_bodies) = if needs_cfg {
-        out.extend(parsed.run_cfg_analyses(cfg, global_summaries, scan_root));
-        parsed.extract_ssa_artifacts(global_summaries, scan_root)
+        // Lower SSA exactly once and feed both the taint engine and the
+        // SSA-artifact extractor.  Pre-fix, both consumers re-lowered the
+        // same `FileCfg` independently — `lower_all_functions_from_bodies`
+        // accounted for ~20% of `analyse_file_fused` wall-clock on the
+        // bench corpus.
+        //
+        // Reset the path-safe-suppressed span set BEFORE lowering: the
+        // per-parameter probes inside the lowering phase publish spans
+        // (`record_path_safe_suppressed_span`), and the state-analysis
+        // pass downstream relies on those spans surviving until
+        // `take_path_safe_suppressed_spans` drains the set inside
+        // `run_cfg_analyses_with_lowered`.  The all-validated span set
+        // (cap-agnostic, AST-pattern suppression evidence) follows the
+        // same lifecycle and is drained inside `TaintSuppressionCtx`.
+        crate::taint::ssa_transfer::reset_path_safe_suppressed_spans();
+        crate::taint::ssa_transfer::reset_all_validated_spans();
+        let (lowered_summaries, lowered_bodies) =
+            parsed.lower_ssa_for_fused(global_summaries, scan_root);
+        out.extend(parsed.run_cfg_analyses_with_lowered(
+            cfg,
+            global_summaries,
+            scan_root,
+            &lowered_summaries,
+            &lowered_bodies,
+        ));
+        let eligible_bodies = crate::taint::build_eligible_bodies(&parsed.file_cfg, lowered_bodies);
+        let summaries_vec: Vec<_> = lowered_summaries.into_iter().collect();
+        (summaries_vec, eligible_bodies)
     } else {
         (vec![], vec![])
     };
@@ -2015,4 +3244,302 @@ fn constant_arg_suppression_works() {
             "Python os.system(cmd) should NOT have all-literal args"
         );
     }
+}
+
+/// Helper that runs a tree-sitter query against PHP source and returns the
+/// first capture-0 node, panicking if no match is found.  Used by the PHP
+/// suppression tests below.
+#[cfg(test)]
+fn first_php_capture<'tree>(
+    tree: &'tree tree_sitter::Tree,
+    code: &[u8],
+    query_str: &str,
+) -> tree_sitter::Node<'tree> {
+    use tree_sitter::StreamingIterator;
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let query = tree_sitter::Query::new(&lang, query_str).expect("query compiles");
+    let mut cursor = tree_sitter::QueryCursor::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), code);
+    let m = matches.next().expect("query should match");
+    let cap = m
+        .captures
+        .iter()
+        .find(|c| c.index == 0)
+        .expect("capture index 0");
+    cap.node
+}
+
+#[test]
+fn php_include_param_passthrough_recognises_canonical_shapes() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    parser.set_language(&lang).unwrap();
+    let q = r#"(include_expression (variable_name)) @vuln"#;
+
+    // Closure parameter pass-through (composer ClassLoader idiom).
+    let code = b"<?php\nstatic $cb = function ($file) { include $file; };\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_include_param_passthrough(cap, code),
+        "closure param pass-through should be recognised"
+    );
+
+    // Method parameter pass-through.
+    let code = b"<?php\nclass C { function f(string $file): void { include $file; } }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_include_param_passthrough(cap, code),
+        "method param pass-through should be recognised"
+    );
+
+    // Local variable assigned from concat — NOT a pass-through.
+    let code = b"<?php\nclass C { function f(string $base): void { $f = $base . '/x.php'; include $f; } }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_include_param_passthrough(cap, code),
+        "concat-built local should NOT be treated as pass-through"
+    );
+
+    // Param reassigned before include — NOT a pass-through.
+    let code = b"<?php\nfunction f($file) { $file = $_GET['x']; include $file; }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_include_param_passthrough(cap, code),
+        "reassigned param should NOT be treated as pass-through"
+    );
+
+    // Top-level (no enclosing function) — NOT a pass-through.
+    let code = b"<?php\n$file = $_GET['x'];\ninclude $file;\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_include_param_passthrough(cap, code),
+        "top-level include should NOT be treated as pass-through"
+    );
+}
+
+#[test]
+fn php_unserialize_allowed_classes_recognises_safe_forms() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    parser.set_language(&lang).unwrap();
+    let q = r#"(function_call_expression function: (name) @n (#eq? @n "unserialize")) @vuln"#;
+
+    // allowed_classes => false
+    let code = b"<?php\n$x = unserialize($d, ['allowed_classes' => false]);\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_unserialize_allowed_classes_restricted(cap, code),
+        "allowed_classes => false should be recognised as safe"
+    );
+
+    // allowed_classes => [Foo::class, Bar::class]
+    let code = b"<?php\n$x = unserialize($d, ['allowed_classes' => [Foo::class]]);\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_unserialize_allowed_classes_restricted(cap, code),
+        "allowed_classes => [array] should be recognised as safe"
+    );
+
+    // allowed_classes => self::ALLOWED  (class constant reference)
+    let code =
+        b"<?php\nclass C { const A = []; function f($d) { return unserialize($d, ['allowed_classes' => self::A]); } }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_unserialize_allowed_classes_restricted(cap, code),
+        "allowed_classes => self::CONST should be recognised as safe"
+    );
+
+    // allowed_classes => true — unsafe default, must NOT be suppressed
+    let code = b"<?php\n$x = unserialize($d, ['allowed_classes' => true]);\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_unserialize_allowed_classes_restricted(cap, code),
+        "allowed_classes => true is the unsafe default, should NOT be suppressed"
+    );
+
+    // No second arg — must NOT be suppressed
+    let code = b"<?php\n$x = unserialize($d);\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_unserialize_allowed_classes_restricted(cap, code),
+        "single-arg unserialize should NOT be suppressed"
+    );
+
+    // Dynamic options variable — must NOT be suppressed
+    let code = b"<?php\n$x = unserialize($d, $opts);\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_unserialize_allowed_classes_restricted(cap, code),
+        "dynamic options variable should NOT be suppressed"
+    );
+}
+
+#[test]
+fn sprintf_format_safety_classifier() {
+    // Numeric / char / pointer specifiers — bounded by definition.
+    assert!(sprintf_format_is_safe(""));
+    assert!(sprintf_format_is_safe("hello world"));
+    assert!(sprintf_format_is_safe("%d"));
+    assert!(sprintf_format_is_safe("%lld%c"));
+    assert!(sprintf_format_is_safe("fixed=%d/%c"));
+    assert!(sprintf_format_is_safe("%5d %x %llo"));
+    assert!(sprintf_format_is_safe("%%literal-percent"));
+    assert!(sprintf_format_is_safe("%p"));
+    // Precision-bounded `%s` / `%.*s` — output capped at precision.
+    assert!(sprintf_format_is_safe(" %.*s"));
+    assert!(sprintf_format_is_safe("%.5s"));
+    assert!(sprintf_format_is_safe("[%-.10s]"));
+    // Bare `%s` / width-only `%5s` — width is a *minimum*, length is
+    // unbounded.  Must NOT be suppressed.
+    assert!(!sprintf_format_is_safe("%s"));
+    assert!(!sprintf_format_is_safe("hello %s world"));
+    assert!(!sprintf_format_is_safe("%5s"));
+    assert!(!sprintf_format_is_safe("[%-20s]"));
+    // Unknown / non-standard conversions → conservative refuse.
+    assert!(!sprintf_format_is_safe("%S"));
+    assert!(!sprintf_format_is_safe("%"));
+    assert!(!sprintf_format_is_safe("%lZ"));
+}
+
+#[cfg(test)]
+fn first_c_capture<'tree>(
+    tree: &'tree tree_sitter::Tree,
+    code: &[u8],
+    query_str: &str,
+) -> tree_sitter::Node<'tree> {
+    use tree_sitter::StreamingIterator;
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    let query = tree_sitter::Query::new(&lang, query_str).expect("query compiles");
+    let mut cursor = tree_sitter::QueryCursor::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), code);
+    let m = matches.next().expect("query should match");
+    m.captures
+        .iter()
+        .find(|c| c.index == 0)
+        .expect("capture index 0")
+        .node
+}
+
+#[test]
+fn c_buffer_call_literal_safe_recognises_canonical_shapes() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    parser.set_language(&lang).unwrap();
+
+    let q_strcpy = r#"(call_expression function: (identifier) @id (#eq? @id "strcpy")) @vuln"#;
+    let q_strcat = r#"(call_expression function: (identifier) @id (#eq? @id "strcat")) @vuln"#;
+    let q_sprintf = r#"(call_expression function: (identifier) @id (#eq? @id "sprintf")) @vuln"#;
+
+    // strcpy(dst, "literal") — postgres autoprewarm shape.
+    let code = b"void f(char *d) { strcpy(d, \"pg_prewarm\"); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcpy);
+    assert!(
+        is_c_buffer_call_literal_safe("c.memory.strcpy", cap, code),
+        "strcpy with string-literal source must be suppressed"
+    );
+
+    // strcpy(dst, cond ? "a" : "b") — string-literal ternary.
+    let code = b"void f(char *s, int h) { strcpy(s, (h >= 12) ? \"p.m.\" : \"a.m.\"); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcpy);
+    assert!(
+        is_c_buffer_call_literal_safe("c.memory.strcpy", cap, code),
+        "strcpy with ternary-of-literals source must be suppressed"
+    );
+
+    // strcpy(dst, cond ? P_M_STR : A_M_STR) — postgres formatting.c
+    // shape with #define'd ALL_CAPS string-constant macros.
+    let code = b"#define P_M_STR \"p.m.\"\n#define A_M_STR \"a.m.\"\nvoid f(char *s, int h) { strcpy(s, (h >= 12) ? P_M_STR : A_M_STR); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcpy);
+    assert!(
+        is_c_buffer_call_literal_safe("c.memory.strcpy", cap, code),
+        "strcpy with ternary-of-ALL_CAPS-macros must be suppressed"
+    );
+
+    // strcpy(dst, cond ? var_a : var_b) — lowercase variables, NOT a
+    // recognisable preprocessor macro shape.  Must NOT suppress.
+    let code = b"void f(char *s, int h, char *a, char *b) { strcpy(s, (h >= 12) ? a : b); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcpy);
+    assert!(
+        !is_c_buffer_call_literal_safe("c.memory.strcpy", cap, code),
+        "strcpy with ternary-of-lowercase-vars must NOT be suppressed"
+    );
+
+    // strcat(dst, "literal") — same principle as strcpy.
+    let code = b"void f(char *d) { strcat(d, \" (done)\"); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcat);
+    assert!(
+        is_c_buffer_call_literal_safe("c.memory.strcat", cap, code),
+        "strcat with string-literal source must be suppressed"
+    );
+
+    // sprintf(dst, "%lld%c", ...) — numeric format string.
+    let code = b"void f(char *cp, long long v, char u) { sprintf(cp, \"%lld%c\", v, u); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_sprintf);
+    assert!(
+        is_c_buffer_call_literal_safe("c.memory.sprintf", cap, code),
+        "sprintf with numeric-only format must be suppressed"
+    );
+
+    // sprintf(str, " %.*s", N, x) — precision-bounded `%s`.
+    let code = b"void f(char *str, int n, const char *x) { sprintf(str, \" %.*s\", n, x); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_sprintf);
+    assert!(
+        is_c_buffer_call_literal_safe("c.memory.sprintf", cap, code),
+        "sprintf with precision-bounded `%.*s` must be suppressed"
+    );
+
+    // strcpy(dst, src) where src is a non-literal — must NOT suppress.
+    let code = b"void f(char *d, char **a) { strcpy(d, a[1]); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcpy);
+    assert!(
+        !is_c_buffer_call_literal_safe("c.memory.strcpy", cap, code),
+        "strcpy with non-literal source must NOT be suppressed"
+    );
+
+    // sprintf with bare `%s` — must NOT suppress.
+    let code = b"void f(char *b, const char *u) { sprintf(b, \"%s\", u); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_sprintf);
+    assert!(
+        !is_c_buffer_call_literal_safe("c.memory.sprintf", cap, code),
+        "sprintf with bare `%%s` must NOT be suppressed"
+    );
+
+    // sprintf with non-literal format (concatenated_string with PRI* macro)
+    // — must NOT suppress (engine cannot statically expand the macro).
+    let code = b"void f(char *b, long long v) { sprintf(b, \"%\" PRId64, v); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_sprintf);
+    assert!(
+        !is_c_buffer_call_literal_safe("c.memory.sprintf", cap, code),
+        "sprintf with concatenated_string format must NOT be suppressed"
+    );
+
+    // Other rule ids should not be affected.
+    let code = b"void f(char *d) { strcpy(d, \"x\"); }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_c_capture(&tree, code, q_strcpy);
+    assert!(
+        !is_c_buffer_call_literal_safe("c.memory.gets", cap, code),
+        "Layer D should only fire for buffer-overflow rule ids"
+    );
 }

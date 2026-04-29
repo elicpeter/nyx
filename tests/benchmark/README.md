@@ -2,7 +2,7 @@
 
 ## Corpus philosophy
 
-The benchmark corpus is a curated set of ~267 minimal synthetic files (8-20 lines each) across 10 languages: JavaScript, TypeScript, Python, Java, Go, PHP, Ruby, Rust, C, and C++. Each file contains exactly one vulnerability (positive case) or demonstrates a specific safe pattern (negative case). The corpus additionally carries a small set of real-CVE replay cases (see `cve_corpus/` and the "Real-CVE Corpus" section in `RESULTS.md`).
+The benchmark corpus is a curated set of ~430 minimal synthetic files (8-20 lines each) across 10 languages: JavaScript, TypeScript, Python, Java, Go, PHP, Ruby, Rust, C, and C++. Each file contains exactly one vulnerability (positive case) or demonstrates a specific safe pattern (negative case). The corpus additionally carries a small set of real-CVE replay cases (see `cve_corpus/` and the "Real CVE coverage" section in `RESULTS.md`).
 
 Design principles:
 - **One vuln per file**: isolates the detection signal from noise.
@@ -35,8 +35,8 @@ When `expected_sink_lines` is present, checks that a matching finding falls with
 
 ## What metrics mean and don't mean
 
-- **Precision** measures false positive rate — how often a flagged file truly has a vulnerability.
-- **Recall** measures detection rate — how many real vulnerabilities the scanner catches.
+- **Precision** measures false positive rate: how often a flagged file truly has a vulnerability.
+- **Recall** measures detection rate: how many real vulnerabilities the scanner catches.
 - **F1** is the harmonic mean, balancing precision and recall.
 
 Caveats:
@@ -48,7 +48,7 @@ Caveats:
 ## How to run
 
 ```bash
-# Full benchmark (all 273 cases)
+# Full benchmark (every case in ground_truth.json)
 cargo test benchmark_evaluation -- --ignored --nocapture
 
 # Filter by language (python, typescript, javascript, java, go, php, ruby, rust, c, cpp)
@@ -80,7 +80,7 @@ NYX_BENCH_TAG=express cargo test benchmark_evaluation -- --ignored --nocapture
 ## How to fix a case
 
 If a case outcome is unexpected:
-1. Investigate the root cause — is the scanner wrong, or is the ground truth wrong?
+1. Investigate the root cause: is the scanner wrong, or is the ground truth wrong?
 2. If the scanner is wrong, fix the scanner (not the ground truth).
 3. If the ground truth is wrong (e.g., wrong expected_rule_ids), update it with justification.
 4. Never auto-normalize ground truth to match scanner output.
@@ -105,17 +105,18 @@ cargo test --release --all-features --test benchmark_test -- --ignored --nocaptu
 and fails if the corpus rule-level metrics fall below the thresholds encoded
 at the bottom of `tests/benchmark_test.rs`:
 
-| Metric | Floor | Current baseline (273 cases) |
+| Metric | Floor | Current baseline (~432 cases) |
 |---|---|---|
-| Precision | ≥ 0.861 | 0.942 |
-| Recall | ≥ 0.944 | 0.994 |
-| F1 | ≥ 0.901 | 0.967 |
+| Precision | ≥ 0.861 | 0.991 |
+| Recall | ≥ 0.944 | 0.995 |
+| F1 | ≥ 0.901 | 0.993 |
 
-The floors sit ~8 pp below the current 273-case baseline — a single-case
-flip is ~0.6 pp on this corpus, so the headroom absorbs honest FP↔TN trades while
-still tripping on a real regression in a whole vulnerability class. The `results/latest.json` artifact is
-uploaded from the CI job for comparison across runs. The Rust job cache is
-warm, so the gate typically adds only a few seconds on top of the build.
+The floors sit roughly 8 pp below the current baseline. A single-case flip
+is about 0.2 pp on this corpus, so the headroom absorbs honest FP/TN
+trades while still tripping on a real regression in a whole vulnerability
+class. The `results/latest.json` artifact is uploaded from the CI job for
+comparison across runs. The Rust job cache is warm, so the gate typically
+adds only a few seconds on top of the build.
 
-Updating the thresholds is a deliberate change — raise them when you land a
+Updating the thresholds is a deliberate change. Raise them when you land a
 measurable, durable improvement; never relax them to paper over a regression.

@@ -438,7 +438,9 @@ fn ssa_summary_serde_round_trip_identity() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -468,7 +470,9 @@ fn ssa_summary_serde_round_trip_strip_bits() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -495,7 +499,9 @@ fn ssa_summary_serde_round_trip_add_bits() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -529,7 +535,9 @@ fn ssa_summary_serde_round_trip_all_variants() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -565,7 +573,9 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     gs.insert_ssa(key.clone(), v1.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v1));
@@ -589,7 +599,9 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     gs.insert_ssa(key.clone(), v2.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v2));
@@ -633,7 +645,9 @@ fn global_summaries_merge_with_ssa_entries() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let sum_b = SsaFuncSummary {
         param_to_return: vec![],
@@ -653,7 +667,9 @@ fn global_summaries_merge_with_ssa_entries() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
 
     gs1.insert_ssa(key_a.clone(), sum_a.clone());
@@ -697,7 +713,9 @@ fn global_summaries_is_empty_considers_ssa() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            field_points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
+            typed_call_receivers: vec![],
         },
     );
 
@@ -724,7 +742,9 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -766,7 +786,9 @@ fn ssa_summary_serde_round_trip_container_fields() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -818,7 +840,9 @@ fn ssa_summary_serde_round_trip_return_abstract() {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -890,6 +914,8 @@ fn make_callee_body(
             value_defs,
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         },
         opt: crate::ssa::OptimizeResult {
             const_values: std::collections::HashMap::new(),
@@ -1046,6 +1072,7 @@ fn callee_body_serde_with_all_ssa_op_variants() {
             value: SsaValue(7),
             op: SsaOp::Call {
                 callee: "foo".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)], smallvec![SsaValue(1)]],
                 receiver: Some(SsaValue(2)),
             },
@@ -1077,6 +1104,7 @@ fn callee_body_serde_with_all_ssa_op_variants() {
             callee,
             args,
             receiver,
+            ..
         } => {
             assert_eq!(callee, "foo");
             assert_eq!(args.len(), 2);
@@ -1330,7 +1358,9 @@ fn global_summaries_resolve_body_requires_body_present() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            field_points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
+            typed_call_receivers: vec![],
         },
     );
     // Don't insert body
@@ -3169,6 +3199,95 @@ fn insert_ssa_arity_overflow_rekeys() {
     assert!(kept.param_to_sink.is_empty());
 }
 
+/// Audit gap A.2.1.G1 reproducer: a summary whose only param-index
+/// references come from synthetic SSA `Param` ops for external
+/// captures (free identifiers, module imports, unresolved method
+/// names) lands at the original key when no existing entry occupies
+/// it.
+///
+/// This is the case `lower_to_ssa` produces for Java instance/static
+/// methods that reference free identifiers (e.g. `f.close()` where
+/// `close` is treated as an external capture — the synthetic Param 0
+/// then leaks into `param_to_return`/`param_to_sink`).  Without the
+/// audit-gap fix, `reconcile_ssa_summary_key` would synthesise a
+/// disambig and Phase 3's `summaries.get_ssa(caller_key)` lookup
+/// (consuming `typed_call_receivers` at the FuncSummary-aligned key)
+/// would miss.
+#[test]
+fn insert_ssa_arity_overflow_keeps_original_key_when_no_collision() {
+    // Single-file fresh insert: no prior entry at `key` to protect, so
+    // the synthetic-Param overflow is treated as the function's own
+    // signal and lands at the original FuncKey.
+    let mut gs = GlobalSummaries::new();
+    let key = FuncKey {
+        lang: Lang::Java,
+        namespace: "Reader.java".into(),
+        container: "Reader".into(),
+        name: "read".into(),
+        arity: Some(0),
+        ..Default::default()
+    };
+    let summary = SsaFuncSummary {
+        // Synthetic Param-0 for the external `close` identifier inside
+        // the static `read()` body — `param_count == 0` per the source-
+        // level signature.
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        typed_call_receivers: vec![(1, "FileHandle".to_string())],
+        ..Default::default()
+    };
+    gs.insert_ssa(key.clone(), summary.clone());
+
+    let kept = gs
+        .get_ssa(&key)
+        .expect("Reader::read SSA must be reachable at the FuncSummary-aligned key");
+    assert_eq!(kept.typed_call_receivers, summary.typed_call_receivers);
+    // The synthetic Param-0 reference is preserved verbatim — pass-2
+    // analysis still aligns it with the caller's implicit-uses
+    // argument group at the same index.
+    assert_eq!(kept.param_to_return, summary.param_to_return);
+}
+
+/// Companion to `insert_ssa_arity_overflow_keeps_original_key_when_no_collision`:
+/// when both rounds of an iterative scan produce summaries whose
+/// param-index references overflow the FuncKey arity (the same
+/// synthetic-Param signal each round), the second-round insert must
+/// land at the original key (last-writer-wins for the same function),
+/// not split off into a synthetic disambig.
+#[test]
+fn insert_ssa_arity_overflow_iterative_rescan_stays_at_original_key() {
+    let mut gs = GlobalSummaries::new();
+    let key = FuncKey {
+        lang: Lang::Java,
+        namespace: "Reader.java".into(),
+        container: "Reader".into(),
+        name: "read".into(),
+        arity: Some(0),
+        ..Default::default()
+    };
+    let round1 = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        typed_call_receivers: vec![(1, "FileHandle".to_string())],
+        ..Default::default()
+    };
+    gs.insert_ssa(key.clone(), round1);
+
+    // Iteration 2 of the scan loop produces the same shape with
+    // refined typed_call_receivers (e.g. a new constructor type
+    // discovered cross-file).
+    let round2 = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        typed_call_receivers: vec![(1, "FileHandle".to_string()), (2, "Cache".to_string())],
+        ..Default::default()
+    };
+    gs.insert_ssa(key.clone(), round2.clone());
+
+    let kept = gs
+        .get_ssa(&key)
+        .expect("iterative-rescan summary must stay at the original key");
+    assert_eq!(kept.typed_call_receivers, round2.typed_call_receivers);
+    assert_eq!(kept.param_to_return, round2.param_to_return);
+}
+
 // ── Primary sink-location attribution — SinkSite round-trips ────────────
 
 #[test]
@@ -3382,7 +3501,9 @@ fn cf4_return_path_transform_serde_round_trip() {
             ],
         )],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -3503,8 +3624,15 @@ fn cf4_union_param_return_paths_by_index() {
 }
 
 #[test]
-fn cf4_ssa_summary_fits_arity_rejects_out_of_range_path_idx() {
-    // A path whose param index exceeds the key's arity is incompatible.
+fn cf4_ssa_summary_fits_arity_keeps_out_of_range_path_idx_at_original_key() {
+    // A path whose param index exceeds the key's arity is treated as a
+    // synthetic external-capture artefact (audit gap A.2.1.G1 — see
+    // `project_typed_callgraph_audit_gap_ssa_disambig.md`).  When no
+    // existing entry sits at the key, `insert_ssa` keeps the (untrimmed)
+    // summary at the original key so the SSA FuncKey stays aligned with
+    // the matching FuncSummary FuncKey — Phase 3's
+    // `summaries.get_ssa(caller_key)` lookup (consuming
+    // `typed_call_receivers`) depends on this alignment.
     let bad = SsaFuncSummary {
         param_return_paths: vec![(5, smallvec![rpt(TaintTransform::Identity, 1, 0, 0)])],
         ..Default::default()
@@ -3513,14 +3641,16 @@ fn cf4_ssa_summary_fits_arity_rejects_out_of_range_path_idx() {
         lang: Lang::Rust,
         namespace: "test.rs".into(),
         name: "helper".into(),
-        arity: Some(2), // too small for idx 5
+        arity: Some(2), // too small for idx 5 — synthetic-Param marker
         ..Default::default()
     };
     let mut gs = GlobalSummaries::new();
     gs.insert_ssa(key.clone(), bad);
-    // Reconciliation synthesises a disambig to keep the bad entry under a
-    // different key; the original key stays empty.
-    assert!(gs.get_ssa(&key).is_none());
+    let kept = gs
+        .get_ssa(&key)
+        .expect("synthetic-Param summary inserted at original key");
+    assert_eq!(kept.param_return_paths.len(), 1);
+    assert_eq!(kept.param_return_paths[0].0, 5);
 }
 
 // ── Parameter-granularity points-to summary ─────────────────────────────
@@ -3568,10 +3698,14 @@ fn cf6_ssa_summary_legacy_json_without_points_to_deserialises() {
 }
 
 #[test]
-fn cf6_ssa_summary_fits_arity_rejects_out_of_range_points_to_idx() {
+fn cf6_ssa_summary_fits_arity_keeps_out_of_range_points_to_idx_at_original_key() {
+    // Same arity-overflow handling as `cf4_ssa_summary_fits_arity_*`
+    // for the points-to channel: when the summary references a
+    // synthetic-Param index beyond `key.arity` and no existing entry
+    // occupies the key, `insert_ssa` preserves the FuncKey-aligned
+    // identity by inserting at the original key (audit gap A.2.1.G1).
     use crate::summary::points_to::{AliasKind, AliasPosition, PointsToSummary};
     let mut pts = PointsToSummary::empty();
-    // Index 7 exceeds arity 2 below.
     pts.insert(
         AliasPosition::Param(7),
         AliasPosition::Return,
@@ -3590,6 +3724,499 @@ fn cf6_ssa_summary_fits_arity_rejects_out_of_range_points_to_idx() {
     };
     let mut gs = GlobalSummaries::new();
     gs.insert_ssa(key.clone(), bad);
-    // Reconciliation rekeys the bad entry; the original key is empty.
-    assert!(gs.get_ssa(&key).is_none());
+    let kept = gs
+        .get_ssa(&key)
+        .expect("synthetic-Param points_to summary inserted at original key");
+    assert_eq!(kept.points_to.max_param_index(), Some(7));
+}
+
+/// Phase 4 (typed call-graph devirtualisation): two `findById`
+/// definitions on different containers must remain structurally
+/// disjoint after [`merge_summaries`] — no cap union may leak
+/// across them.  The FuncKey identity model already keys on
+/// `(lang, namespace, container, name, arity, ...)` so this is
+/// supposed to be true today; the test pins it down so a future
+/// refactor can't silently widen the merge granularity.
+///
+/// Concretely: `Repository::findById` is parameterised (no
+/// `SQL_QUERY` sink cap), `UnsafeCache::findById` runs a string-
+/// concatenated query (carries `Cap::SQL_QUERY`).  After merge,
+/// each FuncKey must own only its own caps — Repository must NOT
+/// inherit Cache's `SQL_QUERY` bit.
+#[test]
+fn cross_file_devirt_does_not_union_unrelated_findbyids() {
+    use crate::labels::Cap;
+    use crate::symbol::FuncKey;
+
+    fn method_summary(name: &str, container: &str, file: &str, sink_caps: u16) -> FuncSummary {
+        FuncSummary {
+            name: name.into(),
+            file_path: file.into(),
+            lang: "rust".into(),
+            param_count: 1,
+            param_names: vec!["id".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps,
+            propagating_params: vec![],
+            propagates_taint: false,
+            tainted_sink_params: if sink_caps != 0 { vec![0] } else { vec![] },
+            callees: vec![],
+            container: container.into(),
+            ..Default::default()
+        }
+    }
+
+    let safe_repo = method_summary("findById", "Repository", "src/repo.rs", 0);
+    let unsafe_cache = method_summary(
+        "findById",
+        "UnsafeCache",
+        "src/cache.rs",
+        Cap::SQL_QUERY.bits(),
+    );
+
+    let gs = merge_summaries(vec![safe_repo, unsafe_cache], None);
+
+    // Two distinct keys must coexist — no merge collision.
+    let repo_key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "src/repo.rs".into(),
+        container: "Repository".into(),
+        name: "findById".into(),
+        arity: Some(1),
+        ..Default::default()
+    };
+    let cache_key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "src/cache.rs".into(),
+        container: "UnsafeCache".into(),
+        name: "findById".into(),
+        arity: Some(1),
+        ..Default::default()
+    };
+
+    let repo_sum = gs.get(&repo_key).expect("Repository::findById missing");
+    let cache_sum = gs.get(&cache_key).expect("UnsafeCache::findById missing");
+
+    // Sink caps stay on their own owner — the whole point of
+    // devirtualisation.  Repository must not have inherited the
+    // SQL_QUERY bit from UnsafeCache.
+    assert_eq!(
+        repo_sum.sink_caps, 0,
+        "Repository::findById inherited a sink cap from UnsafeCache::findById — \
+         the per-FuncKey identity model has been broken (sink_caps bits = {:#x})",
+        repo_sum.sink_caps,
+    );
+    assert_eq!(
+        cache_sum.sink_caps,
+        Cap::SQL_QUERY.bits(),
+        "UnsafeCache::findById lost its own sink cap during merge"
+    );
+    // Same invariant on tainted_sink_params — must not bleed across.
+    assert!(
+        repo_sum.tainted_sink_params.is_empty(),
+        "Repository::findById inherited tainted_sink_params from UnsafeCache: {:?}",
+        repo_sum.tainted_sink_params,
+    );
+    assert_eq!(cache_sum.tainted_sink_params, vec![0]);
+}
+
+// ── Phase 6 hierarchy fan-out at runtime resolution ────────────────────
+//
+// `GlobalSummaries::resolve_callee_widened` is the runtime counterpart of
+// the call-graph builder's `TypeHierarchyIndex::resolve_with_hierarchy`.
+// These tests pin the contract that *every* concrete implementer is
+// reachable when the receiver type is statically a super-class / trait /
+// interface, with the explicit fall-throughs that preserve today's
+// behaviour when no fan-out applies.
+mod hierarchy_widened_tests {
+    use super::*;
+
+    /// Build a minimal `(FuncKey, FuncSummary)` for a method on the
+    /// given container with optional `hierarchy_edges` carried through.
+    fn java_method(
+        namespace: &str,
+        container: &str,
+        name: &str,
+        arity: usize,
+        sink_bits: u16,
+        hierarchy_edges: Vec<(String, String)>,
+    ) -> (FuncKey, FuncSummary) {
+        let (key, mut summary) = fs_with(
+            namespace,
+            container,
+            name,
+            arity,
+            FuncKind::Method,
+            Some((namespace.len() + container.len() + name.len()) as u32),
+            sink_bits,
+        );
+        summary.hierarchy_edges = hierarchy_edges;
+        (key, summary)
+    }
+
+    /// A1 — no hierarchy installed.  Widening collapses to today's
+    /// single-result behaviour: one key in / one key out.
+    #[test]
+    fn widened_without_hierarchy_returns_single_resolved() {
+        let mut gs = GlobalSummaries::new();
+        let (k, s) = java_method("src/http.java", "HttpClient", "send", 1, 0x01, vec![]);
+        gs.insert(k.clone(), s);
+
+        // Hierarchy is intentionally NOT installed.
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "send",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("HttpClient"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(1),
+        });
+        assert_eq!(widened, vec![k]);
+    }
+
+    /// A2 — hierarchy installed but the receiver type has no recorded
+    /// sub-types.  Falls through to today's single-result behaviour.
+    #[test]
+    fn widened_no_subtypes_returns_single() {
+        let mut gs = GlobalSummaries::new();
+        let (k, s) = java_method("src/http.java", "HttpClient", "send", 1, 0x01, vec![]);
+        gs.insert(k.clone(), s);
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "send",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("HttpClient"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(1),
+        });
+        assert_eq!(widened, vec![k]);
+    }
+
+    /// A3 — hierarchy with one sub-type implementer.  Widening returns
+    /// both the direct receiver match and the sub-type's match.
+    #[test]
+    fn widened_one_subtype_returns_two_keys() {
+        let mut gs = GlobalSummaries::new();
+        // Carrier: ILogger -> ConsoleLogger edge.
+        let (k_iface, s_iface) = java_method(
+            "src/logger.java",
+            "ILogger",
+            "log",
+            1,
+            0x00,
+            vec![("ConsoleLogger".to_string(), "ILogger".to_string())],
+        );
+        let (k_impl, s_impl) =
+            java_method("src/logger.java", "ConsoleLogger", "log", 1, 0x01, vec![]);
+        gs.insert(k_iface.clone(), s_iface);
+        gs.insert(k_impl.clone(), s_impl);
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "log",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("ILogger"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(1),
+        });
+        assert_eq!(
+            widened.len(),
+            2,
+            "expected ILogger + ConsoleLogger fan-out, got {widened:?}"
+        );
+        assert!(widened.contains(&k_iface));
+        assert!(widened.contains(&k_impl));
+    }
+
+    /// A4 — hierarchy with multiple sub-types: every implementer's
+    /// matching method is in the result, deduplicated.
+    #[test]
+    fn widened_multiple_subtypes_returns_all() {
+        let mut gs = GlobalSummaries::new();
+        // Three impls + one interface.  The interface itself has no
+        // body so we omit a method on it (that is the more common
+        // shape — a pure interface plus concrete classes).
+        let edges = vec![
+            ("FileLogger".to_string(), "ILogger".to_string()),
+            ("NetLogger".to_string(), "ILogger".to_string()),
+            ("StdLogger".to_string(), "ILogger".to_string()),
+        ];
+        let (k_file, s_file) = java_method(
+            "src/file_logger.java",
+            "FileLogger",
+            "log",
+            1,
+            0x01,
+            edges.clone(),
+        );
+        let (k_net, s_net) =
+            java_method("src/net_logger.java", "NetLogger", "log", 1, 0x02, vec![]);
+        let (k_std, s_std) =
+            java_method("src/std_logger.java", "StdLogger", "log", 1, 0x04, vec![]);
+        gs.insert(k_file.clone(), s_file);
+        gs.insert(k_net.clone(), s_net);
+        gs.insert(k_std.clone(), s_std);
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "log",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("ILogger"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(1),
+        });
+        assert_eq!(widened.len(), 3, "expected three impls, got {widened:?}");
+        assert!(widened.contains(&k_file));
+        assert!(widened.contains(&k_net));
+        assert!(widened.contains(&k_std));
+    }
+
+    /// A5 — the arity filter must apply across the whole fan-out, not
+    /// just the direct-receiver leg.  An implementer with a different
+    /// arity must not leak into the result.
+    #[test]
+    fn widened_arity_filter_applies_across_fanout() {
+        let mut gs = GlobalSummaries::new();
+        let edges = vec![
+            ("OneArg".to_string(), "IBase".to_string()),
+            ("TwoArg".to_string(), "IBase".to_string()),
+        ];
+        let (k_one, s_one) = java_method("src/one.java", "OneArg", "do_it", 1, 0x01, edges.clone());
+        let (k_two, s_two) = java_method("src/two.java", "TwoArg", "do_it", 2, 0x02, vec![]);
+        gs.insert(k_one.clone(), s_one);
+        gs.insert(k_two.clone(), s_two);
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "do_it",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("IBase"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(1),
+        });
+        assert_eq!(widened, vec![k_one], "arity-2 impl must be filtered out");
+    }
+
+    /// A6 — fan-out is bounded at `MAX_HIERARCHY_FANOUT`.  Build a
+    /// hierarchy with more impls than the cap allows and assert the
+    /// result is exactly capped (and that early impls are preserved
+    /// — the cap drops the *tail*, not the head).
+    #[test]
+    fn widened_caps_at_max_hierarchy_fanout() {
+        let cap = GlobalSummaries::MAX_HIERARCHY_FANOUT;
+        let mut gs = GlobalSummaries::new();
+
+        // Build cap+3 impls so we can assert the tail truncates and a
+        // deterministic prefix remains.
+        let extra = 3;
+        let total = cap + extra;
+        let edges: Vec<(String, String)> = (0..total)
+            .map(|i| (format!("Impl{i:02}"), "IBase".to_string()))
+            .collect();
+
+        // Carrier — first impl carries every edge so the index is
+        // populated in one shot.
+        let (k0, s0) = java_method("src/impl00.java", "Impl00", "run", 0, 0x01, edges);
+        gs.insert(k0.clone(), s0);
+        for i in 1..total {
+            let (k, s) = java_method(
+                &format!("src/impl{i:02}.java"),
+                &format!("Impl{i:02}"),
+                "run",
+                0,
+                0x01,
+                vec![],
+            );
+            gs.insert(k, s);
+        }
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "run",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("IBase"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert_eq!(
+            widened.len(),
+            cap,
+            "fan-out must cap at MAX_HIERARCHY_FANOUT={cap}, got {}",
+            widened.len()
+        );
+    }
+
+    /// A7 — when hierarchy widening produces no candidates AND the
+    /// receiver_type lookup is authoritative (Step 1), the secondary
+    /// fall-through goes through `resolve_callee` which returns
+    /// Ambiguous/NotFound rather than silently picking an unrelated
+    /// leaf — exactly the "subset of today's targets, never a
+    /// superset" rule.  Test asserts the empty result is preserved.
+    #[test]
+    fn widened_empty_does_not_silently_pick_unrelated_leaf() {
+        let mut gs = GlobalSummaries::new();
+        // Edge: IUnused has a sub Used, but neither declares
+        // `something`.  An unrelated free function `something` exists
+        // in the same namespace — under today's authoritative
+        // receiver_type rules, that function MUST NOT be picked when
+        // the call is annotated with receiver_type "IUnused".
+        let edges = vec![("Used".to_string(), "IUnused".to_string())];
+        let (k_carrier, s_carrier) =
+            java_method("src/util.java", "Used", "carrier", 0, 0x00, edges);
+        let (k_free, s_free) = free_summary("src/app.java", "something", 0, 0x01);
+        gs.insert(k_carrier, s_carrier);
+        gs.insert(k_free, s_free);
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "something",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("IUnused"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert!(
+            widened.is_empty(),
+            "receiver_type IUnused with no matching method must NOT silently \
+             pick an unrelated free function — got {widened:?}"
+        );
+    }
+
+    /// A7b — when hierarchy widening produces nothing AND today's
+    /// `resolve_callee` *does* resolve (no receiver_type, just bare
+    /// leaf or qualifier hint), the fallback returns the single key.
+    /// This pins the secondary-fallback contract on the path where it
+    /// actually matters (no authoritative receiver_type).
+    #[test]
+    fn widened_falls_through_when_resolve_callee_resolves() {
+        let mut gs = GlobalSummaries::new();
+        let (k_free, s_free) = free_summary("src/app.java", "helper", 0, 0x01);
+        gs.insert(k_free.clone(), s_free);
+        gs.install_hierarchy();
+
+        // No receiver_type → first branch of `resolve_callee_widened`
+        // is the single-result fallback path.
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "helper",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: None,
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert_eq!(widened, vec![k_free]);
+    }
+
+    /// A8 — receiver_type is None → no widening; behaves identically
+    /// to `resolve_callee` (single-result wrap).
+    #[test]
+    fn widened_no_receiver_type_collapses_to_resolve_callee() {
+        let mut gs = GlobalSummaries::new();
+        let (k_free, s_free) = free_summary("src/app.java", "helper", 0, 0x01);
+        gs.insert(k_free.clone(), s_free);
+        gs.install_hierarchy();
+
+        let widened = gs.resolve_callee_widened(&CalleeQuery {
+            name: "helper",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: None,
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert_eq!(widened, vec![k_free]);
+    }
+
+    /// A9 — `merge()` must invalidate the cached hierarchy index so a
+    /// post-merge call to `resolve_callee_widened` doesn't look up a
+    /// stale view.  Since `install_hierarchy` is required after merges,
+    /// the test asserts: post-merge, before reinstall, fan-out must
+    /// fall through to single-result behaviour.
+    #[test]
+    fn merge_invalidates_hierarchy_cache() {
+        let mut gs_a = GlobalSummaries::new();
+        let edges = vec![("Sub".to_string(), "Super".to_string())];
+        let (k_super, s_super) = java_method("src/super.java", "Super", "m", 0, 0x00, edges);
+        let (k_sub, s_sub) = java_method("src/sub.java", "Sub", "m", 0, 0x01, vec![]);
+        gs_a.insert(k_super.clone(), s_super);
+        gs_a.insert(k_sub.clone(), s_sub);
+        gs_a.install_hierarchy();
+        // Before merge: fan-out works.
+        let pre_merge = gs_a.resolve_callee_widened(&CalleeQuery {
+            name: "m",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("Super"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert_eq!(pre_merge.len(), 2);
+
+        // Merge in an empty `gs_b` — should invalidate the cached
+        // hierarchy.
+        gs_a.merge(GlobalSummaries::new());
+        assert!(
+            gs_a.hierarchy().is_none(),
+            "merge() must clear the cached hierarchy"
+        );
+
+        // After merge, before reinstall: the resolver must fall back
+        // to single-result behaviour (no fan-out).
+        let post_merge_no_install = gs_a.resolve_callee_widened(&CalleeQuery {
+            name: "m",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("Super"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert_eq!(post_merge_no_install.len(), 1);
+        assert_eq!(post_merge_no_install[0], k_super);
+
+        // After reinstall: fan-out is restored.
+        gs_a.install_hierarchy();
+        let post_merge_reinstalled = gs_a.resolve_callee_widened(&CalleeQuery {
+            name: "m",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/app.java",
+            caller_container: None,
+            receiver_type: Some("Super"),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(0),
+        });
+        assert_eq!(post_merge_reinstalled.len(), 2);
+        assert!(post_merge_reinstalled.contains(&k_super));
+        assert!(post_merge_reinstalled.contains(&k_sub));
+    }
 }

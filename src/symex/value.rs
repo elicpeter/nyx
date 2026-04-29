@@ -1265,4 +1265,39 @@ mod tests {
         let v = mk_encode(TransformKind::UrlEncode, inner);
         assert_eq!(v.depth(), 1);
     }
+
+    /// `mk_binop(Add, ConcreteStr, Concrete(int))` must not silently
+    /// coerce types. The fold path only triggers when *both* operands
+    /// are `Concrete(i64)`; mixed-type operands must build a symbolic
+    /// `BinOp` so downstream witness rendering / type analysis can
+    /// reject the bogus arithmetic.
+    #[test]
+    fn binop_mixed_str_int_does_not_coerce() {
+        let v = mk_binop(
+            Op::Add,
+            SymbolicValue::ConcreteStr("price=".into()),
+            SymbolicValue::Concrete(42),
+        );
+        assert!(
+            matches!(v, SymbolicValue::BinOp(Op::Add, _, _)),
+            "mixed-type Add must produce a symbolic BinOp, not silently fold"
+        );
+    }
+
+    /// `mk_phi` must not fold when operands have differing types
+    /// (e.g. one branch returns a Concrete int, another returns
+    /// ConcreteStr). The result is genuinely uncertain — a Phi node
+    /// must be preserved to expose the type-conflict to downstream
+    /// witness logic, not collapse to one operand.
+    #[test]
+    fn phi_mixed_types_keeps_phi() {
+        let v = mk_phi(vec![
+            (BlockId(0), SymbolicValue::Concrete(7)),
+            (BlockId(1), SymbolicValue::ConcreteStr("x".into())),
+        ]);
+        assert!(
+            matches!(v, SymbolicValue::Phi(_)),
+            "phi over mixed types must NOT fold to a single operand"
+        );
+    }
 }

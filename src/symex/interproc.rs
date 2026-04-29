@@ -1094,6 +1094,7 @@ fn handle_nested_calls(
             callee,
             args,
             receiver,
+            ..
         } = &inst.op
         {
             // Only attempt if the current result is opaque

@@ -1,6 +1,6 @@
 use crate::database::index::Indexer;
 use crate::errors::NyxResult;
-use crate::server::app::{AppState, build_router};
+use crate::server::app::{AppState, ServerEvent, build_router};
 use crate::server::jobs::JobManager;
 use crate::server::security::LocalServerSecurity;
 use crate::utils::config::Config;
@@ -81,9 +81,28 @@ pub fn handle(
             security,
             config: Arc::new(RwLock::new(config.clone())),
             job_manager: Arc::new(JobManager::new(max_jobs, rayon_stack_size)),
-            event_tx,
+            event_tx: event_tx.clone(),
             db_pool,
+            findings_cache: Arc::new(RwLock::new(None)),
         };
+
+        // Invalidate the findings cache whenever a scan finishes so the next
+        // request rebuilds against fresh diags. The next-request rebuild keeps
+        // this hot-path simple — we only clear the slot here, never recompute.
+        let cache_for_invalidate = Arc::clone(&state.findings_cache);
+        let mut event_rx = event_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match event_rx.recv().await {
+                    Ok(ServerEvent::ScanCompleted { .. } | ServerEvent::ScanFailed { .. }) => {
+                        *cache_for_invalidate.write() = None;
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
 
         let router = build_router(state);
 

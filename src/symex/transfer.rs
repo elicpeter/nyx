@@ -130,6 +130,25 @@ pub fn transfer_inst(
             state.set(inst.value, SymbolicValue::Unknown);
         }
 
+        SsaOp::FieldProj { receiver, .. } => {
+            // Symbolic field read: model `obj.field` as an opaque value
+            // tied to the projection's SsaValue, and propagate the
+            // receiver's taint to the result so flat root-set tracking
+            // continues to flow taint through chained accesses.
+            //
+            // Phase 4 deliberately keeps the opaque-Symbol model: without
+            // a field-sensitive heap, a dedicated `Field { receiver, name }`
+            // SymbolicValue variant cannot soundly carry concrete reads
+            // across method boundaries — the witness pipeline already
+            // reconstructs `obj.field` text from `ValueDef.var_name`
+            // (populated by lower.rs to `"base.f1.f2"` for chain projections).
+            // The structured variant is deferred to the field-sensitive
+            // pointer analysis prompt, where heap loads consume `FieldProj`
+            // directly.
+            state.set(inst.value, SymbolicValue::Symbol(inst.value));
+            state.propagate_taint(inst.value, std::slice::from_ref(receiver));
+        }
+
         SsaOp::Assign(uses) => {
             let uses_slice: &[_] = uses;
             match uses_slice.len() {
@@ -202,6 +221,7 @@ pub fn transfer_inst(
             callee,
             args,
             receiver,
+            ..
         } => {
             // Collect symbolic values for arguments
             let mut arg_syms: Vec<SymbolicValue> = Vec::new();
@@ -284,6 +304,11 @@ pub fn transfer_inst(
                                     return;
                                 }
                                 // Fall through to normal Call
+                            }
+                            ContainerOp::Writeback { .. } => {
+                                // Symex doesn't model writeback yet — taint
+                                // engine handles the destination-arg taint
+                                // directly. Fall through to normal Call.
                             }
                         }
                     }
@@ -985,6 +1010,8 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         }
     }
 
@@ -1133,6 +1160,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "parseInt".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -1159,6 +1187,7 @@ mod tests {
             2,
             SsaOp::Call {
                 callee: "send".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(1)]],
                 receiver: Some(SsaValue(0)),
             },
@@ -1255,6 +1284,7 @@ mod tests {
             4,
             SsaOp::Call {
                 callee: "toString".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(3)]],
                 receiver: None,
             },
@@ -1558,7 +1588,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1567,6 +1599,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "passthrough".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -1623,7 +1656,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1632,6 +1667,7 @@ mod tests {
             2,
             SsaOp::Call {
                 callee: "ambig".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)], smallvec![SsaValue(1)]],
                 receiver: None,
             },
@@ -1688,7 +1724,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1697,6 +1735,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "sanitize".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -1748,7 +1787,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1757,6 +1798,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "enrich".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -1808,7 +1850,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1817,6 +1861,7 @@ mod tests {
             0,
             SsaOp::Call {
                 callee: "readEnv".into(),
+                callee_text: None,
                 args: vec![],
                 receiver: None,
             },
@@ -1855,6 +1900,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "unknown_func".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -1892,6 +1938,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "foo".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -2000,7 +2047,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
 
@@ -2017,6 +2066,7 @@ mod tests {
             2,
             SsaOp::Call {
                 callee: "send".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: Some(SsaValue(1)),
             },
@@ -2075,7 +2125,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
 
@@ -2092,6 +2144,7 @@ mod tests {
             1,
             SsaOp::Call {
                 callee: "passthrough".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: None,
             },
@@ -2151,7 +2204,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
         // Second "send" — in ns B, also with same arity → ambiguous bare-name
@@ -2178,7 +2233,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
         // Also register the type-qualified name so Attempt 1 can find it
@@ -2205,7 +2262,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
 
@@ -2222,6 +2281,7 @@ mod tests {
             2,
             SsaOp::Call {
                 callee: "send".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: Some(SsaValue(1)),
             },
@@ -2280,7 +2340,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
 
@@ -2297,6 +2359,7 @@ mod tests {
             2,
             SsaOp::Call {
                 callee: "send".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: Some(SsaValue(1)),
             },
@@ -2357,7 +2420,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
         insert_java_summary(
@@ -2383,7 +2448,9 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
         // No "HttpClient.send" summary registered — disambiguation has 0 exact matches
@@ -2400,6 +2467,7 @@ mod tests {
             2,
             SsaOp::Call {
                 callee: "send".into(),
+                callee_text: None,
                 args: vec![smallvec![SsaValue(0)]],
                 receiver: Some(SsaValue(1)),
             },

@@ -69,6 +69,12 @@ pub fn run_state_analysis(
     resource_method_summaries: &[transfer::ResourceMethodSummary],
     auth_decorators: &[String],
     path_safe_suppressed_sink_spans: &std::collections::HashSet<(usize, usize)>,
+    // Optional `var_name → PtrProxyHint` map derived from the body's
+    // PointsToFacts.  When present, the proxy-acquire transfer suppresses
+    // SymbolId attribution on field-aliased receivers (`m := c.mu;
+    // m.Lock()`) and routes them through `chain_proxies` instead.  Pass
+    // `None` to disable — strict-additive.
+    ptr_proxy_hints: Option<&std::collections::HashMap<String, crate::pointer::PtrProxyHint>>,
 ) -> Vec<StateFinding> {
     let _span = tracing::debug_span!("run_state_analysis").entered();
 
@@ -88,6 +94,7 @@ pub fn run_state_analysis(
         resource_pairs,
         interner: &interner,
         resource_method_summaries,
+        ptr_proxy_hints,
     };
 
     // Seed initial auth level from decorator-based authorization markers.

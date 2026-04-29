@@ -58,6 +58,7 @@ pub mod interop;
 pub mod labels;
 pub mod output;
 pub mod patterns;
+pub mod pointer;
 pub mod rank;
 pub mod rust_resolve;
 #[cfg(feature = "serve")]

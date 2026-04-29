@@ -168,6 +168,26 @@ pub struct AnalysisUnit {
     /// row-level ownership-equality check on the row implicitly covers
     /// downstream uses of fields read from the same row.
     pub row_field_vars: HashMap<String, String>,
+    /// Map from local variable name to the full member-chain expression
+    /// it was bound from (`let community_id = req.community_id` →
+    /// `community_id → "req.community_id"`).  Distinct from
+    /// `row_field_vars`, which records only the receiver (loses the
+    /// field name).  Powers the row-population reverse-walk's local-
+    /// alias case: when a sink subject is a plain identifier, the
+    /// reverse walk consults this map to also accept rows whose
+    /// population args contain the aliased chain.
+    pub var_alias_chain: HashMap<String, String>,
+    /// Per row-binding metadata: the `let ROW = CALL(..)` declaration
+    /// line and the value-refs appearing in the call's arguments.
+    /// Populated for every `let V = call(..)` shape.  Powers the
+    /// "fetch-then-authorize" exemption in `checks.rs`: if a row-fetch
+    /// operation produces variable `V` and SOME auth check elsewhere
+    /// in the unit names `V`, the row-fetch operation is considered
+    /// authorized — even though the check appears textually after the
+    /// fetch.  This is the standard idiom in row-level authz code:
+    /// fetch the row first to extract the resource id, then call
+    /// `check_<resource>_<role>(&user, &row, ...)` to authorize it.
+    pub row_population_data: HashMap<String, (usize, Vec<ValueRef>)>,
     /// Variables bound to an authenticated-user value. Populated from
     /// `let V = require_auth(..).await?` (or any call matching the
     /// configured login-guard / authorization-check names) and from
@@ -196,6 +216,46 @@ pub struct AnalysisUnit {
     /// and treats a subject as covered when the chain terminates in
     /// one of these names.
     pub authorized_sql_vars: HashSet<String>,
+    /// Local variables bound (by `let`, `:=`, `var`, `const`) to a
+    /// pure literal — string, integer, float, or boolean.  These are
+    /// developer-chosen constants and cannot be user-controlled, so
+    /// they must never trip `<lang>.auth.missing_ownership_check`
+    /// even when the variable name passes `is_id_like`.  Closes the
+    /// gin/context_test.go FP where `id := "id"` triggered the rule.
+    pub const_bound_vars: HashSet<String>,
+    /// Function parameter names whose static type maps to a
+    /// payload-incompatible scalar ([`crate::ssa::type_facts::TypeKind::Int`]
+    /// or [`crate::ssa::type_facts::TypeKind::Bool`]).  Populated
+    /// per-file by [`super::apply_typed_bounded_params`] using the
+    /// SSA-derived `VarTypes` map.  Consulted by
+    /// `is_typed_bounded_subject` so parameters like Spring `Long
+    /// userId`, Axum `Path<i64>`, or FastAPI `user_id: int` are not
+    /// classified as scoped-identifier subjects even when their name
+    /// passes `is_id_like` — the framework guarantees the value is a
+    /// number that cannot carry a SQL/file/shell payload.
+    pub typed_bounded_vars: HashSet<String>,
+    /// Phase 6: per-DTO-extractor parameter, the field names whose
+    /// declared type is a payload-incompatible scalar.  Map key is the
+    /// parameter name (e.g. `dto`), value is the list of field names
+    /// (e.g. `["age", "count"]`).  Populated by
+    /// [`super::apply_typed_bounded_params`] only when the parameter
+    /// itself was recognised as a typed extractor by a Phase 1-2
+    /// matcher — bare parameters with no framework gate never lift
+    /// their fields.
+    pub typed_bounded_dto_fields: HashMap<String, Vec<String>>,
+    /// Per-unit dynamic session-base text set, supplementing the
+    /// hard-coded list in `is_self_scoped_session_base`.  Populated by
+    /// the extractor when a parameter's static type signals a known
+    /// auth-context shape — e.g. TRPC's `Options { ctx: { user:
+    /// NonNullable<TrpcSessionUser> } }` adds `<localCtx>.user` so
+    /// downstream `ctx.user.id` accesses count as actor context.  Each
+    /// entry is the dotted base text (e.g. `"ctx.user"`,
+    /// `"opts.ctx.user"`) that should match a subject's `base` when
+    /// the subject's `field` is an id-like field name.  Distinct from
+    /// `self_actor_vars` (single-segment locals) because TRPC
+    /// destructures route through a base chain, not a top-level
+    /// binding.
+    pub self_scoped_session_bases: HashSet<String>,
 }
 
 /// Per-function summary of which positional parameters are

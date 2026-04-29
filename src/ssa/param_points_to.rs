@@ -415,6 +415,8 @@ mod tests {
             value_defs,
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         }
     }
 
@@ -606,6 +608,7 @@ mod tests {
                 0,
                 SsaOp::Call {
                     callee: "list".to_string(),
+                    callee_text: None,
                     args: vec![],
                     receiver: None,
                 },

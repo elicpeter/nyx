@@ -292,46 +292,58 @@ pub fn extract_findings(
     // CLOSED at function exit (no OPEN paths), check whether there are
     // intervening calls between the proxy acquire and release nodes that
     // could throw and bypass the release. If so, emit a possible leak.
-    for (idx, info) in cfg.node_references() {
-        if !is_terminal_function_exit(idx, info, cfg) {
-            continue;
-        }
-        let Some(state) = result.states.get(&idx) else {
-            continue;
-        };
-        for (&sym, &lifecycle) in &state.resource.vars {
-            // Only for proxy-acquired resources that are fully CLOSED at exit
-            if !state.proxy_acquire_spans.contains_key(&sym) {
+    //
+    // **Language gate**: this heuristic is JS/TS-specific.  Other
+    // languages (Go, Java, C, C++, Python, Rust, Ruby, PHP) use
+    // explicit error returns / try-catch with deterministic control
+    // flow — an intervening call does NOT silently bypass a release.
+    // Firing this on Go gave the gin/context.go FP where any method
+    // calling another method (`c.Set`, `c.Get`) was flagged as a
+    // possible leak on the receiver.  Skip the section but continue
+    // to section 3 (auth-required sinks) which is independent of the
+    // resource state machine.
+    if matches!(lang, Lang::JavaScript | Lang::TypeScript) {
+        for (idx, info) in cfg.node_references() {
+            if !is_terminal_function_exit(idx, info, cfg) {
                 continue;
             }
-            if lifecycle.contains(ResourceLifecycle::OPEN) {
-                continue; // Already handled by the normal leak detection above
-            }
-            if !lifecycle.contains(ResourceLifecycle::CLOSED) {
+            let Some(state) = result.states.get(&idx) else {
                 continue;
-            }
-            // Check if there are intervening Call nodes between acquire and release
-            // in the CFG (these could throw and bypass the release)
-            let has_intervening_calls = cfg.node_references().any(|(_, ni)| {
-                ni.kind == StmtKind::Call
-                    && ni.ast.enclosing_func == info.ast.enclosing_func
-                    && ni.call.callee.is_some()
-                    // Not the acquire or release proxy itself
-                    && !state.proxy_acquire_spans.values().any(|s| *s == ni.ast.span)
-            });
-            if has_intervening_calls {
-                let var_name = interner.resolve(sym);
-                let acquire_span = state.proxy_acquire_spans.get(&sym).copied();
-                findings.push(StateFinding {
-                    rule_id: "state-resource-leak-possible".into(),
-                    severity: Severity::Low,
-                    span: acquire_span.unwrap_or(info.ast.span),
-                    message: format!("resource `{var_name}` may not be closed on all paths"),
-                    machine: "resource",
-                    subject: Some(var_name.to_string()),
-                    from_state: "open",
-                    to_state: "possibly_leaked",
+            };
+            for (&sym, &lifecycle) in &state.resource.vars {
+                // Only for proxy-acquired resources that are fully CLOSED at exit
+                if !state.proxy_acquire_spans.contains_key(&sym) {
+                    continue;
+                }
+                if lifecycle.contains(ResourceLifecycle::OPEN) {
+                    continue; // Already handled by the normal leak detection above
+                }
+                if !lifecycle.contains(ResourceLifecycle::CLOSED) {
+                    continue;
+                }
+                // Check if there are intervening Call nodes between acquire and release
+                // in the CFG (these could throw and bypass the release)
+                let has_intervening_calls = cfg.node_references().any(|(_, ni)| {
+                    ni.kind == StmtKind::Call
+                        && ni.ast.enclosing_func == info.ast.enclosing_func
+                        && ni.call.callee.is_some()
+                        // Not the acquire or release proxy itself
+                        && !state.proxy_acquire_spans.values().any(|s| *s == ni.ast.span)
                 });
+                if has_intervening_calls {
+                    let var_name = interner.resolve(sym);
+                    let acquire_span = state.proxy_acquire_spans.get(&sym).copied();
+                    findings.push(StateFinding {
+                        rule_id: "state-resource-leak-possible".into(),
+                        severity: Severity::Low,
+                        span: acquire_span.unwrap_or(info.ast.span),
+                        message: format!("resource `{var_name}` may not be closed on all paths"),
+                        machine: "resource",
+                        subject: Some(var_name.to_string()),
+                        from_state: "open",
+                        to_state: "possibly_leaked",
+                    });
+                }
             }
         }
     }
@@ -533,6 +545,7 @@ mod tests {
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
             resource_method_summaries: &[],
+            ptr_proxy_hints: None,
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -592,6 +605,7 @@ mod tests {
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
             resource_method_summaries: &[],
+            ptr_proxy_hints: None,
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -725,6 +739,7 @@ mod tests {
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
             resource_method_summaries: &[],
+            ptr_proxy_hints: None,
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -789,6 +804,7 @@ mod tests {
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
             resource_method_summaries: &[],
+            ptr_proxy_hints: None,
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());

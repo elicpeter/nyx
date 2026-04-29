@@ -60,6 +60,7 @@ fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
         static_map: None,
         auto_seed_handler_params: false,
         cross_file_bodies: None,
+        pointer_facts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, cfg, &transfer);
     let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, cfg);
@@ -1581,6 +1582,142 @@ fn cpp_source_to_sink() {
         findings.len(),
         1,
         "C++: source->sink should produce 1 finding"
+    );
+}
+
+/// Phase 2 (cpp-precision): `c_str()` is a const accessor on `std::string`
+/// that returns a pointer to the same buffer.  It must propagate taint from
+/// the receiver to the result so the downstream sink fires.
+#[test]
+fn cpp_c_str_propagates_taint() {
+    let src = b"#include <cstdlib>\n#include <string>\nint main() {\n  char* input = std::getenv(\"X\");\n  std::string s = input;\n  std::system(s.c_str());\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: tainted s.c_str() into system() must fire (Phase 2 c_str passthrough)",
+    );
+}
+
+/// Phase 2: `std::move(x)` returns its argument unchanged in terms of
+/// data flow — the rvalue cast is a representation move, not a sanitiser.
+/// Default propagation collects argument taint into the result.
+#[test]
+fn cpp_std_move_propagates_taint() {
+    let src = b"#include <cstdlib>\n#include <string>\n#include <utility>\nint main() {\n  char* input = std::getenv(\"X\");\n  std::string s = input;\n  std::string moved = std::move(s);\n  std::system(moved.c_str());\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: taint must flow through std::move() into the sink",
+    );
+}
+
+/// Phase 2: `static_cast<T>(x)` is parsed as a call expression by
+/// tree-sitter-cpp; default propagation transports taint from the casted
+/// argument to the result.
+#[test]
+fn cpp_static_cast_propagates_taint() {
+    let src = b"#include <cstdlib>\nint main() {\n  char* input = std::getenv(\"X\");\n  const char* casted = static_cast<const char*>(input);\n  std::system(casted);\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: taint must flow through static_cast<T>() into the sink",
+    );
+}
+
+/// Phase 5 (cpp-precision): a fluent builder chain whose host
+/// argument is tainted should fire on the terminal `.connect()`
+/// SSRF sink.  The chained `.host(...)` / `.port(...)` calls return
+/// the receiver, and default Call-arg propagation puts the tainted
+/// argument on the chain so it reaches the terminal sink.
+#[test]
+fn cpp_builder_chain_user_host_fires() {
+    let src = b"#include <cstdlib>\n#include <string>\nclass Socket {\npublic:\n  static Socket builder() { return Socket(); }\n  Socket& host(const std::string& h) { host_ = h; return *this; }\n  Socket& port(int p) { port_ = p; return *this; }\n  void connect() {}\nprivate:\n  std::string host_;\n  int port_ = 0;\n};\nint main() {\n  char* h = std::getenv(\"X\");\n  Socket::builder().host(h).port(80).connect();\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: tainted host through fluent builder chain must reach terminal connect() (Phase 5)",
+    );
+}
+
+/// Phase 5: a fluent builder chain with a hardcoded host literal
+/// must NOT fire on the terminal connect() sink — the chain carries
+/// no taint.
+#[test]
+fn cpp_builder_chain_const_host_silent() {
+    let src = b"#include <string>\nclass Socket {\npublic:\n  static Socket builder() { return Socket(); }\n  Socket& host(const std::string& h) { host_ = h; return *this; }\n  Socket& port(int p) { port_ = p; return *this; }\n  void connect() {}\nprivate:\n  std::string host_;\n  int port_ = 0;\n};\nint main() {\n  Socket::builder().host(\"api.example.com\").port(80).connect();\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        findings.is_empty(),
+        "C++: builder chain with literal host must NOT fire (Phase 5 negative)",
+    );
+}
+
+/// Phase 4 (cpp-precision): inline member-function bodies inside a
+/// `class_specifier` must be extracted as separate functions and
+/// intra-file calls must resolve to their bodies. Pre-Phase-4, the
+/// `class_specifier` AST kind was unmapped in cpp KINDS, so the CFG
+/// walker treated the entire class as a leaf `Seq` node and never
+/// descended into inline methods.
+#[test]
+fn cpp_inline_class_method_resolves() {
+    let src = b"#include <cstdlib>\nclass Inner {\npublic:\n  void run(const char* arg) { std::system(arg); }\n};\nint main() {\n  char* input = std::getenv(\"X\");\n  Inner inner;\n  inner.run(input);\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: tainted arg through inline class method must reach system() (Phase 4)",
+    );
+}
+
+/// Phase 3 (cpp-precision): a tainted argument passed through an
+/// identity-style lambda (`auto echo = [](const char* s) { return s; }`)
+/// must reach the downstream sink. This is handled by the same default
+/// Call-arg propagation as `std::move`/`static_cast`; pinning the
+/// behaviour here so future engine work doesn't silently regress
+/// identity lambdas.
+#[test]
+fn cpp_identity_lambda_propagates_taint() {
+    let src = b"#include <cstdlib>\nint main() {\n  char* input = std::getenv(\"X\");\n  auto echo = [](const char* s) { return s; };\n  std::system(echo(input));\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: taint must flow through identity lambda echo() into system()",
+    );
+}
+
+/// Phase 2: `std::vector<char>::data()` is a Load-style container op that
+/// returns a pointer to the underlying buffer; `system(v.data())` should
+/// fire when `v` is tainted.
+#[test]
+fn cpp_vector_data_propagates_taint() {
+    let src = b"#include <cstdlib>\n#include <vector>\nint main() {\n  char* input = std::getenv(\"X\");\n  std::vector<char> v(input, input + 8);\n  std::system(v.data());\n  return 0;\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "C++: taint must flow through v.data() into the sink",
     );
 }
 
@@ -3646,6 +3783,7 @@ fn assert_ssa_integration(src: &[u8]) {
         static_map: None,
         auto_seed_handler_params: false,
         cross_file_bodies: None,
+        pointer_facts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
@@ -3781,6 +3919,7 @@ fn integ_php_echo_simple_var() {
         static_map: None,
         auto_seed_handler_params: false,
         cross_file_bodies: None,
+        pointer_facts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
@@ -3848,6 +3987,7 @@ fn integ_c_curl_handle_ssrf() {
         static_map: None,
         auto_seed_handler_params: false,
         cross_file_bodies: None,
+        pointer_facts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
@@ -5583,4 +5723,382 @@ fn link_alternative_paths_three_way_group() {
             "finding {i} must list every other sibling ID",
         );
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Typed call-graph devirtualisation — Phase 2 (typed_call_receivers)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Phase 2: when a method call's receiver was constructed from a known
+/// constructor (`File::open` → `FileHandle`), the SSA-extraction
+/// pipeline must record `(call_ordinal, "FileHandle")` on the
+/// caller's [`crate::summary::ssa_summary::SsaFuncSummary::typed_call_receivers`]
+/// so Phase 3 can devirtualise the cross-file edge.
+///
+/// Uses Java because `FileInputStream` / `FileOutputStream` are part
+/// of the [`crate::ssa::type_facts::constructor_type`] table for Java
+/// and yield [`crate::ssa::type_facts::TypeKind::FileHandle`] without
+/// any framework annotation plumbing.
+#[test]
+fn typed_call_receivers_populated_for_constructor_typed_receiver() {
+    let src = br#"
+class Reader {
+    void read() {
+        FileInputStream f = new FileInputStream("/etc/passwd");
+        f.close();
+    }
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
+    let file_cfg = parse_lang(src, "java", lang);
+
+    let (summaries, _bodies) = super::extract_ssa_artifacts_from_file_cfg(
+        &file_cfg,
+        Lang::Java,
+        "Reader.java",
+        &file_cfg.summaries,
+        None,
+        None,
+    );
+
+    let read_sum = summaries
+        .iter()
+        .find(|(k, _)| k.name == "read")
+        .map(|(_, s)| s)
+        .expect("read() summary must be extracted");
+
+    let containers: Vec<&str> = read_sum
+        .typed_call_receivers
+        .iter()
+        .map(|(_, c)| c.as_str())
+        .collect();
+    assert!(
+        containers.contains(&"FileHandle"),
+        "FileInputStream-typed receiver must surface as `FileHandle` container; got {:?}",
+        read_sum.typed_call_receivers,
+    );
+}
+
+/// Phase 2 negative control: free-function calls (no receiver) must
+/// never appear in `typed_call_receivers`.  Even when the callee is a
+/// known type-producing constructor, it sits in the body as a Call
+/// with `receiver = None` and is not a candidate for devirtualisation.
+#[test]
+fn typed_call_receivers_skips_free_function_calls() {
+    // `new FileInputStream(...)` is a constructor invocation with no
+    // receiver — exactly the shape we want to ignore.
+    let src = br#"
+class Maker {
+    void make() {
+        new FileInputStream("/tmp/x");
+    }
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
+    let file_cfg = parse_lang(src, "java", lang);
+
+    let (summaries, _) = super::extract_ssa_artifacts_from_file_cfg(
+        &file_cfg,
+        Lang::Java,
+        "Maker.java",
+        &file_cfg.summaries,
+        None,
+        None,
+    );
+
+    // make() has zero parameters and no fresh-allocation return, so the
+    // generic insertion gate skips it.  The phase-2 patch only force-
+    // inserts when `typed_call_receivers` is non-empty — which it
+    // isn't here, since `new FileInputStream(...)` is a free-function-
+    // shaped constructor call (no SSA receiver).  So either the
+    // summary is absent, or — if some other side effect inserted it —
+    // its `typed_call_receivers` is empty.  Both forms prove no
+    // spurious typed entry was recorded.
+    let typed = summaries
+        .iter()
+        .find(|(k, _)| k.name == "make")
+        .map(|(_, s)| s.typed_call_receivers.clone())
+        .unwrap_or_default();
+    assert!(
+        typed.is_empty(),
+        "constructor-invocation Call has no receiver and must not surface a typed entry; \
+         got {typed:?}",
+    );
+}
+
+/// Regression: nested arrow functions inside `return new Promise((res,rej)
+/// => { ... })` must be lifted as separate bodies. Before the Kind::Return
+/// arm in cfg/mod.rs called `collect_nested_function_nodes`, only the
+/// outer function (`downloadFromUri`) was extracted — the executor and
+/// its inner callbacks were silently swallowed, hiding the inner gated
+/// http.get sink from classification. Motivated by CVE-2025-64430.
+#[test]
+fn cve_2025_64430_promise_executor_extracted_as_body() {
+    let src = br#"
+const downloadFromUri = (uri) => {
+  return new Promise((res, rej) => {
+    http.get(uri, response => { response.on('data', () => {}); }).on('error', e => rej(e));
+  });
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let names: Vec<Option<String>> = file_cfg
+        .bodies
+        .iter()
+        .map(|b| b.meta.name.clone())
+        .collect();
+    assert!(
+        file_cfg.bodies.len() >= 3,
+        "expected at least 3 bodies (top-level + downloadFromUri + Promise executor), \
+         got {}: {:?}",
+        file_cfg.bodies.len(),
+        names
+    );
+}
+
+/// End-to-end: cross-function flow through a Promise-wrapping helper.
+/// Caller passes a labeled-source value (`req.body.uri`) to a wrapper
+/// whose body is `return new Promise((res, rej) => http.get(uri))`.
+/// The wrapper's SSA summary's `param_to_sink` must include SSRF (via
+/// the closure-capture summary-augmentation pass in
+/// `lower_all_functions_from_bodies`), so the caller's
+/// `wrapper(req.body.uri)` call resolves to a SSRF sink.
+/// Motivated by CVE-2025-64430.
+#[test]
+fn cve_2025_64430_promise_wrapper_via_summary_param_to_sink() {
+    let src = br#"
+const downloadFromUri = uri => {
+  return new Promise((res, rej) => {
+    http.get(uri, response => { response.on('data', () => {}); }).on('error', e => rej(e));
+  });
+};
+const handler = (req) => {
+  downloadFromUri(req.body.uri);
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "expected SSRF flow finding via Promise-wrapper summary; got 0",
+    );
+}
+
+/// End-to-end smoke check: when a JS/TS handler param is recognised as
+/// user-input-bearing (`is_js_ts_handler_param_name`), Promise-executor
+/// closure capture via lexical containment must propagate the seeded
+/// taint into the executor body so the inner gated http.get sink fires.
+/// Without the Kind::Return fix the executor was never extracted as a
+/// body and the sink was invisible to classification. Motivated by
+/// CVE-2025-64430.
+#[test]
+fn cve_2025_64430_promise_executor_sink_via_lexical_containment() {
+    let src = br#"
+const f = (input) => {
+  return new Promise((res, rej) => {
+    http.get(input);
+  });
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "expected SSRF Sink finding in Promise executor capturing `input`; got 0",
+    );
+}
+
+/// Regression: `wrapper(req.body.uri)` where wrapper passes its first
+/// param to a gated SSRF sink must fire. The CFG's first_member_label
+/// rebinds info.call.callee to `"req.body.uri"` (so the source label
+/// applies) and preserves the actual function name in `outer_callee`.
+/// resolve_sink_info has to consult outer_callee when the inner callee
+/// has no sink so the wrapper's `param_to_sink: [(0, SSRF)]` summary
+/// fires. Motivated by CVE-2025-64430.
+#[test]
+fn cve_2025_64430_wrapper_with_member_source_arg_fires() {
+    let src = br#"
+const helper = (uri) => {
+  http.get(uri);
+};
+
+const handler = (req) => {
+  helper(req.body.uri);
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "expected at least one SSRF flow finding through wrapper; got 0",
+    );
+}
+
+/// Two-hop transitive cross-function summary propagation. The chain is
+/// `handler(req) -> helper(req.body) -> downloadFromUri(x.url) ->
+///     Promise(http.get(uri))`.
+///
+/// The augment pass populates `downloadFromUri.summary.param_to_sink:
+/// [(0, SSRF)]` (single-hop closure-capture lift). For the handler's
+/// `helper(req.body)` call to fire, `helper.summary.param_to_sink` must
+/// also contain `[(0, SSRF)]` — but that requires `helper`'s probe to
+/// see `downloadFromUri`'s augmented summary at resolution time.
+///
+/// Because the probe currently runs with `ssa_summaries=None`,
+/// `helper.summary.param_to_sink` stays empty and the handler call site
+/// reports nothing. A second extraction pass that re-runs probes with
+/// the augmented summaries map plumbed through closes the gap. Mirrors
+/// the upstream Parse Server CVE chain (`addFileDataIfNeeded` →
+/// `downloadFileFromURI` → executor). Motivated by CVE-2025-64430.
+#[test]
+fn cve_2025_64430_two_hop_transitive_summary_propagation() {
+    let src = br#"
+const downloadFromUri = uri => {
+  return new Promise((res, rej) => {
+    http.get(uri, response => { response.on('data', () => {}); }).on('error', e => rej(e));
+  });
+};
+const helper = file => {
+  downloadFromUri(file._source.uri);
+};
+const handler = (req) => {
+  helper(req.body);
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "expected SSRF flow finding via two-hop transitive summary propagation; got 0",
+    );
+}
+
+/// Regression for the multi-line method-chain form
+/// `http\n  .get(uri, ...)\n  .on('error', ...)`. Tree-sitter parses
+/// this with whitespace embedded in the inner member-expression's
+/// source text (`"http\n      .get"`), so the chained-call inner-gate
+/// rebinding's classification lookup missed the gated `http.get` sink.
+/// `find_chained_inner_call` now strips whitespace from the inner
+/// callee text before classification. Without this, the upstream
+/// Parse Server fixture (CVE-2025-64430 vulnerable.js) does not fire
+/// even after the transitive summary propagation fix.
+#[test]
+fn cve_2025_64430_multiline_chained_get_classifies_inner_sink() {
+    let src = br#"
+const downloadFromUri = uri => {
+  return new Promise((res, rej) => {
+    http
+      .get(uri, response => { response.on('data', () => {}); })
+      .on('error', e => rej(e));
+  });
+};
+const helper = file => {
+  downloadFromUri(file._source.uri);
+};
+const handler = (req) => {
+  helper(req.body);
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "expected SSRF flow finding through multi-line chained http.get; got 0",
+    );
+}
+
+/// Three-hop transitive propagation: handler -> middle -> helper ->
+/// downloadFromUri (Promise wrapper) -> http.get. The second extraction
+/// pass must lift `downloadFromUri.summary.param_to_sink` (single-hop
+/// from augment) onto `helper.summary.param_to_sink`, then onto
+/// `middle.summary.param_to_sink`, then handler's call site picks it up.
+///
+/// Today the second-pass runs only once (no fixed-point), so depth-3+
+/// is expected to NOT fire — guards against accidental fixed-point
+/// regression that would mask an over-eager rewrite.  Marked
+/// `#[ignore]` so it documents the depth limit without breaking CI.
+/// Motivated by CVE-2025-64430 corner case; remove the `#[ignore]` and
+/// any guarding `assert!` polarity if a fixed-point is added later.
+#[test]
+#[ignore]
+fn cve_2025_64430_three_hop_transitive_documents_depth_limit() {
+    let src = br#"
+const downloadFromUri = uri => {
+  return new Promise((res, rej) => {
+    http.get(uri, response => { response.on('data', () => {}); }).on('error', e => rej(e));
+  });
+};
+const helper = file => {
+  downloadFromUri(file._source.uri);
+};
+const middle = data => {
+  helper(data);
+};
+const handler = (req) => {
+  middle(req.body);
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let _findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
 }

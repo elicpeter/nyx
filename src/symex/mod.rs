@@ -377,6 +377,8 @@ mod tests {
             value_defs: vec![make_value_def(b0, n0), make_value_def(b1, n1)],
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let finding = Finding {
@@ -447,6 +449,8 @@ mod tests {
             value_defs: vec![make_value_def(b0, n0), make_value_def(b1, n1)],
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let finding = Finding {
@@ -545,6 +549,8 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let ctx = SymexContext {
@@ -602,6 +608,8 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let ctx = SymexContext {

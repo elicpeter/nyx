@@ -912,3 +912,60 @@ fn fp_guard_framework_prepared_stmt_java() {
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }
+
+/// FP guard — JPA parameterised execute chain
+/// (`em.createQuery(LITERAL).setParameter(...).executeUpdate()`).
+/// Pinned from a 150-finding cluster in keycloak's
+/// `JpaEventStoreProvider.java`.  The engine walks the receiver chain
+/// from the zero-arg `.executeUpdate()` / `.executeQuery()` sink down
+/// to the SQL-binding call (`createQuery` / `createNativeQuery`) and
+/// synthesises a same-node `Sanitizer(SQL_QUERY)` when arg 0 is a
+/// `string_literal`.
+#[test]
+fn fp_guard_framework_jpa_parameterised_execute() {
+    let dir = fixture_path("fp_guards/framework_jpa_parameterised_execute");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — composer / PSR-4 autoloader closure includes a parameter.
+/// Pinned from a 32-finding cluster in nextcloud's vendored
+/// `composer/composer/ClassLoader.php` plus three further methods
+/// (Router::requireRouteFile, Installer::includeAppScript,
+/// Template/Base::load).  The pattern rule fires syntactically on
+/// `include $var`; without taint context it over-fires when `$var` is a
+/// formal parameter of the immediately enclosing function/closure with
+/// no intervening reassignment.
+#[test]
+fn fp_guard_php_include_param_passthrough() {
+    let dir = fixture_path("fp_guards/php_include_param_passthrough");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — `unserialize($x, ['allowed_classes' => …])` PHP 7+
+/// structural mitigation against object injection.  Pinned from
+/// nextcloud's profiler / DAV custom-properties / queue-bus call sites
+/// where `allowed_classes` is set to `false`, an array literal, or a
+/// class constant referring to an explicit allow-list.
+#[test]
+fn fp_guard_php_unserialize_allowed_classes() {
+    let dir = fixture_path("fp_guards/php_unserialize_allowed_classes");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — C/C++ buffer-overflow pattern rules
+/// (`c.memory.strcpy`, `strcat`, `sprintf`) over-fire when the source /
+/// format-string argument is a literal whose contributed length is
+/// statically bounded.  Pinned from a 938-finding cluster across postgres
+/// (`pg_prewarm/autoprewarm.c::apw_start_leader_worker`,
+/// `formatting.c::DCH_a_m` ternary-of-literals, `datetime.c::EncodeDateTime`
+/// `%.*s`/numeric-only sprintf).  Layer D suppression in
+/// `src/ast.rs::is_c_buffer_call_literal_safe`.
+#[test]
+fn fp_guard_c_buffer_literal_src() {
+    let dir = fixture_path("fp_guards/c_buffer_literal_src");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}

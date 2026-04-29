@@ -71,6 +71,45 @@ fn js_ts_pass2_cap() -> usize {
     if o == 0 { JS_TS_PASS2_SAFETY_CAP } else { o }
 }
 
+// ── Perf-audit sub-stage timers (lower_all_functions_from_bodies) ───────
+//
+// Slot layout (µs):
+//   [0] lower_to_ssa_with_params (per-body sum)
+//   [1] extract_ssa_func_summary (per-body sum, includes per-param probes)
+//   [2] optimize_ssa_with_param_types (per-body sum)
+//   [3] typed_call_receivers + pointer fact extraction (per-body sum)
+//   [4] augment_summaries_with_child_sinks
+//   [5] rerun_extraction_with_augmented_summaries
+//   [6] per-body misc (FuncKey resolve, HashMap insert, interner ctor)
+//
+// Active only when the slot is `Some`.  Production code path leaves it
+// `None`, making instrumentation cost a single thread-local borrow + a
+// `match Option::None` per measured chunk — sub-nanosecond.
+thread_local! {
+    static PERF_LOWER_TIMINGS: std::cell::Cell<Option<[u128; 7]>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[doc(hidden)]
+pub fn perf_lower_timings_start() {
+    PERF_LOWER_TIMINGS.with(|c| c.set(Some([0; 7])));
+}
+
+#[doc(hidden)]
+pub fn perf_lower_timings_take() -> Option<[u128; 7]> {
+    PERF_LOWER_TIMINGS.with(|c| c.replace(None))
+}
+
+#[inline]
+fn perf_lower_record(slot: usize, micros: u128) {
+    PERF_LOWER_TIMINGS.with(|c| {
+        if let Some(mut t) = c.get() {
+            t[slot] = t[slot].saturating_add(micros);
+            c.set(Some(t));
+        }
+    });
+}
+
 /// Test-only override for the Gauss-Seidel toggle.  Values:
 ///
 /// * `0` — respect `NYX_JS_GAUSS_SEIDEL` env var (default production
@@ -298,17 +337,20 @@ pub fn analyse_file(
     interop_edges: &[InteropEdge],
     extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
 ) -> Vec<Finding> {
-    let _span = tracing::debug_span!("taint_analyse_file").entered();
-
-    // Clear the file-level path-safe-suppressed sink-span set before this
-    // file's analysis.  Populated by `is_path_safe_for_sink` and consumed
-    // by the state-analysis pass via `take_path_safe_suppressed_spans` to
-    // suppress `state-unauthed-access` on sinks already proven path-safe.
+    // Reset BEFORE lowering: per-parameter probes inside
+    // `lower_all_functions_from_bodies` may record path-safe sink spans
+    // (via `record_path_safe_suppressed_span`).  Resetting here keeps the
+    // historical contract that "the span set starts empty for each file"
+    // while letting both the probe phase and the taint flow phase
+    // accumulate into the same set, which is what
+    // `take_path_safe_suppressed_spans` then drains for state analysis.
+    // The all-validated span set (cap-agnostic, drained by AST-pattern
+    // suppression in `TaintSuppressionCtx::build`) follows the same
+    // lifecycle.
     ssa_transfer::reset_path_safe_suppressed_spans();
-
-    // 1. Lower all function bodies: produce SSA summaries + cached bodies.
-    //    No locator: pass-2 intra-file summaries are transient (not persisted)
-    //    and behavior depends on SinkSite.cap only, which is always populated.
+    ssa_transfer::reset_all_validated_spans();
+    // No locator: pass-2 intra-file summaries are transient (not persisted)
+    // and behavior depends on SinkSite.cap only, which is always populated.
     let (ssa_summaries, callee_bodies) = lower_all_functions_from_bodies(
         file_cfg,
         caller_lang,
@@ -317,10 +359,52 @@ pub fn analyse_file(
         global_summaries,
         None,
     );
+    analyse_file_with_lowered(
+        file_cfg,
+        local_summaries,
+        global_summaries,
+        caller_lang,
+        caller_namespace,
+        interop_edges,
+        extra_labels,
+        &ssa_summaries,
+        &callee_bodies,
+    )
+}
+
+/// Same as [`analyse_file`] but takes pre-lowered SSA summaries + callee
+/// bodies.  Used by [`crate::ast::analyse_file_fused`] to share a single
+/// `lower_all_functions_from_bodies` invocation across the taint engine and
+/// the SSA-artifact extractor; the bare [`analyse_file`] entry-point keeps
+/// its prior signature for any caller that does not have a pre-lowered
+/// result handy.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn analyse_file_with_lowered(
+    file_cfg: &FileCfg,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+    caller_lang: Lang,
+    caller_namespace: &str,
+    interop_edges: &[InteropEdge],
+    extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
+    ssa_summaries: &std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+    callee_bodies: &std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
+) -> Vec<Finding> {
+    let _span = tracing::debug_span!("taint_analyse_file").entered();
+
+    // NOTE: the path-safe-suppressed span set is reset by the caller, not
+    // here.  Per-parameter probes inside the lowering phase
+    // (`lower_all_functions_from_bodies`) can already publish spans via
+    // `record_path_safe_suppressed_span`; resetting here would wipe them
+    // before `take_path_safe_suppressed_spans` drains the set for state
+    // analysis.  Both `analyse_file` (which lowers internally) and
+    // `analyse_file_fused` (which lowers up-front) reset the set before
+    // their lowering call.
+
     let ssa_sums_ref = if ssa_summaries.is_empty() {
         None
     } else {
-        Some(&ssa_summaries)
+        Some(ssa_summaries)
     };
 
     // 2. Context-sensitive inline analysis setup.  Toggle lives at
@@ -329,7 +413,7 @@ pub fn analyse_file(
     let context_sensitive = crate::utils::analysis_options::current().context_sensitive;
     let inline_cache = std::cell::RefCell::new(std::collections::HashMap::new());
     let callee_bodies_ref = if context_sensitive && !callee_bodies.is_empty() {
-        Some(&callee_bodies)
+        Some(callee_bodies)
     } else {
         None
     };
@@ -592,7 +676,12 @@ fn analyse_body_with_seed(
 
     match ssa_result {
         Ok(mut ssa_body) => {
-            let opt = crate::ssa::optimize_ssa(&mut ssa_body, cfg, Some(lang));
+            let opt = crate::ssa::optimize_ssa_with_param_types(
+                &mut ssa_body,
+                cfg,
+                Some(lang),
+                &body.meta.param_types,
+            );
             if tracing::enabled!(tracing::Level::TRACE) {
                 tracing::trace!(
                     func = body.meta.name.as_deref().unwrap_or("<anon>"),
@@ -618,6 +707,17 @@ fn analyse_body_with_seed(
                 None
             } else {
                 Some(static_map)
+            };
+            // Pointer-Phase 3 / W1+W2+W3: per-body field-sensitive points-to
+            // facts.  Computed only when `NYX_POINTER_ANALYSIS=1`; the
+            // per-body `analyse_body` cost is amortised across the three
+            // hooks (W1 field-write read-back, W2 container ELEM cells,
+            // W3 cross-call resolver).  Strict-additive: `None` keeps
+            // pointer-disabled behaviour bit-identical.
+            let pointer_facts = if crate::pointer::is_enabled() {
+                Some(crate::pointer::analyse_body(&ssa_body, body.meta.id))
+            } else {
+                None
             };
             let transfer = ssa_transfer::SsaTaintTransfer {
                 lang,
@@ -654,6 +754,7 @@ fn analyse_body_with_seed(
                     || (lang == Lang::Java
                         && body.meta.kind == crate::cfg::BodyKind::AnonymousFunction),
                 cross_file_bodies,
+                pointer_facts: pointer_facts.as_ref(),
             };
             let (events, block_states) =
                 ssa_transfer::run_ssa_taint_full(&ssa_body, cfg, &transfer);
@@ -1342,7 +1443,7 @@ pub(crate) fn extract_intra_file_ssa_summaries(
 /// resistant identity we have: same-name methods on different classes, same-
 /// name overloads with different arity, and anonymous bodies at distinct
 /// source spans all get distinct keys.
-fn lower_all_functions_from_bodies(
+pub(crate) fn lower_all_functions_from_bodies(
     file_cfg: &FileCfg,
     lang: Lang,
     namespace: &str,
@@ -1357,6 +1458,7 @@ fn lower_all_functions_from_bodies(
     let mut bodies = std::collections::HashMap::new();
 
     for body in file_cfg.function_bodies() {
+        let _t_misc = std::time::Instant::now();
         let func_name = body.meta.name.clone().unwrap_or_else(|| {
             body.meta
                 .func_key
@@ -1367,6 +1469,9 @@ fn lower_all_functions_from_bodies(
 
         let interner = SymbolInterner::from_cfg(&body.graph);
         let formal_params = &body.meta.params;
+        perf_lower_record(6, _t_misc.elapsed().as_micros());
+
+        let _t_lower = std::time::Instant::now();
         let mut func_ssa = match crate::ssa::lower_to_ssa_with_params(
             &body.graph,
             body.entry,
@@ -1377,6 +1482,7 @@ fn lower_all_functions_from_bodies(
             Ok(ssa) => ssa,
             Err(_) => continue,
         };
+        perf_lower_record(0, _t_lower.elapsed().as_micros());
 
         let param_count = if !formal_params.is_empty() {
             formal_params.len()
@@ -1413,6 +1519,7 @@ fn lower_all_functions_from_bodies(
         // to avoid cluttering `GlobalSummaries` with trivially-empty
         // entries.
         {
+            let _t_extract = std::time::Instant::now();
             let mod_aliases = compute_module_aliases_for_summary(&func_ssa, lang);
             let mod_aliases_ref = if mod_aliases.is_empty() {
                 None
@@ -1443,10 +1550,59 @@ fn lower_all_functions_from_bodies(
             if param_count > 0 || summary.points_to.returns_fresh_alloc {
                 summaries.insert(key.clone(), summary);
             }
+            perf_lower_record(1, _t_extract.elapsed().as_micros());
         }
 
-        let opt = crate::ssa::optimize_ssa(&mut func_ssa, &body.graph, Some(lang));
+        let _t_opt = std::time::Instant::now();
+        let opt = crate::ssa::optimize_ssa_with_param_types(
+            &mut func_ssa,
+            &body.graph,
+            Some(lang),
+            &body.meta.param_types,
+        );
+        perf_lower_record(2, _t_opt.elapsed().as_micros());
 
+        let _t_typed = std::time::Instant::now();
+        // Phase 2 (typed call-graph devirtualisation): walk every SSA
+        // method call in this body, look up the receiver SSA value's
+        // [`crate::ssa::type_facts::TypeKind`] in the just-computed
+        // `opt.type_facts`, and record `(call_ordinal, container_name)`
+        // on the matching summary so Phase 3 in `build_call_graph` can
+        // narrow the indirect-method-call edge to the receiver-typed
+        // container.  Free-function calls (`receiver: None`) and
+        // unknown receiver types are silently skipped — the bare-name
+        // resolution path applies unchanged in that case.
+        let typed_receivers = collect_typed_call_receivers(&func_ssa, &body.graph, &opt.type_facts);
+        if !typed_receivers.is_empty() {
+            // The summary may not have been inserted above (zero-param,
+            // no-fresh-alloc bodies are skipped).  Force-insert in that
+            // case so the receiver-type info reaches Phase 3 — without
+            // it, the cross-file devirtualisation signal would be lost
+            // for any method invoked inside a parameterless caller.
+            let entry = summaries.entry(key.clone()).or_default();
+            entry.typed_call_receivers = typed_receivers;
+        }
+
+        // Pointer-Phase 5 / W3: populate `field_points_to` from the
+        // body's pointer facts when the analysis is enabled.  Strict
+        // opt-in via `NYX_POINTER_ANALYSIS=1`; off-by-default keeps
+        // bit-for-bit identity with the pre-W3 behaviour.
+        //
+        // `extract_field_points_to` covers both reads (via
+        // `SsaOp::FieldProj` walks) and writes (via the W1
+        // `field_writes` side-table on the body) in a single pass.
+        if crate::pointer::is_enabled() {
+            let facts = crate::pointer::analyse_body(&func_ssa, body.meta.id);
+            let fpt = crate::pointer::extract_field_points_to(&func_ssa, &facts);
+            if !fpt.is_empty() {
+                let entry = summaries.entry(key.clone()).or_default();
+                entry.field_points_to = fpt;
+            }
+        }
+
+        perf_lower_record(3, _t_typed.elapsed().as_micros());
+
+        let _t_misc2 = std::time::Instant::now();
         bodies.insert(
             key,
             ssa_transfer::CalleeSsaBody {
@@ -1457,7 +1613,71 @@ fn lower_all_functions_from_bodies(
                 body_graph: Some(body.graph.clone()),
             },
         );
+        perf_lower_record(6, _t_misc2.elapsed().as_micros());
     }
+
+    // ── Closure-capture summary augmentation ─────────────────────────
+    //
+    // Lift child-body sinks into the parent's `param_to_sink` for
+    // every parent body with lexically contained children. This
+    // handles the direct-wrapper case
+    // `f(x) { return new Promise((res, rej) => sink(x)) }` — the
+    // executor's gated http.get sink becomes visible to callers of
+    // `f` via `f.summary.param_to_sink`.
+    //
+    // Without this pass, `f.summary.param_to_sink` stays empty
+    // because the sink lives in a separately-extracted child body
+    // that the parent's pass-1 probe never sees. The
+    // lexical-containment propagation in `analyse_multi_body`
+    // carries seeded taint into child bodies for the production
+    // analysis path, but the single-body summary extractor in
+    // `extract_ssa_func_summary` does not. This pass reproduces that
+    // propagation at summary-extraction time so cross-call
+    // resolution sees the sink at every caller of `f`.
+    //
+    // Strict-additive: only ADDs `param_to_sink` entries — never
+    // removes or modifies existing data — so it cannot regress
+    // detection. Bounded: each parent-param probe runs each child
+    // body's analysis exactly once.
+    let _t_aug = std::time::Instant::now();
+    augment_summaries_with_child_sinks(
+        file_cfg,
+        lang,
+        namespace,
+        local_summaries,
+        global_summaries,
+        &bodies,
+        &mut summaries,
+    );
+    perf_lower_record(4, _t_aug.elapsed().as_micros());
+
+    // ── Second extraction pass: transitive cross-function summary lift ───
+    //
+    // The augment pass populates direct sink-wrapper summaries
+    // (`f(x) { Promise(() => sink(x)) }`). This second pass then
+    // re-runs every body's per-parameter probe with the augmented
+    // `summaries` map plumbed through to the probe transfer's
+    // `ssa_summaries` field, so callers of those wrappers (e.g. an
+    // `addFileDataIfNeeded` whose body calls a `downloadFileFromURI`
+    // sink wrapper) see the augmented `param_to_sink` at step 0 of
+    // `resolve_callee_full` and propagate it onto their own summary.
+    //
+    // OR-merge: only adds `param_to_sink` / `param_to_sink_param`
+    // entries to existing summaries. Existing entries (return
+    // transforms, source caps, augment-populated sinks, etc.) are
+    // preserved. Strict-additive — cannot regress detection.
+    let _t_rerun = std::time::Instant::now();
+    rerun_extraction_with_augmented_summaries(
+        file_cfg,
+        lang,
+        namespace,
+        local_summaries,
+        global_summaries,
+        locator,
+        &bodies,
+        &mut summaries,
+    );
+    perf_lower_record(5, _t_rerun.elapsed().as_micros());
 
     if !summaries.is_empty() {
         tracing::debug!(
@@ -1468,6 +1688,478 @@ fn lower_all_functions_from_bodies(
     }
 
     (summaries, bodies)
+}
+
+/// Second extraction pass: re-runs `extract_ssa_func_summary_full` for
+/// every body with the augmented `summaries` map plumbed through.
+///
+/// Only sink-related fields (`param_to_sink`, `param_to_sink_param`)
+/// are merged into existing summaries; other fields stay as-produced
+/// by the first pass.  Bounded: one re-extraction per body.
+#[allow(clippy::too_many_arguments)]
+fn rerun_extraction_with_augmented_summaries(
+    file_cfg: &FileCfg,
+    lang: Lang,
+    namespace: &str,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+    locator: Option<&crate::summary::SinkSiteLocator<'_>>,
+    bodies: &std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
+    summaries: &mut std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+) {
+    use crate::ssa::ir::SsaOp;
+    use crate::state::symbol::SymbolInterner;
+
+    // Fast-out: rerun matters only when at least one body in the file has
+    // an SSA summary entry that *another* body in the same file might
+    // resolve a Call to.  If no SSA summaries were produced, nothing to
+    // re-extract.  This is the dominant case for files of unrelated
+    // functions or with all-cross-file callees.
+    if summaries.is_empty() {
+        return;
+    }
+
+    // Snapshot the augmented summaries map so the probes resolve
+    // callees against a stable view (the merge below mutates
+    // `summaries` as we iterate).
+    let augmented_snapshot: std::collections::HashMap<
+        FuncKey,
+        crate::summary::ssa_summary::SsaFuncSummary,
+    > = summaries.clone();
+
+    // Set of bare callee names known to have an in-file SsaFuncSummary.
+    // `extract_ssa_func_summary_full` only consults `ssa_summaries` at
+    // Call resolution time, so a body with no Call to any of these names
+    // produces a summary identical to its first-pass output.
+    //
+    // SSA `Call::callee` carries the bare method name after lowering
+    // decomposes chained-receiver calls, which matches `FuncKey::name`.
+    // Borrows `augmented_snapshot` (immutable view) so the loop below can
+    // freely mutate `summaries`.
+    let in_file_names: std::collections::HashSet<&str> =
+        augmented_snapshot.keys().map(|k| k.name.as_str()).collect();
+
+    for body in file_cfg.function_bodies() {
+        let Some(parent_key) = body.meta.func_key.clone() else {
+            continue;
+        };
+        let mut key = parent_key;
+        key.namespace = namespace.to_string();
+
+        let Some(callee) = bodies.get(&key) else {
+            continue;
+        };
+        if callee.param_count == 0 {
+            continue;
+        }
+        let Some(parent_cfg) = callee.body_graph.as_ref() else {
+            continue;
+        };
+
+        // Narrow: rerun only bodies whose SSA references at least one
+        // in-file summary by name.  Bodies with no in-file Call cannot
+        // benefit from the augmented `ssa_summaries` view, so their
+        // re-extraction is a strict no-op.
+        let has_in_file_call = callee.ssa.blocks.iter().any(|b| {
+            b.body.iter().any(|inst| {
+                if let SsaOp::Call { callee: name, .. } = &inst.op {
+                    in_file_names.contains(name.as_str())
+                } else {
+                    false
+                }
+            })
+        });
+        if !has_in_file_call {
+            continue;
+        }
+
+        let interner = SymbolInterner::from_cfg(parent_cfg);
+        let mod_aliases = compute_module_aliases_for_summary(&callee.ssa, lang);
+        let mod_aliases_ref = if mod_aliases.is_empty() {
+            None
+        } else {
+            Some(&mod_aliases)
+        };
+
+        let new_summary = ssa_transfer::extract_ssa_func_summary_full(
+            &callee.ssa,
+            parent_cfg,
+            local_summaries,
+            global_summaries,
+            lang,
+            namespace,
+            &interner,
+            callee.param_count,
+            mod_aliases_ref,
+            locator,
+            Some(&body.meta.params),
+            Some(&augmented_snapshot),
+        );
+
+        // OR-merge sink-only fields into the existing summary.
+        let entry = summaries.entry(key).or_default();
+        merge_sink_fields(entry, &new_summary);
+    }
+}
+
+/// OR-merge `param_to_sink` and `param_to_sink_param` from `src` into
+/// `dst`. Existing entries are preserved; only NEW entries are added.
+fn merge_sink_fields(
+    dst: &mut crate::summary::ssa_summary::SsaFuncSummary,
+    src: &crate::summary::ssa_summary::SsaFuncSummary,
+) {
+    for (idx, sites) in &src.param_to_sink {
+        if let Some((_, dst_sites)) = dst.param_to_sink.iter_mut().find(|(i, _)| i == idx) {
+            for site in sites {
+                let key = site.dedup_key();
+                if !dst_sites.iter().any(|s| s.dedup_key() == key) {
+                    dst_sites.push(site.clone());
+                }
+            }
+        } else {
+            dst.param_to_sink.push((*idx, sites.clone()));
+        }
+    }
+    for &(idx, pos, caps) in &src.param_to_sink_param {
+        if !dst
+            .param_to_sink_param
+            .iter()
+            .any(|(i, p, c)| *i == idx && *p == pos && *c == caps)
+        {
+            dst.param_to_sink_param.push((idx, pos, caps));
+        }
+    }
+}
+
+/// Walk lexical-containment children of every parent body and lift
+/// their sinks into the parent's [`SsaFuncSummary::param_to_sink`].
+///
+/// For each parent body P with at least one lexically contained
+/// child:
+///   - For each formal parameter `p_i` of P:
+///     - Seed a probe with `{ p_i → Cap::all() }`, run P's SSA
+///       analysis, extract P's exit state.
+///     - For every descendant child body C of P, run C's SSA
+///       analysis with the parent's exit state seeded as
+///       `global_seed`. Collect sink events.
+///     - For each event whose `sink_caps` is non-empty, append a
+///       cap-only [`SinkSite`] under `p_i` on P's summary
+///       (deduplicated by cap-mask so repeat probes don't inflate
+///       the entry).
+///
+/// Strict-additive: only inserts new `param_to_sink` entries; never
+/// modifies `param_return_paths`, `points_to`, `source_caps`, etc.
+fn augment_summaries_with_child_sinks(
+    file_cfg: &FileCfg,
+    lang: Lang,
+    namespace: &str,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+    bodies: &std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
+    summaries: &mut std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+) {
+    use crate::cfg::BodyId;
+    use crate::labels::{Cap, SourceKind};
+    use crate::summary::SinkSite;
+    use crate::taint::domain::{TaintOrigin, VarTaint};
+    use ssa_transfer::BindingKey;
+
+    // ── Build lexical-containment relationships ──────────────────────
+    // Map parent BodyId → list of descendant body indices.  Reverse-walk
+    // each body's `parent_body_id` chain so a grand-child's sinks are
+    // attributed to every ancestor in its containment chain.
+    let body_id_to_idx: std::collections::HashMap<BodyId, usize> = file_cfg
+        .bodies
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.meta.id, i))
+        .collect();
+    let mut descendants: std::collections::HashMap<BodyId, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (idx, body) in file_cfg.bodies.iter().enumerate() {
+        // Walk up the parent chain, registering this body as a descendant
+        // of every ancestor.
+        let mut cur = body.meta.parent_body_id;
+        while let Some(pid) = cur {
+            descendants.entry(pid).or_default().push(idx);
+            cur = body_id_to_idx
+                .get(&pid)
+                .and_then(|i| file_cfg.bodies[*i].meta.parent_body_id);
+        }
+    }
+
+    // ── Map each parent body to its FuncKey and the SSA body cache ──
+    // Skip bodies with no formal params (nothing to probe) and bodies
+    // whose SSA was never lowered (lowering errors logged earlier).
+    for parent_body in &file_cfg.bodies {
+        let Some(parent_key) = parent_body.meta.func_key.clone() else {
+            continue;
+        };
+        let mut parent_key = parent_key;
+        parent_key.namespace = namespace.to_string();
+
+        let Some(parent_callee) = bodies.get(&parent_key) else {
+            continue;
+        };
+        if parent_callee.param_count == 0 {
+            continue;
+        }
+        let Some(child_indices) = descendants.get(&parent_body.meta.id) else {
+            continue;
+        };
+        if child_indices.is_empty() {
+            continue;
+        }
+
+        let parent_ssa = &parent_callee.ssa;
+        let parent_cfg = match parent_callee.body_graph.as_ref() {
+            Some(g) => g,
+            None => continue,
+        };
+        let parent_interner = crate::state::symbol::SymbolInterner::from_cfg(parent_cfg);
+
+        // Collect (formal_param_idx, var_name, ssa_value) for the parent's
+        // formal params — mirrors `extract_ssa_func_summary`'s param scan.
+        let mut parent_param_info: Vec<(usize, String)> = Vec::new();
+        for block in &parent_ssa.blocks {
+            for inst in block.phis.iter().chain(block.body.iter()) {
+                if let crate::ssa::ir::SsaOp::Param { index } = &inst.op {
+                    if *index < parent_callee.param_count {
+                        if let Some(name) = inst.var_name.as_ref() {
+                            parent_param_info.push((*index, name.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        for (param_idx, param_name) in &parent_param_info {
+            // Seed parent's probe with this single param tainted to all caps.
+            let mut seed: std::collections::HashMap<BindingKey, VarTaint> =
+                std::collections::HashMap::new();
+            seed.insert(
+                BindingKey::new(param_name.as_str(), BodyId(0)),
+                VarTaint {
+                    caps: Cap::all(),
+                    origins: smallvec::SmallVec::from_elem(
+                        TaintOrigin {
+                            node: petgraph::graph::NodeIndex::new(0),
+                            source_kind: SourceKind::UserInput,
+                            source_span: None,
+                        },
+                        1,
+                    ),
+                    uses_summary: false,
+                },
+            );
+
+            let parent_transfer = ssa_transfer::SsaTaintTransfer {
+                lang,
+                namespace,
+                interner: &parent_interner,
+                local_summaries,
+                global_summaries,
+                interop_edges: &[],
+                owner_body_id: BodyId(0),
+                parent_body_id: None,
+                global_seed: Some(&seed),
+                param_seed: None,
+                receiver_seed: None,
+                const_values: None,
+                type_facts: None,
+                ssa_summaries: Some(summaries),
+                extra_labels: None,
+                base_aliases: None,
+                callee_bodies: None,
+                inline_cache: None,
+                context_depth: 0,
+                callback_bindings: None,
+                points_to: None,
+                dynamic_pts: None,
+                import_bindings: None,
+                promisify_aliases: None,
+                module_aliases: None,
+                static_map: None,
+                auto_seed_handler_params: false,
+                cross_file_bodies: None,
+                pointer_facts: None,
+            };
+
+            let (_parent_events, parent_block_states) =
+                ssa_transfer::run_ssa_taint_full(parent_ssa, parent_cfg, &parent_transfer);
+            let parent_exit = ssa_transfer::extract_ssa_exit_state(
+                &parent_block_states,
+                parent_ssa,
+                parent_cfg,
+                &parent_transfer,
+                BodyId(0),
+            );
+            if parent_exit.is_empty() {
+                continue;
+            }
+
+            for &child_idx in child_indices {
+                let child_body = &file_cfg.bodies[child_idx];
+                let Some(child_key) = child_body.meta.func_key.clone() else {
+                    continue;
+                };
+                let mut child_key = child_key;
+                child_key.namespace = namespace.to_string();
+                let Some(child_callee) = bodies.get(&child_key) else {
+                    continue;
+                };
+                let child_ssa = &child_callee.ssa;
+                let Some(child_cfg) = child_callee.body_graph.as_ref() else {
+                    continue;
+                };
+
+                let child_interner = crate::state::symbol::SymbolInterner::from_cfg(child_cfg);
+
+                let child_transfer = ssa_transfer::SsaTaintTransfer {
+                    lang,
+                    namespace,
+                    interner: &child_interner,
+                    local_summaries,
+                    global_summaries,
+                    interop_edges: &[],
+                    owner_body_id: BodyId(0),
+                    parent_body_id: None,
+                    global_seed: Some(&parent_exit),
+                    param_seed: None,
+                    receiver_seed: None,
+                    const_values: None,
+                    type_facts: None,
+                    ssa_summaries: Some(summaries),
+                    extra_labels: None,
+                    base_aliases: None,
+                    callee_bodies: None,
+                    inline_cache: None,
+                    context_depth: 0,
+                    callback_bindings: None,
+                    points_to: None,
+                    dynamic_pts: None,
+                    import_bindings: None,
+                    promisify_aliases: None,
+                    module_aliases: None,
+                    static_map: None,
+                    auto_seed_handler_params: false,
+                    cross_file_bodies: None,
+                    pointer_facts: None,
+                };
+
+                let (child_events, _child_block_states) =
+                    ssa_transfer::run_ssa_taint_full(child_ssa, child_cfg, &child_transfer);
+
+                if child_events.is_empty() {
+                    continue;
+                }
+
+                // Aggregate sink caps across all child events into one
+                // entry per parent param (cap-only SinkSite — the
+                // exact location lives in the child body's CFG and is
+                // not directly addressable from the parent's summary).
+                let mut union_caps = Cap::empty();
+                for ev in &child_events {
+                    union_caps |= ev.sink_caps;
+                }
+                if union_caps.is_empty() {
+                    continue;
+                }
+
+                let entry = summaries.entry(parent_key.clone()).or_default();
+                let new_site = SinkSite::cap_only(union_caps);
+                let new_key = new_site.dedup_key();
+                if let Some((_, sites)) = entry
+                    .param_to_sink
+                    .iter_mut()
+                    .find(|(i, _)| *i == *param_idx)
+                {
+                    if !sites.iter().any(|s| s.dedup_key() == new_key) {
+                        sites.push(new_site);
+                    }
+                } else {
+                    entry
+                        .param_to_sink
+                        .push((*param_idx, smallvec::smallvec![new_site]));
+                }
+
+                // Mirror cap-only attribution into `param_to_sink_param`
+                // so the call-site emission path that consults it (the
+                // engine's primary sink-site picker uses
+                // `param_to_sink_param` for arg-position filtering)
+                // sees this captured-flow sink. Position 0 is a
+                // best-effort placeholder — the actual filtering at
+                // the caller is by SSRF cap, not arg position, when
+                // the wrapper is itself non-gated.
+                if !entry
+                    .param_to_sink_param
+                    .iter()
+                    .any(|(i, _, c)| *i == *param_idx && *c == union_caps)
+                {
+                    entry.param_to_sink_param.push((*param_idx, 0, union_caps));
+                }
+            }
+        }
+    }
+}
+
+/// Walk every SSA `Call` instruction in `ssa` and produce
+/// `(call_ordinal, container_name)` entries for those whose receiver
+/// SSA value has a [`crate::ssa::type_facts::TypeKind`] with a
+/// non-empty [`crate::ssa::type_facts::TypeKind::container_name`].
+///
+/// Free-function calls (`receiver: None`) and unknown receiver types
+/// are skipped — the cross-file call-graph builder will fall back to
+/// today's name-only resolution for those, preserving the
+/// "subset of today's targets, never a superset" invariant from
+/// `docs/typed-call-graph-prompt.md`.
+///
+/// Ordinals are pulled from the underlying CFG node's
+/// [`crate::cfg::CallMeta::call_ordinal`] so they line up with
+/// [`crate::summary::CalleeSite::ordinal`] at consumer time.  Calls
+/// whose CFG node has no recoverable ordinal (synthetic / removed
+/// nodes) are silently dropped.
+fn collect_typed_call_receivers(
+    ssa: &crate::ssa::ir::SsaBody,
+    cfg: &crate::cfg::Cfg,
+    type_facts: &crate::ssa::type_facts::TypeFactResult,
+) -> Vec<(u32, String)> {
+    use crate::ssa::ir::SsaOp;
+
+    let mut out: Vec<(u32, String)> = Vec::new();
+    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+
+    for block in &ssa.blocks {
+        for inst in block.body.iter() {
+            let SsaOp::Call { receiver, .. } = &inst.op else {
+                continue;
+            };
+            let Some(receiver_val) = receiver else {
+                continue; // free-function call — no devirtualisation possible
+            };
+            let Some(kind) = type_facts.get_type(*receiver_val) else {
+                continue; // type unknown — fall back to name-only resolution
+            };
+            let Some(container) = kind.container_name() else {
+                continue; // scalar/unknown type — no useful container
+            };
+            let Some(node_info) = cfg.node_weight(inst.cfg_node) else {
+                continue;
+            };
+            let ordinal = node_info.call.call_ordinal;
+            // A single SSA call instruction maps 1:1 with a CFG call
+            // node, so each ordinal should appear at most once.  The
+            // dedup guard exists in case lowering ever introduces a
+            // second SSA Call sharing a cfg_node — first wins.
+            if !seen.insert(ordinal) {
+                continue;
+            }
+            out.push((ordinal, container));
+        }
+    }
+
+    out.sort_by_key(|(ord, _)| *ord);
+    out
 }
 
 /// Maximum blocks for a callee body to be eligible for cross-file persistence.
@@ -1497,7 +2189,21 @@ pub(crate) fn extract_ssa_artifacts_from_file_cfg(
         global_summaries,
         locator,
     );
+    let eligible_bodies = build_eligible_bodies(file_cfg, bodies);
+    (summaries, eligible_bodies)
+}
 
+/// Filter pre-lowered SSA bodies down to the cross-file-eligible subset and
+/// populate per-node metadata against the original CFG.
+///
+/// Split out from [`extract_ssa_artifacts_from_file_cfg`] so callers that
+/// already hold a freshly-lowered `bodies` map (specifically
+/// `analyse_file_fused`, which now lowers once and feeds both the taint
+/// engine and this filter) don't pay for a second lowering pass.
+pub(crate) fn build_eligible_bodies(
+    file_cfg: &FileCfg,
+    bodies: std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
+) -> EligibleCalleeBodies {
     let mut eligible_bodies = Vec::new();
     if crate::symex::cross_file_symex_enabled() {
         for (key, mut body) in bodies {
@@ -1531,8 +2237,7 @@ pub(crate) fn extract_ssa_artifacts_from_file_cfg(
             eligible_bodies.push((key, body));
         }
     }
-
-    (summaries, eligible_bodies)
+    eligible_bodies
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiPost, apiDelete } from '../client';
+import { apiPost, apiPut, apiDelete } from '../client';
 import type { LabelEntryView, TerminatorView, ProfileView } from '../types';
 
 // --- Sources ---
@@ -18,6 +18,7 @@ export function useAddSource() {
       apiPost<LabelEntryView>('/config/sources', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sources'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -25,9 +26,11 @@ export function useAddSource() {
 export function useDeleteSource() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: AddLabelBody) => apiDelete<void>('/config/sources'),
+    mutationFn: (body: AddLabelBody) =>
+      apiDelete<void>('/config/sources', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sources'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -41,6 +44,7 @@ export function useAddSink() {
       apiPost<LabelEntryView>('/config/sinks', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sinks'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -48,9 +52,10 @@ export function useAddSink() {
 export function useDeleteSink() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: AddLabelBody) => apiDelete<void>('/config/sinks'),
+    mutationFn: (body: AddLabelBody) => apiDelete<void>('/config/sinks', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sinks'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -64,6 +69,7 @@ export function useAddSanitizer() {
       apiPost<LabelEntryView>('/config/sanitizers', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sanitizers'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -71,9 +77,11 @@ export function useAddSanitizer() {
 export function useDeleteSanitizer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: AddLabelBody) => apiDelete<void>('/config/sanitizers'),
+    mutationFn: (body: AddLabelBody) =>
+      apiDelete<void>('/config/sanitizers', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sanitizers'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -92,6 +100,7 @@ export function useAddTerminator() {
       apiPost<TerminatorView>('/config/terminators', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'terminators'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -100,9 +109,10 @@ export function useDeleteTerminator() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: AddTerminatorBody) =>
-      apiDelete<void>('/config/terminators'),
+      apiDelete<void>('/config/terminators', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'terminators'] });
+      qc.invalidateQueries({ queryKey: ['rules'] });
     },
   });
 }
@@ -139,6 +149,21 @@ export function useActivateProfile() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config'] });
       qc.invalidateQueries({ queryKey: ['config', 'profiles'] });
+    },
+  });
+}
+
+// --- Raw nyx.local TOML ---
+
+export function useSaveRawConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (content: string) =>
+      apiPut<{ status: string; path: string; bytes: number }>('/config/raw', {
+        content,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['config'] });
     },
   });
 }

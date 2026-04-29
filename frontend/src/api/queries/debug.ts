@@ -9,6 +9,9 @@ import type {
   SymexView,
   CallGraphView,
   FuncSummaryView,
+  PointerView,
+  TypeFactsView,
+  AuthAnalysisView,
 } from '../types';
 
 export function useDebugFunctions(file: string | null) {
@@ -107,5 +110,41 @@ export function useDebugSummaries(
     queryKey: ['debug', 'summaries', file, fn_name],
     queryFn: ({ signal }) =>
       apiGet<FuncSummaryView[]>(`/debug/summaries?${params}`, signal),
+  });
+}
+
+export function useDebugPointer(file: string | null, fn_name: string | null) {
+  return useQuery({
+    queryKey: ['debug', 'pointer', file, fn_name],
+    queryFn: ({ signal }) =>
+      apiGet<PointerView>(
+        `/debug/pointer?file=${encodeURIComponent(file!)}&function=${encodeURIComponent(fn_name!)}`,
+        signal,
+      ),
+    enabled: !!file && !!fn_name,
+  });
+}
+
+export function useDebugTypeFacts(file: string | null, fn_name: string | null) {
+  return useQuery({
+    queryKey: ['debug', 'type-facts', file, fn_name],
+    queryFn: ({ signal }) =>
+      apiGet<TypeFactsView>(
+        `/debug/type-facts?file=${encodeURIComponent(file!)}&function=${encodeURIComponent(fn_name!)}`,
+        signal,
+      ),
+    enabled: !!file && !!fn_name,
+  });
+}
+
+export function useDebugAuth(file: string | null) {
+  return useQuery({
+    queryKey: ['debug', 'auth', file],
+    queryFn: ({ signal }) =>
+      apiGet<AuthAnalysisView>(
+        `/debug/auth?file=${encodeURIComponent(file!)}`,
+        signal,
+      ),
+    enabled: !!file,
   });
 }

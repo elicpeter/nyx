@@ -59,6 +59,7 @@ pub fn run_auth_analysis(
     // (skipped for slug-lookup / unit-test call sites).
     if let Some(types) = var_types {
         apply_var_types_to_model(&mut model, &rules, types);
+        apply_typed_bounded_params(&mut model, types);
     }
 
     // Lift per-function auth-check summaries and synthesise call-site
@@ -215,6 +216,47 @@ fn apply_var_types_to_model(
             };
             if let Some(new_class) = sink_class_for_type(ty, &op.callee, rules) {
                 op.sink_class = Some(new_class);
+            }
+        }
+    }
+}
+
+/// Populate each [`model::AnalysisUnit::typed_bounded_vars`] with the
+/// names of formal parameters whose SSA-inferred [`TypeKind`] is a
+/// payload-incompatible scalar ([`TypeKind::Int`] or
+/// [`TypeKind::Bool`]).  Only parameter-rooted entries are considered;
+/// function-local bindings stay outside this set so a downstream
+/// reassignment from user input (`let id = req.params.id`) never gets
+/// suppressed by accident.
+///
+/// Phase 6: when a parameter's type is a [`TypeKind::Dto`], lift each
+/// of its `Int`/`Bool` fields as `typed_bounded_dto_fields[<param>]`
+/// so member-access subjects like `dto.age` are recognised as
+/// payload-incompatible.  Only fires when the base param itself was
+/// recognised as a typed extractor by a Phase 1-2 matcher — bare
+/// parameters with no framework gate never lift their fields.
+fn apply_typed_bounded_params(model: &mut model::AuthorizationModel, var_types: &VarTypes) {
+    for unit in &mut model.units {
+        for name in &unit.params {
+            let Some(ty) = var_types.get(name) else {
+                continue;
+            };
+            match ty {
+                TypeKind::Int | TypeKind::Bool => {
+                    unit.typed_bounded_vars.insert(name.clone());
+                }
+                TypeKind::Dto(dto) => {
+                    let mut bounded = Vec::new();
+                    for (field_name, field_kind) in &dto.fields {
+                        if matches!(field_kind, TypeKind::Int | TypeKind::Bool) {
+                            bounded.push(field_name.clone());
+                        }
+                    }
+                    if !bounded.is_empty() {
+                        unit.typed_bounded_dto_fields.insert(name.clone(), bounded);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -676,9 +718,15 @@ mod tests {
             condition_texts: Vec::new(),
             line: 1,
             row_field_vars: HashMap::new(),
+            var_alias_chain: HashMap::new(),
+            row_population_data: HashMap::new(),
             self_actor_vars: HashSet::new(),
             self_actor_id_vars: HashSet::new(),
             authorized_sql_vars: HashSet::new(),
+            const_bound_vars: HashSet::new(),
+            typed_bounded_vars: HashSet::new(),
+            typed_bounded_dto_fields: HashMap::new(),
+            self_scoped_session_bases: HashSet::new(),
         }
     }
 

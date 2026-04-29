@@ -21,6 +21,7 @@ pub use lower::lower_to_ssa_scoped_nop;
 pub use lower::lower_to_ssa_with_params;
 
 use crate::cfg::Cfg;
+use crate::ssa::type_facts::TypeKind;
 use crate::symbol::Lang;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -51,6 +52,19 @@ pub struct OptimizeResult {
 ///
 /// Pipeline: const propagation → branch pruning → copy propagation → DCE → type facts.
 pub fn optimize_ssa(body: &mut SsaBody, cfg: &Cfg, lang: Option<Lang>) -> OptimizeResult {
+    optimize_ssa_with_param_types(body, cfg, lang, &[])
+}
+
+/// Same as [`optimize_ssa`] but seeds [`SsaOp::Param`] values with
+/// per-position [`TypeKind`] facts derived from the function's
+/// `BodyMeta.param_types`.  Strictly additive: an empty slice or
+/// `None` entries leave the type-fact analysis behaviour unchanged.
+pub fn optimize_ssa_with_param_types(
+    body: &mut SsaBody,
+    cfg: &Cfg,
+    lang: Option<Lang>,
+    param_types: &[Option<TypeKind>],
+) -> OptimizeResult {
     // 1. Constant propagation (SCCP)
     let cp = const_prop::const_propagate(body);
     let branches_pruned = const_prop::apply_const_prop(body, &cp);
@@ -65,7 +79,8 @@ pub fn optimize_ssa(body: &mut SsaBody, cfg: &Cfg, lang: Option<Lang>) -> Optimi
     let dead_defs_removed = dce::eliminate_dead_defs(body, cfg);
 
     // 5. Type fact analysis (uses const prop results + language for constructor inference)
-    let type_facts = type_facts::analyze_types(body, cfg, &cp.values, lang);
+    let type_facts =
+        type_facts::analyze_types_with_param_types(body, cfg, &cp.values, lang, param_types);
 
     // 6. Points-to analysis (uses allocation site detection + SSA def-use)
     let points_to = heap::analyze_points_to(body, cfg, lang);

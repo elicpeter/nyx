@@ -4,6 +4,7 @@ import { useRules } from '../api/queries/rules';
 import { useToggleRule, useCloneRule } from '../api/mutations/rules';
 import { LoadingState } from '../components/ui/LoadingState';
 import { ErrorState } from '../components/ui/ErrorState';
+import { usePageTitle } from '../hooks/usePageTitle';
 import type { RuleListItem } from '../api/types';
 
 function useDebounce(value: string, delay: number): string {
@@ -200,6 +201,7 @@ function RulesTable({
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export function RulesPage() {
+  usePageTitle('Rules');
   const params = useParams<{ id?: string }>();
   const { data: rules, isLoading, error } = useRules();
   const toggleRule = useToggleRule();

@@ -4,6 +4,7 @@ use crate::auth_analysis::model::{
     Framework, HttpMethod, OperationKind, RouteRegistration, SensitiveOperation, SinkClass,
     ValueRef, ValueSourceKind,
 };
+use crate::labels::bare_method_name;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tree_sitter::Node;
@@ -14,11 +15,12 @@ pub fn collect_top_level_units(
     rules: &AuthAnalysisRules,
     model: &mut AuthorizationModel,
 ) {
+    let file_meta = FileMeta::scan(root, bytes);
     for idx in 0..root.named_child_count() {
         let Some(child) = root.named_child(idx as u32) else {
             continue;
         };
-        collect_top_level_from_node(child, bytes, rules, model);
+        collect_top_level_from_node(child, bytes, rules, model, &file_meta);
     }
 }
 
@@ -27,6 +29,7 @@ fn collect_top_level_from_node(
     bytes: &[u8],
     rules: &AuthAnalysisRules,
     model: &mut AuthorizationModel,
+    file_meta: &FileMeta,
 ) {
     match node.kind() {
         "function_declaration"
@@ -35,24 +38,26 @@ fn collect_top_level_from_node(
         | "function_item"
         | "method"
         | "singleton_method" => {
-            model.units.push(build_function_unit(
+            model.units.push(build_function_unit_with_meta(
                 node,
                 AnalysisUnitKind::Function,
                 function_name(node, bytes),
                 bytes,
                 rules,
+                Some(file_meta),
             ));
         }
         "decorated_definition"
             if decorated_definition_child(node)
                 .is_some_and(|definition| definition.kind() == "function_definition") =>
         {
-            model.units.push(build_function_unit(
+            model.units.push(build_function_unit_with_meta(
                 node,
                 AnalysisUnitKind::Function,
                 function_name(node, bytes),
                 bytes,
                 rules,
+                Some(file_meta),
             ));
         }
         "lexical_declaration" | "variable_declaration" => {
@@ -61,7 +66,8 @@ fn collect_top_level_from_node(
                     continue;
                 };
                 if child.kind() == "variable_declarator"
-                    && let Some(unit) = function_unit_from_var_declarator(child, bytes, rules)
+                    && let Some(unit) =
+                        function_unit_from_var_declarator(child, bytes, rules, Some(file_meta))
                 {
                     model.units.push(unit);
                 }
@@ -73,7 +79,7 @@ fn collect_top_level_from_node(
                     continue;
                 };
                 if child.is_named() {
-                    collect_top_level_from_node(child, bytes, rules, model);
+                    collect_top_level_from_node(child, bytes, rules, model, file_meta);
                 }
             }
         }
@@ -83,7 +89,7 @@ fn collect_top_level_from_node(
                 let Some(child) = node.named_child(idx as u32) else {
                     continue;
                 };
-                collect_top_level_from_node(child, bytes, rules, model);
+                collect_top_level_from_node(child, bytes, rules, model, file_meta);
             }
         }
         _ => {}
@@ -94,6 +100,7 @@ fn function_unit_from_var_declarator(
     node: Node<'_>,
     bytes: &[u8],
     rules: &AuthAnalysisRules,
+    file_meta: Option<&FileMeta>,
 ) -> Option<AnalysisUnit> {
     let value = node.child_by_field_name("value")?;
     if !is_function_like(value) {
@@ -103,12 +110,13 @@ fn function_unit_from_var_declarator(
         .child_by_field_name("name")
         .map(|n| text(n, bytes))
         .filter(|s| !s.is_empty());
-    Some(build_function_unit(
+    Some(build_function_unit_with_meta(
         value,
         AnalysisUnitKind::Function,
         name,
         bytes,
         rules,
+        file_meta,
     ))
 }
 
@@ -136,12 +144,18 @@ pub fn attach_route_handler(
 ) -> Option<ResolvedHandler> {
     let handler_node = resolve_handler_node(root, handler_expr, bytes)?;
     let unit_idx = model.units.len();
-    let unit = build_function_unit(
+    // `attach_route_handler` is called by route-aware extractors (express,
+    // koa, fastify, axum, …) which already hold the file root.  Build
+    // the FileMeta once here so the JS/TS TRPC pre-scan only walks the
+    // top-level decl set per file (instead of per route).
+    let file_meta = FileMeta::scan(root, bytes);
+    let unit = build_function_unit_with_meta(
         handler_node,
         AnalysisUnitKind::RouteHandler,
         Some(route_name),
         bytes,
         rules,
+        Some(&file_meta),
     );
     let params = unit.params.clone();
     let line = handler_node.start_position().row + 1;
@@ -153,6 +167,24 @@ pub fn attach_route_handler(
         params,
         line,
     })
+}
+
+/// Per-file metadata gathered once at the top of
+/// [`collect_top_level_units`] / [`attach_route_handler`] and passed
+/// down through unit construction.  Currently carries the set of TS
+/// type-alias names whose body references a TRPC-marker type; future
+/// fields can be added without changing the per-unit signature.
+#[derive(Default, Debug, Clone)]
+pub struct FileMeta {
+    pub trpc_alias_names: HashSet<String>,
+}
+
+impl FileMeta {
+    pub fn scan(root: Node<'_>, bytes: &[u8]) -> Self {
+        let mut trpc_alias_names = HashSet::new();
+        scan_trpc_aliases_visit(root, bytes, &mut trpc_alias_names);
+        Self { trpc_alias_names }
+    }
 }
 
 pub fn push_route_registration(
@@ -310,10 +342,44 @@ pub fn build_function_unit(
     bytes: &[u8],
     rules: &AuthAnalysisRules,
 ) -> AnalysisUnit {
+    build_function_unit_with_meta(node, kind, name, bytes, rules, None)
+}
+
+/// Internal variant of [`build_function_unit`] that accepts a
+/// pre-computed file-level [`FileMeta`].  When `file_meta` is
+/// `Some`, its `trpc_alias_names` set is copied into `UnitState`
+/// once per unit so the per-parameter pre-pass doesn't re-scan the
+/// source-file root.  Pre-built `FileMeta` is required to keep
+/// `tests/hostile_input_tests::many_small_functions_do_not_explode`
+/// inside its 15s budget on N×N files.
+pub fn build_function_unit_with_meta(
+    node: Node<'_>,
+    kind: AnalysisUnitKind,
+    name: Option<String>,
+    bytes: &[u8],
+    rules: &AuthAnalysisRules,
+    file_meta: Option<&FileMeta>,
+) -> AnalysisUnit {
     let definition = function_definition_node(node);
     let params = function_params(definition, bytes);
     let line = node.start_position().row + 1;
     let mut state = UnitState::default();
+    // Seed Go's method-receiver name (`func (c *Cache) ...` → `c`) into
+    // `non_sink_vars` so calls of the form `c.foo(..)` /
+    // `c.field.foo(..)` route through the in-memory-local sink class
+    // and skip the verb-name fallback.  These are intra-struct
+    // dispatches; without type tracking, the auth analyser cannot tell
+    // a `*Cache` field-call from a `*sql.DB` call by name alone, so we
+    // err on the safe side per the deferred memo
+    // (`project_realrepo_hugo.md`).  Only Go's `method_declaration`
+    // exposes a `receiver` field — Rust/Java instance methods route
+    // through `self`/`this` keywords and are unaffected.
+    if let Some(receiver_name) = method_receiver_name(definition, bytes) {
+        state.non_sink_vars.insert(receiver_name);
+    }
+    if let Some(meta) = file_meta {
+        state.trpc_alias_names = meta.trpc_alias_names.clone();
+    }
     collect_unit_state(node, bytes, rules, &mut state);
     dedup_value_refs(&mut state.value_refs);
     let context_inputs: Vec<ValueRef> = state
@@ -344,9 +410,15 @@ pub fn build_function_unit(
         condition_texts: state.condition_texts,
         line,
         row_field_vars: state.row_field_vars,
+        var_alias_chain: state.var_alias_chain,
+        row_population_data: state.row_population_data,
         self_actor_vars: state.self_actor_vars,
         self_actor_id_vars: state.self_actor_id_vars,
         authorized_sql_vars: state.authorized_sql_vars,
+        const_bound_vars: state.const_bound_vars,
+        typed_bounded_vars: HashSet::new(),
+        typed_bounded_dto_fields: std::collections::HashMap::new(),
+        self_scoped_session_bases: state.self_scoped_session_bases,
     }
 }
 
@@ -370,6 +442,14 @@ struct UnitState {
     /// downstream uses of fields from the same row are implicitly
     /// covered by a check on the row's owner column.
     row_field_vars: HashMap<String, String>,
+    /// Full chain text for `let X = BASE.FIELD` shapes (or
+    /// transitively through method calls / try / await wrappers when
+    /// the value resolves to a member access). Stored alongside
+    /// `row_field_vars` so the row-population reverse-walk can match
+    /// plain-identifier sink subjects against population args by
+    /// their original chain text. See
+    /// [`crate::auth_analysis::model::AnalysisUnit::var_alias_chain`].
+    var_alias_chain: HashMap<String, String>,
     /// Per row-binding metadata from the `let ROW = CALL(...)` site:
     /// the declaration line and the set of `ValueRef`s appearing in
     /// the call's arguments. When an A2 AuthCheck fires against
@@ -400,6 +480,31 @@ struct UnitState {
     /// `let Y = ROW.method(..)` propagation paths inside
     /// `collect_row_field_binding` and `collect_for_row_binding`.
     authorized_sql_vars: HashSet<String>,
+    /// Local variables whose declaration binds them to a string,
+    /// numeric, or boolean literal — `id := "id"` / `let id = "1"` /
+    /// `String id = "id";`.  These cannot be user-controlled and so
+    /// must not be treated as scoped-identifier subjects by
+    /// `is_relevant_target_subject`.  Closes the gin/context_test.go
+    /// FP where `id := "id"; c.AddParam(id, value)` triggered
+    /// `go.auth.missing_ownership_check` because the local `id`
+    /// matched `is_id_like` but had no actor-context exemption.
+    const_bound_vars: HashSet<String>,
+    /// Dynamic per-unit session-base set lifted into the
+    /// `AnalysisUnit` of the same name.  Populated by
+    /// [`collect_trpc_ctx_param`] when a TS parameter's type
+    /// references a TRPC-shaped Options alias.  See the field doc on
+    /// [`crate::auth_analysis::model::AnalysisUnit::self_scoped_session_bases`].
+    self_scoped_session_bases: HashSet<String>,
+    /// File-level set of TS type-alias names whose body references a
+    /// TRPC-marker type (`TrpcSessionUser` etc.).  Populated once per
+    /// unit at the top of [`build_function_unit`] by walking up to
+    /// the source-file root and scanning every
+    /// `type_alias_declaration` / `interface_declaration`.  Read by
+    /// [`collect_trpc_ctx_param`] to decide whether a parameter's
+    /// type annotation (often just an alias name like `GetOptions`)
+    /// resolves to a TRPC handler signature.  Empty for non-TS
+    /// languages — the scanner only matches TS-grammar node kinds.
+    trpc_alias_names: HashSet<String>,
 }
 
 fn collect_unit_state(
@@ -429,17 +534,68 @@ fn collect_unit_state(
         "let_declaration" => {
             collect_non_sink_binding(node, bytes, rules, state);
             collect_row_field_binding(node, bytes, state);
+            collect_member_alias_binding(node, bytes, state);
             collect_row_population(node, bytes, state);
             collect_self_actor_binding(node, bytes, rules, state);
             collect_self_actor_id_binding(node, bytes, state);
             collect_sql_authorized_binding(node, bytes, rules, state);
             propagate_sql_authorized_through_field_read(node, bytes, state);
+            collect_const_string_binding(node, bytes, state);
+        }
+        // JS/TS `variable_declarator` inside `lexical_declaration`
+        // (`const X = ...`, `let X = ...`) — exposes `name` + `value`
+        // fields. Run the same self-actor / self-actor-id binding
+        // recognition as the Rust `let_declaration` arm above so the
+        // session-self-actor copy chain (`const session = await
+        // getServerSession(...)`; `const userId = session.user.id`)
+        // populates `self_actor_vars` / `self_actor_id_vars`.
+        "variable_declarator" => {
+            collect_self_actor_binding(node, bytes, rules, state);
+            collect_self_actor_id_binding(node, bytes, state);
+            collect_const_string_binding(node, bytes, state);
+        }
+        // Go `id := "id"` / Python `id = "id"` / Java `String id = "id";` /
+        // Ruby `id = "id"` — language-specific binding nodes that the
+        // let_declaration arm above doesn't catch.  Const-only — never
+        // marks self_actor / row_field / sql vars (those need richer
+        // right-hand-side analysis already provided by the
+        // let_declaration arm).
+        "short_var_declaration"
+        | "const_declaration"
+        | "var_declaration"
+        | "var_spec"
+        | "lexical_declaration"
+        | "local_variable_declaration"
+        | "assignment"
+        | "assignment_expression"
+        | "augmented_assignment"
+        | "expression_statement" => {
+            collect_const_string_binding(node, bytes, state);
+            // Ruby `@issue = Issue.find(params[:id])` is the canonical
+            // controller idiom: instance-variable assignment whose RHS
+            // is a row-fetch call.  The let_declaration arm above
+            // doesn't fire for this kind, so register the row
+            // population separately.  `collect_row_population` reads
+            // either `pattern`/`value` or `left`/`right`, so it works
+            // unchanged for Ruby `assignment` once the LHS recognises
+            // `instance_variable`.
+            if matches!(node.kind(), "assignment" | "assignment_expression") {
+                collect_row_population(node, bytes, state);
+            }
         }
         "for_expression" => {
             collect_for_row_binding(node, bytes, state);
         }
         "parameter" => {
             collect_typed_extractor_self_actor(node, bytes, state);
+        }
+        // TS `required_parameter` / `optional_parameter` — the analogous
+        // arm to Rust's `parameter`.  Recognise TRPC-shaped Options
+        // params (`{ ctx, input }: GetOptions`) and add the destructured
+        // ctx-base to `self_scoped_session_bases` so downstream
+        // `ctx.user.id` accesses count as actor context.
+        "required_parameter" | "optional_parameter" => {
+            collect_trpc_ctx_param(node, bytes, state);
         }
         _ => {}
     }
@@ -628,7 +784,19 @@ fn collect_non_sink_binding(
 fn first_identifier_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
     if matches!(
         node.kind(),
-        "identifier" | "shorthand_property_identifier_pattern"
+        "identifier"
+            | "shorthand_property_identifier_pattern"
+            // Ruby `@foo` instance vars and `@@foo` class vars:
+            // Rails controllers populate the row via `@issue =
+            // Issue.find(...)`, so the row var is the *full* `@issue`
+            // text — chain_root in checks.rs strips on `.` only, so an
+            // auth check on `@issue.visible?` resolves to root `@issue`,
+            // matching the row var.
+            | "instance_variable"
+            | "class_variable"
+            // Ruby globals `$foo` are unusual but match the same
+            // handler-state idiom — kept symmetric with @-vars.
+            | "global_variable"
     ) {
         let value = text(node, bytes);
         if !value.is_empty() {
@@ -698,11 +866,22 @@ fn collect_row_field_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitState
     state.row_field_vars.insert(var_name, row_name);
 }
 
-/// Record the line and argument value-refs of a `let ROW = CALL(..)`.
-/// When A2 synthesises an `AuthCheck` on `ROW` later, we back-date the
-/// check to this line and merge the args into its subjects so the
-/// original fetch (e.g. `db.query_one(.., &[doc_id])`) is also covered.
-fn collect_row_population(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+/// Track `let X = BASE.FIELD` (or `BASE.FIELD?` / `(BASE.FIELD).await`)
+/// so a downstream sink whose subject is the bare identifier `X` can be
+/// matched against row-population args that recorded the original
+/// chain text.  Distinct from `collect_row_field_binding`, which only
+/// records the receiver name (loses the field).
+///
+/// Only fires when the value resolves to a member-access node and the
+/// resulting chain has at least two segments (`req.community_id`,
+/// `data.user.id`, …) — single-ident receivers are uninteresting and a
+/// chain of length one would just duplicate the binding's own name.
+///
+/// Defensive: never overwrites an existing entry — first writer wins.
+/// Re-binding the same local name (rare in idiomatic Rust) is treated
+/// as a separate variable scope; the rest of the analysis already
+/// works on the first binding seen during a top-down walk.
+fn collect_member_alias_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
     let Some(pattern) = node.child_by_field_name("pattern") else {
         return;
     };
@@ -713,6 +892,67 @@ fn collect_row_population(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
         return;
     }
     let Some(value) = node.child_by_field_name("value") else {
+        return;
+    };
+    let target = unwrap_try_like(value);
+    if !matches!(
+        target.kind(),
+        "member_expression"
+            | "attribute"
+            | "selector_expression"
+            | "field_expression"
+            | "field_access"
+    ) {
+        return;
+    }
+    let chain = member_chain(target, bytes);
+    if chain.len() < 2 {
+        return;
+    }
+    let chain_text = chain.join(".");
+    state.var_alias_chain.entry(var_name).or_insert(chain_text);
+}
+
+/// Record the line and argument value-refs of a `let ROW = CALL(..)`.
+/// When A2 synthesises an `AuthCheck` on `ROW` later, we back-date the
+/// check to this line and merge the args into its subjects so the
+/// original fetch (e.g. `db.query_one(.., &[doc_id])`) is also covered.
+///
+/// The recorded line is the **call**'s start line, not the
+/// `let_declaration`'s.  These differ for multi-line bindings such as
+///
+/// ```ignore
+/// let orig =                         // let_declaration starts here
+///     CommentView::read(&mut pool, comment_id, ..).await?;  // call starts here
+/// ```
+///
+/// `has_row_fetch_exemption` looks for a row var "declared at this
+/// op's line", where `op.line` is the call site.  Recording the
+/// let-line caused the multi-line shape to fall through the exemption
+/// — surfaced on lemmy's `comment/lock.rs:31`, where every fetch-then-
+/// check route handler that wraps the read across two lines was
+/// flagged despite a textual auth check on the resulting row.
+fn collect_row_population(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+    // Most languages expose `pattern`/`value` on let / const / var
+    // declarations.  Ruby `assignment` uses `left`/`right` instead, so
+    // accept either.  When both fields are missing, the node isn't an
+    // RHS-bound binding and we skip.
+    let Some(pattern) = node
+        .child_by_field_name("pattern")
+        .or_else(|| node.child_by_field_name("left"))
+    else {
+        return;
+    };
+    let Some(var_name) = first_identifier_name(pattern, bytes) else {
+        return;
+    };
+    if var_name.is_empty() {
+        return;
+    }
+    let Some(value) = node
+        .child_by_field_name("value")
+        .or_else(|| node.child_by_field_name("right"))
+    else {
         return;
     };
     let call_node = unwrap_try_like(value);
@@ -730,8 +970,10 @@ fn collect_row_population(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
     for arg in args {
         arg_refs.extend(extract_value_refs(arg, bytes));
     }
-    let line = node.start_position().row + 1;
-    state.row_population_data.insert(var_name, (line, arg_refs));
+    let call_line = call_node.start_position().row + 1;
+    state
+        .row_population_data
+        .insert(var_name, (call_line, arg_refs));
 }
 
 /// A3: record `let V = CALL(..)` (or `.await?` / `?` / reference
@@ -745,21 +987,614 @@ fn collect_self_actor_binding(
     rules: &AuthAnalysisRules,
     state: &mut UnitState,
 ) {
-    let Some(pattern) = node.child_by_field_name("pattern") else {
+    // Rust `let_declaration` exposes `pattern`; JS/TS
+    // `variable_declarator` exposes `name`. Try both so the same
+    // recognition fires across languages.
+    let Some(pattern) = node
+        .child_by_field_name("pattern")
+        .or_else(|| node.child_by_field_name("name"))
+    else {
         return;
     };
+    let Some(value) = node.child_by_field_name("value") else {
+        return;
+    };
+
+    // Destructuring: `const { user } = ctx.session;` /
+    // `const { user } = await getServerSession();` /
+    // `const { id } = req.user;`.  These bind LOCAL variables that are
+    // semantically the actor (or the actor's id), and the existing
+    // single-ident path can't see them because `first_identifier_name`
+    // either picks the wrong key when several are destructured or
+    // misses the session-container RHS shape entirely.
+    if pattern.kind() == "object_pattern" {
+        collect_destructured_self_actor_binding(pattern, value, bytes, rules, state);
+        return;
+    }
+
     let Some(var_name) = first_identifier_name(pattern, bytes) else {
         return;
     };
     if var_name.is_empty() {
         return;
     }
-    let Some(value) = node.child_by_field_name("value") else {
-        return;
-    };
     if value_is_self_actor_call(value, bytes, rules) {
         state.self_actor_vars.insert(var_name);
     }
+}
+
+/// Pattern is `object_pattern` (JS/TS destructure).  Walk the keys and
+/// classify the RHS to decide what each destructured local should
+/// register as:
+///
+/// * `const { user } = ctx.session` / `const { user } = await
+///   getServerSession()` — RHS is a session container, so a
+///   destructured `user` (or `currentUser`) becomes the unit's
+///   self-actor binding.
+/// * `const { id } = req.user` / `const { userId } = session.user` —
+///   RHS is the canonical authed-user base from
+///   `is_self_scoped_session_base_text`, so a destructured `id` /
+///   `userId` / `user_id` / `uid` becomes a self-actor-id binding.
+/// * `const { user } = await loginGuardCall()` — also accepted
+///   because `value_is_self_actor_call` already covers the
+///   `let user = require_auth(..)` shape; we lift that recognition
+///   into the destructure case so callers can extract the actor in a
+///   single statement.
+///
+/// Each `pair_pattern` entry distinguishes the destructured KEY (the
+/// shape of the RHS source) from the bound LOCAL (what we add to the
+/// state set).  Shorthand patterns reuse the key as the local.
+fn collect_destructured_self_actor_binding(
+    pattern: Node<'_>,
+    value: Node<'_>,
+    bytes: &[u8],
+    rules: &AuthAnalysisRules,
+    state: &mut UnitState,
+) {
+    // Two recognition paths run in sequence:
+    //   1. Static classify_destructure_rhs: hard-coded session-container
+    //      / self-actor-base / self-actor-call shapes.
+    //   2. Dynamic self_scoped_session_bases lookup: if the RHS is a
+    //      chain (or bare identifier) `<X>` and `<X>.user` was added to
+    //      `self_scoped_session_bases` by an earlier TRPC param scan,
+    //      the destructured `user` key is the actor.  Closes the
+    //      cal.com `({ ctx, input }: Options) => { const { user } = ctx; }`
+    //      shape where ctx is the TRPC-typed param.
+    let kind = classify_destructure_rhs(value, bytes, rules);
+    let trpc_ctx_path = lookup_trpc_ctx_destructure_match(value, bytes, state);
+
+    if kind == DestructureRhsKind::None && trpc_ctx_path.is_none() {
+        return;
+    }
+
+    for idx in 0..pattern.named_child_count() {
+        let Some(child) = pattern.named_child(idx as u32) else {
+            continue;
+        };
+        let (key, local) = match child.kind() {
+            // `{ user }` — key and local are the same identifier.
+            "shorthand_property_identifier_pattern" => {
+                let name = text(child, bytes);
+                (name.clone(), name)
+            }
+            // `{ user = default }` — left is the shorthand key/local.
+            "object_assignment_pattern" => {
+                let Some(left) = child.child_by_field_name("left") else {
+                    continue;
+                };
+                let name = if matches!(
+                    left.kind(),
+                    "identifier" | "shorthand_property_identifier_pattern"
+                ) {
+                    text(left, bytes)
+                } else {
+                    first_identifier_name(left, bytes).unwrap_or_default()
+                };
+                (name.clone(), name)
+            }
+            // `{ user: localName }` — `key` and `value` fields are
+            // distinct (key from RHS source, local in our scope).
+            "pair_pattern" => {
+                let key_node = child.child_by_field_name("key");
+                let local_node = child.child_by_field_name("value");
+                let (Some(k), Some(v)) = (key_node, local_node) else {
+                    continue;
+                };
+                let key = text(k, bytes);
+                let local = first_identifier_name(v, bytes).unwrap_or_default();
+                (key, local)
+            }
+            _ => continue,
+        };
+        if kind != DestructureRhsKind::None {
+            process_destructure_entry(&key, &local, kind, state);
+        }
+        // Dynamic-set lift: when the RHS resolves to an `<X>` whose
+        // `<X>.user` was added to `self_scoped_session_bases`, the
+        // destructured `user` key is the actor.  This closes the
+        // chained TRPC shape `({ ctx }: Options) => { const { user }
+        // = ctx; }` where the param-level pre-pass marked `ctx.user`
+        // earlier in the unit.
+        if let Some(rhs_path) = trpc_ctx_path.as_deref()
+            && key.eq_ignore_ascii_case("user")
+            && !local.is_empty()
+        {
+            let _ = rhs_path; // path itself is not stored; presence is the signal
+            state.self_actor_vars.insert(local);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestructureRhsKind {
+    /// RHS is a session container — the destructured `user` field
+    /// resolves to the authenticated actor.  Examples: `ctx.session`,
+    /// `req.session`, `session`, `await getServerSession()`,
+    /// `getSession()`.
+    SessionContainer,
+    /// RHS is the authed-user base itself (`req.user`, `session.user`,
+    /// `ctx.session.user`).  A destructured `id` field is the actor's
+    /// own id.
+    SelfActorBase,
+    /// RHS is not a session/actor source — destructure is irrelevant
+    /// for self-actor recognition.
+    None,
+}
+
+/// When the destructure RHS is `<chain>` (an identifier or member
+/// chain), return `Some(chain_text)` if `<chain_text>.user` was added
+/// to `state.self_scoped_session_bases` by an earlier
+/// `collect_trpc_ctx_param` call.  Used to mark the destructured
+/// `user` shorthand as a self-actor binding when extracting it from a
+/// TRPC ctx param's local — `({ ctx }: Options) => { const { user }
+/// = ctx; }`.
+fn lookup_trpc_ctx_destructure_match(
+    node: Node<'_>,
+    bytes: &[u8],
+    state: &UnitState,
+) -> Option<String> {
+    if state.self_scoped_session_bases.is_empty() {
+        return None;
+    }
+    let chain_text = chain_text_from_value(node, bytes)?;
+    if chain_text.is_empty() {
+        return None;
+    }
+    let candidate = format!("{chain_text}.user");
+    if state.self_scoped_session_bases.contains(&candidate) {
+        Some(chain_text)
+    } else {
+        None
+    }
+}
+
+/// Reduce an RHS expression to its dotted chain text, walking through
+/// `await`/parens/non-null wrappers.  Returns `None` for shapes that
+/// aren't a pure identifier/member-chain (e.g. a call result, a
+/// template literal, an object-literal expression).
+fn chain_text_from_value(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    match node.kind() {
+        "identifier" => {
+            let t = text(node, bytes);
+            if t.is_empty() { None } else { Some(t) }
+        }
+        "field_expression" | "member_expression" | "field_access" | "scoped_identifier" => {
+            let chain = member_chain(node, bytes);
+            if chain.is_empty() {
+                None
+            } else {
+                Some(chain.join("."))
+            }
+        }
+        "type_cast_expression"
+        | "as_expression"
+        | "cast_expression"
+        | "parenthesized_expression"
+        | "non_null_expression"
+        | "await_expression"
+        | "try_expression" => {
+            let inner = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("expression"));
+            if let Some(v) = inner
+                && let Some(t) = chain_text_from_value(v, bytes)
+            {
+                return Some(t);
+            }
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if let Some(t) = chain_text_from_value(child, bytes) {
+                    return Some(t);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn classify_destructure_rhs(
+    node: Node<'_>,
+    bytes: &[u8],
+    rules: &AuthAnalysisRules,
+) -> DestructureRhsKind {
+    if value_is_self_actor_call(node, bytes, rules) {
+        return DestructureRhsKind::SessionContainer;
+    }
+    if value_is_session_provider_chain(node, bytes) {
+        return DestructureRhsKind::SessionContainer;
+    }
+    if value_is_self_actor_base_chain(node, bytes) {
+        return DestructureRhsKind::SelfActorBase;
+    }
+    DestructureRhsKind::None
+}
+
+fn process_destructure_entry(
+    key: &str,
+    local: &str,
+    kind: DestructureRhsKind,
+    state: &mut UnitState,
+) {
+    if key.is_empty() || local.is_empty() {
+        return;
+    }
+    let key_lower = key.to_ascii_lowercase();
+    match kind {
+        DestructureRhsKind::SessionContainer => {
+            if matches!(key_lower.as_str(), "user" | "currentuser" | "current_user") {
+                state.self_actor_vars.insert(local.to_string());
+            }
+        }
+        DestructureRhsKind::SelfActorBase => {
+            if matches!(key_lower.as_str(), "id" | "userid" | "user_id" | "uid") {
+                state.self_actor_id_vars.insert(local.to_string());
+            }
+        }
+        DestructureRhsKind::None => {}
+    }
+}
+
+/// True when `node` (after walking through `await`/parens/non-null
+/// wrappers) is a session-container expression — a chain ending in
+/// `.session` / `.state.session` / a bare `session` identifier, or a
+/// call to a known session-getter (`getServerSession()`,
+/// `getSession()`).  Distinct from `value_is_self_actor_call` which
+/// matches login-guard / authorization-check callees configured per
+/// language.
+fn value_is_session_provider_chain(node: Node<'_>, bytes: &[u8]) -> bool {
+    match node.kind() {
+        "field_expression" | "member_expression" | "field_access" | "scoped_identifier" => {
+            let chain = member_chain(node, bytes);
+            if chain.is_empty() {
+                return false;
+            }
+            let joined = chain.join(".");
+            // Bare session containers — `ctx.session`, `req.session`,
+            // `request.session`, plus the Koa `ctx.state` shape.
+            matches!(
+                joined.as_str(),
+                "ctx.session" | "ctx.state" | "req.session" | "request.session" | "session"
+            )
+        }
+        "identifier" => {
+            let name = text(node, bytes);
+            matches!(name.as_str(), "session")
+        }
+        // Known session-getter calls.  Conservative list — only
+        // recogniser shapes that are unambiguously session-providing
+        // in the JS/TS ecosystem (NextAuth's `getServerSession` is the
+        // dominant one).  `auth()` and `useSession()` are deliberately
+        // omitted because their meaning is ambiguous outside of a
+        // server-component context and adding them risks
+        // over-suppression in non-NextAuth code.
+        "call_expression" | "call" => {
+            let callee = call_name(node, bytes);
+            let last = bare_method_name(&callee);
+            matches!(
+                last,
+                "getServerSession"
+                    | "getSession"
+                    | "getServerSideSession"
+                    | "unstable_getServerSession"
+            )
+        }
+        "type_cast_expression"
+        | "as_expression"
+        | "cast_expression"
+        | "parenthesized_expression"
+        | "non_null_expression"
+        | "await_expression"
+        | "try_expression" => {
+            let inner = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("expression"));
+            if let Some(v) = inner
+                && value_is_session_provider_chain(v, bytes)
+            {
+                return true;
+            }
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if value_is_session_provider_chain(child, bytes) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// True when `node` is the canonical authed-user base from
+/// `is_self_scoped_session_base_text` (e.g. `req.user`, `session.user`,
+/// `ctx.session.user`).  Used to recognise `const { id } = req.user`
+/// so the destructured `id` becomes a self-actor-id.
+fn value_is_self_actor_base_chain(node: Node<'_>, bytes: &[u8]) -> bool {
+    match node.kind() {
+        "field_expression" | "member_expression" | "field_access" | "scoped_identifier" => {
+            let chain = member_chain(node, bytes);
+            if chain.is_empty() {
+                return false;
+            }
+            let joined = chain.join(".");
+            is_self_scoped_session_base_text(&joined)
+        }
+        "type_cast_expression"
+        | "as_expression"
+        | "cast_expression"
+        | "parenthesized_expression"
+        | "non_null_expression"
+        | "await_expression"
+        | "try_expression" => {
+            let inner = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("expression"));
+            if let Some(v) = inner
+                && value_is_self_actor_base_chain(v, bytes)
+            {
+                return true;
+            }
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if value_is_self_actor_base_chain(child, bytes) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Recognise variable bindings whose right-hand side is a literal
+/// constant — string, integer, float, or boolean.  A subject backed
+/// by a constant binding cannot be user-controlled and so must not
+/// trigger `<lang>.auth.missing_ownership_check` even when the
+/// variable name happens to match `is_id_like` (e.g.
+/// `id := "id"` in a Go test fixture).
+///
+/// Walks the binding's RHS through common wrappers
+/// (`parenthesized_expression`, `type_cast_expression`,
+/// reference/borrow expressions) before checking for a leaf literal
+/// kind.  Conservative: any non-literal subexpression on the RHS
+/// (a call, identifier, field-access) skips the binding — that var
+/// might still hold attacker-controlled data.
+///
+/// Handles the per-language declaration kinds wired in
+/// `collect_unit_state`: Go `short_var_declaration` (`x := "foo"`),
+/// JS `lexical_declaration` (`const x = "foo"`), Java
+/// `local_variable_declaration`, Rust `let_declaration`, and bare
+/// `assignment_expression`.
+fn collect_const_string_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+    // `assignment` / `assignment_expression`: `x = "foo"` — populate
+    // the LHS (`name` / `left`) when the RHS is a literal.
+    if matches!(
+        node.kind(),
+        "assignment" | "assignment_expression" | "augmented_assignment"
+    ) {
+        let lhs = node
+            .child_by_field_name("left")
+            .or_else(|| node.child_by_field_name("name"))
+            .or_else(|| node.child_by_field_name("target"));
+        let rhs = node
+            .child_by_field_name("right")
+            .or_else(|| node.child_by_field_name("value"));
+        if let (Some(lhs), Some(rhs)) = (lhs, rhs)
+            && rhs_is_pure_literal(rhs)
+        {
+            for var in collect_lhs_idents(lhs, bytes) {
+                state.const_bound_vars.insert(var);
+            }
+        }
+        return;
+    }
+
+    // Go `short_var_declaration` / `var_declaration` /
+    // `const_declaration`: `id := "id"` or `var id string = "id"`.
+    // Tree-sitter-go uses `left:expression_list` and
+    // `right:expression_list`.
+    if matches!(
+        node.kind(),
+        "short_var_declaration" | "var_spec" | "const_spec"
+    ) {
+        let left = node.child_by_field_name("left").or_else(|| {
+            // Some tree-sitter grammars expose name(s) instead of left
+            node.child_by_field_name("name")
+        });
+        let right = node.child_by_field_name("right").or_else(|| {
+            node.child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("default"))
+        });
+        if let (Some(left), Some(right)) = (left, right) {
+            // expression_list parallel — pair LHS idents with RHS exprs.
+            let lhs_idents = collect_lhs_idents(left, bytes);
+            let rhs_exprs: Vec<Node<'_>> = if right.kind() == "expression_list" {
+                let mut cursor = right.walk();
+                right
+                    .children(&mut cursor)
+                    .filter(|c| !matches!(c.kind(), "," | "(" | ")"))
+                    .collect()
+            } else {
+                vec![right]
+            };
+            for (idx, var) in lhs_idents.into_iter().enumerate() {
+                if let Some(expr) = rhs_exprs.get(idx)
+                    && rhs_is_pure_literal(*expr)
+                {
+                    state.const_bound_vars.insert(var);
+                }
+            }
+        }
+        return;
+    }
+
+    // `var_declaration` / `const_declaration` (Go top-level wrappers
+    // around var_spec/const_spec): recurse into children handled above.
+    if matches!(node.kind(), "var_declaration" | "const_declaration") {
+        for idx in 0..node.named_child_count() {
+            if let Some(child) = node.named_child(idx as u32) {
+                collect_const_string_binding(child, bytes, state);
+            }
+        }
+        return;
+    }
+
+    // Rust `let_declaration` / Python `expression_statement` wrapping a
+    // top-level assignment / JS `lexical_declaration` / Java
+    // `local_variable_declaration` — all expose the binding via
+    // `pattern`/`name` + `value`.
+    let pattern = node
+        .child_by_field_name("pattern")
+        .or_else(|| node.child_by_field_name("name"));
+    let value = node.child_by_field_name("value");
+    if let (Some(pattern), Some(value)) = (pattern, value)
+        && rhs_is_pure_literal(value)
+    {
+        for var in collect_lhs_idents(pattern, bytes) {
+            state.const_bound_vars.insert(var);
+        }
+        return;
+    }
+
+    // JS `lexical_declaration` / Java `local_variable_declaration` /
+    // Python `expression_statement` — the binding child is a wrapper
+    // (`variable_declarator`).  Recurse into wrappers; the
+    // `variable_declarator` arm in `collect_unit_state` handles them.
+    for idx in 0..node.named_child_count() {
+        let Some(child) = node.named_child(idx as u32) else {
+            continue;
+        };
+        if matches!(
+            child.kind(),
+            "variable_declarator"
+                | "init_declarator"
+                | "var_spec"
+                | "const_spec"
+                | "assignment"
+                | "assignment_expression"
+        ) {
+            collect_const_string_binding(child, bytes, state);
+        }
+    }
+}
+
+/// Returns true if `node` (after unwrapping common wrappers) is a
+/// pure literal — string, integer, float, boolean, or null.  Returns
+/// false for any expression that could carry attacker-controlled data
+/// (calls, identifiers, field access, template strings with
+/// interpolations).
+fn rhs_is_pure_literal(node: Node<'_>) -> bool {
+    // Unwrap wrappers that don't change taint provenance.
+    let inner = match node.kind() {
+        "parenthesized_expression"
+        | "type_cast_expression"
+        | "as_expression"
+        | "cast_expression"
+        | "reference_expression" => {
+            let value = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("expression"));
+            value.unwrap_or(node)
+        }
+        _ => node,
+    };
+    matches!(
+        inner.kind(),
+        "string_literal"
+            | "raw_string_literal"
+            | "string"
+            | "interpreted_string_literal"
+            | "rune_literal"
+            | "integer_literal"
+            | "int_literal"
+            | "float_literal"
+            | "true"
+            | "false"
+            | "boolean_literal"
+            | "nil"
+            | "null"
+            | "null_literal"
+            | "none"
+            | "character_literal"
+    ) || (inner.kind() == "template_string" && !template_has_interpolation(inner))
+        || (inner.kind() == "template_literal" && !template_has_interpolation(inner))
+}
+
+/// Returns true if a template literal/string contains any
+/// interpolation segment (which carries dynamic data).  Pure
+/// hard-coded template strings without `${...}` are still constants.
+fn template_has_interpolation(node: Node<'_>) -> bool {
+    for idx in 0..node.named_child_count() {
+        let Some(child) = node.named_child(idx as u32) else {
+            continue;
+        };
+        if matches!(
+            child.kind(),
+            "template_substitution" | "interpolation" | "string_interpolation"
+        ) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Collect identifier names from an LHS pattern: a bare `identifier`,
+/// a `tuple_pattern`, a Go `expression_list`, or a Rust `tuple_pattern`
+/// / `let_pattern`.  Returns the bound variable names.  Ignores
+/// destructured field accesses (we only track plain locals).
+fn collect_lhs_idents(node: Node<'_>, bytes: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    if node.kind() == "identifier" {
+        out.push(text(node, bytes));
+        return out;
+    }
+    // Walk children, picking up identifiers; recurse into list/tuple
+    // wrappers commonly seen on LHS of multi-binding declarations.
+    for idx in 0..node.named_child_count() {
+        let Some(child) = node.named_child(idx as u32) else {
+            continue;
+        };
+        match child.kind() {
+            "identifier" => out.push(text(child, bytes)),
+            "tuple_pattern"
+            | "expression_list"
+            | "pattern_list"
+            | "list_pattern"
+            | "field_identifier"
+            | "shorthand_field_identifier" => {
+                out.extend(collect_lhs_idents(child, bytes));
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Detect `let X = V.id` (or `(V.id as ..).into()`, `V.id.into()`,
@@ -774,7 +1609,12 @@ fn collect_self_actor_binding(
 /// The original `V.id`-shape recognition only covered direct subject
 /// expressions; this captures the common copy-and-pass shape.
 fn collect_self_actor_id_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
-    let Some(pattern) = node.child_by_field_name("pattern") else {
+    // Rust `let_declaration` exposes `pattern`; JS/TS
+    // `variable_declarator` exposes `name`.
+    let Some(pattern) = node
+        .child_by_field_name("pattern")
+        .or_else(|| node.child_by_field_name("name"))
+    else {
         return;
     };
     let Some(var_name) = first_identifier_name(pattern, bytes) else {
@@ -786,7 +1626,9 @@ fn collect_self_actor_id_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitS
     let Some(value) = node.child_by_field_name("value") else {
         return;
     };
-    if value_is_self_actor_id_field(value, bytes, &state.self_actor_vars) {
+    if value_is_self_actor_id_field(value, bytes, &state.self_actor_vars)
+        || value_is_self_scoped_session_id_chain(value, bytes)
+    {
         state.self_actor_id_vars.insert(var_name);
     }
 }
@@ -877,6 +1719,111 @@ fn is_self_actor_id_field_name(field: &str) -> bool {
     matches!(
         lower.as_str(),
         "id" | "user_id" | "userid" | "uid" | "email" | "username" | "handle"
+    )
+}
+
+/// Recognise `let X = session.user.id` (or
+/// `req.session.user.id` / `ctx.session.user.id` / `req.user.id` /
+/// `request.user.id`, etc.) — a copy of the authenticated actor's
+/// own id field through one of the canonical session-context chains
+/// (the same set `is_self_scoped_session_subject` accepts at use
+/// time). Walks through wrappers (`await`, `?.`, parens, casts,
+/// trivial method chains like `.toString()`).
+///
+/// Closes a real-repo FP cluster (cal.com Next.js handlers): the
+/// idiomatic shape is `if (session?.user?.id) { const userId =
+/// session.user.id; await repo.get(userId); }`. The use site sees
+/// a plain `userId` subject, so without binding-time recognition the
+/// classifier can't tell it's actor context.
+fn value_is_self_scoped_session_id_chain(node: Node<'_>, bytes: &[u8]) -> bool {
+    match node.kind() {
+        "field_expression" | "member_expression" | "field_access" | "scoped_identifier" => {
+            // Build the dotted chain and reuse the same predicate the
+            // subject classifier uses (`matches_session_context` +
+            // self-scoped-base check). Doing it via the chain avoids
+            // re-implementing the session-context grammar here.
+            let chain = member_chain(node, bytes);
+            if chain.len() < 2 {
+                return false;
+            }
+            let field = chain.last().expect("len >= 2");
+            if !is_self_actor_id_field_name(field) {
+                return false;
+            }
+            let base_chain = &chain[..chain.len() - 1];
+            let base = base_chain.join(".");
+            classify_member_chain(base_chain) == ValueSourceKind::Session
+                && is_self_scoped_session_base_text(&base)
+        }
+        "type_cast_expression"
+        | "as_expression"
+        | "cast_expression"
+        | "parenthesized_expression"
+        | "try_expression"
+        | "await_expression"
+        | "reference_expression"
+        | "non_null_expression" => {
+            let value = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("expression"));
+            if let Some(v) = value
+                && value_is_self_scoped_session_id_chain(v, bytes)
+            {
+                return true;
+            }
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if value_is_self_scoped_session_id_chain(child, bytes) {
+                    return true;
+                }
+            }
+            false
+        }
+        // `(req.user.id as number).toString()` / `session.user.id.toString()`
+        "call_expression" | "call" | "method_invocation" | "method_call_expression" => {
+            let receiver = node
+                .child_by_field_name("function")
+                .or_else(|| node.child_by_field_name("object"));
+            if let Some(r) = receiver {
+                if value_is_self_scoped_session_id_chain(r, bytes) {
+                    return true;
+                }
+                if let Some(inner) = r
+                    .child_by_field_name("value")
+                    .or_else(|| r.child_by_field_name("object"))
+                    && value_is_self_scoped_session_id_chain(inner, bytes)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// String-level analogue of `is_self_scoped_session_base` from
+/// `checks.rs`. Kept here in the extract layer to avoid a layer
+/// dependency; the two lists must stay in sync.
+fn is_self_scoped_session_base_text(base: &str) -> bool {
+    matches!(
+        base,
+        "req.session.user"
+            | "request.session.user"
+            | "session.user"
+            | "req.session.currentUser"
+            | "request.session.currentUser"
+            | "session.currentUser"
+            | "req.user"
+            | "request.user"
+            | "req.currentUser"
+            | "request.currentUser"
+            | "ctx.session.user"
+            | "ctx.session.currentUser"
+            | "ctx.state.user"
+            | "ctx.state.currentUser"
     )
 }
 
@@ -1046,7 +1993,7 @@ fn find_authorized_sql_call_in_chain<'tree>(
         }
 
         let callee = call_name(cur, bytes);
-        let last_segment = callee.rsplit('.').next().unwrap_or(callee.as_str());
+        let last_segment = bare_method_name(&callee);
         if is_sql_prepare_method(last_segment) {
             // Check first arg is a string literal that classifies
             // as authorized.
@@ -1195,7 +2142,7 @@ fn single_iter_source_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
         }
         "call_expression" | "call" | "method_invocation" | "method_call_expression" => {
             let callee = call_name(node, bytes);
-            let last = callee.rsplit('.').next().unwrap_or(callee.as_str());
+            let last = bare_method_name(&callee);
             if !matches!(
                 last,
                 "iter" | "iter_mut" | "into_iter" | "values" | "keys" | "drain"
@@ -1250,6 +2197,39 @@ fn propagate_sql_authorized_through_field_read(
     }
 }
 
+/// Recognise type names that semantically mean "the authenticated
+/// actor" as the type of a function parameter.  Used by
+/// `collect_typed_extractor_self_actor` to seed `self_actor_vars` so
+/// that downstream `V.id`-shaped subjects on a parameter of one of
+/// these types count as actor context, not foreign scoped IDs.
+///
+/// The recogniser is intentionally type-only — no name heuristic on
+/// the variable.  A handler signature
+/// `pub async fn handler(.., local_user_view: LocalUserView)` is
+/// recognised because the type name matches, not because the
+/// parameter is conventionally named `local_user_view`.
+///
+/// **Two acceptance forms:**
+///
+/// 1. *Tight exact set* — names whose entire identity is "auth
+///    subject": `Authenticated`, `Identity`, `Principal`.  Adding new
+///    bare names to this set should be done sparingly; framework
+///    types that include `User` should go through the structural
+///    form instead.
+///
+/// 2. *Structural form* — a CamelCase identifier of the shape
+///    `<PREFIX>User<SUFFIX>?` where `PREFIX` is one of `Local`,
+///    `Current`, `Session`, `Auth`, `Authenticated`, `LoggedIn`,
+///    `Admin`, and `SUFFIX` (optional) is one of `View`, `Info`,
+///    `Context`, `Session`, `Token`.  Catches `LocalUserView`
+///    (lemmy), `LocalUser`, `CurrentUser`, `LoggedInUser`,
+///    `AuthenticatedUserContext`, etc.
+///
+/// **Deliberately *not* matched:**
+/// * Bare `User` — too loose; `User` parameters are very often
+///   deserialised payloads, not actor extractors.
+/// * `UserView`, `UserPreferences` — same reason; the prefix is what
+///   carries the auth signal, not the bare `User` segment.
 fn is_self_actor_type_text(ty: &str) -> bool {
     let trimmed = ty
         .trim()
@@ -1262,17 +2242,48 @@ fn is_self_actor_type_text(ty: &str) -> bool {
         .next()
         .unwrap_or(after_colons)
         .trim();
-    matches!(
-        base,
-        "CurrentUser"
-            | "SessionUser"
-            | "AuthUser"
-            | "AdminUser"
-            | "AuthenticatedUser"
-            | "RequireAuth"
-            | "RequireLogin"
-            | "Authenticated"
-    )
+    if matches!(base, "Authenticated" | "Identity" | "Principal") {
+        return true;
+    }
+    matches_self_actor_user_form(base)
+}
+
+/// Structural form: `<PREFIX>User<SUFFIX>?` where PREFIX is in the
+/// authority-prefix vocabulary and SUFFIX is in the
+/// auth-context-suffix vocabulary (or absent).
+///
+/// Implementation: strip a leading PREFIX, require the remainder to
+/// start with `User`, and accept either an exact `User` match or a
+/// `User`+SUFFIX match.  Case-sensitive on the segment boundaries
+/// because we want CamelCase types only — `localuser` wouldn't be a
+/// real Rust type name and matching it would create ambiguity with
+/// payload identifiers.
+fn matches_self_actor_user_form(base: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "Local",
+        "Current",
+        "Session",
+        "Authenticated",
+        "Auth",
+        "LoggedIn",
+        "Admin",
+    ];
+    const SUFFIXES: &[&str] = &["View", "Info", "Context", "Session", "Token"];
+    for prefix in PREFIXES {
+        let Some(rest) = base.strip_prefix(prefix) else {
+            continue;
+        };
+        let Some(after_user) = rest.strip_prefix("User") else {
+            continue;
+        };
+        if after_user.is_empty() {
+            return true;
+        }
+        if SUFFIXES.contains(&after_user) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Extract a single-segment receiver name for a value node of the shape
@@ -1655,6 +2666,238 @@ fn function_params(node: Node<'_>, bytes: &[u8]) -> Vec<String> {
     params
 }
 
+/// Walk the tree starting at `node` and gather TS type-alias /
+/// interface names whose body references a TRPC-marker type
+/// (`TrpcSessionUser`, `TRPCContext`, …).  Recurses only through
+/// container kinds that legitimately host top-level type aliases
+/// (`program` / `module` / `export_statement` / namespace bodies);
+/// stops at function or class bodies to avoid an O(units × tree)
+/// blowup on files with many small functions.
+///
+/// No-op for non-TS files — the matched node kinds only exist in
+/// the TS grammar.  Used by [`FileMeta::scan`] (called once per file
+/// in `collect_top_level_units` / `attach_route_handler`) to amortise
+/// the alias scan across all units in the same source file.
+fn scan_trpc_aliases_visit(node: Node<'_>, bytes: &[u8], out: &mut HashSet<String>) {
+    match node.kind() {
+        "type_alias_declaration" | "interface_declaration" => {
+            let body = node
+                .child_by_field_name("value")
+                .or_else(|| node.child_by_field_name("body"));
+            if let Some(body) = body {
+                let body_text = text(body, bytes);
+                if body_text_references_trpc_marker(&body_text)
+                    && let Some(name_node) = node.child_by_field_name("name")
+                {
+                    let name = text(name_node, bytes);
+                    if !name.is_empty() {
+                        out.insert(name);
+                    }
+                }
+            }
+            return;
+        }
+        // Recurse only through container kinds that legitimately host
+        // top-level type aliases.  Skipping into function bodies /
+        // class bodies / call arguments avoids an O(unit × tree)
+        // blowup when `build_function_unit` triggers this scan once
+        // per unit on files with thousands of small functions
+        // (`tests/hostile_input_tests::many_small_functions_do_not_explode`).
+        "program"
+        | "source_file"
+        | "module"
+        | "export_statement"
+        | "namespace_declaration"
+        | "module_declaration"
+        | "internal_module"
+        | "ambient_declaration"
+        | "lexical_declaration"
+        | "variable_declaration"
+        | "statement_block" => {}
+        _ => return,
+    }
+    for idx in 0..node.named_child_count() {
+        let Some(child) = node.named_child(idx as u32) else {
+            continue;
+        };
+        scan_trpc_aliases_visit(child, bytes, out);
+    }
+}
+
+fn body_text_references_trpc_marker(body_text: &str) -> bool {
+    body_text.contains("TrpcSessionUser")
+        || body_text.contains("TRPCContext")
+        || body_text.contains("ProtectedTRPCContext")
+        || body_text.contains("TrpcContext")
+}
+
+/// Recognise a TS `required_parameter` / `optional_parameter` whose
+/// type annotation refers to a TRPC-shaped Options alias (or
+/// inlines `TrpcSessionUser` directly), and add the destructured /
+/// declared `ctx`-base to `self_scoped_session_bases` so subjects
+/// rooted at `ctx.user.<id-like>` count as actor context downstream.
+///
+/// Three pattern shapes are handled:
+///   1. Destructured shorthand: `({ ctx, input }: GetOptions)` →
+///      add `"ctx.user"`.
+///   2. Destructured rename: `({ ctx: c, input }: GetOptions)` →
+///      add `"c.user"`.
+///   3. Plain identifier: `(opts: GetOptions)` → add `"opts.ctx.user"`.
+///
+/// The rule is principled: we only fire when the param's type either
+/// IS one of the file-level TRPC aliases (`state.trpc_alias_names`,
+/// populated by [`scan_trpc_aliases_from_node_root`]) or its annotation
+/// text inlines `TrpcSessionUser` directly.  Bare `ctx.user` is never
+/// added to the static session-base list — that would over-suppress
+/// in non-TRPC code.  Instead, the dynamic per-unit set
+/// `self_scoped_session_bases` carries the lift.
+fn collect_trpc_ctx_param(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(ty_node) = node.child_by_field_name("type") else {
+        return;
+    };
+    let ty_text = text(ty_node, bytes);
+    if !type_text_is_trpc_options(&ty_text, &state.trpc_alias_names) {
+        return;
+    }
+
+    if pattern.kind() == "object_pattern" {
+        for idx in 0..pattern.named_child_count() {
+            let Some(child) = pattern.named_child(idx as u32) else {
+                continue;
+            };
+            match child.kind() {
+                "shorthand_property_identifier_pattern" => {
+                    let name = text(child, bytes);
+                    if name.eq_ignore_ascii_case("ctx") {
+                        state
+                            .self_scoped_session_bases
+                            .insert(format!("{name}.user"));
+                    }
+                }
+                "object_assignment_pattern" => {
+                    if let Some(left) = child.child_by_field_name("left") {
+                        let name = if matches!(
+                            left.kind(),
+                            "identifier" | "shorthand_property_identifier_pattern"
+                        ) {
+                            text(left, bytes)
+                        } else {
+                            first_identifier_name(left, bytes).unwrap_or_default()
+                        };
+                        if name.eq_ignore_ascii_case("ctx") {
+                            state
+                                .self_scoped_session_bases
+                                .insert(format!("{name}.user"));
+                        }
+                    }
+                }
+                "pair_pattern" => {
+                    let key_node = child.child_by_field_name("key");
+                    let local_node = child.child_by_field_name("value");
+                    if let (Some(k), Some(v)) = (key_node, local_node) {
+                        let key = text(k, bytes);
+                        let local = first_identifier_name(v, bytes).unwrap_or_default();
+                        if !local.is_empty() && key.eq_ignore_ascii_case("ctx") {
+                            state
+                                .self_scoped_session_bases
+                                .insert(format!("{local}.user"));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        return;
+    }
+
+    if let Some(name) = first_identifier_name(pattern, bytes)
+        && !name.is_empty()
+    {
+        state
+            .self_scoped_session_bases
+            .insert(format!("{name}.ctx.user"));
+    }
+}
+
+/// True when the type-annotation text identifies a TRPC-shaped Options
+/// type: it contains `TrpcSessionUser` directly (inline object type
+/// literal), or it references one of the file-level TRPC alias names
+/// from the pre-scan.
+fn type_text_is_trpc_options(ty_text: &str, trpc_alias_names: &HashSet<String>) -> bool {
+    if body_text_references_trpc_marker(ty_text) {
+        return true;
+    }
+    let trimmed = ty_text.trim_start_matches(':').trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Match the leading identifier of the type (dropping any generic
+    // suffix `<...>`).  This covers `GetOptions` and
+    // `NonNullable<GetOptions>` shapes alike.
+    let head = trimmed.split('<').next().unwrap_or(trimmed).trim();
+    if trpc_alias_names.contains(head) {
+        return true;
+    }
+    // Also accept the bare alias name appearing anywhere in the
+    // annotation text — handles `Promise<GetOptions>` and other
+    // wrappers without enumerating every shape.  Word-boundary check
+    // avoids matching aliases that are substrings of longer
+    // identifiers.
+    for alias in trpc_alias_names {
+        if alias.is_empty() {
+            continue;
+        }
+        if let Some(idx) = ty_text.find(alias.as_str()) {
+            let before_ok = idx == 0
+                || !ty_text.as_bytes()[idx - 1].is_ascii_alphanumeric()
+                    && ty_text.as_bytes()[idx - 1] != b'_';
+            let end = idx + alias.len();
+            let after_ok = end >= ty_text.len()
+                || !ty_text.as_bytes()[end].is_ascii_alphanumeric()
+                    && ty_text.as_bytes()[end] != b'_';
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Extract the receiver-variable name from a Go `method_declaration`
+/// (`func (c *Cache) ...` → `Some("c")`).  Returns `None` for any node
+/// that doesn't expose a `receiver` field (Rust `function_item`,
+/// Java `method_declaration`, JS arrow-functions, …).
+///
+/// Tree-sitter-go shape: `method_declaration` has a `receiver` field
+/// whose value is a `parameter_list` containing a single
+/// `parameter_declaration` with a `name` field (identifier) and a
+/// `type` field (often `pointer_type`).  We only need the name.
+pub fn method_receiver_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    let receiver = node.child_by_field_name("receiver")?;
+    extract_receiver_param_name(receiver, bytes)
+}
+
+fn extract_receiver_param_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    if let Some(name_node) = node.child_by_field_name("name") {
+        let name = text(name_node, bytes);
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    for idx in 0..node.named_child_count() {
+        let Some(child) = node.named_child(idx as u32) else {
+            continue;
+        };
+        if let Some(found) = extract_receiver_param_name(child, bytes) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 fn collect_param_names(node: Node<'_>, bytes: &[u8], out: &mut Vec<String>) {
     match node.kind() {
         "identifier" | "property_identifier" | "shorthand_property_identifier_pattern" => {
@@ -1812,7 +3055,15 @@ pub fn extract_value_refs(node: Node<'_>, bytes: &[u8]) -> Vec<ValueRef> {
                     refs
                 })
         }
-        "identifier" => vec![ValueRef {
+        "identifier"
+        // Ruby `@foo` instance variables and `@@foo` class variables are
+        // leaves with no named children, so the catch-all recurse arm
+        // would yield an empty subject set.  Surface them as Identifier
+        // value-refs so receiver-side ownership checks (`@issue.visible?`)
+        // produce a subject that the row-fetch exemption can match.
+        | "instance_variable"
+        | "class_variable"
+        | "global_variable" => vec![ValueRef {
             source_kind: ValueSourceKind::Identifier,
             name: text(node, bytes),
             base: None,
@@ -2325,7 +3576,7 @@ fn accessor_call_value_ref(
     args: &[Node<'_>],
     bytes: &[u8],
 ) -> Option<ValueRef> {
-    let method = callee.rsplit('.').next().unwrap_or(callee);
+    let method = bare_method_name(callee);
     let field = args
         .first()
         .and_then(|arg| string_literal_value(*arg, bytes));
@@ -2398,25 +3649,57 @@ mod tests {
 
     #[test]
     fn is_self_actor_type_text_matches_known_wrappers() {
+        // Tight exact set: bare names whose entire identity is "auth subject".
+        assert!(is_self_actor_type_text("Authenticated"));
+        assert!(is_self_actor_type_text("Identity"));
+        assert!(is_self_actor_type_text("Principal"));
+
+        // Structural form: <PREFIX>User<SUFFIX?>.
         assert!(is_self_actor_type_text("CurrentUser"));
         assert!(is_self_actor_type_text("SessionUser"));
         assert!(is_self_actor_type_text("AuthUser"));
         assert!(is_self_actor_type_text("AdminUser"));
         assert!(is_self_actor_type_text("AuthenticatedUser"));
-        assert!(is_self_actor_type_text("RequireAuth"));
-        assert!(is_self_actor_type_text("RequireLogin"));
-        assert!(is_self_actor_type_text("Authenticated"));
+        // Lemmy: LocalUserView (the real-repo motivation for the
+        // structural recogniser).
+        assert!(is_self_actor_type_text("LocalUserView"));
+        assert!(is_self_actor_type_text("LocalUser"));
+        assert!(is_self_actor_type_text("LoggedInUser"));
+        assert!(is_self_actor_type_text("CurrentUserContext"));
+        assert!(is_self_actor_type_text("AuthenticatedUserSession"));
+        assert!(is_self_actor_type_text("SessionUserToken"));
+        assert!(is_self_actor_type_text("AdminUserInfo"));
         // Qualified paths resolve to last segment.
         assert!(is_self_actor_type_text("crate::auth::CurrentUser"));
+        assert!(is_self_actor_type_text("crate::user::LocalUserView"));
         assert!(is_self_actor_type_text("&CurrentUser"));
         assert!(is_self_actor_type_text("&mut AuthUser"));
         // Generic wrappers: match on the base segment.
         assert!(is_self_actor_type_text("CurrentUser<Admin>"));
+        assert!(is_self_actor_type_text("LocalUserView<Admin>"));
+
         // Non-matches.
+        // Bare `User` — too loose; commonly a deserialised payload type.
+        assert!(!is_self_actor_type_text("User"));
+        assert!(!is_self_actor_type_text("UserPreferences"));
+        // `UserView` lacks an authority-prefix segment and stays a
+        // payload-shaped name.
+        assert!(!is_self_actor_type_text("UserView"));
+        // No prefix vocabulary match — still rejected.
+        assert!(!is_self_actor_type_text("PaymentUser"));
+        // Wrong suffix vocabulary.
+        assert!(!is_self_actor_type_text("CurrentUserPreferences"));
+        // Framework extractors / unrelated types.
         assert!(!is_self_actor_type_text("Db"));
         assert!(!is_self_actor_type_text("Path<(i64,)>"));
-        assert!(!is_self_actor_type_text("User"));
         assert!(!is_self_actor_type_text("Json<Body>"));
+        // `RequireAuth` / `RequireLogin` were dropped from the exact
+        // set: they aren't `User`-bearing types and aren't
+        // semantically the auth subject — they're guard markers.  The
+        // route-aware `axum::classify_guard_type` still treats them
+        // as a login guard via the looser substring match.
+        assert!(!is_self_actor_type_text("RequireAuth"));
+        assert!(!is_self_actor_type_text("RequireLogin"));
     }
 
     fn ident(name: &str) -> ValueRef {
@@ -2476,5 +3759,82 @@ mod tests {
         assert!(!is_self_actor_subject(&member("target", "id")));
         // Plain identifier, no base.
         assert!(!is_self_actor_subject(&ident("user_id")));
+    }
+
+    #[test]
+    fn type_text_is_trpc_options_matches_alias_and_inline_marker() {
+        use super::type_text_is_trpc_options;
+        use std::collections::HashSet;
+        let mut aliases = HashSet::new();
+        aliases.insert("GetOptions".to_string());
+        aliases.insert("UpdateOptions".to_string());
+
+        // Inline `TrpcSessionUser` marker — accepted regardless of alias set.
+        assert!(type_text_is_trpc_options(
+            ": { ctx: { user: NonNullable<TrpcSessionUser> } }",
+            &aliases
+        ));
+        assert!(type_text_is_trpc_options(
+            ": { user: TrpcSessionUser }",
+            &HashSet::new()
+        ));
+
+        // Plain alias name match.
+        assert!(type_text_is_trpc_options(": GetOptions", &aliases));
+        assert!(type_text_is_trpc_options("GetOptions", &aliases));
+
+        // Generic-wrapped alias.
+        assert!(type_text_is_trpc_options(": Promise<GetOptions>", &aliases));
+        assert!(type_text_is_trpc_options(
+            ": NonNullable<UpdateOptions>",
+            &aliases
+        ));
+
+        // Negatives: alias not in set, no inline marker.
+        assert!(!type_text_is_trpc_options(": OtherOptions", &aliases));
+        assert!(!type_text_is_trpc_options(": Promise<Foo>", &aliases));
+        assert!(!type_text_is_trpc_options(": SomeRandomType", &aliases));
+        // Substring of a longer identifier must NOT match.
+        assert!(!type_text_is_trpc_options(": MyGetOptionsX", &aliases));
+    }
+
+    #[test]
+    fn body_text_references_trpc_marker_recognises_known_markers() {
+        use super::body_text_references_trpc_marker as bm;
+        assert!(bm("type X = { user: NonNullable<TrpcSessionUser> }"));
+        assert!(bm("interface Ctx extends TRPCContext { ... }"));
+        assert!(bm("type Ctx = ProtectedTRPCContext"));
+        assert!(bm("export type Y = { ctx: TrpcContext }"));
+        // Negatives.
+        assert!(!bm("type X = { user: User }"));
+        assert!(!bm("type X = SessionContext"));
+        assert!(!bm("type X = { foo: SomeContext }"));
+    }
+
+    /// Pin the string-level analogue used by
+    /// `value_is_self_scoped_session_id_chain`: it must accept the
+    /// same set of session-scoped bases that `checks.rs::
+    /// is_self_scoped_session_base` accepts.  When you add a new base
+    /// to one, add it to the other and update both tests.
+    #[test]
+    fn is_self_scoped_session_base_text_matches_known_session_bases() {
+        use super::is_self_scoped_session_base_text as bt;
+        // Express / passport idioms.
+        assert!(bt("req.user"));
+        assert!(bt("request.user"));
+        assert!(bt("req.session.user"));
+        assert!(bt("req.session.currentUser"));
+        // Bare session.user (Next.js / NextAuth idiom).
+        assert!(bt("session.user"));
+        assert!(bt("session.currentUser"));
+        // Koa ctx.state / ctx.session.
+        assert!(bt("ctx.session.user"));
+        assert!(bt("ctx.state.user"));
+        // Negatives — bases that are NOT canonical authed-user roots.
+        assert!(!bt("req.body"));
+        assert!(!bt("req.params"));
+        assert!(!bt("ctx.user"));
+        assert!(!bt("data.user"));
+        assert!(!bt("user"));
     }
 }

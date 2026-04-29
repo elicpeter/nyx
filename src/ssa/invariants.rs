@@ -548,6 +548,7 @@ fn op_kind(op: &SsaOp) -> &'static str {
         SsaOp::CatchParam => "CatchParam",
         SsaOp::Nop => "Nop",
         SsaOp::Undef => "Undef",
+        SsaOp::FieldProj { .. } => "FieldProj",
     }
 }
 
@@ -785,6 +786,8 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: Default::default(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
         let errs = check_structural_invariants(&body);
         assert!(
@@ -830,6 +833,8 @@ mod tests {
             }],
             cfg_node_map: Default::default(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
         let errs = check_structural_invariants(&body);
         assert!(
@@ -878,6 +883,8 @@ mod tests {
             }],
             cfg_node_map: Default::default(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
         let errs = check_structural_invariants(&body);
         assert!(
@@ -904,6 +911,8 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: Default::default(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
         let errs = check_structural_invariants(&body);
         assert!(

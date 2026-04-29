@@ -8,7 +8,7 @@
 //! etc.) for witness enrichment and heuristic mismatch diagnostics. They do
 //! NOT affect taint semantics.
 
-use crate::labels::Cap;
+use crate::labels::{Cap, bare_method_name};
 use crate::symbol::Lang;
 
 use super::value::SymbolicValue;
@@ -155,7 +155,7 @@ pub fn classify_string_method(
     args: &[SymbolicValue],
     lang: Lang,
 ) -> Option<StringMethodInfo> {
-    let method = callee.rsplit('.').next().unwrap_or(callee);
+    let method = bare_method_name(callee);
 
     match lang {
         Lang::JavaScript | Lang::TypeScript => classify_js(method, args),
@@ -506,7 +506,7 @@ fn classify_transform_js(callee: &str) -> Option<TransformMethodInfo> {
     use StringOperandSource::*;
     use TransformKind::*;
 
-    let method = callee.rsplit('.').next().unwrap_or(callee);
+    let method = bare_method_name(callee);
     match method {
         // URL encoding/decoding
         "encodeURIComponent" | "encodeURI" => Some(TransformMethodInfo {
@@ -622,7 +622,7 @@ fn classify_transform_java(callee: &str) -> Option<TransformMethodInfo> {
     // `URLEncoder.encode`, `Base64.getEncoder.encodeToString`). Match on
     // the suffix after the last `.` for the leaf method name, but also
     // examine the dotted callee for receiver-qualified disambiguation.
-    let method = callee.rsplit('.').next().unwrap_or(callee);
+    let method = bare_method_name(callee);
 
     // URL encoding/decoding — `java.net.URLEncoder.encode` / `URLDecoder.decode`.
     if callee.ends_with("URLEncoder.encode") {
@@ -1039,7 +1039,7 @@ pub fn detect_replace_sanitizer(
 
 /// Determine whether a replace call is global (replaces all occurrences).
 fn is_global_replace(callee: &str, lang: Lang) -> bool {
-    let method = callee.rsplit('.').next().unwrap_or(callee);
+    let method = bare_method_name(callee);
     match lang {
         // JS: replace() is NOT global; replaceAll() IS global
         Lang::JavaScript | Lang::TypeScript => method == "replaceAll",

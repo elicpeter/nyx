@@ -26,6 +26,9 @@ pub fn routes() -> Router<AppState> {
         .route("/debug/call-graph", get(get_call_graph))
         .route("/debug/abstract-interp", get(get_abstract_interp))
         .route("/debug/symex", get(get_symex))
+        .route("/debug/pointer", get(get_pointer))
+        .route("/debug/type-facts", get(get_type_facts))
+        .route("/debug/auth", get(get_auth))
 }
 
 // ── Query params ─────────────────────────────────────────────────────────────
@@ -117,7 +120,7 @@ async fn get_ssa(
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
     let config = state.config.read();
     let analysis = debug::analyse_file(&path, &config)?;
-    let (ssa, _opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
+    let (ssa, _opt, _cfg) = debug::analyse_function_ssa(&analysis, &q.function)?;
     Ok(Json(SsaBodyView::from_ssa(&ssa, &analysis.bytes)))
 }
 
@@ -130,7 +133,7 @@ async fn get_taint(
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
     let config = state.config.read();
     let analysis = debug::analyse_file(&path, &config)?;
-    let (ssa, opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
+    let (ssa, opt, body_cfg) = debug::analyse_function_ssa(&analysis, &q.function)?;
 
     // Try to load global summaries from DB for cross-file context
     let global = load_global_summaries(&state);
@@ -141,7 +144,7 @@ async fn get_taint(
 
     let (events, _entry_states, exit_states) = debug::analyse_function_taint(
         &ssa,
-        analysis.cfg(),
+        body_cfg,
         analysis.lang,
         analysis.summaries(),
         global.as_ref(),
@@ -168,13 +171,13 @@ async fn get_abstract_interp(
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
     let config = state.config.read();
     let analysis = debug::analyse_file(&path, &config)?;
-    let (ssa, opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
+    let (ssa, opt, body_cfg) = debug::analyse_function_ssa(&analysis, &q.function)?;
 
     let global = load_global_summaries(&state);
 
     let (_events, block_states, _exit_states) = debug::analyse_function_taint(
         &ssa,
-        analysis.cfg(),
+        body_cfg,
         analysis.lang,
         analysis.summaries(),
         global.as_ref(),
@@ -262,14 +265,57 @@ async fn get_symex(
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
     let config = state.config.read();
     let analysis = debug::analyse_file(&path, &config)?;
-    let (ssa, opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
+    let (ssa, opt, body_cfg) = debug::analyse_function_ssa(&analysis, &q.function)?;
 
     let global = load_global_summaries(&state);
 
     let sym_state =
-        debug::analyse_function_symex(&ssa, analysis.cfg(), analysis.lang, &opt, global.as_ref());
+        debug::analyse_function_symex(&ssa, body_cfg, analysis.lang, &opt, global.as_ref());
 
     Ok(Json(SymexView::from_symbolic_state(&sym_state, &ssa)))
+}
+
+/// GET /api/debug/pointer?file=<path>&function=<name>
+/// Return the field-sensitive Steensgaard points-to facts for a function.
+async fn get_pointer(
+    State(state): State<AppState>,
+    Query(q): Query<FileFunctionQuery>,
+) -> Result<Json<PointerView>, StatusCode> {
+    let path = validate_and_resolve(&state.scan_root, &q.file)?;
+    let config = state.config.read();
+    let analysis = debug::analyse_file(&path, &config)?;
+    let (ssa, facts) = debug::analyse_function_pointer(&analysis, &q.function)?;
+    Ok(Json(PointerView::from_facts(&facts, &ssa)))
+}
+
+/// GET /api/debug/type-facts?file=<path>&function=<name>
+/// Return per-function type-fact details derived from the SSA optimiser.
+async fn get_type_facts(
+    State(state): State<AppState>,
+    Query(q): Query<FileFunctionQuery>,
+) -> Result<Json<TypeFactsView>, StatusCode> {
+    let path = validate_and_resolve(&state.scan_root, &q.file)?;
+    let config = state.config.read();
+    let analysis = debug::analyse_file(&path, &config)?;
+    let (ssa, opt, _cfg) = debug::analyse_function_ssa(&analysis, &q.function)?;
+    Ok(Json(TypeFactsView::from_optimize(
+        &opt,
+        &ssa,
+        &analysis.bytes,
+    )))
+}
+
+/// GET /api/debug/auth?file=<path>
+/// Return the file-scoped authorization model — routes, units,
+/// sensitive operations, and auth checks — for the debug UI.
+async fn get_auth(
+    State(state): State<AppState>,
+    Query(q): Query<FileQuery>,
+) -> Result<Json<AuthAnalysisView>, StatusCode> {
+    let path = validate_and_resolve(&state.scan_root, &q.file)?;
+    let config = state.config.read();
+    let (model, bytes, enabled) = debug::analyse_file_auth(&path, &config)?;
+    Ok(Json(AuthAnalysisView::from_model(&model, &bytes, enabled)))
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -396,7 +442,9 @@ mod tests {
                         abstract_transfer: vec![],
                         param_return_paths: vec![],
                         points_to: Default::default(),
+                        field_points_to: Default::default(),
                         return_path_facts: smallvec::SmallVec::new(),
+                        typed_call_receivers: vec![],
                     },
                 )],
             )
@@ -466,6 +514,8 @@ mod tests {
                 value_defs: vec![],
                 cfg_node_map: std::collections::HashMap::new(),
                 exception_edges: vec![],
+                field_interner: crate::ssa::ir::FieldInterner::default(),
+                field_writes: std::collections::HashMap::new(),
             },
             false,
             false,
@@ -486,6 +536,8 @@ mod tests {
                 value_defs: vec![],
                 cfg_node_map: std::collections::HashMap::new(),
                 exception_edges: vec![],
+                field_interner: crate::ssa::ir::FieldInterner::default(),
+                field_writes: std::collections::HashMap::new(),
             },
             true,
             true,
@@ -506,6 +558,8 @@ mod tests {
                 value_defs: vec![],
                 cfg_node_map: std::collections::HashMap::new(),
                 exception_edges: vec![],
+                field_interner: crate::ssa::ir::FieldInterner::default(),
+                field_writes: std::collections::HashMap::new(),
             },
             true,
             false,
@@ -599,7 +653,9 @@ mod tests {
                         abstract_transfer: vec![],
                         param_return_paths: vec![],
                         points_to: Default::default(),
+                        field_points_to: Default::default(),
                         return_path_facts: smallvec::SmallVec::new(),
+                        typed_call_receivers: vec![],
                     },
                 )],
             )

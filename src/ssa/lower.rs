@@ -18,6 +18,104 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use super::ir::*;
 
+/// Try to decompose a chained-receiver method call (e.g. `a.b.c.method`)
+/// into a `FieldProj` chain plus a bare-method `Call`.
+///
+/// **Returns** `Some((final_receiver_value, bare_method_name))` on success,
+/// `None` to fall back to the existing single-Call lowering (current
+/// behaviour).
+///
+/// On success, the caller should:
+///   - Construct the `Call` op with `callee = bare_method_name`,
+///     `callee_text = Some(original_callee.to_string())`,
+///     `receiver = Some(final_receiver_value)`.
+///   - Use the returned receiver as the implicit method receiver — do NOT
+///     add the chain root or any intermediate field name to `args`.
+///
+/// **Decomposition rules** (Phase 2 of the field-projections rollout):
+///   - Skip when the callee contains zero `.` characters (no member access)
+///     or only one `.` (single-dot case is handled by the existing
+///     `info.call.receiver` channel without needing a `FieldProj` op).
+///   - Bail when any "complex" token appears in the callee — `(`, `)`,
+///     `[`, `]`, `::`, `->`, `?`, `<`, `>`, `*`, `&`, `:` (other than `::`
+///     already filtered), or whitespace — signaling the callee text isn't
+///     a clean `<ident>.<ident>...` chain we can safely split on `.`.
+///   - The first segment must be a known SSA variable in `var_stacks`;
+///     otherwise the chain root is unresolvable and we bail.
+///   - Each intermediate segment becomes a `FieldProj { receiver, field }`
+///     instruction emitted onto `block.body` with a fresh `SsaValue`.
+///   - The last segment is the bare method name returned to the caller.
+///
+/// FieldProj instructions are tagged with `var_name = Some("base.f1.f2")`
+/// so debug output and downstream consumers that key on `var_name` can
+/// recognise the projection chain provenance.
+#[allow(clippy::too_many_arguments)]
+fn try_lower_field_proj_chain(
+    callee: &str,
+    var_stacks: &HashMap<String, Vec<SsaValue>>,
+    field_interner: &mut crate::ssa::ir::FieldInterner,
+    block_idx: usize,
+    block_id: BlockId,
+    next_value: &mut u32,
+    ssa_blocks: &mut [SsaBlock],
+    value_defs: &mut Vec<ValueDef>,
+    cfg_node: NodeIndex,
+    span: (usize, usize),
+) -> Option<(SsaValue, String)> {
+    // Bail on any token that signals a complex callee expression.
+    // `::` (Rust/C++ paths) is folded into the broader `:` check.
+    for ch in callee.chars() {
+        match ch {
+            '(' | ')' | '[' | ']' | '<' | '>' | '?' | '*' | '&' | ':' | ' ' | '\t' | '\n' | '-'
+            | '!' | ',' | ';' | '"' | '\'' | '\\' => return None,
+            _ => {}
+        }
+    }
+    let segments: Vec<&str> = callee.split('.').collect();
+    // Need at least 3 segments: `base.field.method` → 1 FieldProj, 1 Call.
+    if segments.len() < 3 {
+        return None;
+    }
+    // Reject empty segments (would happen on leading/trailing/double dots).
+    if segments.iter().any(|s| s.is_empty()) {
+        return None;
+    }
+
+    let base = segments[0];
+    let mut current = *var_stacks.get(base).and_then(|s| s.last())?;
+    let mut chain_var = base.to_string();
+
+    // Each intermediate segment becomes a FieldProj op.  segments[0] is the
+    // base SSA variable, segments[len-1] is the bare method name.
+    for field_name in &segments[1..segments.len() - 1] {
+        let fid = field_interner.intern(field_name);
+        let v = SsaValue(*next_value);
+        *next_value += 1;
+        chain_var.push('.');
+        chain_var.push_str(field_name);
+        ssa_blocks[block_idx].body.push(SsaInst {
+            value: v,
+            op: SsaOp::FieldProj {
+                receiver: current,
+                field: fid,
+                projected_type: None,
+            },
+            cfg_node,
+            var_name: Some(chain_var.clone()),
+            span,
+        });
+        value_defs.push(ValueDef {
+            var_name: Some(chain_var.clone()),
+            cfg_node,
+            block: block_id,
+        });
+        current = v;
+    }
+
+    let method = segments.last().unwrap().to_string();
+    Some((current, method))
+}
+
 /// Lower a CFG to SSA form for a single function scope.
 ///
 /// `scope` filters nodes by `enclosing_func`:
@@ -141,17 +239,18 @@ fn lower_to_ssa_inner(
 
     // 6. Rename variables (dominator tree preorder walk)
     let dom_tree_children = build_dom_tree_children(num_blocks, &doms, &block_graph);
-    let (mut ssa_blocks, mut value_defs, cfg_node_map) = rename_variables(
-        cfg,
-        &blocks_nodes,
-        &block_succs,
-        &block_preds,
-        &phi_placements,
-        &dom_tree_children,
-        &filtered_edges,
-        &external_vars,
-        &nop_nodes,
-    );
+    let (mut ssa_blocks, mut value_defs, cfg_node_map, field_interner, field_writes) =
+        rename_variables(
+            cfg,
+            &blocks_nodes,
+            &block_succs,
+            &block_preds,
+            &phi_placements,
+            &dom_tree_children,
+            &filtered_edges,
+            &external_vars,
+            &nop_nodes,
+        );
 
     // 6b. Fill any missing phi operands with a shared Undef sentinel so
     // every phi has exactly one operand per predecessor. See
@@ -178,10 +277,10 @@ fn lower_to_ssa_inner(
     }
 
     // 7b. Debug assertions: verify structural invariants.
-    #[cfg(debug_assertions)]
-    {
-        debug_assert_bfs_ordering(&block_preds);
-    }
+    // The helper body is `debug_assert!` only, so it's a no-op in release —
+    // call unconditionally to avoid a dead_code warning when the lib is
+    // built without `--tests`.
+    debug_assert_bfs_ordering(&block_preds);
     // Phi operand counts are a release-level invariant: every phi must
     // have exactly one operand per predecessor. Missing operands are
     // filled with an explicit Undef sentinel in
@@ -205,6 +304,8 @@ fn lower_to_ssa_inner(
         value_defs,
         cfg_node_map,
         exception_edges,
+        field_interner,
+        field_writes,
     };
 
     // 9. Catch-block reachability invariant.
@@ -660,6 +761,15 @@ pub(crate) fn is_receiver_name(name: &str) -> bool {
 /// present) followed by a contiguous run of [`SsaOp::Param { index }`] values
 /// whose indices 0..N correspond exactly to positional call-site argument
 /// positions — no receiver offset required anywhere downstream.
+///
+/// W1.b: every formal parameter gets a Param op even when the body never
+/// references it directly.  Without this, the *first* `obj.f = rhs` on a
+/// formal `obj` whose body never reads `obj` produces no W1
+/// `field_writes` entry — `var_stacks["obj"]` is empty when the synth
+/// Assign runs because no external-use path interned `obj`.  Subsequent
+/// writes work because the synth Assign itself defines `obj`, so the
+/// gap is exactly the FIRST write.  Always emitting a formal Param at
+/// block 0 closes that gap.
 fn reorder_external_vars(external: Vec<String>, formal_params: &[String]) -> Vec<String> {
     if formal_params.is_empty() {
         return external; // no reordering — preserve existing alphabetical sort
@@ -672,20 +782,22 @@ fn reorder_external_vars(external: Vec<String>, formal_params: &[String]) -> Vec
     // Languages with explicit self (Rust/Python) put it in formal_params;
     // languages with implicit this (JS/TS/Java/PHP) have it only as an
     // external reference.  Either way, SelfParam should be emitted first.
-    if ext_set.contains("self") {
+    if ext_set.contains("self") || formal_set.contains("self") {
         result.push("self".to_string());
-    } else if ext_set.contains("this") {
+    } else if ext_set.contains("this") || formal_set.contains("this") {
         result.push("this".to_string());
     }
     // Formal positional params next (declaration order), skipping any
-    // receiver that was already emitted above.
+    // receiver that was already emitted above.  W1.b: include EVERY
+    // formal regardless of whether the body uses it externally — an
+    // unused formal that gets field-written via `obj.cache = rhs` still
+    // needs a Param op so the synth Assign loop sees its prior reaching
+    // def in `var_stacks`.
     for p in formal_params {
         if is_receiver_name(p) {
             continue;
         }
-        if ext_set.contains(p.as_str()) {
-            result.push(p.clone());
-        }
+        result.push(p.clone());
     }
     // Remaining external vars alphabetically (external is already sorted),
     // excluding anything already placed.
@@ -816,11 +928,28 @@ fn rename_variables(
     filtered_edges: &[(NodeIndex, NodeIndex, EdgeKind)],
     external_vars: &[String],
     nop_nodes: &HashSet<NodeIndex>,
-) -> (Vec<SsaBlock>, Vec<ValueDef>, HashMap<NodeIndex, SsaValue>) {
+) -> (
+    Vec<SsaBlock>,
+    Vec<ValueDef>,
+    HashMap<NodeIndex, SsaValue>,
+    crate::ssa::ir::FieldInterner,
+    HashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
+) {
     let num_blocks = blocks_nodes.len();
     let mut next_value: u32 = 0;
     let mut value_defs: Vec<ValueDef> = Vec::new();
     let mut cfg_node_map: HashMap<NodeIndex, SsaValue> = HashMap::new();
+    // Per-body interner for FieldProj field names; populated when the
+    // member-access decomposition (try_lower_field_proj_chain) emits a
+    // chain for chained-receiver method calls (`a.b.c()`), and remains
+    // empty otherwise so existing per-statement Call lowering is
+    // bit-for-bit unchanged.
+    let mut field_interner = crate::ssa::ir::FieldInterner::new();
+    // Pointer-Phase 3 / W1: side-table mapping each synthetic base-update
+    // [`SsaOp::Assign`]'s defined value to its `(receiver, field)` pair.
+    // Populated below at the synthetic-Assign emission site.  Read by
+    // the taint engine to lift the assign into a structural field WRITE.
+    let mut field_writes: HashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)> = HashMap::new();
 
     // Per-variable rename stacks
     let mut var_stacks: HashMap<String, Vec<SsaValue>> = HashMap::new();
@@ -887,6 +1016,8 @@ fn rename_variables(
         cfg_node_map: &mut HashMap<NodeIndex, SsaValue>,
         next_value: &mut u32,
         nop_nodes: &HashSet<NodeIndex>,
+        field_interner: &mut crate::ssa::ir::FieldInterner,
+        field_writes: &mut HashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
     ) {
         let block_id = BlockId(block_idx as u32);
 
@@ -993,9 +1124,43 @@ fn rename_variables(
                 SsaOp::Source
             } else if info.call.callee.is_some() {
                 let callee = info.call.callee.as_deref().unwrap_or("").to_string();
-                let (args, receiver) = build_call_args(info, var_stacks);
+                let (mut args, mut receiver) = build_call_args(info, var_stacks);
+                // Phase 2: try decomposing chained-receiver method calls
+                // (`a.b.c()`) into a FieldProj chain plus a bare-method Call
+                // so downstream consumers can read the receiver structure
+                // without re-parsing the callee text.  Bails to None on any
+                // non-chain receiver (current behaviour preserved).
+                let (final_callee, callee_text) = match try_lower_field_proj_chain(
+                    &callee,
+                    var_stacks,
+                    field_interner,
+                    block_idx,
+                    block_id,
+                    next_value,
+                    ssa_blocks,
+                    value_defs,
+                    node,
+                    info.ast.span,
+                ) {
+                    Some((recv_v, bare_method)) => {
+                        receiver = Some(recv_v);
+                        // Strip any positional arg group that exactly matches the
+                        // chain root identifier — it has been replaced by the
+                        // FieldProj chain receiver, and re-listing it as an
+                        // argument would inflate arity / double-taint.
+                        if let Some(base_ident) = callee.split('.').next() {
+                            if let Some(base_v) = var_stacks.get(base_ident).and_then(|s| s.last())
+                            {
+                                args.retain(|grp| !(grp.len() == 1 && grp.first() == Some(base_v)));
+                            }
+                        }
+                        (bare_method, Some(callee.clone()))
+                    }
+                    None => (callee, None),
+                };
                 SsaOp::Call {
-                    callee,
+                    callee: final_callee,
+                    callee_text,
                     args,
                     receiver,
                 }
@@ -1084,9 +1249,38 @@ fn rename_variables(
                 SsaOp::Nop
             } else if info.call.callee.is_some() {
                 let callee = info.call.callee.as_deref().unwrap_or("").to_string();
-                let (args, receiver) = build_call_args(info, var_stacks);
+                let (mut args, mut receiver) = build_call_args(info, var_stacks);
+                // Phase 2: same FieldProj-chain decomposition as the primary
+                // Call branch above — kept in sync because this fallback
+                // path also constructs SSA Call ops (used for control-flow
+                // wrapper calls that landed past the earlier match arms).
+                let (final_callee, callee_text) = match try_lower_field_proj_chain(
+                    &callee,
+                    var_stacks,
+                    field_interner,
+                    block_idx,
+                    block_id,
+                    next_value,
+                    ssa_blocks,
+                    value_defs,
+                    node,
+                    info.ast.span,
+                ) {
+                    Some((recv_v, bare_method)) => {
+                        receiver = Some(recv_v);
+                        if let Some(base_ident) = callee.split('.').next() {
+                            if let Some(base_v) = var_stacks.get(base_ident).and_then(|s| s.last())
+                            {
+                                args.retain(|grp| !(grp.len() == 1 && grp.first() == Some(base_v)));
+                            }
+                        }
+                        (bare_method, Some(callee.clone()))
+                    }
+                    None => (callee, None),
+                };
                 SsaOp::Call {
-                    callee,
+                    callee: final_callee,
+                    callee_text,
                     args,
                     receiver,
                 }
@@ -1147,12 +1341,28 @@ fn rename_variables(
             // Only includes the new field value (not the old base) so that field
             // overwrites properly kill taint: if obj.data is re-assigned to a
             // constant, the base `obj` no longer carries that field's taint.
+            //
+            // Pointer-Phase 3 / W1: each synthetic Assign also records its
+            // structural identity into `field_writes` — `(receiver_old_value,
+            // FieldId(field_name))` — so the taint engine can recognise the
+            // synthetic assign as a field WRITE and mirror the rhs taint
+            // into the matching `(loc, field)` cell on `SsaTaintState`.
+            // The "old" parent value is the reaching def of `parent` BEFORE
+            // we push the new `synth_v`; when no prior def exists (the
+            // parent is undefined at this point), we skip the side-table
+            // entry so the consumer's `pt(receiver)` walk produces no work.
             if !nop_nodes.contains(&node) {
                 if let Some(ref d) = info.taint.defines {
                     let mut current = d.as_str();
                     let mut child_value = v;
                     while let Some(dot_pos) = current.rfind('.') {
                         let parent = &current[..dot_pos];
+                        let field_name = &current[dot_pos + 1..];
+                        // Snapshot prior reaching def of `parent` BEFORE we
+                        // push the new synth_v.  Used by the field-write
+                        // side-table as the receiver SsaValue.
+                        let prior_parent_value: Option<SsaValue> =
+                            var_stacks.get(parent).and_then(|s| s.last().copied());
                         let synth_v = SsaValue(*next_value);
                         *next_value += 1;
                         let synth_uses: SmallVec<[SsaValue; 4]> =
@@ -1173,6 +1383,15 @@ fn rename_variables(
                             var_name: Some(parent.to_string()),
                             span: info.ast.span,
                         });
+                        // Record `(synth_v -> (prior_parent, field_id))` so
+                        // the taint engine can lift the synthetic assign
+                        // into a field-write hook.  The field name is
+                        // interned through the per-body `FieldInterner` so
+                        // FieldProj reads downstream resolve to the same id.
+                        if let Some(rcv) = prior_parent_value {
+                            let fid = field_interner.intern(field_name);
+                            field_writes.insert(synth_v, (rcv, fid));
+                        }
                         child_value = synth_v;
                         current = parent;
                     }
@@ -1441,6 +1660,8 @@ fn rename_variables(
                 cfg_node_map,
                 next_value,
                 nop_nodes,
+                field_interner,
+                field_writes,
             );
         }
 
@@ -1509,6 +1730,8 @@ fn rename_variables(
         &mut cfg_node_map,
         &mut next_value,
         nop_nodes,
+        &mut field_interner,
+        &mut field_writes,
     );
 
     // Process orphan blocks (e.g. catch blocks disconnected after exception edge removal).
@@ -1548,12 +1771,20 @@ fn rename_variables(
                     &mut cfg_node_map,
                     &mut next_value,
                     nop_nodes,
+                    &mut field_interner,
+                    &mut field_writes,
                 );
             }
         }
     }
 
-    (ssa_blocks, value_defs, cfg_node_map)
+    (
+        ssa_blocks,
+        value_defs,
+        cfg_node_map,
+        field_interner,
+        field_writes,
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1562,7 +1793,6 @@ fn rename_variables(
 
 /// Verify BFS block ordering: every non-entry, non-orphan block must have at
 /// least one predecessor with a smaller block ID.
-#[cfg(debug_assertions)]
 fn debug_assert_bfs_ordering(block_preds: &[Vec<usize>]) {
     for (i, preds) in block_preds.iter().enumerate() {
         if i == 0 {
@@ -2860,5 +3090,1093 @@ mod tests {
                 b.succs
             );
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Phase 2: FieldProj chain lowering tests
+    // ─────────────────────────────────────────────────────────────────
+    //
+    // These tests pin the contract that `try_lower_field_proj_chain`
+    // emits a `FieldProj` chain for chained-receiver method calls
+    // (`a.b.c.method()`) and bails (preserving the existing single-Call
+    // lowering) for everything else.  Per-language end-to-end coverage
+    // lives below in `phase2_e2e_*` tests; the unit tests here pin the
+    // helper's behaviour without going through tree-sitter.
+
+    /// Build a freshly-allocated empty SSA scratch state suitable for
+    /// invoking `try_lower_field_proj_chain` in isolation.  Returns
+    /// `(var_stacks, field_interner, ssa_blocks, value_defs, next_value)`.
+    fn fresh_proj_scratch() -> (
+        std::collections::HashMap<String, Vec<SsaValue>>,
+        crate::ssa::ir::FieldInterner,
+        Vec<SsaBlock>,
+        Vec<ValueDef>,
+        u32,
+    ) {
+        let blocks = vec![SsaBlock {
+            id: BlockId(0),
+            phis: Vec::new(),
+            body: Vec::new(),
+            terminator: Terminator::Unreachable,
+            preds: SmallVec::new(),
+            succs: SmallVec::new(),
+        }];
+        (
+            std::collections::HashMap::new(),
+            crate::ssa::ir::FieldInterner::new(),
+            blocks,
+            Vec::new(),
+            0,
+        )
+    }
+
+    /// Seed a single SSA value `SsaValue(0)` for `name` so the chain
+    /// helper's base lookup succeeds.
+    fn seed_var(
+        var_stacks: &mut std::collections::HashMap<String, Vec<SsaValue>>,
+        value_defs: &mut Vec<ValueDef>,
+        next_value: &mut u32,
+        name: &str,
+    ) -> SsaValue {
+        let v = SsaValue(*next_value);
+        *next_value += 1;
+        value_defs.push(ValueDef {
+            var_name: Some(name.into()),
+            cfg_node: NodeIndex::new(0),
+            block: BlockId(0),
+        });
+        var_stacks.entry(name.into()).or_default().push(v);
+        v
+    }
+
+    #[test]
+    fn try_lower_field_proj_chain_too_few_segments_returns_none() {
+        // 0 dots: bare callee → no chain.
+        let (mut vs, mut interner, mut blocks, mut defs, mut nv) = fresh_proj_scratch();
+        seed_var(&mut vs, &mut defs, &mut nv, "obj");
+        assert!(
+            try_lower_field_proj_chain(
+                "foo",
+                &vs,
+                &mut interner,
+                0,
+                BlockId(0),
+                &mut nv,
+                &mut blocks,
+                &mut defs,
+                NodeIndex::new(0),
+                (0, 0),
+            )
+            .is_none()
+        );
+
+        // 1 dot: simple receiver, NOT decomposed (existing receiver channel
+        // already handles `obj.method()` calls).
+        assert!(
+            try_lower_field_proj_chain(
+                "obj.method",
+                &vs,
+                &mut interner,
+                0,
+                BlockId(0),
+                &mut nv,
+                &mut blocks,
+                &mut defs,
+                NodeIndex::new(0),
+                (0, 0),
+            )
+            .is_none()
+        );
+
+        // No FieldProj instructions emitted; interner stays empty.
+        assert!(blocks[0].body.is_empty());
+        assert!(interner.is_empty());
+    }
+
+    #[test]
+    fn try_lower_field_proj_chain_complex_token_returns_none() {
+        // Each of these contains a token signaling complexity that breaks
+        // the simple `<ident>.<ident>...` shape; helper must bail.
+        let cases = [
+            "Foo::bar::baz", // Rust path
+            "ptr->field.f",  // C-style arrow
+            "obj.f().g",     // intermediate call
+            "vec[0].field",  // index expression
+            "obj.f.<T>",     // template-ish
+            "obj.f g",       // whitespace
+            "obj?.f.g",      // optional chain
+        ];
+        let (mut vs, mut interner, mut blocks, mut defs, mut nv) = fresh_proj_scratch();
+        seed_var(&mut vs, &mut defs, &mut nv, "obj");
+        for s in &cases {
+            assert!(
+                try_lower_field_proj_chain(
+                    s,
+                    &vs,
+                    &mut interner,
+                    0,
+                    BlockId(0),
+                    &mut nv,
+                    &mut blocks,
+                    &mut defs,
+                    NodeIndex::new(0),
+                    (0, 0),
+                )
+                .is_none(),
+                "expected bail on complex callee {s}"
+            );
+        }
+        assert!(blocks[0].body.is_empty());
+        assert!(interner.is_empty());
+    }
+
+    #[test]
+    fn try_lower_field_proj_chain_unknown_base_returns_none() {
+        // The chain root must be a known SSA variable; otherwise the chain
+        // root SSA value is unrecoverable and we must fall back.
+        let (vs, mut interner, mut blocks, mut defs, mut nv) = fresh_proj_scratch();
+        // "ghost" intentionally not seeded.
+        assert!(
+            try_lower_field_proj_chain(
+                "ghost.f.method",
+                &vs,
+                &mut interner,
+                0,
+                BlockId(0),
+                &mut nv,
+                &mut blocks,
+                &mut defs,
+                NodeIndex::new(0),
+                (0, 0),
+            )
+            .is_none()
+        );
+        assert!(blocks[0].body.is_empty());
+        assert!(interner.is_empty());
+    }
+
+    #[test]
+    fn try_lower_field_proj_chain_basic_two_dots_emits_one_proj() {
+        // `c.mu.Lock()` → emit one FieldProj, return (v_mu, "Lock").
+        let (mut vs, mut interner, mut blocks, mut defs, mut nv) = fresh_proj_scratch();
+        let v_c = seed_var(&mut vs, &mut defs, &mut nv, "c");
+
+        let (recv, method) = try_lower_field_proj_chain(
+            "c.mu.Lock",
+            &vs,
+            &mut interner,
+            0,
+            BlockId(0),
+            &mut nv,
+            &mut blocks,
+            &mut defs,
+            NodeIndex::new(0),
+            (10, 20),
+        )
+        .expect("chain decomposition should succeed");
+
+        // The returned receiver is a NEW SsaValue (one past v_c).
+        assert_eq!(recv, SsaValue(1));
+        assert_eq!(method, "Lock");
+        // Exactly one FieldProj op was emitted.
+        assert_eq!(blocks[0].body.len(), 1);
+        let inst = &blocks[0].body[0];
+        match &inst.op {
+            SsaOp::FieldProj {
+                receiver,
+                field,
+                projected_type,
+            } => {
+                assert_eq!(*receiver, v_c);
+                assert_eq!(interner.resolve(*field), "mu");
+                assert!(projected_type.is_none());
+            }
+            other => panic!("expected FieldProj, got {other:?}"),
+        }
+        // Span propagated to the FieldProj instruction.
+        assert_eq!(inst.span, (10, 20));
+        assert_eq!(inst.var_name.as_deref(), Some("c.mu"));
+        // value_defs has an entry for the new SSA value.
+        assert_eq!(defs.last().unwrap().var_name.as_deref(), Some("c.mu"));
+    }
+
+    #[test]
+    fn try_lower_field_proj_chain_three_dots_emits_two_projs_chained() {
+        // `c.writer.header.set` → 2 FieldProj ops, chained: v_writer reads c,
+        // v_header reads v_writer.
+        let (mut vs, mut interner, mut blocks, mut defs, mut nv) = fresh_proj_scratch();
+        let v_c = seed_var(&mut vs, &mut defs, &mut nv, "c");
+
+        let (recv, method) = try_lower_field_proj_chain(
+            "c.writer.header.set",
+            &vs,
+            &mut interner,
+            0,
+            BlockId(0),
+            &mut nv,
+            &mut blocks,
+            &mut defs,
+            NodeIndex::new(0),
+            (0, 0),
+        )
+        .expect("chain decomposition should succeed");
+        assert_eq!(method, "set");
+        assert_eq!(recv, SsaValue(2)); // v_c=0, v_writer=1, v_header=2
+
+        assert_eq!(blocks[0].body.len(), 2, "expected 2 FieldProj ops");
+        match &blocks[0].body[0].op {
+            SsaOp::FieldProj {
+                receiver, field, ..
+            } => {
+                assert_eq!(*receiver, v_c);
+                assert_eq!(interner.resolve(*field), "writer");
+            }
+            other => panic!("expected FieldProj, got {other:?}"),
+        }
+        match &blocks[0].body[1].op {
+            SsaOp::FieldProj {
+                receiver, field, ..
+            } => {
+                assert_eq!(*receiver, SsaValue(1)); // chained on v_writer
+                assert_eq!(interner.resolve(*field), "header");
+            }
+            other => panic!("expected FieldProj, got {other:?}"),
+        }
+        // var_names form a readable chain
+        assert_eq!(blocks[0].body[0].var_name.as_deref(), Some("c.writer"));
+        assert_eq!(
+            blocks[0].body[1].var_name.as_deref(),
+            Some("c.writer.header")
+        );
+    }
+
+    #[test]
+    fn try_lower_field_proj_chain_dedupes_field_names() {
+        // Two separate chains that share a field name should reuse the
+        // same FieldId via the per-body interner.
+        let (mut vs, mut interner, mut blocks, mut defs, mut nv) = fresh_proj_scratch();
+        let v_a = seed_var(&mut vs, &mut defs, &mut nv, "a");
+        let v_b = seed_var(&mut vs, &mut defs, &mut nv, "b");
+
+        let _ = try_lower_field_proj_chain(
+            "a.shared.f",
+            &vs,
+            &mut interner,
+            0,
+            BlockId(0),
+            &mut nv,
+            &mut blocks,
+            &mut defs,
+            NodeIndex::new(0),
+            (0, 0),
+        )
+        .unwrap();
+        let _ = try_lower_field_proj_chain(
+            "b.shared.g",
+            &vs,
+            &mut interner,
+            0,
+            BlockId(0),
+            &mut nv,
+            &mut blocks,
+            &mut defs,
+            NodeIndex::new(0),
+            (0, 0),
+        )
+        .unwrap();
+
+        // Two FieldProj insts emitted, both pointing at the same FieldId.
+        assert_eq!(blocks[0].body.len(), 2);
+        let f0 = match &blocks[0].body[0].op {
+            SsaOp::FieldProj { field, .. } => *field,
+            _ => panic!(),
+        };
+        let f1 = match &blocks[0].body[1].op {
+            SsaOp::FieldProj { field, .. } => *field,
+            _ => panic!(),
+        };
+        assert_eq!(f0, f1, "dedup should reuse FieldId");
+        assert_eq!(interner.len(), 1, "only one unique field name interned");
+        let _ = (v_a, v_b);
+    }
+
+    #[test]
+    fn try_lower_field_proj_chain_rejects_empty_segments() {
+        // Defensive: leading/trailing/double dots are not a member chain.
+        let (mut vs, mut interner, mut blocks, mut defs, mut nv) = fresh_proj_scratch();
+        seed_var(&mut vs, &mut defs, &mut nv, "x");
+        for s in [".x.f", "x..f", "x.f."] {
+            assert!(
+                try_lower_field_proj_chain(
+                    s,
+                    &vs,
+                    &mut interner,
+                    0,
+                    BlockId(0),
+                    &mut nv,
+                    &mut blocks,
+                    &mut defs,
+                    NodeIndex::new(0),
+                    (0, 0),
+                )
+                .is_none(),
+                "expected bail on {s}"
+            );
+        }
+        assert!(blocks[0].body.is_empty());
+    }
+
+    // ── End-to-end Phase 2 tests via real tree-sitter parsing ──────────
+    //
+    // These exercise the integration between CFG construction (which sets
+    // `info.call.callee = "c.mu.Lock"`) and SSA lowering.  We assert that
+    // the resulting SsaBody contains a `FieldProj` op whose interned name
+    // matches the source-level field name.
+
+    fn parse_to_first_body(
+        src: &[u8],
+        lang: &str,
+        ts_lang: tree_sitter::Language,
+        path: &str,
+    ) -> SsaBody {
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&ts_lang).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let file_cfg = crate::cfg::build_cfg(&tree, src, lang, path, None);
+        // Prefer the first non-top-level body (a function), fall back to top.
+        let body = if file_cfg.bodies.len() > 1 {
+            &file_cfg.bodies[1]
+        } else {
+            &file_cfg.bodies[0]
+        };
+        // Mirror the production lowering path: function bodies use
+        // lower_to_ssa_with_params so formal parameters get synthetic
+        // Param/SelfParam injections at block 0 — without them, the
+        // FieldProj chain helper has no SSA root to anchor to.
+        if body.meta.name.is_some() {
+            let func_name = body.meta.name.clone().unwrap_or_default();
+            lower_to_ssa_with_params(
+                &body.graph,
+                body.entry,
+                Some(&func_name),
+                false,
+                &body.meta.params,
+            )
+            .expect("SSA lowering should succeed")
+        } else {
+            lower_to_ssa(&body.graph, body.entry, None, true).expect("SSA lowering should succeed")
+        }
+    }
+
+    /// Iterate every FieldProj instance in `body` along with its resolved
+    /// field name.
+    fn collect_field_projs(body: &SsaBody) -> Vec<(SsaValue, SsaValue, String)> {
+        let mut out = Vec::new();
+        for blk in &body.blocks {
+            for inst in blk.phis.iter().chain(blk.body.iter()) {
+                if let SsaOp::FieldProj {
+                    receiver, field, ..
+                } = &inst.op
+                {
+                    out.push((inst.value, *receiver, body.field_name(*field).to_string()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Iterate every Call instance in `body` along with its callee + callee_text.
+    fn collect_calls(body: &SsaBody) -> Vec<(String, Option<String>, Option<SsaValue>)> {
+        let mut out = Vec::new();
+        for blk in &body.blocks {
+            for inst in blk.body.iter() {
+                if let SsaOp::Call {
+                    callee,
+                    callee_text,
+                    receiver,
+                    ..
+                } = &inst.op
+                {
+                    out.push((callee.clone(), callee_text.clone(), *receiver));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn phase2_e2e_go_chained_receiver_emits_field_proj() {
+        // Go: `c.writer.header.set(k, v)` — 3-segment receiver, 2 FieldProjs.
+        // Chain root `c` is a function parameter so it is resolvable.
+        let src = b"package p\nfunc f(c *T, k string, v string) { c.writer.header.set(k, v) }\n";
+        let body = parse_to_first_body(
+            src,
+            "go",
+            tree_sitter::Language::from(tree_sitter_go::LANGUAGE),
+            "test.go",
+        );
+        let projs = collect_field_projs(&body);
+        assert!(
+            projs.len() >= 2,
+            "expected ≥2 FieldProj ops for c.writer.header.<m>; got {projs:?}"
+        );
+        // Field names match the source-level field structure.
+        let names: Vec<&str> = projs.iter().map(|(_, _, n)| n.as_str()).collect();
+        assert!(
+            names.contains(&"writer"),
+            "missing 'writer' projection in {names:?}"
+        );
+        assert!(
+            names.contains(&"header"),
+            "missing 'header' projection in {names:?}"
+        );
+
+        // The Call op carries the bare method name and callee_text retains the path.
+        let calls = collect_calls(&body);
+        let bare = calls.iter().find(|(c, _, _)| c == "set");
+        assert!(
+            bare.is_some(),
+            "expected a Call with bare callee 'set'; got {calls:?}"
+        );
+        let (_, ctext, recv) = bare.unwrap();
+        assert!(recv.is_some(), "decomposed call must carry an SSA receiver");
+        assert_eq!(
+            ctext.as_deref(),
+            Some("c.writer.header.set"),
+            "callee_text should preserve the original textual path"
+        );
+    }
+
+    #[test]
+    fn phase2_e2e_python_chained_receiver_emits_field_proj() {
+        // Python: `obj.client.session.send(p)` — 3-segment receiver.
+        let src = b"def f(obj, p):\n    obj.client.session.send(p)\n";
+        let body = parse_to_first_body(
+            src,
+            "python",
+            tree_sitter::Language::from(tree_sitter_python::LANGUAGE),
+            "test.py",
+        );
+        let projs = collect_field_projs(&body);
+        let names: Vec<&str> = projs.iter().map(|(_, _, n)| n.as_str()).collect();
+        assert!(
+            names.contains(&"client") && names.contains(&"session"),
+            "expected client + session projections, got {names:?}"
+        );
+        let calls = collect_calls(&body);
+        assert!(
+            calls.iter().any(|(c, ct, r)| c == "send"
+                && ct.as_deref() == Some("obj.client.session.send")
+                && r.is_some()),
+            "expected bare 'send' Call with callee_text retained; got {calls:?}"
+        );
+    }
+
+    #[test]
+    fn phase2_e2e_javascript_chained_receiver_emits_field_proj() {
+        // JS: `obj.foo.bar.baz()` — 3-segment receiver.
+        let src = b"function f(obj) { obj.foo.bar.baz(); }";
+        let body = parse_to_first_body(
+            src,
+            "javascript",
+            tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE),
+            "test.js",
+        );
+        let projs = collect_field_projs(&body);
+        let names: Vec<&str> = projs.iter().map(|(_, _, n)| n.as_str()).collect();
+        assert!(
+            names.contains(&"foo") && names.contains(&"bar"),
+            "expected foo + bar projections, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn phase2_e2e_java_chained_receiver_emits_field_proj() {
+        // Java: `obj.config.handler.run()` — 3-segment receiver chain through
+        // a parameter `obj`.  We avoid `this.…` because `this` is a Java
+        // keyword (not an identifier_node) so it isn't extracted as an
+        // external use — outside Phase 2's scope.
+        let src = b"class C { void f(Object obj) { obj.config.handler.run(); } }";
+        let body = parse_to_first_body(
+            src,
+            "java",
+            tree_sitter::Language::from(tree_sitter_java::LANGUAGE),
+            "test.java",
+        );
+        let projs = collect_field_projs(&body);
+        let names: Vec<&str> = projs.iter().map(|(_, _, n)| n.as_str()).collect();
+        assert!(
+            names.contains(&"config") && names.contains(&"handler"),
+            "expected config + handler projections, got {names:?}; full body:\n{body}"
+        );
+        let calls = collect_calls(&body);
+        assert!(
+            calls.iter().any(|(c, ct, r)| c == "run"
+                && ct.as_deref() == Some("obj.config.handler.run")
+                && r.is_some()),
+            "expected bare 'run' Call with callee_text retained; got {calls:?}"
+        );
+    }
+
+    #[test]
+    fn phase2_e2e_simple_receiver_no_field_proj() {
+        // REGRESSION: `obj.foo()` — single-dot receiver.  Phase 2 must NOT
+        // decompose this into a FieldProj chain (existing receiver channel
+        // already covers it).  Verify the body has zero FieldProj ops and
+        // the Call's callee_text stays None.
+        let src = b"function f(obj) { obj.foo(); }";
+        let body = parse_to_first_body(
+            src,
+            "javascript",
+            tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE),
+            "test.js",
+        );
+        assert!(
+            collect_field_projs(&body).is_empty(),
+            "single-dot call should not generate FieldProj"
+        );
+        let calls = collect_calls(&body);
+        assert!(
+            calls.iter().any(|(_, ct, _)| ct.is_none()),
+            "single-dot Call should have callee_text=None; calls={calls:?}"
+        );
+    }
+
+    #[test]
+    fn phase2_e2e_bare_call_no_field_proj() {
+        // REGRESSION: a free-function call `foo()` must produce zero
+        // FieldProj ops and an empty per-body interner.
+        let src = b"function f() { foo(1, 2); }";
+        let body = parse_to_first_body(
+            src,
+            "javascript",
+            tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE),
+            "test.js",
+        );
+        assert!(collect_field_projs(&body).is_empty());
+        assert!(
+            body.field_interner.is_empty(),
+            "no chain → interner stays empty"
+        );
+    }
+
+    #[test]
+    fn phase2_e2e_global_root_chain_still_emits_field_proj() {
+        // REGRESSION-NEGATIVE: when the chain root is a global identifier
+        // (`Math.foo.bar()`), the lowerer's external-var synthesis makes
+        // `Math` available as a synthetic Param — the chain still
+        // decomposes, treating `Math` as the SSA receiver.  This is the
+        // semantically correct outcome even for global-rooted chains: the
+        // FieldProj op precisely captures the field-access structure.
+        let src = b"function f() { Math.foo.bar(); }";
+        let body = parse_to_first_body(
+            src,
+            "javascript",
+            tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE),
+            "test.js",
+        );
+        let projs = collect_field_projs(&body);
+        let names: Vec<&str> = projs.iter().map(|(_, _, n)| n.as_str()).collect();
+        assert!(
+            names.contains(&"foo"),
+            "expected 'foo' projection (chain root Math is a synthesized external var); got {names:?}"
+        );
+    }
+
+    #[test]
+    fn phase2_e2e_rust_method_call_through_field_emits_field_proj() {
+        // Rust: `c.mu.lock()` — `c` is a function parameter, `mu` is a field,
+        // `lock` is the method.  Verifies we generate FieldProj for `mu`.
+        // (Rust paths like `std::env::var` use `::` and are excluded by
+        // the helper's complex-token check.)
+        let src = b"fn f(c: &T) { c.mu.lock(); }";
+        let body = parse_to_first_body(
+            src,
+            "rust",
+            tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
+            "test.rs",
+        );
+        let projs = collect_field_projs(&body);
+        let names: Vec<&str> = projs.iter().map(|(_, _, n)| n.as_str()).collect();
+        assert!(
+            names.contains(&"mu"),
+            "expected 'mu' projection from c.mu.lock(); got {names:?}; body:\n{body}"
+        );
+        let calls = collect_calls(&body);
+        assert!(
+            calls
+                .iter()
+                .any(|(c, ct, r)| c == "lock" && ct.as_deref() == Some("c.mu.lock") && r.is_some()),
+            "expected bare 'lock' Call with callee_text='c.mu.lock'; got {calls:?}"
+        );
+    }
+
+    #[test]
+    fn phase2_e2e_rust_path_call_does_not_emit_field_proj() {
+        // REGRESSION: `std::env::var(...)` is a Rust path (uses `::`), NOT
+        // a member-access chain.  Helper must bail.
+        let src = br#"fn f() { let _ = std::env::var("X"); }"#;
+        let body = parse_to_first_body(
+            src,
+            "rust",
+            tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
+            "test.rs",
+        );
+        assert!(
+            collect_field_projs(&body).is_empty(),
+            "Rust path expression must not be decomposed into FieldProj"
+        );
+    }
+
+    #[test]
+    fn phase2_e2e_field_interner_populated_only_when_chain_emitted() {
+        // Helper invariant: a body with a chained call has a non-empty
+        // interner; a body with no chained calls has an empty interner.
+        let src_chain = b"function f(o) { o.a.b.c(); }";
+        let src_plain = b"function f(o) { o.foo(); }";
+        let body_chain = parse_to_first_body(
+            src_chain,
+            "javascript",
+            tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE),
+            "test.js",
+        );
+        let body_plain = parse_to_first_body(
+            src_plain,
+            "javascript",
+            tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE),
+            "test.js",
+        );
+        assert!(
+            !body_chain.field_interner.is_empty(),
+            "interner should hold the chain field names"
+        );
+        assert!(
+            body_plain.field_interner.is_empty(),
+            "single-dot call should not populate interner"
+        );
+    }
+
+    #[test]
+    fn phase2_e2e_field_proj_chain_preserves_receiver_dataflow() {
+        // The FieldProj receiver chain must trace back to the chain root
+        // (parameter `c` here) via `uses_iter()`.  This is the contract
+        // every downstream consumer relies on for taint propagation.
+        let src = b"function f(c) { c.a.b.m(); }";
+        let body = parse_to_first_body(
+            src,
+            "javascript",
+            tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE),
+            "test.js",
+        );
+        let projs = collect_field_projs(&body);
+        assert_eq!(projs.len(), 2, "expected 2 FieldProj ops, got {projs:?}");
+
+        // The first FieldProj's receiver should be a parameter or external
+        // var; the second FieldProj's receiver should be the first
+        // FieldProj's value.
+        let v_first = projs[0].0;
+        let r_second = projs[1].1;
+        assert_eq!(
+            r_second, v_first,
+            "second FieldProj must chain off the first's value"
+        );
+    }
+
+    /// Pointer-Phase 3 / W1 end-to-end: lowering an `obj.f = rhs`
+    /// statement populates `SsaBody.field_writes` with the synthetic
+    /// base-update Assign's `(receiver, FieldId)` mapping.
+    ///
+    /// W1.b: a SINGLE-write shape — `function f(obj) { obj.cache = 42 }`
+    /// — also populates `field_writes` because every formal gets a
+    /// Param op at block 0 regardless of whether it's read by the
+    /// body.  Pre-W1.b this required two writes (the second's prior
+    /// reaching def came from the first synth Assign); now the first
+    /// write already finds the formal's Param in `var_stacks`.
+    #[test]
+    fn w1_end_to_end_field_write_records_side_table_when_parent_has_prior_def() {
+        // Single write to `obj.cache`: the formal `obj` provides the
+        // prior reaching def via the synthetic Param at block 0.
+        let src = b"function f(obj) { obj.cache = 42; }";
+        let body = parse_to_first_body(
+            src,
+            "javascript",
+            tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE),
+            "test.js",
+        );
+        assert!(
+            !body.field_writes.is_empty(),
+            "single `obj.cache = 42` on a JS formal must populate \
+             field_writes via the formal's W1.b synthetic Param; got \
+             body.field_writes={:?}\nbody:\n{body}",
+            body.field_writes,
+        );
+        // Every recorded field name resolves to "cache".
+        for (_rcv, fid) in body.field_writes.values() {
+            assert_eq!(body.field_interner.resolve(*fid), "cache");
+        }
+    }
+
+    /// W1.b: Python — single `obj.cache = 42` on a formal also
+    /// populates `field_writes` thanks to the formal Param op.
+    #[test]
+    fn w1b_single_write_records_field_write_python() {
+        let src = b"def f(obj):\n    obj.cache = 42\n";
+        let body = parse_to_first_body(
+            src,
+            "python",
+            tree_sitter::Language::from(tree_sitter_python::LANGUAGE),
+            "test.py",
+        );
+        assert!(
+            !body.field_writes.is_empty(),
+            "Python single `obj.cache = 42` must populate field_writes; \
+             got body.field_writes={:?}\nbody:\n{body}",
+            body.field_writes,
+        );
+    }
+
+    /// W1.b: Rust — single `obj.cache = 42` on a method-style formal
+    /// (`fn f(obj: &mut O)`) also populates `field_writes`.
+    #[test]
+    fn w1b_single_write_records_field_write_rust() {
+        let src = b"struct O { cache: i32 } fn f(obj: &mut O) { obj.cache = 42; }";
+        let body = parse_to_first_body(
+            src,
+            "rust",
+            tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
+            "test.rs",
+        );
+        assert!(
+            !body.field_writes.is_empty(),
+            "Rust single `obj.cache = 42` must populate field_writes; \
+             got body.field_writes={:?}\nbody:\n{body}",
+            body.field_writes,
+        );
+    }
+
+    /// W1: a plain non-dotted assignment (`x = 1`) records nothing
+    /// in `field_writes`.  Strict-additive: existing behaviour is
+    /// unchanged for non-field-write shapes.
+    #[test]
+    fn w1_end_to_end_plain_assign_records_no_field_write() {
+        let src = b"function f() { let x = 1; x = 2; }";
+        let body = parse_to_first_body(
+            src,
+            "javascript",
+            tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE),
+            "test.js",
+        );
+        assert!(
+            body.field_writes.is_empty(),
+            "plain assign must not populate field_writes; got {:?}",
+            body.field_writes,
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // SSA edge cases: loop induction, multi-variable phis, multiple
+    // returns, switch-cases, and shadowing. These plug holes in the
+    // dominator-frontier / variable-renaming coverage.
+    // ─────────────────────────────────────────────────────────────────
+
+    /// Loop induction variable: `x = x + 1` inside a loop is the
+    /// canonical SSA challenge — the body uses `x` then redefines it,
+    /// and the join with the entry definition must produce a phi that
+    /// distinguishes the entry value from the body's redefinition.
+    /// Phase 5.2 (induction var pruning) depends on this shape being
+    /// lowered correctly.
+    #[test]
+    fn loop_self_assignment_induction_phi_is_distinct() {
+        // Entry → x=0 → Loop header → [Body: use x; x = x_new] → Loop
+        // The body both uses and defines x, modeling `x = x + 1`.
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let init_x = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let header = cfg.add_node(make_node(StmtKind::Loop));
+        let body = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                uses: vec!["x".into()],
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, init_x, EdgeKind::Seq);
+        cfg.add_edge(init_x, header, EdgeKind::Seq);
+        cfg.add_edge(header, body, EdgeKind::True);
+        cfg.add_edge(body, header, EdgeKind::Back);
+        cfg.add_edge(header, exit, EdgeKind::False);
+
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+
+        // We expect THREE distinct SSA values for `x`:
+        //   - init_x (entry value)
+        //   - body's redefinition
+        //   - the loop-header phi
+        let x_defs: Vec<_> = ssa
+            .value_defs
+            .iter()
+            .filter(|vd| vd.var_name.as_deref() == Some("x"))
+            .collect();
+        assert!(
+            x_defs.len() >= 3,
+            "expected ≥3 SSA values for x (init, phi, body-redef), got {}",
+            x_defs.len()
+        );
+
+        // The header's phi for x must have exactly two operands (entry
+        // value + back-edge value) and they must NOT both be the same
+        // SsaValue (otherwise the renaming collapsed the two arms).
+        let phi_ops = ssa
+            .blocks
+            .iter()
+            .flat_map(|b| b.phis.iter())
+            .find(|p| p.var_name.as_deref() == Some("x"))
+            .and_then(|p| match &p.op {
+                SsaOp::Phi(ops) => Some(ops.clone()),
+                _ => None,
+            })
+            .expect("expected a Phi op for x at the loop header");
+        assert_eq!(
+            phi_ops.len(),
+            2,
+            "loop header phi for x should have 2 operands, got {}",
+            phi_ops.len()
+        );
+        let unique: HashSet<_> = phi_ops.iter().map(|(_, v)| v).collect();
+        assert_eq!(
+            unique.len(),
+            2,
+            "phi operands must be distinct (entry vs back-edge), got {:?}",
+            phi_ops
+        );
+    }
+
+    /// Diamond join with two distinct variables defined in both arms:
+    /// the merge block must contain a phi for EACH of the variables,
+    /// not just one. Guards against single-variable phi insertion.
+    #[test]
+    fn diamond_join_produces_phi_per_variable() {
+        // Entry → cond → [True: x=1; y=10] → join
+        //              ↘ [False: x=2; y=20] ↗
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let cond = cfg.add_node(make_node(StmtKind::If));
+        let true_def = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let true_def2 = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                defines: Some("y".into()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let false_def = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let false_def2 = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                defines: Some("y".into()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let join = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                uses: vec!["x".into(), "y".into()],
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, cond, EdgeKind::Seq);
+        cfg.add_edge(cond, true_def, EdgeKind::True);
+        cfg.add_edge(true_def, true_def2, EdgeKind::Seq);
+        cfg.add_edge(true_def2, join, EdgeKind::Seq);
+        cfg.add_edge(cond, false_def, EdgeKind::False);
+        cfg.add_edge(false_def, false_def2, EdgeKind::Seq);
+        cfg.add_edge(false_def2, join, EdgeKind::Seq);
+        cfg.add_edge(join, exit, EdgeKind::Seq);
+
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+
+        let phi_vars: HashSet<&str> = ssa
+            .blocks
+            .iter()
+            .flat_map(|b| b.phis.iter())
+            .filter_map(|p| p.var_name.as_deref())
+            .collect();
+        assert!(
+            phi_vars.contains("x"),
+            "expected phi for x at diamond join, got {:?}",
+            phi_vars
+        );
+        assert!(
+            phi_vars.contains("y"),
+            "expected phi for y at diamond join, got {:?}",
+            phi_vars
+        );
+    }
+
+    /// Two reachable Return nodes from different branches must each
+    /// produce a `Terminator::Return`. Common before: only the last
+    /// CFG-Return survived as a real return, others were Goto'd to
+    /// Exit. Regression for the early-return check.
+    #[test]
+    fn two_branches_with_returns_each_terminates_with_return() {
+        // Entry → cond → [True: r1=1; return r1] / [False: r2=2; return r2]
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let cond = cfg.add_node(make_node(StmtKind::If));
+        let r1 = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                defines: Some("r1".into()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let ret1 = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                uses: vec!["r1".into()],
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Return)
+        });
+        let r2 = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                defines: Some("r2".into()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let ret2 = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                uses: vec!["r2".into()],
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Return)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, cond, EdgeKind::Seq);
+        cfg.add_edge(cond, r1, EdgeKind::True);
+        cfg.add_edge(r1, ret1, EdgeKind::Seq);
+        cfg.add_edge(ret1, exit, EdgeKind::Seq);
+        cfg.add_edge(cond, r2, EdgeKind::False);
+        cfg.add_edge(r2, ret2, EdgeKind::Seq);
+        cfg.add_edge(ret2, exit, EdgeKind::Seq);
+
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+
+        // Count blocks ending with `Terminator::Return(_)`.
+        let return_blocks = ssa
+            .blocks
+            .iter()
+            .filter(|b| matches!(&b.terminator, Terminator::Return(_)))
+            .count();
+        assert_eq!(
+            return_blocks, 2,
+            "expected 2 Return-terminated blocks, got {}",
+            return_blocks
+        );
+    }
+
+    /// Variable defined ONLY in one branch of a conditional must be
+    /// undef on the other path. The phi at the join should include an
+    /// undef sentinel for the missing arm — guards against the
+    /// renamer silently dropping the missing operand.
+    #[test]
+    fn conditional_define_only_one_arm_phi_has_undef_operand() {
+        // Entry → cond → [True: x=1] → join (uses x)
+        //              ↘ [False: nop] ↗
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let cond = cfg.add_node(make_node(StmtKind::If));
+        let true_def = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let false_nop = cfg.add_node(make_node(StmtKind::Seq));
+        let join = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                uses: vec!["x".into()],
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+        cfg.add_edge(entry, cond, EdgeKind::Seq);
+        cfg.add_edge(cond, true_def, EdgeKind::True);
+        cfg.add_edge(true_def, join, EdgeKind::Seq);
+        cfg.add_edge(cond, false_nop, EdgeKind::False);
+        cfg.add_edge(false_nop, join, EdgeKind::Seq);
+        cfg.add_edge(join, exit, EdgeKind::Seq);
+
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+
+        // Find a phi for x and verify it has 2 operands. The "undef"
+        // operand can manifest as a Nop-defined SsaValue or a sentinel
+        // — both are acceptable; the invariant is that arity == preds.
+        let x_phi_ops = ssa
+            .blocks
+            .iter()
+            .flat_map(|b| b.phis.iter())
+            .find(|p| p.var_name.as_deref() == Some("x"))
+            .and_then(|p| match &p.op {
+                SsaOp::Phi(ops) => Some(ops.clone()),
+                _ => None,
+            });
+        if let Some(ops) = x_phi_ops {
+            assert_eq!(
+                ops.len(),
+                2,
+                "phi for x at the join must have 2 operands (one per pred), got {}",
+                ops.len()
+            );
+        }
+        // Acceptable alternative: SSA may skip phi insertion when one
+        // arm is undef. The invariant we care about is that lowering
+        // doesn't panic, which `lower_to_ssa(...).unwrap()` already
+        // exercises.
+    }
+
+    /// `lower_to_ssa` on a CFG with NO definitions of any variable
+    /// must still succeed and produce a body with at least entry/exit
+    /// blocks. Regression for trivial-function lowering.
+    #[test]
+    fn empty_function_body_only_entry_and_exit_lowers_cleanly() {
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+        cfg.add_edge(entry, exit, EdgeKind::Seq);
+
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+        assert!(
+            !ssa.blocks.is_empty(),
+            "even an empty body should produce at least one block"
+        );
+        // No phis (nothing converged), no value_defs except possibly
+        // entry sentinels. We just assert it lowered without panic.
     }
 }

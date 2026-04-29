@@ -1,11 +1,15 @@
 # Advanced Analysis
 
-Nyx ships four optional analysis passes that layer on top of the core SSA
-taint engine. Each pass is independently switchable via config
-(`[analysis.engine]` in `nyx.conf` / `nyx.local`), a matching CLI flag pair,
-or; as a legacy last-resort override for library users with no CLI entry
-point; a `NYX_*` environment variable. All four are **on by default**: turning
-them off trades precision for speed.
+Nyx layers several analysis passes on top of the core SSA taint engine.
+Most are switchable via config (`[analysis.engine]` in `nyx.conf` /
+`nyx.local`), a matching CLI flag pair, or, as a last-resort override for
+library users with no CLI entry point, a `NYX_*` environment variable. The
+five precision-tuning passes (abstract interpretation, context sensitivity,
+symbolic execution, constraint solving, field-sensitive points-to) are
+**on by default** because the benchmark numbers in
+[language-maturity.md](language-maturity.md) are measured with them on.
+The demand-driven backwards walk and hierarchy fan-out sit alongside but
+are not user-toggleable in the same way.
 
 See [`Configuration`](configuration.md#analysisengine) for the full config
 surface and CLI flag table. This page explains what each pass does, why it
@@ -78,6 +82,77 @@ origin-attribution.
 
 **Source**: [`src/taint/ssa_transfer.rs`](https://github.com/elicpeter/nyx/blob/master/src/taint/ssa_transfer.rs)
 (`ArgTaintSig`, `InlineCache`, `inline_analyse_callee`).
+
+---
+
+## Field-sensitive points-to
+
+**What it does.** Runs a Steensgaard-style alias analysis that interns field
+accesses as their own abstract locations. `c.mu` becomes `Field(c, mu)`,
+distinct from `c` itself; a write to `obj.cache` and a read from
+`obj.cache` in different methods both land on the same abstract location;
+subscript reads and writes (`arr[i]`, `map[k] = v`) lower to synthetic
+`__index_get__` / `__index_set__` calls so the engine can model them
+through the same container store/load primitives used for STL containers,
+Python lists, JS arrays, and similar.
+
+**Why it helps.** It splits a class of false positives that the
+whole-variable taint model produced. Before this pass, `obj.field =
+tainted; sink(obj.other_field)` would taint `obj` as a whole and fire on
+the safe field; the receiver-type / sub-field distinction is also what
+lets the resource-lifecycle pass attribute a `c.mu.Lock()` to the lock
+field rather than to its container. Cross-method field flow (writer in
+one method, reader in another) shows up only when fields have stable
+identity independent of the parent value.
+
+**How to turn it off.**
+
+| Surface | Value |
+|---|---|
+| Env var | `NYX_POINTER_ANALYSIS=0` |
+
+The pass is **on by default** as of 2026-04-26. The env-var override is
+kept for one release so you can compare against the pre-pointer baseline,
+then will be removed.
+
+**Limitations.** This is not a general escape analysis. Function pointers
+and arbitrary indirect calls still resolve to no callee, and deep alias
+chains through `*p` / `p->field` in C/C++ are not tracked beyond the
+direct field case. The points-to set per value is capped at
+`--max-pointsto` (default 32); when truncation happens, an engine note
+records the precision loss.
+
+**Source**: [`src/pointer/`](https://github.com/elicpeter/nyx/tree/master/src/pointer/).
+
+---
+
+## Hierarchy fan-out for virtual dispatch
+
+**What it does.** Builds a per-language type-hierarchy index in pass 1
+(extends, implements, impl-for, includes; the exact construct depends on
+the language) and uses it in pass 2 to widen method-call resolution. When
+a call's receiver is statically typed as a super-class, trait, or
+interface, the resolver returns every concrete implementer it has seen
+in the codebase rather than just the first match.
+
+**Why it helps.** Without it, a call like `repository.findById(id)` where
+`repository` is typed as the interface gets resolved against whatever the
+single-result resolver finds first; if the matching implementer is in
+another file the call effectively goes opaque. With the hierarchy, the
+taint engine sees the union of every implementer's transform and the
+flow shows up regardless of which file holds the concrete class.
+
+**Limitations.** Fan-out is capped at 8 implementers per call site; over
+that, the tail is silently dropped (a debug log records the cap hit) and
+the call is treated as a non-deterministic union of the kept
+implementers. Languages that use structural / implicit interface
+satisfaction (Go) are deliberately skipped because per-file extraction
+is intractable; those calls fall back to the single-result resolver. The
+extractor covers Java, Rust, TS/JS/TSX, Python, Ruby, PHP, and C++.
+
+**Source**: [`src/cfg/hierarchy.rs`](https://github.com/elicpeter/nyx/blob/master/src/cfg/hierarchy.rs)
+and [`src/summary/mod.rs`](https://github.com/elicpeter/nyx/blob/master/src/summary/mod.rs)
+(`TypeHierarchyIndex`, `resolve_callee_widened`).
 
 ---
 

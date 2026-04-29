@@ -9,6 +9,7 @@ use crate::auth_analysis::extract::common::{attach_route_handler, collect_top_le
 use crate::auth_analysis::model::{
     AnalysisUnitKind, AuthorizationModel, CallSite, Framework, HttpMethod,
 };
+use crate::labels::bare_method_name;
 use crate::utils::project::{DetectedFramework, FrameworkContext};
 use std::path::Path;
 use tree_sitter::{Node, Tree};
@@ -55,7 +56,7 @@ fn maybe_collect_django_path(
         return;
     };
     let callee = text(function, bytes);
-    let target = callee.rsplit('.').next().unwrap_or(&callee);
+    let target = bare_method_name(&callee);
     if !matches!(target, "path" | "re_path") {
         return;
     }

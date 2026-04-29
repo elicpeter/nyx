@@ -1,0 +1,148 @@
+name: Fuzz
+
+on:
+  pull_request:
+    branches: ["master"]
+    paths:
+      - "src/**"
+      - "fuzz/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/fuzz.yml"
+  schedule:
+    # Long-form weekly run, Sundays at 06:00 UTC.
+    - cron: "0 6 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: fuzz-${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [scan_bytes, extract_summaries, cross_file_taint]
+    steps:
+      - uses: actions/checkout@v6
+
+      # cargo-fuzz needs nightly for the libFuzzer codegen flags.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly
+          cache: true
+          cache-workspaces: |
+            .
+            fuzz
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Restore fuzz corpus
+        uses: actions/cache@v5
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.sha }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      # The harness reads inputs as <lang_idx_byte><source>, so we prefix
+      # each seed with its language index here at stage time. Files in
+      # fuzz/seed_corpus/ are committed as plain source without the byte
+      # because some IDEs strip 0x00 on save.
+      - name: Layer seed corpus
+        run: |
+          set -euo pipefail
+          target=${{ matrix.target }}
+          dest="fuzz/corpus/$target"
+          mkdir -p "$dest"
+          ext_to_idx() {
+            case "$1" in
+              rs)   echo 0 ;;
+              js)   echo 1 ;;
+              ts)   echo 2 ;;
+              py)   echo 3 ;;
+              go)   echo 4 ;;
+              java) echo 5 ;;
+              rb)   echo 6 ;;
+              php)  echo 7 ;;
+              c)    echo 8 ;;
+              cpp)  echo 9 ;;
+              *)    return 1 ;;
+            esac
+          }
+          stage() {
+            src="$1"
+            ext="${src##*.}"
+            idx=$(ext_to_idx "$ext") || return 0
+            hash=$(sha256sum "$src" | cut -c1-16)
+            out="$dest/seed-${ext}-${hash}"
+            [ -e "$out" ] && return 0
+            printf '%b' "$(printf '\\%03o' "$idx")" > "$out"
+            cat "$src" >> "$out"
+          }
+          for f in benches/fixtures/sample.*; do
+            [ -e "$f" ] && stage "$f"
+          done
+          while IFS= read -r f; do
+            stage "$f"
+          done < <(find tests/benchmark/corpus -type f \( \
+                     -name '*.rs' -o -name '*.js' -o -name '*.ts' \
+                  -o -name '*.py' -o -name '*.go' -o -name '*.java' \
+                  -o -name '*.rb' -o -name '*.php' -o -name '*.c' \
+                  -o -name '*.cpp' \))
+          if [ -d "fuzz/seed_corpus/$target" ]; then
+            while IFS= read -r f; do
+              stage "$f"
+            done < <(find "fuzz/seed_corpus/$target" -type f \( \
+                       -name '*.rs' -o -name '*.js' -o -name '*.ts' \
+                    -o -name '*.py' -o -name '*.go' -o -name '*.java' \
+                    -o -name '*.rb' -o -name '*.php' -o -name '*.c' \
+                    -o -name '*.cpp' \))
+          fi
+          echo "Corpus dir: $(ls "$dest" | wc -l) files"
+
+      - name: Choose fuzz duration
+        id: budget
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "seconds=18000" >> "$GITHUB_OUTPUT"
+          else
+            echo "seconds=600" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run fuzz target
+        run: |
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- \
+            -max_total_time=${{ steps.budget.outputs.seconds }} \
+            -max_len=65536 \
+            -timeout=60 \
+            -dict=fuzz/dict/all.dict
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}-${{ github.run_id }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 14

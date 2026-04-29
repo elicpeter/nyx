@@ -81,6 +81,13 @@ pub static RULES: &[LabelRule] = &[
             "os.Create",
             "ioutil.ReadFile",
             "os.ReadFile",
+            // Mutating filesystem operations.  Path-traversal CVEs commonly
+            // sink into delete/write rather than read (Owncast CVE-2024-31450
+            // sinks into `os.Remove(filepath.Join(root, userInput))`).
+            "os.Remove",
+            "os.RemoveAll",
+            "os.WriteFile",
+            "ioutil.WriteFile",
         ],
         label: DataLabel::Sink(Cap::FILE_IO),
         case_sensitive: false,
@@ -94,10 +101,22 @@ pub static RULES: &[LabelRule] = &[
         matchers: &[
             "http.Get",
             "http.Post",
+            "http.Head",
             "http.NewRequest",
             "http.NewRequestWithContext",
             "net.Dial",
             "net.DialTimeout",
+            // `http.DefaultClient` is the package-level default `*http.Client`.
+            // Idiomatic Go SSRF sinks (Owncast CVE-2023-3188) use the
+            // `http.DefaultClient.Get(url)` form rather than the bare
+            // `http.Get(url)` helper, so the suffix-matched callee text needs
+            // an explicit entry here — bare `Get/Post/Do/Head` would
+            // over-match unrelated method names.
+            "http.DefaultClient.Get",
+            "http.DefaultClient.Post",
+            "http.DefaultClient.Head",
+            "http.DefaultClient.Do",
+            "http.DefaultClient.PostForm",
         ],
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,

@@ -1,5 +1,6 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { usePersistedState } from './usePersistedState';
 
 export interface FindingsURLState {
   page: string;
@@ -29,6 +30,21 @@ const FINDINGS_DEFAULTS: FindingsURLState = {
   search: '',
 };
 
+/** Subset of state we remember across sessions. Filters intentionally are
+ * NOT persisted — they're scan-specific and should reset by default, but the
+ * URL still reflects them so a shared link reproduces them exactly. */
+interface PersistedFindingsPrefs {
+  per_page: string;
+  sort_by: string;
+  sort_dir: string;
+}
+
+const DEFAULT_PREFS: PersistedFindingsPrefs = {
+  per_page: '50',
+  sort_by: '',
+  sort_dir: 'asc',
+};
+
 const FILTER_KEYS: ReadonlySet<string> = new Set([
   'severity',
   'category',
@@ -49,16 +65,42 @@ const NON_RESET_KEYS: ReadonlySet<string> = new Set([
 
 export function useFindingsURLState() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const [prefs, setPrefs] = usePersistedState<PersistedFindingsPrefs>(
+    'findings:prefs',
+    DEFAULT_PREFS,
+  );
 
   const state: FindingsURLState = useMemo(() => {
     const s = {} as FindingsURLState;
     for (const key of Object.keys(
       FINDINGS_DEFAULTS,
     ) as (keyof FindingsURLState)[]) {
-      s[key] = searchParams.get(key) || FINDINGS_DEFAULTS[key];
+      // URL wins; fall back to remembered prefs for keys we persist;
+      // last resort is the global default.
+      const fromUrl = searchParams.get(key);
+      if (fromUrl) {
+        s[key] = fromUrl;
+      } else if (
+        key === 'per_page' ||
+        key === 'sort_by' ||
+        key === 'sort_dir'
+      ) {
+        s[key] = prefs[key] || FINDINGS_DEFAULTS[key];
+      } else {
+        s[key] = FINDINGS_DEFAULTS[key];
+      }
     }
     return s;
-  }, [searchParams]);
+  }, [searchParams, prefs]);
+
+  // Persist user-driven changes to per_page / sort_*.
+  useEffect(() => {
+    setPrefs({
+      per_page: state.per_page,
+      sort_by: state.sort_by,
+      sort_dir: state.sort_dir,
+    });
+  }, [state.per_page, state.sort_by, state.sort_dir, setPrefs]);
 
   const updateState = useCallback(
     (updates: Partial<FindingsURLState>) => {

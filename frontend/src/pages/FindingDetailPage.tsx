@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useFinding } from '../api/queries/findings';
 import { useBulkTriage } from '../api/mutations/triage';
+import { usePageTitle } from '../hooks/usePageTitle';
 import { truncPath } from '../utils/truncPath';
 import { escapeHtml, highlightSyntax } from '../utils/syntaxHighlight';
 import { parseNoteText } from '../utils/parseNote';
@@ -816,6 +817,11 @@ export function FindingDetailPage() {
   const { id } = useParams<{ id: string }>();
 
   const { data: finding, isLoading, isError, error } = useFinding(id ?? '');
+  usePageTitle(
+    finding
+      ? `${finding.rule_id} · ${finding.path}:${finding.line}`
+      : 'Finding',
+  );
 
   const bulkTriage = useBulkTriage();
   const [codeModalOpen, setCodeModalOpen] = useState(false);

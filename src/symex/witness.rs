@@ -772,6 +772,8 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: [(sink_node, sink_val)].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let finding = Finding {
@@ -824,6 +826,8 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: [(sink_node, SsaValue(5))].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
         let cfg = Cfg::new();
         let finding = Finding {
@@ -882,6 +886,8 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: [(sink_node, sink_val)].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let finding = Finding {
@@ -941,6 +947,8 @@ mod tests {
             value_defs: vec![],
             cfg_node_map: [(sink_node, sink_val)].into_iter().collect(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         };
 
         let finding = Finding {

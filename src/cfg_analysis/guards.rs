@@ -266,6 +266,10 @@ fn ssa_operand_const_or_param(
             }
             SsaOp::Source => return false,
             SsaOp::Nop | SsaOp::Undef => {}
+            // FieldProj: walk the receiver — `obj.f` is constant iff `obj`
+            // is constant under the same definition.  The field name itself
+            // is structural and adds no runtime value.
+            SsaOp::FieldProj { receiver, .. } => stack.push(*receiver),
         }
     }
     true
@@ -332,6 +336,9 @@ fn ssa_operand_constant(
             // Undef is a non-user, non-dynamic sentinel — treat like Const
             // (no additional operands to trace).
             SsaOp::Undef => {}
+            // FieldProj: structural field read; constness reduces to the
+            // receiver's constness.
+            SsaOp::FieldProj { receiver, .. } => stack.push(*receiver),
         }
     }
     true

@@ -505,6 +505,38 @@ pub static GATED_SINKS: &[SinkGate] = &[
             object_destination_fields: &["host", "hostname", "path", "protocol", "port", "origin"],
         },
     },
+    // Node `http.get(options[, cb])` / `https.get(options[, cb])` —
+    // convenience wrappers around `.request()` that auto-call `.end()`.
+    // Same destination semantics as `.request`. Motivated by
+    // CVE-2025-64430 (Parse Server SSRF via http.get(uri)).
+    SinkGate {
+        callee_matcher: "http.get",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["host", "hostname", "path", "protocol", "port", "origin"],
+        },
+    },
+    SinkGate {
+        callee_matcher: "https.get",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["host", "hostname", "path", "protocol", "port", "origin"],
+        },
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {

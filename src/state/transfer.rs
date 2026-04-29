@@ -1,12 +1,53 @@
 #![allow(clippy::collapsible_if)]
 
-use super::domain::{AuthLevel, ProductState, ResourceLifecycle};
+use super::domain::{AuthLevel, ChainProxyState, ProductState, ResourceLifecycle};
 use super::engine::Transfer;
 use super::symbol::{SymbolId, SymbolInterner};
 use crate::cfg::{EdgeKind, NodeInfo, StmtKind};
 use crate::cfg_analysis::rules::{self, ResourcePair};
 use crate::symbol::Lang;
 use petgraph::graph::NodeIndex;
+
+/// Decompose a textual callee like `"c.mu.Lock"` into
+/// `(chain_receiver_text, method_suffix)`.  Returns `None` when the
+/// callee isn't a clean dotted member chain (parens, brackets, `::`,
+/// arrow operators, whitespace, or other complex tokens disqualify it).
+///
+/// Phase 3 of the field-projections rollout: this is the textual mirror
+/// of `try_lower_field_proj_chain` in `src/ssa/lower.rs`.  The state
+/// engine doesn't yet read SSA bodies (would require threading SSA
+/// through the lattice run), so the same parse rules are duplicated
+/// here.  Both helpers share the contract: a success here implies a
+/// FieldProj chain at SSA level (or a direct receiver for the 1-dot
+/// case).
+///
+/// **Returns** `Some(("c", "Close"))` for `"c.Close"` (1 dot — the
+/// receiver is a bare ident); `Some(("c.mu", "Lock"))` for
+/// `"c.mu.Lock"` (2 dots — receiver is a 1-element chain);
+/// `Some(("c.writer.header", "set"))` for `"c.writer.header.set"`
+/// (3 dots — receiver is a 2-element chain).  Returns `None` for any
+/// callee shape we can't safely decompose textually.
+fn try_chain_decompose(callee: &str) -> Option<(&str, &str)> {
+    for ch in callee.chars() {
+        match ch {
+            '(' | ')' | '[' | ']' | '<' | '>' | '?' | '*' | '&' | ':' | ' ' | '\t' | '\n' | '-'
+            | '!' | ',' | ';' | '"' | '\'' | '\\' => return None,
+            _ => {}
+        }
+    }
+    let last_dot = callee.rfind('.')?;
+    let receiver_text = &callee[..last_dot];
+    let method_suffix = &callee[last_dot + 1..];
+    if receiver_text.is_empty() || method_suffix.is_empty() {
+        return None;
+    }
+    // Reject if any segment in the receiver is empty (leading dot,
+    // double dots) — same discipline as the SSA-side helper.
+    if receiver_text.split('.').any(str::is_empty) {
+        return None;
+    }
+    Some((receiver_text, method_suffix))
+}
 
 /// Events emitted during transfer for illegal state transitions.
 /// These are NOT lattice values — they become findings in `facts.rs`.
@@ -130,6 +171,20 @@ pub struct DefaultTransfer<'a> {
     pub interner: &'a SymbolInterner,
     /// Resource method summaries for cross-body proxy resolution.
     pub resource_method_summaries: &'a [ResourceMethodSummary],
+    /// Optional per-body field-only points-to hints — names that resolve
+    /// to a value whose entire abstract heap identity is one or more
+    /// [`crate::pointer::AbsLoc::Field`] locations (e.g. `m := c.mu`).
+    ///
+    /// Populated only when `NYX_POINTER_ANALYSIS=1` is set and the
+    /// state-analysis caller built the body's
+    /// [`crate::pointer::PointsToFacts`].  When present, the proxy-acquire
+    /// logic routes single-dot calls on field-aliased receivers
+    /// (e.g. `m.Lock()` after `m := c.mu`) into `chain_proxies` instead
+    /// of marking the local with a `SymbolId` that would later be flagged
+    /// as a leak.  Strict-additive: when `None`, behaviour matches the
+    /// pointer-unaware fallback exactly.
+    pub ptr_proxy_hints:
+        Option<&'a std::collections::HashMap<String, crate::pointer::PtrProxyHint>>,
 }
 
 impl Transfer<ProductState> for DefaultTransfer<'_> {
@@ -170,6 +225,77 @@ impl DefaultTransfer<'_> {
             .get_scoped(info.ast.enclosing_func.as_deref(), name)
     }
 
+    /// Pointer-Phase 2 hook.  Returns `true` when the call has been
+    /// fully handled as a field-aliased receiver proxy and the rest of
+    /// `apply_call` should bail.
+    ///
+    /// Activates only on single-dot calls (`<recv>.<method>`) whose
+    /// receiver name is recorded with [`crate::pointer::PtrProxyHint::FieldOnly`]
+    /// in the per-body hint map AND for which a matching
+    /// [`ResourceMethodSummary`] exists.  The acquire/release effect
+    /// is recorded against `state.chain_proxies` keyed by the receiver
+    /// name — chain_proxies is a tracking-only lattice today, so leak
+    /// detection (which only inspects `state.resource`) is suppressed
+    /// for the alias.  Strict-additive: when no hint map is supplied,
+    /// when the receiver isn't `FieldOnly`, or when no method summary
+    /// matches, the function returns `false` and the legacy branches
+    /// run unchanged.
+    fn try_apply_field_alias_proxy(
+        &self,
+        info: &NodeInfo,
+        callee: &str,
+        state: &mut ProductState,
+    ) -> bool {
+        let Some(hints) = self.ptr_proxy_hints else {
+            return false;
+        };
+        // Only single-dot callees: `m.Lock`, not `c.mu.Lock` (which the
+        // chain-receiver block already handles textually) and not zero-
+        // dot (no receiver to alias).
+        let Some((receiver_text, method_suffix)) = try_chain_decompose(callee) else {
+            return false;
+        };
+        if receiver_text.contains('.') {
+            return false;
+        }
+        let recv_name: &str = match info.call.receiver.as_deref() {
+            Some(r) if !r.contains('.') && !r.contains('(') => r,
+            _ => receiver_text,
+        };
+        if hints.get(recv_name).copied() != Some(crate::pointer::PtrProxyHint::FieldOnly) {
+            return false;
+        }
+        let mut handled = false;
+        for summary in self.resource_method_summaries {
+            if !summary.method_name.eq_ignore_ascii_case(method_suffix) {
+                continue;
+            }
+            handled = true;
+            match summary.effect {
+                ResourceEffect::Acquire => {
+                    state.chain_proxies.insert(
+                        recv_name.to_string(),
+                        ChainProxyState {
+                            lifecycle: ResourceLifecycle::OPEN,
+                            class_group: summary.class_group,
+                            acquire_span: summary.original_span,
+                        },
+                    );
+                }
+                ResourceEffect::Release => {
+                    if let Some(entry) = state.chain_proxies.get_mut(recv_name) {
+                        if entry.class_group == summary.class_group
+                            && entry.lifecycle.contains(ResourceLifecycle::OPEN)
+                        {
+                            entry.lifecycle = ResourceLifecycle::CLOSED;
+                        }
+                    }
+                }
+            }
+        }
+        handled
+    }
+
     fn apply_call(
         &self,
         node_idx: NodeIndex,
@@ -181,6 +307,23 @@ impl DefaultTransfer<'_> {
             Some(c) => c.to_ascii_lowercase(),
             None => return,
         };
+
+        // ── Pointer-Phase 2: field-aliased receiver fast-path ───────────
+        // When the receiver name resolves through points-to to a value
+        // whose abstract heap identity is purely `Field(_, _)` (e.g.
+        // `m := c.mu` followed by `m.Lock()`), the receiver is a
+        // sub-object alias rather than a standalone resource handle.
+        // Routing the entire call into `chain_proxies` here — *before*
+        // the SymbolId-based direct-acquire/release/proxy branches —
+        // suppresses the FP class where the local `m` would otherwise
+        // be flagged as a leakable resource at function exit.
+        //
+        // Strict-additive: when `ptr_proxy_hints` is `None` or the
+        // receiver name is absent from the map, this returns early and
+        // the legacy branches run unchanged.
+        if self.try_apply_field_alias_proxy(info, &callee, state) {
+            return;
+        }
 
         // ── Resource acquire ─────────────────────────────────────────────
         let mut direct_acquire = false;
@@ -240,47 +383,92 @@ impl DefaultTransfer<'_> {
 
         // ── Resource method proxy ────────────────────────────────────────
         // When no direct resource pair matched, check if the callee is a
-        // method wrapper for a known resource operation. Only fires when:
-        //   1. The callee is a method call (contains `.`)
-        //   2. An explicit receiver is identified
-        //   3. The method suffix matches a ResourceMethodSummary
-        //   4. For Release: the receiver was previously acquired by the same class group
-        if !direct_acquire && !direct_release && callee.contains('.') {
-            // Extract receiver: prefer explicit NodeInfo.call.receiver, fall back
-            // to everything before the last `.` in the callee string.
-            let recv_from_callee: Option<String>;
-            let recv_name: Option<&str> = if let Some(ref r) = info.call.receiver {
-                Some(r.as_str())
-            } else {
-                recv_from_callee = callee.rsplit_once('.').map(|(prefix, _)| {
-                    // For multi-segment paths like "a.b.c", use the root receiver
-                    prefix.split('.').next().unwrap_or(prefix).to_string()
-                });
-                recv_from_callee.as_deref()
-            };
-            if let Some(recv) = recv_name {
-                let method_suffix = callee.rsplit('.').next().unwrap_or("");
+        // method wrapper for a known resource operation.
+        //
+        // Phase 3 (field-projections rollout, 2026-04-25):  the previous
+        // single-dot band-aid (`callee.matches('.').count() == 1 &&
+        // !callee.contains('(')`) silently dropped chained receivers
+        // because the original textual extractor took the chain root as
+        // receiver — collapsing `c.writer.header().set` to `c` and
+        // marking `c` as proxy-acquired (the gin/context.go FP class).
+        //
+        // The band-aid is now deleted.  Chained-receiver method calls
+        // are routed to a *separate* state map (`chain_proxies`) keyed by
+        // the joined receiver chain text — so `c.mu.Lock()` acquires
+        // `c.mu` (a chain-receiver entity), not `c`.  The chain receiver
+        // is independent of the chain root: leaks/double-closes are
+        // tracked per chain, never propagated up to the root.
+        //
+        // The single-dot case (`<recv>.<method>`) keeps the original
+        // SymbolId-based path so existing fixtures' lifecycle tracking,
+        // leak detection, and finding attribution stay bit-for-bit
+        // identical.
+        // Chain-receiver proxy path runs independently of the direct
+        // acquire/release flags: it touches a *separate* state map
+        // (`chain_proxies`) that doesn't overlap with the SymbolId-based
+        // `state.resource` / `receiver_class_group` lattice.  This is
+        // important for callees like `c.mu.Unlock()` where the textual
+        // direct-release matcher (`.Unlock`) fires (sets `direct_release`
+        // even without a SymbolId state change), but the chain receiver
+        // (`c.mu`) is still the semantically meaningful target.
+        if let Some((receiver_text, method_suffix)) = try_chain_decompose(&callee) {
+            let receiver_is_chain = receiver_text.contains('.');
+            if receiver_is_chain {
                 for summary in self.resource_method_summaries {
-                    if summary.method_name.eq_ignore_ascii_case(method_suffix) {
-                        if let Some(sym) = self.get_sym(info, recv) {
-                            match summary.effect {
-                                ResourceEffect::Acquire => {
-                                    state.resource.set(sym, ResourceLifecycle::OPEN);
-                                    // Track class group for release matching
-                                    state.receiver_class_group.insert(sym, summary.class_group);
-                                    // Store original acquire span for finding attribution
-                                    state.proxy_acquire_spans.insert(sym, summary.original_span);
+                    if !summary.method_name.eq_ignore_ascii_case(method_suffix) {
+                        continue;
+                    }
+                    match summary.effect {
+                        ResourceEffect::Acquire => {
+                            state.chain_proxies.insert(
+                                receiver_text.to_string(),
+                                ChainProxyState {
+                                    lifecycle: ResourceLifecycle::OPEN,
+                                    class_group: summary.class_group,
+                                    acquire_span: summary.original_span,
+                                },
+                            );
+                        }
+                        ResourceEffect::Release => {
+                            if let Some(entry) = state.chain_proxies.get_mut(receiver_text) {
+                                if entry.class_group == summary.class_group
+                                    && entry.lifecycle.contains(ResourceLifecycle::OPEN)
+                                {
+                                    entry.lifecycle = ResourceLifecycle::CLOSED;
                                 }
-                                ResourceEffect::Release => {
-                                    // Only release if receiver was acquired by same class group
-                                    if state.receiver_class_group.get(&sym)
-                                        == Some(&summary.class_group)
-                                    {
-                                        let current = state.resource.get(sym);
-                                        if current.contains(ResourceLifecycle::OPEN) {
-                                            state.resource.set(sym, ResourceLifecycle::CLOSED);
-                                        }
-                                    }
+                            }
+                        }
+                    }
+                }
+            } else if !direct_acquire && !direct_release {
+                // Single-dot receiver (`<recv>.<method>`): existing
+                // SymbolId-based path.  Gated on direct_acquire/release
+                // because it shares state with the direct paths above —
+                // running both would double-transition.  Honour the
+                // explicit `info.call.receiver` when it's the same bare
+                // ident, otherwise fall back to the parsed receiver text.
+                let recv_name: &str = match info.call.receiver.as_deref() {
+                    Some(r) if !r.contains('.') && !r.contains('(') => r,
+                    _ => receiver_text,
+                };
+                for summary in self.resource_method_summaries {
+                    if !summary.method_name.eq_ignore_ascii_case(method_suffix) {
+                        continue;
+                    }
+                    let Some(sym) = self.get_sym(info, recv_name) else {
+                        continue;
+                    };
+                    match summary.effect {
+                        ResourceEffect::Acquire => {
+                            state.resource.set(sym, ResourceLifecycle::OPEN);
+                            state.receiver_class_group.insert(sym, summary.class_group);
+                            state.proxy_acquire_spans.insert(sym, summary.original_span);
+                        }
+                        ResourceEffect::Release => {
+                            if state.receiver_class_group.get(&sym) == Some(&summary.class_group) {
+                                let current = state.resource.get(sym);
+                                if current.contains(ResourceLifecycle::OPEN) {
+                                    state.resource.set(sym, ResourceLifecycle::CLOSED);
                                 }
                             }
                         }
@@ -658,6 +846,7 @@ mod tests {
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
             resource_method_summaries: &[],
+            ptr_proxy_hints: None,
         };
 
         let info = NodeInfo {
@@ -693,6 +882,7 @@ mod tests {
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
             resource_method_summaries: &[],
+            ptr_proxy_hints: None,
         };
 
         let mut state = ProductState::initial();
@@ -730,6 +920,7 @@ mod tests {
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
             resource_method_summaries: &[],
+            ptr_proxy_hints: None,
         };
 
         let mut state = ProductState::initial();
@@ -768,6 +959,7 @@ mod tests {
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
             resource_method_summaries: &[],
+            ptr_proxy_hints: None,
         };
 
         let mut state = ProductState::initial();
@@ -840,6 +1032,7 @@ mod tests {
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
             resource_method_summaries: &[],
+            ptr_proxy_hints: None,
         };
 
         let mut state = ProductState::initial();
@@ -894,6 +1087,7 @@ mod tests {
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
             resource_method_summaries: &[],
+            ptr_proxy_hints: None,
         };
 
         let mut state = ProductState::initial();
@@ -1155,5 +1349,639 @@ mod tests {
             "user == null || !user.is_authenticated",
             "is_authenticated"
         ));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Phase 3: chain-receiver decomposition + chain_proxies tracking
+    // ─────────────────────────────────────────────────────────────────
+    //
+    // These tests pin the contract that:
+    //   1. `try_chain_decompose` parses dotted callees into receiver +
+    //      method, bailing on complex tokens.
+    //   2. The proxy-method routing in `apply_call` records chained
+    //      receivers in `state.chain_proxies` (keyed by joined chain
+    //      text) — independent from the chain root's `SymbolId`-based
+    //      `state.receiver_class_group` entries.
+    //   3. Single-dot callees still flow through the existing SymbolId
+    //      path (regression guard).
+    //   4. The deleted single-dot band-aid no longer suppresses chain
+    //      cases — `c.mu.Lock()` now fires the chain-proxies path
+    //      instead of being silently dropped.
+
+    #[test]
+    fn try_chain_decompose_basic_two_dots() {
+        // `c.mu.Lock` → receiver "c.mu", method "Lock".  The receiver
+        // is a 1-element chain (one FieldProj at the SSA level).
+        let (recv, method) = try_chain_decompose("c.mu.Lock").unwrap();
+        assert_eq!(recv, "c.mu");
+        assert_eq!(method, "Lock");
+    }
+
+    #[test]
+    fn try_chain_decompose_three_dots() {
+        // `c.writer.header.set` → receiver "c.writer.header", method "set".
+        let (recv, method) = try_chain_decompose("c.writer.header.set").unwrap();
+        assert_eq!(recv, "c.writer.header");
+        assert_eq!(method, "set");
+    }
+
+    #[test]
+    fn try_chain_decompose_one_dot_keeps_bare_receiver() {
+        // `f.Close` → receiver "f" (bare ident), method "Close".  The
+        // single-dot case still decomposes; apply_call routes it through
+        // the existing SymbolId-based path (not chain_proxies).
+        let (recv, method) = try_chain_decompose("f.Close").unwrap();
+        assert_eq!(recv, "f");
+        assert_eq!(method, "Close");
+    }
+
+    #[test]
+    fn try_chain_decompose_no_dot_returns_none() {
+        assert!(try_chain_decompose("Close").is_none());
+        assert!(try_chain_decompose("fopen").is_none());
+    }
+
+    #[test]
+    fn try_chain_decompose_complex_tokens_returns_none() {
+        // Each of these contains a token signaling complexity that breaks
+        // the simple `<ident>.<ident>...` shape; helper must bail to
+        // preserve the conservative behaviour the band-aid established.
+        for s in [
+            "Foo::bar::baz",     // Rust path — `::` rules it out
+            "ptr->field.f",      // C arrow operator
+            "obj.f().g",         // intermediate call
+            "vec[0].field",      // index expression
+            "obj?.f.g",          // optional chain
+            "obj.f g",           // whitespace
+            "c.writer.header()", // trailing parens (the gin/context shape)
+        ] {
+            assert!(
+                try_chain_decompose(s).is_none(),
+                "expected bail on complex callee {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn try_chain_decompose_rejects_empty_segments() {
+        for s in [".x.f", "x..f", "x.f.", "."] {
+            assert!(try_chain_decompose(s).is_none(), "expected bail on {s}");
+        }
+    }
+
+    #[test]
+    fn chain_proxy_acquire_records_chain_text_not_root() {
+        // Phase 3 key behaviour: a chained-receiver acquire (`c.mu.Lock()`)
+        // records `c.mu` in `state.chain_proxies` and DOES NOT touch the
+        // SymbolId-keyed `receiver_class_group` for the chain root `c`.
+        let mut interner = SymbolInterner::new();
+        let _sym_c = interner.intern_scoped(None, "c");
+
+        let lock = ResourceMethodSummary {
+            method_name: "Lock".into(),
+            effect: ResourceEffect::Acquire,
+            class_group: crate::cfg::BodyId(7),
+            original_span: (10, 20),
+        };
+
+        let transfer = DefaultTransfer {
+            lang: Lang::Go,
+            resource_pairs: rules::resource_pairs(Lang::Go),
+            interner: &interner,
+            resource_method_summaries: std::slice::from_ref(&lock),
+            ptr_proxy_hints: None,
+        };
+
+        let info = NodeInfo {
+            kind: StmtKind::Call,
+            ast: AstMeta {
+                span: (0, 30),
+                ..Default::default()
+            },
+            taint: TaintMeta::default(),
+            call: CallMeta {
+                callee: Some("c.mu.Lock".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (state, events) =
+            transfer.apply(NodeIndex::new(0), &info, None, ProductState::initial());
+        assert!(events.is_empty());
+
+        // chain_proxies has the chain text entry.
+        assert!(
+            state.chain_proxies.contains_key("c.mu"),
+            "expected chain_proxies['c.mu'] entry; got {:?}",
+            state.chain_proxies.keys().collect::<Vec<_>>()
+        );
+        let entry = &state.chain_proxies["c.mu"];
+        assert_eq!(entry.lifecycle, ResourceLifecycle::OPEN);
+        assert_eq!(entry.class_group, crate::cfg::BodyId(7));
+        assert_eq!(entry.acquire_span, (10, 20));
+
+        // Root `c` is NOT marked in receiver_class_group — the gin/context FP
+        // the band-aid was guarding against can no longer reappear.
+        assert!(
+            state.receiver_class_group.is_empty(),
+            "chain root must not inherit proxy state; receiver_class_group was {:?}",
+            state.receiver_class_group
+        );
+    }
+
+    #[test]
+    fn chain_proxy_release_after_acquire_transitions_to_closed() {
+        // Acquire + matching Release on the same chain receiver +
+        // class group should transition the chain entry to CLOSED.
+        let mut interner = SymbolInterner::new();
+        let _sym_c = interner.intern_scoped(None, "c");
+        let class_group = crate::cfg::BodyId(11);
+
+        let summaries = vec![
+            ResourceMethodSummary {
+                method_name: "Lock".into(),
+                effect: ResourceEffect::Acquire,
+                class_group,
+                original_span: (0, 10),
+            },
+            ResourceMethodSummary {
+                method_name: "Unlock".into(),
+                effect: ResourceEffect::Release,
+                class_group,
+                original_span: (20, 30),
+            },
+        ];
+
+        let transfer = DefaultTransfer {
+            lang: Lang::Go,
+            resource_pairs: rules::resource_pairs(Lang::Go),
+            interner: &interner,
+            resource_method_summaries: &summaries,
+            ptr_proxy_hints: None,
+        };
+
+        let lock_info = NodeInfo {
+            kind: StmtKind::Call,
+            ast: AstMeta {
+                span: (0, 10),
+                ..Default::default()
+            },
+            taint: TaintMeta::default(),
+            call: CallMeta {
+                callee: Some("c.mu.Lock".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (state, _) =
+            transfer.apply(NodeIndex::new(0), &lock_info, None, ProductState::initial());
+        assert_eq!(
+            state.chain_proxies["c.mu"].lifecycle,
+            ResourceLifecycle::OPEN
+        );
+
+        let unlock_info = NodeInfo {
+            kind: StmtKind::Call,
+            ast: AstMeta {
+                span: (20, 30),
+                ..Default::default()
+            },
+            taint: TaintMeta::default(),
+            call: CallMeta {
+                callee: Some("c.mu.Unlock".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (state, _) = transfer.apply(NodeIndex::new(1), &unlock_info, None, state);
+        assert_eq!(
+            state.chain_proxies["c.mu"].lifecycle,
+            ResourceLifecycle::CLOSED
+        );
+    }
+
+    #[test]
+    fn chain_proxy_distinct_chains_dont_collide() {
+        // `c.mu.Lock()` and `c.other.Lock()` are independent chain
+        // receivers — each gets its own entry in chain_proxies.
+        let interner = SymbolInterner::new();
+        let class_group = crate::cfg::BodyId(3);
+
+        let lock = ResourceMethodSummary {
+            method_name: "Lock".into(),
+            effect: ResourceEffect::Acquire,
+            class_group,
+            original_span: (0, 0),
+        };
+        let transfer = DefaultTransfer {
+            lang: Lang::Go,
+            resource_pairs: rules::resource_pairs(Lang::Go),
+            interner: &interner,
+            resource_method_summaries: std::slice::from_ref(&lock),
+            ptr_proxy_hints: None,
+        };
+
+        let mk_call = |callee: &str| NodeInfo {
+            kind: StmtKind::Call,
+            ast: AstMeta {
+                span: (0, 0),
+                ..Default::default()
+            },
+            taint: TaintMeta::default(),
+            call: CallMeta {
+                callee: Some(callee.into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (state, _) = transfer.apply(
+            NodeIndex::new(0),
+            &mk_call("c.mu.Lock"),
+            None,
+            ProductState::initial(),
+        );
+        let (state, _) = transfer.apply(NodeIndex::new(1), &mk_call("c.other.Lock"), None, state);
+        assert!(state.chain_proxies.contains_key("c.mu"));
+        assert!(state.chain_proxies.contains_key("c.other"));
+        assert_eq!(state.chain_proxies.len(), 2);
+    }
+
+    #[test]
+    fn single_dot_proxy_acquire_uses_symbol_id_path() {
+        // REGRESSION: single-dot callees keep the existing SymbolId-based
+        // path — `f.acquireMine()` records against
+        // `receiver_class_group[sym_f]`, NOT `chain_proxies["f"]`.  This
+        // preserves all existing 1-dot proxy semantics (leak detection,
+        // finding attribution).
+        //
+        // We use an unusual method name so the direct-pair matcher
+        // doesn't fire first (Go's resource_pairs cover `.Close`,
+        // `.close`, etc., which would short-circuit before the proxy
+        // routing).
+        let mut interner = SymbolInterner::new();
+        let sym_f = interner.intern_scoped(None, "f");
+        let class_group = crate::cfg::BodyId(2);
+
+        let acquire = ResourceMethodSummary {
+            method_name: "acquireMine".into(),
+            effect: ResourceEffect::Acquire,
+            class_group,
+            original_span: (0, 0),
+        };
+        let transfer = DefaultTransfer {
+            lang: Lang::Go,
+            resource_pairs: rules::resource_pairs(Lang::Go),
+            interner: &interner,
+            resource_method_summaries: std::slice::from_ref(&acquire),
+            ptr_proxy_hints: None,
+        };
+        let info = NodeInfo {
+            kind: StmtKind::Call,
+            ast: AstMeta {
+                span: (0, 0),
+                ..Default::default()
+            },
+            taint: TaintMeta::default(),
+            call: CallMeta {
+                callee: Some("f.acquireMine".into()),
+                receiver: Some("f".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (state, _) = transfer.apply(NodeIndex::new(0), &info, None, ProductState::initial());
+
+        // SymbolId path fired: receiver_class_group has the SymbolId entry.
+        assert_eq!(
+            state.receiver_class_group.get(&sym_f),
+            Some(&class_group),
+            "single-dot must use SymbolId path"
+        );
+        // chain_proxies stays empty: this is NOT a chain receiver.
+        assert!(
+            state.chain_proxies.is_empty(),
+            "single-dot must not populate chain_proxies; got {:?}",
+            state.chain_proxies.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn complex_callee_does_not_record_proxy() {
+        // REGRESSION: callees with parens / `::` / `[` / `?` are
+        // unparseable as chain receivers.  The helper bails, no proxy
+        // entry is recorded anywhere.  Matches the conservative behaviour
+        // the band-aid established.
+        let interner = SymbolInterner::new();
+        let class_group = crate::cfg::BodyId(0);
+        let lock = ResourceMethodSummary {
+            method_name: "Lock".into(),
+            effect: ResourceEffect::Acquire,
+            class_group,
+            original_span: (0, 0),
+        };
+        let transfer = DefaultTransfer {
+            lang: Lang::Go,
+            resource_pairs: rules::resource_pairs(Lang::Go),
+            interner: &interner,
+            resource_method_summaries: std::slice::from_ref(&lock),
+            ptr_proxy_hints: None,
+        };
+        for callee in ["c.writer.header().Lock", "Foo::bar::Lock", "c[i].mu.Lock"] {
+            let info = NodeInfo {
+                kind: StmtKind::Call,
+                ast: AstMeta {
+                    span: (0, 0),
+                    ..Default::default()
+                },
+                taint: TaintMeta::default(),
+                call: CallMeta {
+                    callee: Some(callee.into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let (state, _) =
+                transfer.apply(NodeIndex::new(0), &info, None, ProductState::initial());
+            assert!(
+                state.chain_proxies.is_empty() && state.receiver_class_group.is_empty(),
+                "complex callee {callee} should not record any proxy state; chain={:?} root={:?}",
+                state.chain_proxies.keys().collect::<Vec<_>>(),
+                state.receiver_class_group.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn chain_proxy_lattice_join_unions_keys() {
+        // Sanity check: the lattice join unions chain_proxies keys.
+        // Branch A: `c.mu` OPEN.  Branch B: `c.other` OPEN.  Join must
+        // contain both — this is the dataflow-correctness invariant
+        // for chain tracking across branches.
+        use crate::state::lattice::Lattice;
+        let mut a = ProductState::initial();
+        let mut b = ProductState::initial();
+        a.chain_proxies.insert(
+            "c.mu".into(),
+            ChainProxyState {
+                lifecycle: ResourceLifecycle::OPEN,
+                class_group: crate::cfg::BodyId(1),
+                acquire_span: (0, 0),
+            },
+        );
+        b.chain_proxies.insert(
+            "c.other".into(),
+            ChainProxyState {
+                lifecycle: ResourceLifecycle::OPEN,
+                class_group: crate::cfg::BodyId(2),
+                acquire_span: (10, 20),
+            },
+        );
+        let joined = a.join(&b);
+        assert_eq!(joined.chain_proxies.len(), 2);
+        assert!(joined.chain_proxies.contains_key("c.mu"));
+        assert!(joined.chain_proxies.contains_key("c.other"));
+    }
+
+    #[test]
+    fn chain_proxy_lattice_join_merges_lifecycle() {
+        // Same chain key on two branches — the lifecycle is OR-joined
+        // (OPEN ∪ CLOSED).  Mirrors the `ResourceLifecycle::join`
+        // bitflag-or semantics already used for SymbolId-based tracking.
+        use crate::state::lattice::Lattice;
+        let mut a = ProductState::initial();
+        let mut b = ProductState::initial();
+        a.chain_proxies.insert(
+            "c.mu".into(),
+            ChainProxyState {
+                lifecycle: ResourceLifecycle::OPEN,
+                class_group: crate::cfg::BodyId(1),
+                acquire_span: (0, 0),
+            },
+        );
+        b.chain_proxies.insert(
+            "c.mu".into(),
+            ChainProxyState {
+                lifecycle: ResourceLifecycle::CLOSED,
+                class_group: crate::cfg::BodyId(1),
+                acquire_span: (0, 0),
+            },
+        );
+        let joined = a.join(&b);
+        assert_eq!(joined.chain_proxies.len(), 1);
+        let lc = joined.chain_proxies["c.mu"].lifecycle;
+        assert!(lc.contains(ResourceLifecycle::OPEN));
+        assert!(lc.contains(ResourceLifecycle::CLOSED));
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Pointer-analysis Phase 2: PtrProxyHint::FieldOnly routes
+    // single-dot proxy-acquire to chain_proxies, suppressing the
+    // SymbolId path that would otherwise mark the field-aliased local
+    // as a leakable resource.
+    // ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn field_only_hint_routes_single_dot_acquire_to_chain_proxies() {
+        // Models `m := c.mu; m.Lock()` — `m`'s pt set is `{Field(SelfParam, mu)}`,
+        // so PtrProxyHint::FieldOnly applies.  The acquire must record
+        // `m` in chain_proxies, NOT in receiver_class_group, so the
+        // leak detector does not later flag `m` as an OPEN-at-exit
+        // resource (it lives inside the function and never escapes).
+        let mut interner = SymbolInterner::new();
+        let _sym_m = interner.intern_scoped(None, "m");
+        let class_group = crate::cfg::BodyId(2);
+
+        let acquire = ResourceMethodSummary {
+            method_name: "Lock".into(),
+            effect: ResourceEffect::Acquire,
+            class_group,
+            original_span: (0, 10),
+        };
+
+        let mut hints = std::collections::HashMap::new();
+        hints.insert("m".to_string(), crate::pointer::PtrProxyHint::FieldOnly);
+
+        let transfer = DefaultTransfer {
+            lang: Lang::Go,
+            resource_pairs: rules::resource_pairs(Lang::Go),
+            interner: &interner,
+            resource_method_summaries: std::slice::from_ref(&acquire),
+            ptr_proxy_hints: Some(&hints),
+        };
+
+        let info = NodeInfo {
+            kind: StmtKind::Call,
+            ast: AstMeta {
+                span: (0, 10),
+                ..Default::default()
+            },
+            taint: TaintMeta::default(),
+            call: CallMeta {
+                callee: Some("m.Lock".into()),
+                receiver: Some("m".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (state, events) =
+            transfer.apply(NodeIndex::new(0), &info, None, ProductState::initial());
+        assert!(events.is_empty());
+        assert!(
+            state.chain_proxies.contains_key("m"),
+            "FieldOnly hint should route `m.Lock()` into chain_proxies; got {:?}",
+            state.chain_proxies.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            state.receiver_class_group.is_empty(),
+            "FieldOnly hint must not record SymbolId proxy entry; got {:?}",
+            state.receiver_class_group.keys().collect::<Vec<_>>()
+        );
+        let entry = &state.chain_proxies["m"];
+        assert_eq!(entry.lifecycle, ResourceLifecycle::OPEN);
+        assert_eq!(entry.class_group, class_group);
+    }
+
+    #[test]
+    fn field_only_hint_release_transitions_chain_entry_to_closed() {
+        // Acquire + Release pair on the field-aliased local both route
+        // through chain_proxies — the entry transitions OPEN → CLOSED
+        // exactly as the existing chain-receiver path does.
+        let mut interner = SymbolInterner::new();
+        let _sym_m = interner.intern_scoped(None, "m");
+        let class_group = crate::cfg::BodyId(11);
+
+        let summaries = vec![
+            ResourceMethodSummary {
+                method_name: "Lock".into(),
+                effect: ResourceEffect::Acquire,
+                class_group,
+                original_span: (0, 10),
+            },
+            ResourceMethodSummary {
+                method_name: "Unlock".into(),
+                effect: ResourceEffect::Release,
+                class_group,
+                original_span: (20, 30),
+            },
+        ];
+
+        let mut hints = std::collections::HashMap::new();
+        hints.insert("m".to_string(), crate::pointer::PtrProxyHint::FieldOnly);
+
+        let transfer = DefaultTransfer {
+            lang: Lang::Go,
+            resource_pairs: rules::resource_pairs(Lang::Go),
+            interner: &interner,
+            resource_method_summaries: &summaries,
+            ptr_proxy_hints: Some(&hints),
+        };
+
+        let lock_info = NodeInfo {
+            kind: StmtKind::Call,
+            call: CallMeta {
+                callee: Some("m.Lock".into()),
+                receiver: Some("m".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (state, _) =
+            transfer.apply(NodeIndex::new(0), &lock_info, None, ProductState::initial());
+        assert_eq!(state.chain_proxies["m"].lifecycle, ResourceLifecycle::OPEN);
+
+        let unlock_info = NodeInfo {
+            kind: StmtKind::Call,
+            call: CallMeta {
+                callee: Some("m.Unlock".into()),
+                receiver: Some("m".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (state, _) = transfer.apply(NodeIndex::new(1), &unlock_info, None, state);
+        assert_eq!(
+            state.chain_proxies["m"].lifecycle,
+            ResourceLifecycle::CLOSED
+        );
+    }
+
+    #[test]
+    fn no_hint_falls_through_to_existing_symbol_id_path() {
+        // REGRESSION: when `ptr_proxy_hints` is `None`, the single-dot
+        // proxy-acquire branch behaves exactly as today — the SymbolId
+        // path fires, `chain_proxies` stays empty.  Strict-additive
+        // contract: pointer analysis disabled ⇒ no behavioural change.
+        let mut interner = SymbolInterner::new();
+        let sym_f = interner.intern_scoped(None, "f");
+        let class_group = crate::cfg::BodyId(3);
+
+        let acquire = ResourceMethodSummary {
+            method_name: "acquireMine".into(),
+            effect: ResourceEffect::Acquire,
+            class_group,
+            original_span: (0, 0),
+        };
+        let transfer = DefaultTransfer {
+            lang: Lang::Go,
+            resource_pairs: rules::resource_pairs(Lang::Go),
+            interner: &interner,
+            resource_method_summaries: std::slice::from_ref(&acquire),
+            ptr_proxy_hints: None,
+        };
+        let info = NodeInfo {
+            kind: StmtKind::Call,
+            call: CallMeta {
+                callee: Some("f.acquireMine".into()),
+                receiver: Some("f".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (state, _) = transfer.apply(NodeIndex::new(0), &info, None, ProductState::initial());
+        assert_eq!(
+            state.receiver_class_group.get(&sym_f),
+            Some(&class_group),
+            "no hint ⇒ SymbolId path"
+        );
+        assert!(state.chain_proxies.is_empty());
+    }
+
+    #[test]
+    fn empty_hint_map_does_not_redirect() {
+        // REGRESSION: an empty hint map means "every name resolves to
+        // PtrProxyHint::Other".  The single-dot branch must fall
+        // through to the SymbolId path — not silently route to
+        // chain_proxies because the map happened to be empty.
+        let mut interner = SymbolInterner::new();
+        let sym_f = interner.intern_scoped(None, "f");
+        let class_group = crate::cfg::BodyId(3);
+        let acquire = ResourceMethodSummary {
+            method_name: "acquireMine".into(),
+            effect: ResourceEffect::Acquire,
+            class_group,
+            original_span: (0, 0),
+        };
+        let hints: std::collections::HashMap<String, crate::pointer::PtrProxyHint> =
+            std::collections::HashMap::new();
+        let transfer = DefaultTransfer {
+            lang: Lang::Go,
+            resource_pairs: rules::resource_pairs(Lang::Go),
+            interner: &interner,
+            resource_method_summaries: std::slice::from_ref(&acquire),
+            ptr_proxy_hints: Some(&hints),
+        };
+        let info = NodeInfo {
+            kind: StmtKind::Call,
+            call: CallMeta {
+                callee: Some("f.acquireMine".into()),
+                receiver: Some("f".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (state, _) = transfer.apply(NodeIndex::new(0), &info, None, ProductState::initial());
+        assert_eq!(state.receiver_class_group.get(&sym_f), Some(&class_group));
+        assert!(state.chain_proxies.is_empty());
     }
 }

@@ -6,11 +6,17 @@
 //! analysis pipeline on a single file/function for debug inspection.
 
 use crate::ast::build_cfg_for_file;
+use crate::auth_analysis::model::{
+    AnalysisUnit, AuthCheck, AuthorizationModel, CallSite, RouteRegistration, SensitiveOperation,
+    ValueRef,
+};
 use crate::callgraph::{CallGraph, CallGraphAnalysis};
 use crate::cfg::{Cfg, EdgeKind, FileCfg, FuncSummaries, StmtKind};
 use crate::constraint::{CompOp, ConditionExpr, ConstValue, Operand};
 use crate::labels::{Cap, DataLabel};
+use crate::pointer::{AbsLoc, PointsToFacts};
 use crate::ssa::ir::*;
+use crate::ssa::type_facts::{TypeFactResult, TypeKind};
 use crate::ssa::{self, OptimizeResult};
 use crate::state::symbol::SymbolInterner;
 use crate::summary::GlobalSummaries;
@@ -100,6 +106,13 @@ fn label_str(l: &DataLabel) -> String {
 pub struct FunctionInfo {
     pub name: String,
     pub namespace: String,
+    /// Enclosing container path (class / impl / module / outer function).
+    /// Empty for free top-level functions.  Surfaced so the UI can render
+    /// closures as `<anon#N> [in outer_fn]`.
+    pub container: String,
+    /// Structural [`crate::symbol::FuncKind`] slug (`"fn"`, `"method"`,
+    /// `"closure"`, ...).  Lets the UI offer a closure-filter toggle.
+    pub func_kind: String,
     pub param_count: usize,
     pub line: usize,
     pub source_caps: Vec<String>,
@@ -298,6 +311,7 @@ fn op_view(op: &SsaOp) -> (String, Vec<String>) {
             callee,
             args,
             receiver,
+            ..
         } => {
             let mut ops = Vec::new();
             if let Some(rv) = receiver {
@@ -320,6 +334,18 @@ fn op_view(op: &SsaOp) -> (String, Vec<String>) {
         SsaOp::CatchParam => ("CatchParam".into(), vec![]),
         SsaOp::Nop => ("Nop".into(), vec![]),
         SsaOp::Undef => ("Undef".into(), vec![]),
+        // FieldProj prints field-id (resolution to name requires the
+        // owning SsaBody, which the serializer does not have here).
+        // Debug consumers walk to the owning body when the name matters.
+        SsaOp::FieldProj {
+            receiver, field, ..
+        } => (
+            "FieldProj".into(),
+            vec![
+                format!("recv=v{}", receiver.0),
+                format!("field={}", field.0),
+            ],
+        ),
     }
 }
 
@@ -753,6 +779,13 @@ pub struct FuncSummaryView {
     pub file_path: String,
     pub lang: String,
     pub namespace: String,
+    /// Enclosing container path (class / impl / module / outer function).
+    /// Empty for free top-level functions.
+    pub container: String,
+    /// Structural [`crate::symbol::FuncKind`] slug — `"fn"`, `"method"`,
+    /// `"closure"`, etc.  Lets the UI distinguish anonymous closures from
+    /// named functions for filtering.
+    pub func_kind: String,
     pub arity: Option<usize>,
     pub param_count: usize,
     pub source_caps: Vec<String>,
@@ -832,6 +865,8 @@ impl FuncSummaryView {
             file_path: summary.file_path.clone(),
             lang: format!("{:?}", key.lang),
             namespace: key.namespace.clone(),
+            container: key.container.clone(),
+            func_kind: key.kind.as_str().to_string(),
             arity: key.arity,
             param_count: summary.param_count,
             source_caps: cap_names(Cap::from_bits_truncate(summary.source_caps)),
@@ -861,6 +896,480 @@ fn transform_str(t: &TaintTransform) -> String {
         TaintTransform::Identity => "Identity".into(),
         TaintTransform::StripBits(caps) => format!("StripBits({})", cap_names(*caps).join("|")),
         TaintTransform::AddBits(caps) => format!("AddBits({})", cap_names(*caps).join("|")),
+    }
+}
+
+// ── Pointer / Points-to ──────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct PointerLocationView {
+    pub id: u32,
+    pub kind: String,
+    pub display: String,
+    /// Parent location id for `Field { parent, field }` chains.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PointerValueView {
+    pub ssa_value: u32,
+    pub var_name: Option<String>,
+    /// `LocId`s referencing entries in [`PointerView::locations`].
+    pub points_to: Vec<u32>,
+    pub is_top: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PointerFieldEntryView {
+    /// Parameter index, or `null` for the implicit receiver.
+    pub param_index: Option<u32>,
+    pub field: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PointerView {
+    pub locations: Vec<PointerLocationView>,
+    pub values: Vec<PointerValueView>,
+    /// Field reads attributed to params/receiver via the field-points-to
+    /// extractor (Phase 5).
+    pub field_reads: Vec<PointerFieldEntryView>,
+    /// Field writes attributed to params/receiver via the field-points-to
+    /// extractor (Phase 5).
+    pub field_writes: Vec<PointerFieldEntryView>,
+    /// Number of distinct interned locations beyond the reserved Top sentinel.
+    pub location_count: usize,
+}
+
+impl PointerView {
+    pub fn from_facts(facts: &PointsToFacts, ssa: &SsaBody) -> Self {
+        // Determine which LocIds are referenced by any pt set so we only
+        // emit those (plus Top when referenced).
+        let mut referenced: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        for v in 0..ssa.num_values() as u32 {
+            let set = facts.pt(SsaValue(v));
+            for loc in set.iter() {
+                referenced.insert(loc.0);
+            }
+        }
+
+        // Build location views in interner order so parent ids land before
+        // child Field locations.
+        let mut locations: Vec<PointerLocationView> = Vec::new();
+        for raw_id in 0..facts.interner.len() as u32 {
+            if !referenced.contains(&raw_id) {
+                continue;
+            }
+            let loc_id = crate::pointer::LocId(raw_id);
+            let abs = facts.interner.resolve(loc_id);
+            let (kind, display, parent, field) = match abs {
+                AbsLoc::Top => ("Top".to_string(), "⊤".to_string(), None, None),
+                AbsLoc::Alloc(_, ssa_v) => {
+                    ("Alloc".to_string(), format!("alloc#v{}", ssa_v), None, None)
+                }
+                AbsLoc::Param(_, idx) => {
+                    ("Param".to_string(), format!("param[{}]", idx), None, None)
+                }
+                AbsLoc::SelfParam(_) => ("SelfParam".to_string(), "self".to_string(), None, None),
+                AbsLoc::Field { parent, field } => {
+                    let field_name = if *field == FieldId::ELEM {
+                        "<elem>".to_string()
+                    } else if (field.0 as usize) < ssa.field_interner.len() {
+                        ssa.field_interner.resolve(*field).to_string()
+                    } else {
+                        format!("#{}", field.0)
+                    };
+                    (
+                        "Field".to_string(),
+                        format!(".{}", field_name),
+                        Some(parent.0),
+                        Some(field_name),
+                    )
+                }
+            };
+            locations.push(PointerLocationView {
+                id: raw_id,
+                kind,
+                display,
+                parent,
+                field,
+            });
+        }
+
+        // Per-value pt sets — emit only values with non-empty sets to keep
+        // the payload focused on interesting facts.
+        let mut values: Vec<PointerValueView> = Vec::new();
+        for v in 0..ssa.num_values() as u32 {
+            let set = facts.pt(SsaValue(v));
+            if set.is_empty() {
+                continue;
+            }
+            values.push(PointerValueView {
+                ssa_value: v,
+                var_name: ssa
+                    .value_defs
+                    .get(v as usize)
+                    .and_then(|d| d.var_name.clone()),
+                points_to: set.iter().map(|loc| loc.0).collect(),
+                is_top: set.is_top(),
+            });
+        }
+
+        // Field reads / writes summary derived from the body + facts.
+        let summary = crate::pointer::extract_field_points_to(ssa, facts);
+        let to_field_entries = |entries: &[(u32, smallvec::SmallVec<[String; 2]>)]| {
+            entries
+                .iter()
+                .flat_map(|(idx, fields)| {
+                    let pi = if *idx == u32::MAX { None } else { Some(*idx) };
+                    fields.iter().map(move |f| PointerFieldEntryView {
+                        param_index: pi,
+                        field: f.clone(),
+                    })
+                })
+                .collect()
+        };
+        let field_reads = to_field_entries(&summary.param_field_reads);
+        let field_writes = to_field_entries(&summary.param_field_writes);
+
+        let location_count = facts.interner.len().saturating_sub(1);
+        PointerView {
+            locations,
+            values,
+            field_reads,
+            field_writes,
+            location_count,
+        }
+    }
+}
+
+// ── Type Facts (standalone view) ─────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct DtoFieldView {
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DtoFactView {
+    pub class_name: String,
+    pub fields: Vec<DtoFieldView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TypeFactDetailView {
+    pub ssa_value: u32,
+    pub var_name: Option<String>,
+    pub line: usize,
+    /// Type kind tag — matches the [`TypeKind`] discriminant
+    /// (`String`, `Int`, `HttpClient`, `Dto`, …).
+    pub kind: String,
+    /// True when the value is allowed to be null/None.
+    pub nullable: bool,
+    /// Container/class name — set for `HttpClient`, `DatabaseConnection`,
+    /// `Dto`, etc.  Mirrors [`TypeKind::container_name`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+    /// DTO field shape, populated only when `kind == "Dto"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dto: Option<DtoFactView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TypeFactsView {
+    pub facts: Vec<TypeFactDetailView>,
+    /// Total count of values reaching the analysis (for the "X of Y" header).
+    pub total_values: usize,
+    /// Count of values where the inferred type is `Unknown`.  Surfaced so
+    /// the UI can show coverage at a glance.
+    pub unknown_count: usize,
+}
+
+impl TypeFactsView {
+    pub fn from_optimize(opt: &OptimizeResult, ssa: &SsaBody, bytes: &[u8]) -> Self {
+        Self::from_type_facts(&opt.type_facts, ssa, bytes)
+    }
+
+    pub fn from_type_facts(tf: &TypeFactResult, ssa: &SsaBody, bytes: &[u8]) -> Self {
+        let total_values = ssa.num_values();
+        let unknown_count = tf
+            .facts
+            .values()
+            .filter(|f| matches!(f.kind, TypeKind::Unknown))
+            .count();
+
+        let mut facts: Vec<TypeFactDetailView> = tf
+            .facts
+            .iter()
+            .filter(|(_, f)| !matches!(f.kind, TypeKind::Unknown))
+            .map(|(sv, fact)| {
+                // Find the defining instruction for this SSA value so we can
+                // resolve its source line.  Falls back to 0 when no inst
+                // matches (the value lives only in `value_defs`).
+                let span: (usize, usize) = ssa
+                    .blocks
+                    .iter()
+                    .find_map(|blk| {
+                        blk.phis
+                            .iter()
+                            .chain(blk.body.iter())
+                            .find(|i| i.value == *sv)
+                            .map(|i| i.span)
+                    })
+                    .unwrap_or_default();
+                let line = byte_offset_to_line(bytes, span.0);
+
+                let dto = match &fact.kind {
+                    TypeKind::Dto(d) => Some(DtoFactView {
+                        class_name: d.class_name.clone(),
+                        fields: d
+                            .fields
+                            .iter()
+                            .map(|(name, k)| DtoFieldView {
+                                name: name.clone(),
+                                kind: type_kind_tag(k),
+                            })
+                            .collect(),
+                    }),
+                    _ => None,
+                };
+
+                TypeFactDetailView {
+                    ssa_value: sv.0,
+                    var_name: ssa
+                        .value_defs
+                        .get(sv.0 as usize)
+                        .and_then(|d| d.var_name.clone()),
+                    line,
+                    kind: type_kind_tag(&fact.kind),
+                    nullable: fact.nullable,
+                    container: fact.kind.container_name(),
+                    dto,
+                }
+            })
+            .collect();
+        facts.sort_by_key(|v| v.ssa_value);
+
+        TypeFactsView {
+            facts,
+            total_values,
+            unknown_count,
+        }
+    }
+}
+
+/// Stable string tag for a [`TypeKind`] (used by both the TypeFacts view
+/// and DTO field rendering).  Uses the variant name so the UI can map
+/// each tag to a colour without parsing free-form `Debug` strings.
+fn type_kind_tag(k: &TypeKind) -> String {
+    match k {
+        TypeKind::String => "String".into(),
+        TypeKind::Int => "Int".into(),
+        TypeKind::Bool => "Bool".into(),
+        TypeKind::Object => "Object".into(),
+        TypeKind::Array => "Array".into(),
+        TypeKind::Null => "Null".into(),
+        TypeKind::Unknown => "Unknown".into(),
+        TypeKind::HttpResponse => "HttpResponse".into(),
+        TypeKind::DatabaseConnection => "DatabaseConnection".into(),
+        TypeKind::FileHandle => "FileHandle".into(),
+        TypeKind::Url => "Url".into(),
+        TypeKind::HttpClient => "HttpClient".into(),
+        TypeKind::LocalCollection => "LocalCollection".into(),
+        TypeKind::Dto(_) => "Dto".into(),
+    }
+}
+
+// ── Auth Analysis ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct AuthValueRefView {
+    pub source_kind: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<String>,
+    pub line: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthCheckView {
+    pub kind: String,
+    pub callee: String,
+    pub line: usize,
+    pub subjects: Vec<AuthValueRefView>,
+    pub args: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition_text: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthOperationView {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sink_class: Option<String>,
+    pub callee: String,
+    pub line: usize,
+    pub text: String,
+    pub subjects: Vec<AuthValueRefView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthCallSiteView {
+    pub name: String,
+    pub line: usize,
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthUnitView {
+    pub kind: String,
+    pub name: Option<String>,
+    pub line: usize,
+    pub params: Vec<String>,
+    pub auth_checks: Vec<AuthCheckView>,
+    pub operations: Vec<AuthOperationView>,
+    pub call_sites: Vec<AuthCallSiteView>,
+    pub self_actor_vars: Vec<String>,
+    pub typed_bounded_vars: Vec<String>,
+    pub authorized_sql_vars: Vec<String>,
+    pub const_bound_vars: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthRouteView {
+    pub framework: String,
+    pub method: String,
+    pub path: String,
+    pub middleware: Vec<String>,
+    pub handler_params: Vec<String>,
+    pub line: usize,
+    pub unit_idx: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthAnalysisView {
+    pub routes: Vec<AuthRouteView>,
+    pub units: Vec<AuthUnitView>,
+    /// Whether the auth-analysis rule set is enabled for the file's
+    /// language.  When `false`, the model is intentionally empty and the
+    /// UI should surface that the analysis is skipped (not failing).
+    pub enabled: bool,
+}
+
+impl AuthAnalysisView {
+    pub fn from_model(model: &AuthorizationModel, bytes: &[u8], enabled: bool) -> Self {
+        let routes = model.routes.iter().map(|r| route_view(r, bytes)).collect();
+        let units = model.units.iter().map(|u| unit_view(u, bytes)).collect();
+        AuthAnalysisView {
+            routes,
+            units,
+            enabled,
+        }
+    }
+}
+
+fn value_ref_view(vr: &ValueRef, bytes: &[u8]) -> AuthValueRefView {
+    AuthValueRefView {
+        source_kind: format!("{:?}", vr.source_kind),
+        name: vr.name.clone(),
+        base: vr.base.clone(),
+        field: vr.field.clone(),
+        index: vr.index.clone(),
+        line: byte_offset_to_line(bytes, vr.span.0),
+    }
+}
+
+fn auth_check_view(c: &AuthCheck, bytes: &[u8]) -> AuthCheckView {
+    AuthCheckView {
+        kind: format!("{:?}", c.kind),
+        callee: c.callee.clone(),
+        line: c.line,
+        subjects: c
+            .subjects
+            .iter()
+            .map(|s| value_ref_view(s, bytes))
+            .collect(),
+        args: c.args.clone(),
+        condition_text: c.condition_text.clone(),
+    }
+}
+
+fn operation_view(op: &SensitiveOperation, bytes: &[u8]) -> AuthOperationView {
+    AuthOperationView {
+        kind: format!("{:?}", op.kind),
+        sink_class: op.sink_class.map(|c| format!("{:?}", c)),
+        callee: op.callee.clone(),
+        line: op.line,
+        text: op.text.clone(),
+        subjects: op
+            .subjects
+            .iter()
+            .map(|s| value_ref_view(s, bytes))
+            .collect(),
+    }
+}
+
+fn call_site_view(c: &CallSite, bytes: &[u8]) -> AuthCallSiteView {
+    AuthCallSiteView {
+        name: c.name.clone(),
+        line: byte_offset_to_line(bytes, c.span.0),
+        args: c.args.clone(),
+    }
+}
+
+fn unit_view(unit: &AnalysisUnit, bytes: &[u8]) -> AuthUnitView {
+    let mut self_actor_vars: Vec<String> = unit.self_actor_vars.iter().cloned().collect();
+    self_actor_vars.sort();
+    let mut typed_bounded_vars: Vec<String> = unit.typed_bounded_vars.iter().cloned().collect();
+    typed_bounded_vars.sort();
+    let mut authorized_sql_vars: Vec<String> = unit.authorized_sql_vars.iter().cloned().collect();
+    authorized_sql_vars.sort();
+    let mut const_bound_vars: Vec<String> = unit.const_bound_vars.iter().cloned().collect();
+    const_bound_vars.sort();
+
+    AuthUnitView {
+        kind: format!("{:?}", unit.kind),
+        name: unit.name.clone(),
+        line: unit.line,
+        params: unit.params.clone(),
+        auth_checks: unit
+            .auth_checks
+            .iter()
+            .map(|c| auth_check_view(c, bytes))
+            .collect(),
+        operations: unit
+            .operations
+            .iter()
+            .map(|op| operation_view(op, bytes))
+            .collect(),
+        call_sites: unit
+            .call_sites
+            .iter()
+            .map(|c| call_site_view(c, bytes))
+            .collect(),
+        self_actor_vars,
+        typed_bounded_vars,
+        authorized_sql_vars,
+        const_bound_vars,
+    }
+}
+
+fn route_view(r: &RouteRegistration, _bytes: &[u8]) -> AuthRouteView {
+    AuthRouteView {
+        framework: format!("{:?}", r.framework),
+        method: format!("{:?}", r.method),
+        path: r.path.clone(),
+        middleware: r.middleware.clone(),
+        handler_params: r.handler_params.clone(),
+        line: r.line,
+        unit_idx: r.unit_idx,
     }
 }
 
@@ -914,6 +1423,8 @@ pub fn function_list(analysis: &FileAnalysis) -> Vec<FunctionInfo> {
         .map(|(key, summary)| FunctionInfo {
             name: key.name.clone(),
             namespace: key.namespace.clone(),
+            container: key.container.clone(),
+            func_kind: key.kind.as_str().to_string(),
             param_count: summary.param_count,
             line: byte_offset_to_line(&analysis.bytes, analysis.cfg()[summary.entry].ast.span.0),
             source_caps: cap_names(summary.source_caps),
@@ -924,10 +1435,16 @@ pub fn function_list(analysis: &FileAnalysis) -> Vec<FunctionInfo> {
 }
 
 /// Lower a single function to SSA and optimize it.
-pub fn analyse_function_ssa(
-    analysis: &FileAnalysis,
+///
+/// Returns the per-function body graph alongside the SSA. SSA is lowered
+/// against `body.graph`, whose `NodeIndex` space is body-local — the file's
+/// top-level CFG (`analysis.cfg()`) has a different index space, so any
+/// downstream analysis that indexes by `inst.cfg_node` must use the returned
+/// `&Cfg`, not `analysis.cfg()`.
+pub fn analyse_function_ssa<'a>(
+    analysis: &'a FileAnalysis,
     func_name: &str,
-) -> Result<(SsaBody, OptimizeResult), StatusCode> {
+) -> Result<(SsaBody, OptimizeResult, &'a Cfg), StatusCode> {
     // Find the function body by name from the per-body CFGs.
     let body = analysis
         .file_cfg
@@ -945,9 +1462,48 @@ pub fn analyse_function_ssa(
     );
 
     let mut ssa = ssa_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let opt = ssa::optimize_ssa(&mut ssa, &body.graph, Some(analysis.lang));
+    let opt = ssa::optimize_ssa_with_param_types(
+        &mut ssa,
+        &body.graph,
+        Some(analysis.lang),
+        &body.meta.param_types,
+    );
 
-    Ok((ssa, opt))
+    Ok((ssa, opt, &body.graph))
+}
+
+/// Lower a function and run the field-sensitive Steensgaard pointer
+/// analysis on its body.  Returns the SSA body alongside the resulting
+/// [`PointsToFacts`] so the debug view can attribute names to SSA values.
+pub fn analyse_function_pointer(
+    analysis: &FileAnalysis,
+    func_name: &str,
+) -> Result<(SsaBody, PointsToFacts), StatusCode> {
+    let body = analysis
+        .file_cfg
+        .bodies
+        .iter()
+        .find(|b| b.meta.name.as_deref() == Some(func_name))
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let ssa_result = crate::ssa::lower::lower_to_ssa_with_params(
+        &body.graph,
+        body.entry,
+        Some(func_name),
+        false,
+        &body.meta.params,
+    );
+
+    let mut ssa = ssa_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let _opt = ssa::optimize_ssa_with_param_types(
+        &mut ssa,
+        &body.graph,
+        Some(analysis.lang),
+        &body.meta.param_types,
+    );
+
+    let facts = crate::pointer::analyse_body(&ssa, body.meta.id);
+    Ok((ssa, facts))
 }
 
 /// Run taint analysis on a function's SSA body.
@@ -999,6 +1555,7 @@ pub fn analyse_function_taint(
         static_map: None,
         auto_seed_handler_params: matches!(lang, Lang::JavaScript | Lang::TypeScript),
         cross_file_bodies: global_summaries.and_then(|gs| gs.bodies_by_key()),
+        pointer_facts: None,
     };
 
     crate::taint::ssa_transfer::run_ssa_taint_full_with_exits(ssa, cfg, &transfer)
@@ -1078,6 +1635,31 @@ pub fn analyse_file_summaries(
     Ok(global)
 }
 
+/// Run the file-level authorization extraction pipeline for the debug UI.
+///
+/// Returns the structured `AuthorizationModel` (routes, units, sensitive
+/// operations, auth checks) plus the file bytes and an `enabled` flag —
+/// the bytes drive line-number resolution in the view, and `enabled`
+/// surfaces "auth analysis is off for this language" without conflating
+/// it with an empty result.
+pub fn analyse_file_auth(
+    file_path: &Path,
+    config: &Config,
+) -> Result<(AuthorizationModel, Vec<u8>, bool), StatusCode> {
+    let bytes = std::fs::read(file_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let model = crate::ast::extract_auth_model_for_debug(file_path, config)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    // Determine whether the auth rules were actually enabled for this
+    // file's language — `extract_auth_model_for_debug` returns an empty
+    // model both when the rules are disabled and when the file just
+    // happens to have no routes.  The view distinguishes the two so the
+    // UI can show "analysis disabled" instead of "no routes found".
+    let lang_slug = crate::ast::lang_slug_for_path(file_path).unwrap_or("");
+    let rules = crate::auth_analysis::config::build_auth_rules(config, lang_slug);
+    Ok((model, bytes, rules.enabled))
+}
+
 /// Format a `ConditionExpr` as a human-readable string.
 fn format_condition_expr(cond: &ConditionExpr) -> String {
     match cond {
@@ -1150,7 +1732,7 @@ function demo() {
 
         let config = Config::default();
         let analysis = analyse_file(&path, &config).expect("file should analyse");
-        let (ssa, opt) =
+        let (ssa, opt, _cfg) =
             analyse_function_ssa(&analysis, "demo").expect("function should lower to SSA");
         let body = analysis
             .file_cfg
@@ -1205,7 +1787,7 @@ function sink() {
 
         let config = Config::default();
         let analysis = analyse_file(&path, &config).expect("file should analyse");
-        let (ssa, opt) =
+        let (ssa, opt, _cfg) =
             analyse_function_ssa(&analysis, "sink").expect("function should lower to SSA");
         let body = analysis
             .file_cfg
@@ -1249,7 +1831,7 @@ function consume() {
 
         let config = Config::default();
         let analysis = analyse_file(&path, &config).expect("file should analyse");
-        let (ssa, opt) =
+        let (ssa, opt, _cfg) =
             analyse_function_ssa(&analysis, "consume").expect("function should lower to SSA");
         let body = analysis
             .file_cfg
@@ -1287,7 +1869,9 @@ function consume() {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         );
 
@@ -1371,6 +1955,251 @@ async function recentAuditLogs() {
         assert!(
             view.nodes.iter().all(|node| node.line < 13),
             "sibling function nodes should not appear in writeAuditLog view"
+        );
+    }
+
+    #[test]
+    fn pointer_view_serializes_synthetic_facts() {
+        // The Steensgaard analyser is exercised against synthetic SSA
+        // bodies in `src/pointer/analysis.rs` because real-world
+        // lowering can yield bodies whose Param ops have been folded
+        // away.  Here we just pin the view-model wiring: feeding the
+        // serialiser an SsaBody with one SelfParam + one FieldProj
+        // produces non-empty locations / values / field_reads sections.
+        use crate::cfg::BodyId;
+        use crate::pointer::analyse_body;
+        use crate::ssa::ir::{
+            BlockId, FieldInterner, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue, Terminator,
+            ValueDef,
+        };
+        use petgraph::graph::NodeIndex;
+        use smallvec::SmallVec;
+
+        let mut field_interner = FieldInterner::new();
+        let mu = field_interner.intern("mu");
+
+        let v_self = SsaValue(0);
+        let v_field = SsaValue(1);
+        let value_defs = vec![
+            ValueDef {
+                var_name: Some("c".into()),
+                cfg_node: NodeIndex::new(0),
+                block: BlockId(0),
+            },
+            ValueDef {
+                var_name: Some("c.mu".into()),
+                cfg_node: NodeIndex::new(0),
+                block: BlockId(0),
+            },
+        ];
+        let body = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![
+                    SsaInst {
+                        value: v_self,
+                        op: SsaOp::SelfParam,
+                        cfg_node: NodeIndex::new(0),
+                        var_name: Some("c".into()),
+                        span: (0, 0),
+                    },
+                    SsaInst {
+                        value: v_field,
+                        op: SsaOp::FieldProj {
+                            receiver: v_self,
+                            field: mu,
+                            projected_type: None,
+                        },
+                        cfg_node: NodeIndex::new(0),
+                        var_name: Some("c.mu".into()),
+                        span: (0, 0),
+                    },
+                ],
+                terminator: Terminator::Return(None),
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs,
+            cfg_node_map: std::collections::HashMap::new(),
+            exception_edges: vec![],
+            field_interner,
+            field_writes: std::collections::HashMap::new(),
+        };
+
+        let facts = analyse_body(&body, BodyId(0));
+        let view = PointerView::from_facts(&facts, &body);
+        assert!(
+            view.location_count > 0,
+            "synthetic body should produce at least one location"
+        );
+        assert!(
+            view.locations.iter().any(|l| l.kind == "SelfParam"),
+            "expected a SelfParam location in the serialised view"
+        );
+        assert!(
+            view.locations.iter().any(|l| l.kind == "Field"),
+            "expected a Field location in the serialised view"
+        );
+        assert!(
+            view.field_reads.iter().any(|e| e.field == "mu"),
+            "expected a `mu` field read; got {:?}",
+            view.field_reads,
+        );
+    }
+
+    /// Regression: `analyse_function_ssa` lowers SSA against `body.graph`
+    /// (per-function NodeIndex space). Routes used to pass `analysis.cfg()`
+    /// (the file's top-level CFG) to `analyse_function_taint`, which made
+    /// every `cfg[inst.cfg_node]` lookup index a foreign graph and panicked
+    /// with `index out of bounds` on any non-toplevel function whose body
+    /// had more nodes than the toplevel. Reproduce: a small Rust file with
+    /// a few top-level items and a `main` whose body branches enough to
+    /// allocate body-local NodeIndex values past the toplevel's count.
+    #[test]
+    fn taint_route_uses_per_function_cfg_for_index_lookups() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("docgen_like.rs");
+        std::fs::write(
+            &path,
+            r#"
+use std::env;
+use std::fs;
+
+const BEGIN_MARKER: &str = "<!-- BEGIN -->";
+const END_MARKER: &str = "<!-- END -->";
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    let target = args.get(1).cloned().unwrap_or_else(|| "x".to_string());
+    let original = match fs::read_to_string(&target) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let begin = match original.find(BEGIN_MARKER) {
+        Some(i) => i,
+        None => return,
+    };
+    let end = match original.find(END_MARKER) {
+        Some(i) => i,
+        None => return,
+    };
+    if end < begin {
+        return;
+    }
+    let _ = fs::write(&target, &original);
+}
+"#,
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let analysis = analyse_file(&path, &config).expect("file should analyse");
+        let (ssa, opt, body_cfg) =
+            analyse_function_ssa(&analysis, "main").expect("function should lower to SSA");
+
+        // Sanity check that this fixture exercises the bug shape: main's body
+        // graph must have more nodes than the file's top-level CFG, so a
+        // mistaken `analysis.cfg()` would panic on `cfg[inst.cfg_node]`.
+        assert!(
+            body_cfg.node_count() > analysis.cfg().node_count(),
+            "fixture must have more body nodes than toplevel nodes to exercise the bug"
+        );
+
+        // Must not panic.  Pre-fix this would `index out of bounds` inside
+        // `transfer_inst` because the SSA was lowered against `body_cfg` but
+        // the engine was given `analysis.cfg()`.
+        let _ = analyse_function_taint(
+            &ssa,
+            body_cfg,
+            analysis.lang,
+            analysis.summaries(),
+            None,
+            &opt,
+        );
+
+        // Belt-and-suspenders: assert that calling with the wrong (top-level)
+        // CFG would have panicked. We can't catch the panic across rayon
+        // worker threads here, but we can confirm at least one `inst.cfg_node`
+        // index lies outside `analysis.cfg()`'s range — that's what triggers
+        // the OOB indexing inside `transfer_inst`.
+        let toplevel_count = analysis.cfg().node_count();
+        let max_inst_idx = ssa
+            .blocks
+            .iter()
+            .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+            .map(|inst| inst.cfg_node.index())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_inst_idx >= toplevel_count,
+            "regression: at least one inst.cfg_node ({max_inst_idx}) must exceed the \
+             toplevel CFG node count ({toplevel_count}) for this test to exercise the bug"
+        );
+    }
+
+    #[test]
+    fn type_facts_view_groups_security_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.java");
+        std::fs::write(
+            &path,
+            r#"
+import java.net.http.HttpClient;
+
+public class Demo {
+    public void run() {
+        HttpClient c = HttpClient.newHttpClient();
+        c.send(null, null);
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let analysis = analyse_file(&path, &config).expect("file should analyse");
+        let (ssa, opt, _cfg) = analyse_function_ssa(&analysis, "run").expect("ssa should lower");
+        let view = TypeFactsView::from_optimize(&opt, &ssa, &analysis.bytes);
+        assert!(
+            view.facts.iter().any(|f| f.kind == "HttpClient"),
+            "expected HttpClient inference for `c = HttpClient.newHttpClient()`; got {:?}",
+            view.facts.iter().map(|f| &f.kind).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn auth_view_renders_routes_for_express_handlers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.js");
+        std::fs::write(
+            &path,
+            r#"
+const express = require('express');
+const app = express();
+
+app.get('/api/users/:id', (req, res) => {
+  db.query('SELECT * FROM users WHERE id=$1', [req.params.id]);
+});
+"#,
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let (model, bytes, enabled) =
+            analyse_file_auth(&path, &config).expect("auth analysis should run");
+        assert!(enabled, "auth analysis should be enabled for JavaScript");
+        let view = AuthAnalysisView::from_model(&model, &bytes, enabled);
+        assert!(view.enabled);
+        assert!(
+            view.routes.iter().any(|r| r.path.contains("/api/users")),
+            "expected the express GET route to surface; got {:?}",
+            view.routes.iter().map(|r| &r.path).collect::<Vec<_>>(),
+        );
+        assert!(
+            !view.units.is_empty(),
+            "expected at least one analysis unit for the handler"
         );
     }
 }

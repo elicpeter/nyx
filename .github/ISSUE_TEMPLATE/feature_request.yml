@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a new capability, rule, language, or UX improvement.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that Nyx can't do today? Concrete scenarios beat abstract wishes.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should it work? Sketches, example commands, or example findings are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you've thought about, and why they don't fit.
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context

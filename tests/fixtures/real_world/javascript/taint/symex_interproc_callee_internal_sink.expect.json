@@ -18,11 +18,11 @@
       "severity": null,
       "must_match": true,
       "line_range": [
-        10,
-        13
+        11,
+        11
       ],
       "evidence_contains": [],
-      "notes": "req.query.msg flows through processAndStore which has an internal db.query sink"
+      "notes": "outer call site: req.query.msg → processAndStore where summary param_to_sink resolves the SQL_QUERY cap via outer_callee fallback (CVE-2025-64430-style detection)"
     },
     {
       "rule_id": "taint-unsanitised-flow",
@@ -33,7 +33,18 @@
         8
       ],
       "evidence_contains": [],
-      "notes": "callee-internal flow: tainted input param reaches client.query inside processAndStore during inline callee analysis"
+      "notes": "callee-internal flow: tainted input param reaches client.query inside processAndStore during interprocedural execution"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        12,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "return-value flow: processAndStore returns input.length, count carries taint to res.json (HTML_ESCAPE sink)"
     }
   ]
 }

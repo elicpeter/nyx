@@ -43,14 +43,16 @@ void deploy_package(void) {
 /* VULN: fgets (stdin/file source) → strcpy (buffer overflow) */
 void handle_client_request(FILE *client_stream) {
     char input[MAX_BUF];
+    char suffix[MAX_BUF];
     char request_path[64];
     char query_string[64];
 
     fgets(input, sizeof(input), client_stream);
+    fgets(suffix, sizeof(suffix), client_stream);
 
     /* Parse the request line — vulnerable string operations */
     strcpy(request_path, input);        /* VULN: strcpy no bounds check */
-    strcat(request_path, "/index.html");/* VULN: strcat can overflow */
+    strcat(request_path, suffix);       /* VULN: strcat unbounded source */
 
     /* Build a log message */
     char log_msg[128];

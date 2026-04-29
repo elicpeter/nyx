@@ -5,42 +5,49 @@ use console::style;
 use std::fs;
 
 pub fn handle(verbose: bool, database_dir: &std::path::Path) -> NyxResult<()> {
-    println!("{}", style("Indexed projects").blue().bold().underlined());
+    println!("{}", style("Indexed projects").bold());
 
     if !database_dir.exists() {
-        println!("  {}", style("∅ No indexed projects found").dim());
+        println!("  {}", style("(none)").dim());
         std::process::exit(0);
     }
 
-    for entry in fs::read_dir(database_dir)? {
-        let path = entry?.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("sqlite") {
-            continue;
-        }
+    let mut entries: Vec<_> = fs::read_dir(database_dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("sqlite"))
+        .collect();
+    entries.sort();
 
+    if entries.is_empty() {
+        println!("  {}", style("(none)").dim());
+        std::process::exit(0);
+    }
+
+    for path in &entries {
         let name = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown");
-        println!("  {}", style(name).white().bold());
 
         if verbose {
-            let meta = fs::metadata(&path)?;
+            let meta = fs::metadata(path)?;
             let size = ByteSize::b(meta.len());
             let mtime: DateTime<Local> = meta.modified()?.into();
             println!(
-                "    {:10} {}",
-                style("Path"),
-                style(path.display()).underlined()
+                "  {} {} {}",
+                style(name).white().bold(),
+                style(format!("({size})")).dim(),
+                style(format!("· {}", mtime.format("%Y-%m-%d %H:%M:%S"))).dim()
             );
-            println!("    {:10} {}", style("Size"), size);
-            println!(
-                "    {:10} {}",
-                style("Modified"),
-                mtime.format("%Y-%m-%d %H:%M:%S")
-            );
+            println!("    {}", style(path.display()).dim().underlined());
+        } else {
+            println!("  {}", style(name).white().bold());
         }
     }
+
+    println!();
+    println!("{}", style(format!("{} project(s)", entries.len())).dim());
 
     std::process::exit(0);
 }

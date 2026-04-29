@@ -112,32 +112,7 @@ impl<'a> SinkSiteLocator<'a> {
     }
 }
 
-/// Extract the source line containing `byte_offset`, trimmed and capped at
-/// 120 chars.  Returns `None` when the offset is out of range or the line
-/// is entirely blank after trimming.
-pub(crate) fn line_snippet(src: &[u8], byte_offset: usize) -> Option<String> {
-    if byte_offset >= src.len() {
-        return None;
-    }
-    let line_start = src[..byte_offset]
-        .iter()
-        .rposition(|&b| b == b'\n')
-        .map_or(0, |p| p + 1);
-    let line_end = src[byte_offset..]
-        .iter()
-        .position(|&b| b == b'\n')
-        .map_or(src.len(), |p| byte_offset + p);
-    let line = std::str::from_utf8(&src[line_start..line_end]).ok()?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed.len() > 120 {
-        Some(format!("{}...", &trimmed[..120]))
-    } else {
-        Some(trimmed.to_string())
-    }
-}
+pub(crate) use crate::utils::snippet::line_snippet;
 
 /// Union two `SmallVec<[SinkSite; 1]>` lists with `(file_rel, line, col,
 /// cap)` dedup.  Preserves insertion order of `existing` then appends any
@@ -403,6 +378,31 @@ pub struct FuncSummary {
     /// alias.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust_wildcards: Option<Vec<String>>,
+
+    /// Per-file class / trait / interface hierarchy edges captured at
+    /// CFG-construction time.  Each entry is
+    /// `(sub_container, super_container)` after language-specific
+    /// normalisation:
+    ///
+    /// * Java `class X extends Y` → `(X, Y)`; `implements I, J` → `(X, I)`, `(X, J)`
+    /// * Rust `impl Trait for Type` → `(Type, Trait)`
+    /// * TypeScript `class X extends Y implements I` → `(X, Y)`, `(X, I)`
+    /// * Python `class X(A, B)` → `(X, A)`, `(X, B)`
+    /// * PHP `class X extends Y implements I` → `(X, Y)`, `(X, I)`
+    /// * Ruby `class X < Y` → `(X, Y)`
+    /// * C++ `class X : public Y` → `(X, Y)`
+    ///
+    /// Empty for files with no declared inheritance / impl
+    /// relationships and for Go (which uses implicit interface
+    /// satisfaction — Phase 6 does not try to compute it).
+    ///
+    /// **Per-file duplication.**  Every `FuncSummary` produced from a
+    /// given file carries the **same** `hierarchy_edges` vector so the
+    /// information survives summary-by-summary persistence to SQLite.
+    /// `merge_summaries` deduplicates downstream when building
+    /// [`crate::callgraph::TypeHierarchyIndex`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hierarchy_edges: Vec<(String, String)>,
 }
 
 // ── Cap conversion helpers ──────────────────────────────────────────────
@@ -562,6 +562,20 @@ pub struct GlobalSummaries {
     /// pass 1 and consumed by
     /// [`crate::auth_analysis::run_auth_analysis`] during pass 2.
     auth_by_key: HashMap<FuncKey, crate::auth_analysis::model::AuthCheckSummary>,
+    /// Phase 6 type hierarchy index for runtime virtual-dispatch fan-out.
+    ///
+    /// Installed by [`Self::install_hierarchy`] after pass 1 from the
+    /// merged `FuncSummary::hierarchy_edges` vectors.  Consumed by
+    /// [`Self::resolve_callee_widened`] during pass 2 so the taint
+    /// engine sees every concrete implementer of a method when the
+    /// receiver is statically typed as a super-class / trait /
+    /// interface — recovering the dispatch precision that today's
+    /// single-result [`Self::resolve_callee`] discards.
+    ///
+    /// `None` until installed: every consumer treats `None` as
+    /// "fall through to today's bare resolution", so the index is
+    /// strictly additive.
+    hierarchy: Option<crate::callgraph::TypeHierarchyIndex>,
 }
 
 impl GlobalSummaries {
@@ -858,6 +872,13 @@ impl GlobalSummaries {
         for (key, auth_sum) in other.auth_by_key {
             self.auth_by_key.insert(key, auth_sum);
         }
+        // Hierarchy index: invalidate after a merge so the next consumer
+        // sees a freshly-built view that includes `other`'s edges.  The
+        // alternative — point-merging two indexes — is racy when the
+        // same `(lang, super)` key carries different sub-orderings in
+        // each input; rebuild is O(n) over `by_key.iter()` and is the
+        // single source of truth.
+        self.hierarchy = None;
     }
 
     /// Insert an SSA summary.
@@ -873,8 +894,74 @@ impl GlobalSummaries {
     /// functions — we synthesize a disambig so both are kept.  Silent
     /// replacement in that case would drop one function's cross-file
     /// taint signal entirely, which the caller cannot recover.
+    ///
+    /// Before reconciliation, drop any parameter-index reference at or
+    /// above `key.arity`.  Such indices come from synthetic SSA `Param`
+    /// ops emitted by scoped lowering for **external captures** (free
+    /// identifiers like `this`, module imports, or unresolved method
+    /// names) and are useful for *intra-file* pass-2 analysis (the
+    /// caller's implicit-uses argument group at the same index aligns
+    /// with the synthetic Param) but never for cross-file consumers,
+    /// which key off the FuncKey arity exclusively.  Without the trim,
+    /// `ssa_summary_fits_arity` would reject the summary and
+    /// `reconcile_ssa_summary_key` would synthesise a disambig that
+    /// uncouples the SSA FuncKey from the matching FuncSummary FuncKey
+    /// (audit gap A.2.1.G1 —
+    /// `project_typed_callgraph_audit_gap_ssa_disambig.md`).
     pub fn insert_ssa(&mut self, key: FuncKey, summary: SsaFuncSummary) {
-        let key = self.reconcile_ssa_summary_key(key, &summary);
+        // The summary may reference a parameter index ≥ `key.arity` when
+        // scoped SSA lowering synthesised `Param` ops for **external
+        // captures** (free identifiers like `this`, module imports,
+        // unresolved method names) — see audit gap A.2.1.G1
+        // (`project_typed_callgraph_audit_gap_ssa_disambig.md`).  These
+        // synthetic refs are useful inside the file they were extracted
+        // in (the caller's implicit-uses argument group at the same
+        // index aligns with the synthetic Param) and stay useful when
+        // resolved cross-file by name from this map (the same
+        // implicit-uses alignment applies).  But they would trip
+        // [`ssa_summary_fits_arity`] inside [`reconcile_ssa_summary_key`],
+        // forcing a synthetic disambig that uncouples the SSA FuncKey
+        // from the matching FuncSummary FuncKey — and Phase 3's
+        // `summaries.get_ssa(caller_key)` lookup (consuming
+        // `typed_call_receivers` at the FuncSummary-aligned key) would
+        // miss.
+        //
+        // Resolution rule (applies only when `summary` does not fit
+        // arity):
+        //
+        // * **No existing entry, or existing entry also has out-of-range
+        //   refs** — keep the (untrimmed) summary at the original key,
+        //   bypassing the disambig synthesis.  Phase 3 finds the entry
+        //   under the FuncSummary's own disambig; cross-file resolvers
+        //   find the same entry with its full per-param signal
+        //   (closures, lambdas, captured-var sinks).  The "existing also
+        //   has out-of-range refs" branch covers the iterative-rescan
+        //   case where round 2's incoming summary lands on top of round
+        //   1's already-installed copy of the same function.
+        //
+        // * **Existing entry fits arity (legit) but new doesn't** — fall
+        //   back to the disambig synthesis.  This preserves the
+        //   `insert_ssa_arity_overflow_rekeys` invariant: a structurally
+        //   incompatible incoming summary (different function sharing
+        //   name + container + arity, with param refs at indices that
+        //   don't even exist in the legitimate function) cannot
+        //   dethrone the existing entry by silent overwrite.  Both
+        //   summaries survive — the existing one at the original key,
+        //   the new one at the synthesised disambig.
+        let key = if key.arity.is_some() && !ssa_summary_fits_arity(&summary, key.arity) {
+            let existing_also_overflows = self
+                .ssa_by_key
+                .get(&key)
+                .is_some_and(|existing| !ssa_summary_fits_arity(existing, key.arity));
+            let existing_present = self.ssa_by_key.contains_key(&key);
+            if !existing_present || existing_also_overflows {
+                key
+            } else {
+                self.reconcile_ssa_summary_key(key, &summary)
+            }
+        } else {
+            self.reconcile_ssa_summary_key(key, &summary)
+        };
         self.ssa_by_key.insert(key, summary);
     }
 
@@ -1362,6 +1449,148 @@ impl GlobalSummaries {
             0 => CalleeResolution::Ambiguous(arity_filtered.into_iter().cloned().collect()),
             _ => CalleeResolution::Ambiguous(same_ns.into_iter().cloned().collect()),
         }
+    }
+
+    /// Install / refresh the type-hierarchy index from the currently
+    /// loaded summaries.  Idempotent — calling twice rebuilds.
+    ///
+    /// Call this once after pass-1 merge (and again whenever
+    /// summary state changes in a way that could affect virtual
+    /// dispatch — typically: after the call-graph is rebuilt mid-fixed-point).
+    /// `merge()` automatically invalidates so a forgotten reinstall
+    /// degrades to today's behaviour rather than a stale lookup.
+    pub fn install_hierarchy(&mut self) {
+        let h = crate::callgraph::TypeHierarchyIndex::build(self);
+        self.hierarchy = Some(h);
+    }
+
+    /// Borrow the installed hierarchy index, if any.
+    pub fn hierarchy(&self) -> Option<&crate::callgraph::TypeHierarchyIndex> {
+        self.hierarchy.as_ref()
+    }
+
+    /// Hard cap on hierarchy fan-out from a single call site — see
+    /// [`Self::resolve_callee_widened`] for rationale.  Public for tests
+    /// that need to assert cap behaviour without hard-coding the value.
+    pub const MAX_HIERARCHY_FANOUT: usize = 8;
+
+    /// Resolve a call site to *every* candidate FuncKey reachable
+    /// through type-hierarchy fan-out.  This is the runtime counterpart
+    /// of the [`crate::callgraph::TypeHierarchyIndex::resolve_with_hierarchy`]
+    /// step that the call-graph builder applies at edge-construction time.
+    ///
+    /// Behaviour:
+    ///
+    /// * `receiver_type = None` → falls through to
+    ///   [`Self::resolve_callee`]; returns `[k]` on `Resolved`, `[]`
+    ///   otherwise.
+    /// * `receiver_type = Some(rt)` and either no hierarchy is installed
+    ///   or `rt` has no recorded sub-types → identical fall-through;
+    ///   the hierarchy lookup is a no-op.
+    /// * `receiver_type = Some(rt)` with sub-types `s1, s2, …` →
+    ///   union of `lookup_qualified` for `(rt, s1, s2, …)` after arity
+    ///   filtering.  Result is dedup'd in insertion order
+    ///   (direct-receiver match first, then each sub-type's match).
+    ///
+    /// Hard cap: at most [`Self::MAX_HIERARCHY_FANOUT`] keys are
+    /// returned.  When the cap fires, the cap-hit is logged at `debug`
+    /// and the tail impls are silently dropped — over-fanning is a
+    /// precision-tax knob, not a soundness one.
+    ///
+    /// Empty result + non-empty `subs` triggers a
+    /// secondary fall-through to [`Self::resolve_callee`] so a
+    /// type-fact misclassification (receiver typed as a super-class
+    /// that has no method by this name on any sub) does not silently
+    /// regress to "no resolution at all" — the leaf-name path can still
+    /// pick up a match.  This preserves the
+    /// "subset of today's targets, never a superset" rule under
+    /// hierarchy-aware resolution failure.
+    pub fn resolve_callee_widened(&self, q: &CalleeQuery<'_>) -> Vec<FuncKey> {
+        let arity_matches = |k: &FuncKey| match q.arity {
+            Some(a) => k.arity == Some(a),
+            None => true,
+        };
+
+        let single_fallback = || -> Vec<FuncKey> {
+            match self.resolve_callee(q) {
+                CalleeResolution::Resolved(k) => vec![k],
+                _ => Vec::new(),
+            }
+        };
+
+        // Hierarchy fan-out only fires when the call has an
+        // authoritative receiver type AND the index is installed AND
+        // the type has recorded sub-types.  Every other case collapses
+        // to today's resolver.
+        let Some(rt) = q.receiver_type.filter(|s| !s.is_empty()) else {
+            return single_fallback();
+        };
+        let Some(h) = self.hierarchy.as_ref() else {
+            return single_fallback();
+        };
+        let subs = h.subs_of(q.caller_lang, rt);
+        if subs.is_empty() {
+            return single_fallback();
+        }
+
+        // Union direct + sub-type matches in insertion order.  Dedup is
+        // O(n²) over the cap (n ≤ 8) so a HashSet would be wasted
+        // overhead; linear scan is faster and order-preserving.
+        let mut out: Vec<FuncKey> = Vec::new();
+        let push_unique = |out: &mut Vec<FuncKey>, k: FuncKey| -> bool {
+            if !out.iter().any(|e| e == &k) {
+                out.push(k);
+                true
+            } else {
+                false
+            }
+        };
+        let qualified_lookup = |container: &str| -> Vec<FuncKey> {
+            let qual = format!("{container}::{}", q.name);
+            self.lookup_qualified(q.caller_lang, &qual)
+                .into_iter()
+                .map(|(k, _)| k.clone())
+                .filter(|k| arity_matches(k))
+                .collect()
+        };
+        for k in qualified_lookup(rt) {
+            push_unique(&mut out, k);
+            if out.len() >= Self::MAX_HIERARCHY_FANOUT {
+                tracing::debug!(
+                    receiver = rt,
+                    method = q.name,
+                    cap = Self::MAX_HIERARCHY_FANOUT,
+                    "hierarchy fan-out cap reached on direct receiver match"
+                );
+                return out;
+            }
+        }
+        for sub in subs {
+            for k in qualified_lookup(sub.as_str()) {
+                push_unique(&mut out, k);
+                if out.len() >= Self::MAX_HIERARCHY_FANOUT {
+                    tracing::debug!(
+                        receiver = rt,
+                        method = q.name,
+                        cap = Self::MAX_HIERARCHY_FANOUT,
+                        "hierarchy fan-out cap reached; tail impls dropped"
+                    );
+                    return out;
+                }
+            }
+        }
+
+        if out.is_empty() {
+            // Hierarchy widening produced nothing (e.g., none of the
+            // recorded sub-types declare this method).  Fall back to
+            // today's qualified-first resolver so the misclassified-
+            // type case still finds a leaf match — the same
+            // "preserve today's behaviour on miss" rule the call-graph
+            // builder applies.
+            return single_fallback();
+        }
+
+        out
     }
 }
 

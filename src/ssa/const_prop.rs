@@ -59,9 +59,12 @@ impl ConstLattice {
             return ConstLattice::Int(i);
         }
 
-        // String: strip surrounding quotes
-        if (trimmed.starts_with('"') && trimmed.ends_with('"'))
-            || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+        // String: strip surrounding quotes. Require len >= 2 so a lone `'`
+        // or `"` (where starts_with and ends_with both match the same byte)
+        // does not produce an empty `[1..0]` slice and panic.
+        if trimmed.len() >= 2
+            && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+                || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
         {
             let inner = &trimmed[1..trimmed.len() - 1];
             return ConstLattice::Str(inner.to_string());
@@ -279,6 +282,12 @@ fn eval_inst(inst: &SsaInst, values: &HashMap<SsaValue, ConstLattice>) -> ConstL
         | SsaOp::Param { .. }
         | SsaOp::SelfParam
         | SsaOp::CatchParam => ConstLattice::Varying,
+        // FieldProj: projecting a field is dynamic with respect to the
+        // const-propagation lattice — there is no general way to fold
+        // `obj.field` to a known scalar at this phase.  Returning Varying
+        // matches Call: callers needing field-level constness will go
+        // through the points-to / heap analysis.
+        SsaOp::FieldProj { .. } => ConstLattice::Varying,
         SsaOp::Phi(_) => ConstLattice::Varying, // phis in body shouldn't happen
         SsaOp::Nop => ConstLattice::Varying,
         // Undef contributes no knowledge: `Top` is the lattice identity
@@ -303,6 +312,7 @@ fn inst_uses(inst: &SsaInst) -> Vec<SsaValue> {
             }
             vals
         }
+        SsaOp::FieldProj { receiver, .. } => vec![*receiver],
         SsaOp::Source
         | SsaOp::Const(_)
         | SsaOp::Param { .. }
@@ -626,6 +636,8 @@ mod tests {
             value_defs,
             cfg_node_map,
             exception_edges: Vec::new(),
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         }
     }
 
@@ -750,5 +762,130 @@ mod tests {
             result.values.get(&SsaValue(1)),
             Some(&ConstLattice::Bool(true))
         );
+    }
+
+    /// Meet must be commutative: `a ⊓ b == b ⊓ a` for every pair of
+    /// lattice values. Iterates a representative cross product; failure
+    /// would indicate the implementation special-cased one operand.
+    #[test]
+    fn meet_lattice_is_commutative() {
+        let vals = [
+            ConstLattice::Top,
+            ConstLattice::Varying,
+            ConstLattice::Null,
+            ConstLattice::Int(0),
+            ConstLattice::Int(42),
+            ConstLattice::Bool(true),
+            ConstLattice::Bool(false),
+            ConstLattice::Str("a".into()),
+            ConstLattice::Str("b".into()),
+        ];
+        for a in &vals {
+            for b in &vals {
+                assert_eq!(
+                    a.meet(b),
+                    b.meet(a),
+                    "meet should be commutative for ({a:?}, {b:?})"
+                );
+            }
+        }
+    }
+
+    /// Meet must be associative: `(a ⊓ b) ⊓ c == a ⊓ (b ⊓ c)`.
+    #[test]
+    fn meet_lattice_is_associative() {
+        let vals = [
+            ConstLattice::Top,
+            ConstLattice::Varying,
+            ConstLattice::Null,
+            ConstLattice::Int(0),
+            ConstLattice::Int(42),
+            ConstLattice::Bool(true),
+            ConstLattice::Str("x".into()),
+        ];
+        for a in &vals {
+            for b in &vals {
+                for c in &vals {
+                    let lhs = a.meet(b).meet(c);
+                    let rhs = a.meet(&b.meet(c));
+                    assert_eq!(lhs, rhs, "associativity broken on ({a:?},{b:?},{c:?})");
+                }
+            }
+        }
+    }
+
+    /// Meet must be idempotent: `a ⊓ a == a` for every lattice value.
+    #[test]
+    fn meet_lattice_is_idempotent() {
+        let vals = [
+            ConstLattice::Top,
+            ConstLattice::Varying,
+            ConstLattice::Null,
+            ConstLattice::Int(7),
+            ConstLattice::Bool(false),
+            ConstLattice::Str("y".into()),
+        ];
+        for a in &vals {
+            assert_eq!(a.meet(a), a.clone(), "idempotence broken on {a:?}");
+        }
+    }
+
+    /// Top is the meet identity: `Top ⊓ x == x` for every value.
+    /// Varying is meet-absorbing: `Varying ⊓ x == Varying`.
+    /// Two distinct concrete values meet to Varying.
+    #[test]
+    fn meet_lattice_extremes() {
+        let xs = [
+            ConstLattice::Null,
+            ConstLattice::Int(1),
+            ConstLattice::Bool(true),
+            ConstLattice::Str("a".into()),
+        ];
+        for x in &xs {
+            assert_eq!(ConstLattice::Top.meet(x), x.clone());
+            assert_eq!(x.meet(&ConstLattice::Top), x.clone());
+            assert_eq!(ConstLattice::Varying.meet(x), ConstLattice::Varying);
+            assert_eq!(x.meet(&ConstLattice::Varying), ConstLattice::Varying);
+        }
+        assert_eq!(
+            ConstLattice::Int(1).meet(&ConstLattice::Int(2)),
+            ConstLattice::Varying
+        );
+        assert_eq!(
+            ConstLattice::Bool(true).meet(&ConstLattice::Bool(false)),
+            ConstLattice::Varying
+        );
+        assert_eq!(
+            ConstLattice::Str("a".into()).meet(&ConstLattice::Str("b".into())),
+            ConstLattice::Varying
+        );
+    }
+
+    /// Const parsing must round-trip integer signs. i64::MIN/MAX must
+    /// parse without overflow; arbitrary text falls back to a bare-string
+    /// const (current contract — tested here so a future change is
+    /// caught explicitly).
+    #[test]
+    fn const_parse_extremes_and_fallback() {
+        assert_eq!(
+            ConstLattice::parse(&i64::MAX.to_string()),
+            ConstLattice::Int(i64::MAX)
+        );
+        assert_eq!(
+            ConstLattice::parse(&i64::MIN.to_string()),
+            ConstLattice::Int(i64::MIN)
+        );
+        // Larger than i64 falls back to bare-string.
+        let huge = "99999999999999999999";
+        assert_eq!(
+            ConstLattice::parse(huge),
+            ConstLattice::Str(huge.to_string())
+        );
+        // Empty string parses as empty Str (not panic).
+        assert_eq!(ConstLattice::parse(""), ConstLattice::Str("".into()));
+        // Lone quote characters must not panic in the quote-stripping path
+        // (regression for fuzz crash-2f943c14: `'` triggered &s[1..0]).
+        assert_eq!(ConstLattice::parse("'"), ConstLattice::Str("'".into()));
+        assert_eq!(ConstLattice::parse("\""), ConstLattice::Str("\"".into()));
     }
 }

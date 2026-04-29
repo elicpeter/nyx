@@ -27,7 +27,7 @@ jobs:
 
       - name: Cache mdbook
         id: cache-mdbook
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/mdbook
           key: mdbook-0.5.2-${{ runner.os }}
@@ -36,15 +36,13 @@ jobs:
         if: steps.cache-mdbook.outputs.cache-hit != 'true'
         run: cargo install mdbook --version 0.5.2 --locked
 
-      # mdbook follows the committed docs/assets symlink (→ ../assets) so
-      # image references in docs resolve both in `mdbook serve` and in CI.
       - name: Build
         run: mdbook build
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5
         with:
           path: book
 
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

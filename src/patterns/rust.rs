@@ -11,7 +11,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Memory Safety (unsafe) ─────────────────────────────────
     Pattern {
         id: "rs.memory.transmute",
-        description: "std::mem::transmute — unchecked type reinterpretation",
+        description: "std::mem::transmute performs unchecked type reinterpretation",
         query: r#"(call_expression
                      function: (scoped_identifier
                        path: (identifier) @p (#eq? @p "mem")
@@ -24,7 +24,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "rs.memory.copy_nonoverlapping",
-        description: "ptr::copy_nonoverlapping — raw pointer memcpy",
+        description: "ptr::copy_nonoverlapping is a raw pointer memcpy",
         query: r#"(call_expression
                      function: (scoped_identifier
                        path: (identifier) @p (#eq? @p "ptr")
@@ -37,7 +37,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "rs.memory.get_unchecked",
-        description: "get_unchecked / get_unchecked_mut — unchecked indexing",
+        description: "get_unchecked / get_unchecked_mut performs unchecked indexing",
         query: r#"(call_expression
                      function: (field_expression
                        field: (field_identifier) @m
@@ -50,7 +50,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "rs.memory.mem_zeroed",
-        description: "std::mem::zeroed — zero-initialised memory may be UB for non-POD types",
+        description: "std::mem::zeroed is UB for non-POD types since the zero pattern may not be a valid value",
         query: r#"(call_expression
                      function: (scoped_identifier
                        path: (identifier) @p (#eq? @p "mem")
@@ -63,7 +63,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "rs.memory.ptr_read",
-        description: "ptr::read / ptr::read_volatile — raw pointer dereference",
+        description: "ptr::read / ptr::read_volatile dereferences a raw pointer",
         query: r#"(call_expression
                      function: (scoped_identifier
                        path: (identifier) @p (#eq? @p "ptr")
@@ -77,7 +77,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Code quality / robustness ──────────────────────────────
     Pattern {
         id: "rs.quality.unsafe_block",
-        description: "unsafe block — manual memory safety obligation",
+        description: "unsafe block carries a manual memory safety obligation",
         query: "(unsafe_block) @vuln",
         severity: Severity::Medium,
         tier: PatternTier::A,
@@ -98,7 +98,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "rs.quality.unwrap",
-        description: ".unwrap() — panics on None/Err",
+        description: ".unwrap() panics on None/Err",
         query: r#"(call_expression
                      function: (field_expression
                        field: (field_identifier) @name (#eq? @name "unwrap")))
@@ -110,7 +110,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "rs.quality.expect",
-        description: ".expect() — panics on None/Err",
+        description: ".expect() panics on None/Err",
         query: r#"(call_expression
                      function: (field_expression
                        field: (field_identifier) @name (#eq? @name "expect")))
@@ -144,7 +144,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Narrowing cast ─────────────────────────────────────────
     Pattern {
         id: "rs.memory.narrow_cast",
-        description: "`as` cast to 8/16-bit integer — possible truncation",
+        description: "`as` cast to 8/16-bit integer can truncate",
         query: r#"(type_cast_expression
                      type: (primitive_type) @to
                      (#match? @to "^(u8|i8|u16|i16)$"))
@@ -156,7 +156,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "rs.memory.mem_forget",
-        description: "std::mem::forget — may leak resources",
+        description: "std::mem::forget can leak resources",
         query: r#"(call_expression
                      function: (scoped_identifier
                        path: (identifier) @p (#eq? @p "mem")

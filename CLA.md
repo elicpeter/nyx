@@ -18,7 +18,7 @@ By submitting a Contribution to the Project, You accept and agree to the terms b
 
 **"You"** (or **"Your"**) means the individual or legal entity making a Contribution to the Project. For a legal entity, "You" includes the entity and any entity that controls, is controlled by, or is under common control with that entity.
 
-**"Contribution"** means any work of authorship, including any modifications or additions to an existing work, that is intentionally submitted by You to the Project for inclusion in, or documentation of, the Project. "Submitted" means any form of electronic, verbal, or written communication sent to the Project — including but not limited to pull requests, patches, and issue comments — but excluding communication that is conspicuously marked or otherwise designated in writing by You as "Not a Contribution."
+**"Contribution"** means any work of authorship, including any modifications or additions to an existing work, that is intentionally submitted by You to the Project for inclusion in, or documentation of, the Project. "Submitted" means any form of electronic, verbal, or written communication sent to the Project (including but not limited to pull requests, patches, and issue comments) but excluding communication that is conspicuously marked or otherwise designated in writing by You as "Not a Contribution."
 
 ## 2. Copyright License Grant
 

@@ -1,4 +1,6 @@
 use crate::server::jobs::JobManager;
+use crate::server::models::{FilterValues, FindingSummary, FindingView};
+use crate::server::observability;
 use crate::server::progress::TimingBreakdown;
 use crate::server::routes;
 use crate::server::security::LocalServerSecurity;
@@ -41,6 +43,21 @@ pub enum ServerEvent {
     ConfigChanged,
 }
 
+/// Pre-computed views over the latest scan's findings.
+///
+/// Built once per completed scan and reused across `/findings`,
+/// `/findings/summary`, `/findings/filters`, and `/overview` requests so we
+/// don't re-walk the diag list (or re-deserialize from SQLite) on every hit.
+/// The `job_id` lets readers detect a stale entry without holding a write
+/// lock on hot paths.
+#[derive(Debug, Clone)]
+pub struct CachedFindings {
+    pub job_id: String,
+    pub views: Arc<Vec<FindingView>>,
+    pub summary: Arc<FindingSummary>,
+    pub filters: Arc<FilterValues>,
+}
+
 /// Shared application state accessible to all route handlers.
 #[derive(Clone)]
 pub struct AppState {
@@ -52,6 +69,7 @@ pub struct AppState {
     pub job_manager: Arc<JobManager>,
     pub event_tx: broadcast::Sender<ServerEvent>,
     pub db_pool: Option<Arc<Pool<SqliteConnectionManager>>>,
+    pub findings_cache: Arc<RwLock<Option<CachedFindings>>>,
 }
 
 /// 50 MiB cap on request bodies — generous for config uploads, tight
@@ -83,6 +101,7 @@ pub fn build_router(state: AppState) -> Router {
             security,
             crate::server::security::guard_requests,
         ))
+        .layer(middleware::from_fn(observability::observe))
         .layer(CompressionLayer::new())
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("x-frame-options"),
@@ -124,6 +143,7 @@ mod tests {
             job_manager: Arc::new(JobManager::new(4, 8 * 1024 * 1024)),
             event_tx,
             db_pool: None,
+            findings_cache: Arc::new(RwLock::new(None)),
         }
     }
 

@@ -50,6 +50,10 @@ jobs:
         working-directory: frontend
         run: npm test
 
+      - name: Frontend build
+        working-directory: frontend
+        run: npm run build
+
   rustfmt:
     name: rustfmt
     runs-on: ubuntu-latest
@@ -95,6 +99,14 @@ jobs:
 
       - name: License & advisory checks
         run: cargo deny check advisories licenses bans sources
+
+  unused-deps:
+    name: unused-deps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: bnjbvr/cargo-machete@v0.9.2
 
   third-party-licenses:
     name: third-party-licenses
@@ -155,6 +167,20 @@ jobs:
       - name: Beta compile compatibility check
         run: cargo check --all-features --tests
 
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.88"
+          cache: true
+
+      - name: Compile check at MSRV
+        run: cargo check --all-features --tests
+
   rust-stable-test:
     name: rust-stable-test
     runs-on: ubuntu-latest
@@ -210,10 +236,44 @@ jobs:
       - name: Rust tests (beta)
         run: cargo nextest run --all-features
 
+  cargo-package:
+    name: cargo-package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify dist embedded in package
+        run: |
+          for f in src/server/assets/dist/index.html src/server/assets/dist/app.js src/server/assets/dist/style.css src/server/assets/favicon.svg default-nyx.conf build.rs; do
+            if ! cargo package --list --allow-dirty | grep -qx "$f"; then
+              echo "::error::missing from cargo package: $f"
+              exit 1
+            fi
+          done
+
+      - name: cargo package (verify build)
+        run: cargo package --allow-dirty
+
   benchmark-gate:
     name: benchmark-gate
     runs-on: ubuntu-latest
-    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
 
@@ -222,6 +282,9 @@ jobs:
           toolchain: stable
           cache: true
           cache-key: benchmark-gate-release
+
+      - name: Build benchmark + perf test binaries
+        run: cargo test --release --all-features --test benchmark_test --test perf_tests --no-run
 
       - name: Accuracy regression gate (P/R/F1)
         run: cargo test --release --all-features --test benchmark_test -- --ignored --nocapture benchmark_evaluation

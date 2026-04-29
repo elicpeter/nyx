@@ -244,6 +244,214 @@ pub(super) fn has_keyword_arg(call_node: Node, keyword_name: &str, code: &[u8]) 
     false
 }
 
+/// Inspect the first positional argument of a call node and return its
+/// tree-sitter `kind()` plus a flag indicating whether any descendant is an
+/// `interpolation` node.  Skips parenthesisation (`(arg0)` is treated as
+/// `arg0`).  Returns `None` when the call has no arguments.
+///
+/// Used by per-language shape-aware sink suppression — for example, Ruby
+/// ActiveRecord query methods (`where`, `order`, `pluck`, …) are intrinsically
+/// parameterised when arg 0 is a hash/symbol/array/non-interpolated string,
+/// regardless of taint reaching that argument.
+pub(super) fn arg0_kind_and_interpolation(call_node: Node) -> Option<(String, bool)> {
+    let args = call_node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let arg0 = args.named_children(&mut cursor).next()?;
+    let arg0 = unwrap_parens(arg0);
+    let kind = arg0.kind().to_string();
+    let has_interp = subtree_has_interpolation(arg0);
+    Some((kind, has_interp))
+}
+
+/// Walk a Java method-chain receiver looking for an inner `method_invocation`
+/// whose method name matches one of `target_methods` (e.g. `createQuery`,
+/// `prepareStatement`).  Returns the kind of that inner call's arg 0 — used
+/// to verify the SQL-bearing call up-chain was given a string literal rather
+/// than a concatenation / method call.
+///
+/// Conservative: returns `None` when no matching call is found in the chain.
+/// Stops drilling into args of an unrelated call, so the chain walk is
+/// strictly down the receiver spine.
+pub(super) fn java_chain_arg0_kind_for_method(
+    expr: Node,
+    target_methods: &[&str],
+    code: &[u8],
+) -> Option<String> {
+    let n = unwrap_parens(expr);
+    if n.kind() == "method_invocation"
+        && let Some(name_node) = n.child_by_field_name("name")
+        && let Some(name) = text_of(name_node, code)
+        && target_methods.iter().any(|m| *m == name)
+    {
+        let args = n.child_by_field_name("arguments")?;
+        let mut cursor = args.walk();
+        let arg0 = args.named_children(&mut cursor).next()?;
+        let arg0 = unwrap_parens(arg0);
+        return Some(arg0.kind().to_string());
+    }
+    // Drill down the receiver spine.  Java grammar uses `object` for the
+    // receiver of a `method_invocation`.
+    if n.kind() == "method_invocation"
+        && let Some(recv) = n.child_by_field_name("object")
+        && let Some(found) = java_chain_arg0_kind_for_method(recv, target_methods, code)
+    {
+        return Some(found);
+    }
+    None
+}
+
+/// Walk a Ruby method-chain receiver-side looking for the inner call whose
+/// method identifier matches one of `target_methods`, then return that
+/// inner call's [`arg0_kind_and_interpolation`].  Used when the CFG node
+/// represents a chained expression like `Model.where(...).preload(...).to_a`
+/// — the outermost call (`to_a`) has no arguments, so the shape suppressor
+/// must reach down the chain to inspect `where`'s arg 0.
+///
+/// Conservative: returns `None` if the chain doesn't contain a matching
+/// method, so callers fall through to the no-suppression path.
+pub(super) fn ruby_chain_arg0_for_method(
+    expr: Node,
+    target_methods: &[&str],
+    code: &[u8],
+) -> Option<(String, bool)> {
+    let n = unwrap_parens(expr);
+    if n.kind() == "call"
+        && let Some(method) = n.child_by_field_name("method")
+        && let Some(name) = text_of(method, code)
+        && target_methods.iter().any(|m| *m == name)
+    {
+        return arg0_kind_and_interpolation(n);
+    }
+    // Recurse into the receiver chain (`call.receiver` → next call up).
+    if n.kind() == "call"
+        && let Some(recv) = n
+            .child_by_field_name("receiver")
+            .or_else(|| n.child_by_field_name("object"))
+        && let Some(found) = ruby_chain_arg0_for_method(recv, target_methods, code)
+    {
+        return Some(found);
+    }
+    // Also descend into named children to handle wrapping (assignment RHS,
+    // begin-end blocks, parenthesised expressions, etc.).
+    let mut cursor = n.walk();
+    for c in n.named_children(&mut cursor) {
+        if let Some(found) = ruby_chain_arg0_for_method(c, target_methods, code) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn subtree_has_interpolation(n: Node) -> bool {
+    if n.kind() == "interpolation" || n.kind() == "string_interpolation" {
+        return true;
+    }
+    let mut cursor = n.walk();
+    n.named_children(&mut cursor).any(subtree_has_interpolation)
+}
+
+/// For a chained method call (`a.b().c().d()`), walk down the receiver
+/// chain (`function.object`) and return the innermost call_expression
+/// alongside its callee text (e.g. `"http.get"`).
+///
+/// Returns `None` when:
+/// * `outer` is not itself a CallFn / CallMethod node, or
+/// * its `function`/`method` field is not a member-style expression whose
+///   `object` field is itself a call (i.e. there is no chained receiver).
+///
+/// Motivated by CVE-2025-64430 (Parse Server SSRF via
+/// `http.get(uri, cb).on('error', e => ...)`).  Without this, the outer
+/// `.on(...)` call swallows classification of the inner gated sink.
+pub(super) fn find_chained_inner_call<'a>(
+    outer: Node<'a>,
+    lang: &str,
+    code: &[u8],
+) -> Option<(Node<'a>, String)> {
+    if !matches!(lookup(lang, outer.kind()), Kind::CallFn | Kind::CallMethod) {
+        return None;
+    }
+    let function = outer
+        .child_by_field_name("function")
+        .or_else(|| outer.child_by_field_name("method"))?;
+    // The function/method field for a chained call is a member_expression
+    // (JS/TS) or attribute (Python) etc.; its `object` field is the
+    // receiver expression.  Only proceed when that receiver is itself a
+    // call.
+    let object = function.child_by_field_name("object")?;
+    if !matches!(lookup(lang, object.kind()), Kind::CallFn | Kind::CallMethod) {
+        return None;
+    }
+    // Recurse: the inner call may itself be chained
+    // (`axios.get(u).then(h).catch(h)` — innermost is `axios.get`).
+    if let Some(inner) = find_chained_inner_call(object, lang, code) {
+        return Some(inner);
+    }
+    // `object` is the innermost call_expression in the chain.  Extract
+    // its callee identifier the same way `first_call_ident_with_span`
+    // does for a CallFn (member_expression text → "http.get").
+    let inner_func = object
+        .child_by_field_name("function")
+        .or_else(|| object.child_by_field_name("method"))
+        .or_else(|| object.child_by_field_name("name"))?;
+    // Multi-line dotted member expressions (`http\n  .get`) include
+    // formatting whitespace in the source-text slice. The labels map
+    // keys are literal `"http.get"` etc. — strip whitespace so the
+    // chained-call inner-gate rebinding fires for both single-line and
+    // multi-line chain styles. Also strips `\r` for CRLF sources.
+    // Motivated by upstream Parse Server CVE-2025-64430 which uses the
+    // multi-line `http\n  .get(uri, ...)\n  .on(...)` form.
+    let raw = text_of(inner_func, code)?;
+    let inner_text: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+    Some((object, inner_text))
+}
+
+/// Recursively walk the receiver chain of `outer` (a CallFn / CallMethod
+/// node) and yield each *named argument* of every inner call along the
+/// way.  Outer's own arguments are NOT included — the caller already
+/// handles those via the standard `pre_emit_arg_source_nodes` pass over
+/// `outer.arguments`.
+///
+/// For `json.NewDecoder(r.Body).Decode(emoji)`:
+///   outer  = `.Decode(emoji)`           — caller iterates `emoji`
+///   inner  = `json.NewDecoder(r.Body)`  — yielded arg: `r.Body`
+///
+/// We only pull from each inner call's `arguments` field, never from its
+/// `function`/`method`/receiver expressions.  That distinction matters
+/// because chained source-receivers like `r.URL.Query()` expose a
+/// member-text path that classifies as a Source — but it's the OUTER
+/// chain text (`r.URL.Query.Get`) that already classifies, so emitting
+/// a synth source for the inner-call's own callee would double-count.
+///
+/// Used by Go (where chain shapes like `json.NewDecoder(r.Body).Decode`
+/// hide source-labeled args inside parens between dots, leaving the
+/// outer callee text un-classifiable).  The helper itself is
+/// language-neutral, but callers should gate per-language until each
+/// language's regression coverage catches up.
+pub(super) fn walk_chain_inner_call_args<'a>(outer: Node<'a>, lang: &str, out: &mut Vec<Node<'a>>) {
+    if !matches!(lookup(lang, outer.kind()), Kind::CallFn | Kind::CallMethod) {
+        return;
+    }
+    let function = outer
+        .child_by_field_name("function")
+        .or_else(|| outer.child_by_field_name("method"));
+    let Some(function) = function else { return };
+    let object = function
+        .child_by_field_name("object")
+        .or_else(|| function.child_by_field_name("operand"))
+        .or_else(|| function.child_by_field_name("value"));
+    let Some(inner) = object else { return };
+    if !matches!(lookup(lang, inner.kind()), Kind::CallFn | Kind::CallMethod) {
+        return;
+    }
+    if let Some(args) = inner.child_by_field_name("arguments") {
+        let mut cursor = args.walk();
+        for arg in args.named_children(&mut cursor) {
+            out.push(arg);
+        }
+    }
+    walk_chain_inner_call_args(inner, lang, out);
+}
+
 /// Recursively find a call-expression node within an AST subtree (up to
 /// 4 levels deep).  Unlike `find_call_node` which only checks 2 levels,
 /// this handles `await`-wrapped calls inside declarations.

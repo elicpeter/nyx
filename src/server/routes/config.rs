@@ -1,16 +1,17 @@
 use crate::commands::config as config_cmd;
-use crate::labels;
 use crate::server::app::{AppState, ServerEvent};
 use crate::server::models::{LabelEntryView, ProfileView, RuleView, TerminatorView};
-use crate::utils::config::{CapName, RuleKind, ScanProfile};
+use crate::utils::config::{CapName, Config, RuleKind, ScanProfile};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
+use std::fs;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/config", get(get_config))
+        .route("/config/raw", get(get_config_raw).put(put_config_raw))
         .route(
             "/config/rules",
             get(list_rules).post(add_rule).delete(remove_rule),
@@ -53,6 +54,67 @@ pub fn routes() -> Router<AppState> {
 async fn get_config(State(state): State<AppState>) -> Json<serde_json::Value> {
     let config = state.config.read();
     Json(serde_json::to_value(&*config).unwrap_or_default())
+}
+
+// ── Raw nyx.local read/write ─────────────────────────────────────────────────
+
+async fn get_config_raw(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let local_path = state.config_dir.join("nyx.local");
+    let exists = local_path.exists();
+    let content = if exists {
+        fs::read_to_string(&local_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    Json(serde_json::json!({
+        "path": local_path.display().to_string(),
+        "exists": exists,
+        "content": content,
+    }))
+}
+
+async fn put_config_raw(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let content = body
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| bad_request("missing content field"))?
+        .to_string();
+
+    // Validate by parsing into Config (round-trip check).
+    let parsed: Config =
+        toml::from_str(&content).map_err(|e| bad_request(&format!("invalid TOML: {e}")))?;
+    if let Err(errs) = parsed.validate() {
+        let joined = errs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(bad_request(&format!("config validation failed: {joined}")));
+    }
+
+    let local_path = state.config_dir.join("nyx.local");
+    fs::write(&local_path, &content)
+        .map_err(|e| bad_request(&format!("failed to write {}: {e}", local_path.display())))?;
+
+    // Reload the merged config so live state matches the file.
+    match Config::load(&state.config_dir) {
+        Ok((reloaded, _note)) => {
+            *state.config.write() = reloaded;
+        }
+        Err(e) => return Err(bad_request(&format!("config reload failed: {e}"))),
+    }
+
+    let _ = state.event_tx.send(ServerEvent::ConfigChanged);
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "path": local_path.display().to_string(),
+        "bytes": content.len(),
+    })))
 }
 
 // ── Custom rules (existing endpoints) ────────────────────────────────────────
@@ -220,29 +282,17 @@ async fn remove_terminator(
 // ── Sources / Sinks / Sanitizers (by kind) ───────────────────────────────────
 
 fn list_by_kind(state: &AppState, target_kind: &str) -> Vec<LabelEntryView> {
-    let builtins = labels::enumerate_builtin_rules();
-    let config = state.config.read();
-
-    let mut out: Vec<LabelEntryView> = builtins
-        .iter()
-        .filter(|r| r.kind == target_kind && !r.is_gated)
-        .map(|r| LabelEntryView {
-            lang: r.language.clone(),
-            matchers: r.matchers.clone(),
-            cap: r.cap.clone(),
-            case_sensitive: r.case_sensitive,
-            is_builtin: true,
-        })
-        .collect();
-
-    // Add custom rules of the target kind
+    // Built-in rules live on /api/rules — keep this endpoint focused on the
+    // user's own additions in nyx.local.
     let target_rule_kind = match target_kind {
         "source" => RuleKind::Source,
         "sanitizer" => RuleKind::Sanitizer,
         "sink" => RuleKind::Sink,
-        _ => return out,
+        _ => return Vec::new(),
     };
 
+    let config = state.config.read();
+    let mut out: Vec<LabelEntryView> = Vec::new();
     for (lang, lang_cfg) in &config.analysis.languages {
         for cr in &lang_cfg.rules {
             if cr.kind == target_rule_kind {
@@ -256,7 +306,6 @@ fn list_by_kind(state: &AppState, target_kind: &str) -> Vec<LabelEntryView> {
             }
         }
     }
-
     out
 }
 

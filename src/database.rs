@@ -98,7 +98,7 @@ pub mod index {
             container TEXT NOT NULL DEFAULT '',
             disambig INTEGER,
             kind TEXT NOT NULL DEFAULT 'fn',
-            body TEXT NOT NULL,
+            body BLOB NOT NULL,
             updated_at INTEGER NOT NULL,
             UNIQUE(project, file_path, name, container, arity, disambig, kind)
         );
@@ -173,6 +173,26 @@ pub mod index {
             created_at TEXT NOT NULL,
             UNIQUE(suppress_by, match_value)
         );
+
+        -- First time we observed each finding fingerprint. Lazy-populated by the
+        -- overview endpoint when computing backlog age — INSERT OR IGNORE means
+        -- only the earliest scan that mentioned a fingerprint sticks.
+        CREATE TABLE IF NOT EXISTS finding_first_seen (
+            fingerprint TEXT PRIMARY KEY,
+            first_seen_at TEXT NOT NULL
+        );
+
+        -- Indexes on (project, file_path) for the per-file replace_* paths.
+        -- Without these, every DELETE WHERE project=? AND file_path=? does a
+        -- full table scan, which dominates indexing time as the cache grows.
+        CREATE INDEX IF NOT EXISTS idx_function_summaries_project_file
+            ON function_summaries(project, file_path);
+        CREATE INDEX IF NOT EXISTS idx_ssa_function_summaries_project_file
+            ON ssa_function_summaries(project, file_path);
+        CREATE INDEX IF NOT EXISTS idx_ssa_function_bodies_project_file
+            ON ssa_function_bodies(project, file_path);
+        CREATE INDEX IF NOT EXISTS idx_auth_check_summaries_project_file
+            ON auth_check_summaries(project, file_path);
     "#;
 
     /// Engine version used to detect stale caches across upgrades.
@@ -191,7 +211,10 @@ pub mod index {
     ///   byte offset to a depth-first structural index.  Pre-0.5.0 caches
     ///   store byte-offset disambigs and would fail to match bodies built
     ///   by the new engine, so they are silently rebuilt on open.
-    pub const SCHEMA_VERSION: &str = "2";
+    /// * `"3"` — `ssa_function_bodies.body` changed from JSON TEXT to
+    ///   bincode BLOB.  Old JSON payloads cannot be deserialised by the
+    ///   new engine, so they are silently rebuilt on open.
+    pub const SCHEMA_VERSION: &str = "3";
 
     // TODO: ADD CLEANS FOR EACH TABLE BASED ON PROJECT WHICH RUNS ON CLEAN
     // TODO: ADD DROP AND GIVE A CLI PARAMETER FOR DROP
@@ -263,7 +286,12 @@ pub mod index {
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX;
             let manager = SqliteConnectionManager::file(database_path).with_flags(flags);
-            let pool = Arc::new(Pool::new(manager)?);
+            // r2d2's default `max_size` is 10, which can stall rayon
+            // workers on machines with more cores than that during the
+            // parallel indexing pass.  Size the pool to comfortably hold
+            // a connection per rayon thread plus a small slack.
+            let max_conns = (num_cpus::get() as u32 + 4).max(16);
+            let pool = Arc::new(Pool::builder().max_size(max_conns).build(manager)?);
 
             {
                 let conn = pool.get()?;
@@ -411,13 +439,17 @@ pub mod index {
                     tracing::info!(
                         "db schema version changed ({old} → {current}), clearing summary caches"
                     );
+                    // Drop ssa_function_bodies entirely: column type changed
+                    // to BLOB in v3 and `CREATE TABLE IF NOT EXISTS` will
+                    // not migrate the column on an existing table.
                     conn.execute_batch(
-                        "DELETE FROM function_summaries;
+                        "DROP TABLE IF EXISTS ssa_function_bodies;
+                         DELETE FROM function_summaries;
                          DELETE FROM ssa_function_summaries;
-                         DELETE FROM ssa_function_bodies;
                          DELETE FROM auth_check_summaries;
                          DELETE FROM files;",
                     )?;
+                    conn.execute_batch(SCHEMA)?;
                     conn.execute(
                         "INSERT OR REPLACE INTO nyx_metadata (key, value) VALUES ('schema_version', ?1)",
                         params![current],
@@ -1005,26 +1037,32 @@ pub mod index {
             }
         }
 
-        /// Load symbol metadata (name, arity, lang, namespace) for a single file.
+        /// Load symbol metadata (name, arity, lang, namespace, container, kind)
+        /// for a single file.
         ///
         /// Lighter than `load_all_ssa_summaries` — skips JSON deserialization of
-        /// the full summary body and filters by file_path in the query.
+        /// the full summary body and filters by file_path in the query.  `kind`
+        /// is the [`crate::symbol::FuncKind`] slug (`"fn"`, `"method"`,
+        /// `"closure"`, ...) so consumers can distinguish anonymous functions
+        /// from named ones.
         pub fn load_ssa_summaries_for_file(
             &self,
             file_path: &str,
-        ) -> NyxResult<Vec<(String, i64, String, String)>> {
+        ) -> NyxResult<Vec<(String, i64, String, String, String, String)>> {
             let mut stmt = self.c().prepare(
-                "SELECT name, arity, lang, namespace
+                "SELECT name, arity, lang, namespace, container, kind
                  FROM ssa_function_summaries
                  WHERE project = ?1 AND file_path = ?2",
             )?;
-            let rows: Vec<(String, i64, String, String)> = stmt
+            let rows: Vec<(String, i64, String, String, String, String)> = stmt
                 .query_map(rusqlite::params![self.project, file_path], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, i64>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
                     ))
                 })?
                 .filter_map(Result::ok)
@@ -1035,7 +1073,11 @@ pub mod index {
         /// Atomically replace all SSA callee bodies for a single file.
         ///
         /// Persists cross-file callee bodies for interprocedural symex.
-        /// Bodies are serialized as JSON TEXT, matching the ssa_function_summaries pattern.
+        /// Bodies are serialized as MessagePack (rmp-serde, named-field
+        /// encoding) BLOBs — JSON proved too costly at indexing time on
+        /// large SSA structures, and bincode's positional format trips
+        /// over the `#[serde(skip_serializing_if = ...)]` attributes
+        /// scattered through `OptimizeResult` and friends.
         /// Input tuple: `(name, arity, lang, namespace, container, disambig, kind, body)`.
         pub fn replace_ssa_bodies_for_file(
             &mut self,
@@ -1070,7 +1112,7 @@ pub mod index {
                 )?;
 
                 for (name, arity, lang, namespace, container, disambig, kind, body) in bodies {
-                    let json = serde_json::to_string(body)
+                    let blob = rmp_serde::to_vec_named(body)
                         .map_err(|e| NyxError::Msg(format!("SSA body serialise: {e}")))?;
                     let disambig_sql = disambig.map(|d| d as i64);
                     stmt.execute(params![
@@ -1084,7 +1126,7 @@ pub mod index {
                         container,
                         disambig_sql,
                         kind.as_str(),
-                        json,
+                        blob,
                         now
                     ])?;
                 }
@@ -1128,7 +1170,7 @@ pub mod index {
                 String,
                 Option<i64>,
                 String,
-                String,
+                Vec<u8>,
             )> = stmt
                 .query_map([&self.project], |row| {
                     Ok((
@@ -1140,7 +1182,7 @@ pub mod index {
                         row.get::<_, String>(5)?,
                         row.get::<_, Option<i64>>(6)?,
                         row.get::<_, String>(7)?,
-                        row.get::<_, String>(8)?,
+                        row.get::<_, Vec<u8>>(8)?,
                     ))
                 })?
                 .filter_map(|r| match r {
@@ -1157,10 +1199,10 @@ pub mod index {
                 let results: Vec<_> = rows
                     .par_iter()
                     .filter_map(
-                        |(fp, name, lang, arity, ns, container, disambig, kind, json)| {
-                            serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json)
+                        |(fp, name, lang, arity, ns, container, disambig, kind, blob)| {
+                            rmp_serde::from_slice::<crate::taint::ssa_transfer::CalleeSsaBody>(blob)
                                 .map_err(|e| {
-                                    tracing::warn!("failed to deserialize SSA body JSON: {e}");
+                                    tracing::warn!("failed to deserialize SSA body: {e}");
                                     e
                                 })
                                 .ok()
@@ -1188,8 +1230,8 @@ pub mod index {
                 Ok(results)
             } else {
                 let mut out = Vec::with_capacity(rows.len());
-                for (fp, name, lang, arity, ns, container, disambig, kind, json) in &rows {
-                    match serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json) {
+                for (fp, name, lang, arity, ns, container, disambig, kind, blob) in &rows {
+                    match rmp_serde::from_slice::<crate::taint::ssa_transfer::CalleeSsaBody>(blob) {
                         Ok(mut b) => {
                             // See note in parallel branch above.
                             crate::taint::ssa_transfer::rebuild_body_graph(&mut b);
@@ -1206,7 +1248,7 @@ pub mod index {
                             ));
                         }
                         Err(e) => {
-                            tracing::warn!("failed to deserialize SSA body JSON: {e}");
+                            tracing::warn!("failed to deserialize SSA body: {e}");
                         }
                     }
                 }
@@ -1253,6 +1295,205 @@ pub mod index {
                 )?;
 
                 for (name, arity, lang, namespace, container, disambig, kind, summary) in summaries
+                {
+                    let json = serde_json::to_string(summary)
+                        .map_err(|e| NyxError::Msg(format!("auth summary serialise: {e}")))?;
+                    let disambig_sql = disambig.map(|d| d as i64);
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        name,
+                        *arity as i64,
+                        lang,
+                        namespace,
+                        container,
+                        disambig_sql,
+                        kind.as_str(),
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            tx.commit()?;
+            Ok(())
+        }
+
+        /// Atomically replace all four per-file caches in a single
+        /// transaction.  Equivalent in effect to calling
+        /// [`Self::replace_summaries_for_file`],
+        /// [`Self::replace_ssa_summaries_for_file`],
+        /// [`Self::replace_ssa_bodies_for_file`] and
+        /// [`Self::replace_auth_summaries_for_file`] in sequence, but
+        /// issues a single fsync at commit instead of four — the
+        /// dominant cost on large scans.
+        ///
+        /// Behaviour parity with the four-call sequence:
+        /// * function and auth summaries: DELETE-then-INSERT regardless
+        ///   of input length, so emptying a file's summaries clears
+        ///   stale rows.
+        /// * SSA summaries and bodies: only touched when the input is
+        ///   non-empty, matching the existing scan path.
+        #[allow(clippy::too_many_arguments)]
+        pub fn replace_all_for_file(
+            &mut self,
+            file_path: &Path,
+            file_hash: &[u8],
+            func_summaries: &[crate::summary::FuncSummary],
+            ssa_summaries: &[(
+                String,
+                usize,
+                String,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::summary::ssa_summary::SsaFuncSummary,
+            )],
+            ssa_bodies: &[(
+                String,
+                usize,
+                String,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::taint::ssa_transfer::CalleeSsaBody,
+            )],
+            auth_summaries: &[(
+                String,
+                usize,
+                String,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::auth_analysis::model::AuthCheckSummary,
+            )],
+        ) -> NyxResult<()> {
+            let tx = self.conn.transaction()?;
+            let path_str = file_path.to_string_lossy();
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+
+            // function_summaries — always replace.
+            tx.execute(
+                "DELETE FROM function_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO function_summaries
+                        (project, file_path, file_hash, name, arity, lang,
+                         container, disambig, kind, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                )?;
+                for s in func_summaries {
+                    let json = serde_json::to_string(s)
+                        .map_err(|e| NyxError::Msg(format!("summary serialise: {e}")))?;
+                    let disambig_sql = s.disambig.map(|d| d as i64);
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        s.name,
+                        s.param_count as i64,
+                        s.lang,
+                        s.container,
+                        disambig_sql,
+                        s.kind.as_str(),
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            // ssa_function_summaries — only touched when non-empty.
+            if !ssa_summaries.is_empty() {
+                tx.execute(
+                    "DELETE FROM ssa_function_summaries
+                     WHERE project = ?1 AND file_path = ?2",
+                    params![self.project, path_str],
+                )?;
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO ssa_function_summaries
+                        (project, file_path, file_hash, name, arity, lang, namespace,
+                         container, disambig, kind, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                )?;
+                for (name, arity, lang, namespace, container, disambig, kind, summary) in
+                    ssa_summaries
+                {
+                    let json = serde_json::to_string(summary)
+                        .map_err(|e| NyxError::Msg(format!("SSA summary serialise: {e}")))?;
+                    let disambig_sql = disambig.map(|d| d as i64);
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        name,
+                        *arity as i64,
+                        lang,
+                        namespace,
+                        container,
+                        disambig_sql,
+                        kind.as_str(),
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            // ssa_function_bodies — only touched when non-empty.
+            if !ssa_bodies.is_empty() {
+                tx.execute(
+                    "DELETE FROM ssa_function_bodies
+                     WHERE project = ?1 AND file_path = ?2",
+                    params![self.project, path_str],
+                )?;
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO ssa_function_bodies
+                        (project, file_path, file_hash, name, arity, lang, namespace,
+                         container, disambig, kind, body, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                )?;
+                for (name, arity, lang, namespace, container, disambig, kind, body) in ssa_bodies {
+                    let blob = rmp_serde::to_vec_named(body)
+                        .map_err(|e| NyxError::Msg(format!("SSA body serialise: {e}")))?;
+                    let disambig_sql = disambig.map(|d| d as i64);
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        name,
+                        *arity as i64,
+                        lang,
+                        namespace,
+                        container,
+                        disambig_sql,
+                        kind.as_str(),
+                        blob,
+                        now
+                    ])?;
+                }
+            }
+
+            // auth_check_summaries — always replace, even when empty,
+            // so a helper that lost its ownership check no longer
+            // leaks lifts into subsequent pass-2 runs.
+            tx.execute(
+                "DELETE FROM auth_check_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO auth_check_summaries
+                        (project, file_path, file_hash, name, arity, lang, namespace,
+                         container, disambig, kind, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                )?;
+                for (name, arity, lang, namespace, container, disambig, kind, summary) in
+                    auth_summaries
                 {
                     let json = serde_json::to_string(summary)
                         .map_err(|e| NyxError::Msg(format!("auth summary serialise: {e}")))?;
@@ -1962,6 +2203,103 @@ pub mod index {
             Ok(rows)
         }
 
+        /// Record the first time a finding fingerprint was observed. Idempotent —
+        /// the earliest call wins via INSERT OR IGNORE. Used by the overview
+        /// backlog-age computation; ts should be the originating scan's
+        /// `started_at` (RFC-3339).
+        pub fn record_finding_first_seen(&self, fingerprint: &str, ts: &str) -> NyxResult<()> {
+            self.c().execute(
+                "INSERT OR IGNORE INTO finding_first_seen (fingerprint, first_seen_at) VALUES (?1, ?2)",
+                params![fingerprint, ts],
+            )?;
+            Ok(())
+        }
+
+        /// Bulk variant. Inserts ignoring conflicts.
+        pub fn record_finding_first_seen_bulk(
+            &self,
+            entries: &[(String, String)],
+        ) -> NyxResult<()> {
+            if entries.is_empty() {
+                return Ok(());
+            }
+            let conn = self.c();
+            let tx = conn.unchecked_transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR IGNORE INTO finding_first_seen (fingerprint, first_seen_at) VALUES (?1, ?2)",
+                )?;
+                for (fp, ts) in entries {
+                    stmt.execute(params![fp, ts])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        }
+
+        /// Look up first-seen timestamps for a set of fingerprints. Missing
+        /// entries are simply absent from the returned map.
+        pub fn get_first_seen_map(
+            &self,
+            fingerprints: &[String],
+        ) -> NyxResult<std::collections::HashMap<String, String>> {
+            if fingerprints.is_empty() {
+                return Ok(std::collections::HashMap::new());
+            }
+            // SQLite IN-clause cap is high but parameter count is bounded — chunk
+            // for safety with large fingerprint sets.
+            let mut out = std::collections::HashMap::with_capacity(fingerprints.len());
+            let conn = self.c();
+            for chunk in fingerprints.chunks(500) {
+                let placeholders = (1..=chunk.len())
+                    .map(|i| format!("?{i}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let sql = format!(
+                    "SELECT fingerprint, first_seen_at FROM finding_first_seen WHERE fingerprint IN ({placeholders})"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let params: Vec<&dyn rusqlite::ToSql> =
+                    chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+                let rows = stmt.query_map(params.as_slice(), |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                for r in rows.flatten() {
+                    out.insert(r.0, r.1);
+                }
+            }
+            Ok(out)
+        }
+
+        /// Get a single metadata value by key. Returns None if absent.
+        pub fn get_metadata(&self, key: &str) -> NyxResult<Option<String>> {
+            let conn = self.c();
+            let mut stmt = conn.prepare("SELECT value FROM nyx_metadata WHERE key = ?1")?;
+            let mut rows = stmt.query(params![key])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(row.get(0)?))
+            } else {
+                Ok(None)
+            }
+        }
+
+        /// Set a metadata value (insert-or-replace).
+        pub fn set_metadata(&self, key: &str, value: &str) -> NyxResult<()> {
+            self.c().execute(
+                "INSERT OR REPLACE INTO nyx_metadata (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )?;
+            Ok(())
+        }
+
+        /// Remove a metadata key. Returns true if a row was deleted.
+        pub fn delete_metadata(&self, key: &str) -> NyxResult<bool> {
+            let n = self
+                .c()
+                .execute("DELETE FROM nyx_metadata WHERE key = ?1", params![key])?;
+            Ok(n > 0)
+        }
+
         /// Delete a suppression rule by ID. Returns true if a row was deleted.
         pub fn delete_suppression_rule(&self, id: i64) -> NyxResult<bool> {
             let count = self.c().execute(
@@ -2175,7 +2513,9 @@ fn ssa_summaries_round_trip() {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         ),
         (
@@ -2207,7 +2547,9 @@ fn ssa_summaries_round_trip() {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
+                typed_call_receivers: vec![],
             },
         ),
     ];
@@ -2377,7 +2719,9 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            field_points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
+            typed_call_receivers: vec![],
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v1, &sums_v1)
@@ -2411,7 +2755,9 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            field_points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
+            typed_call_receivers: vec![],
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v2, &sums_v2)
@@ -2466,7 +2812,9 @@ fn clear_drops_ssa_summaries_table() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            field_points_to: Default::default(),
             return_path_facts: smallvec::SmallVec::new(),
+            typed_call_receivers: vec![],
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
@@ -2521,6 +2869,8 @@ fn make_test_callee_body(
             value_defs,
             cfg_node_map: std::collections::HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::new(),
+            field_writes: std::collections::HashMap::new(),
         },
         opt: crate::ssa::OptimizeResult {
             const_values: std::collections::HashMap::new(),
@@ -2733,7 +3083,9 @@ fn make_test_ssa_summary() -> crate::summary::ssa_summary::SsaFuncSummary {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        field_points_to: Default::default(),
         return_path_facts: smallvec::SmallVec::new(),
+        typed_call_receivers: vec![],
     }
 }
 
@@ -3381,4 +3733,117 @@ fn metadata_table_survives_clear() {
     // Metadata should survive clear (clear only drops analysis tables)
     let stored = index::Indexer::get_stored_engine_version(&pool).unwrap();
     assert_eq!(stored.as_deref(), Some(index::ENGINE_VERSION));
+}
+
+/// Pointer-Phase 5 / A3 audit: field_points_to round-trips through
+/// the SsaFuncSummary SQLite blob.  Pin that the new field_points_to
+/// records preserve param_field_reads, param_field_writes, the
+/// receiver sentinel (`u32::MAX`), the container-element marker
+/// (`<elem>`), and the `overflow` flag across serialise → store →
+/// load → deserialise.  This is the strict-additive contract for
+/// pre-Phase-5 blobs (default-empty deserialises cleanly) and the
+/// completeness check for the W3 cross-call resolver.
+#[test]
+fn ssa_summaries_round_trip_preserves_field_points_to() {
+    use crate::summary::points_to::FieldPointsToSummary;
+    use crate::summary::ssa_summary::SsaFuncSummary;
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("store.rs");
+    std::fs::write(&f, "// helper that writes obj.cache").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    let hash = index::Indexer::digest_bytes(b"// helper that writes obj.cache");
+
+    // Build a summary with one read on param 0 ("name"), one write on
+    // param 1 ("cache"), one read on the receiver sentinel ("kind"),
+    // and an ELEM marker on param 0.  Round-trip must preserve all
+    // four channels.
+    let mut fpt = FieldPointsToSummary::empty();
+    fpt.add_read(0, "name");
+    fpt.add_write(1, "cache");
+    fpt.add_read(u32::MAX, "kind");
+    fpt.add_write(0, "<elem>");
+
+    let summary = SsaFuncSummary {
+        field_points_to: fpt.clone(),
+        ..Default::default()
+    };
+    let row = (
+        "store".to_string(),
+        2_usize,
+        "rust".to_string(),
+        "store.rs".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        summary,
+    );
+    idx.replace_ssa_summaries_for_file(&f, &hash, &[row])
+        .unwrap();
+
+    let loaded = idx.load_all_ssa_summaries().unwrap();
+    assert_eq!(loaded.len(), 1, "single summary stored, single returned");
+    let (_, name, _, _, _, _, _, _, sum) = &loaded[0];
+    assert_eq!(name, "store");
+    assert_eq!(
+        sum.field_points_to, fpt,
+        "field_points_to must round-trip byte-equal",
+    );
+
+    // Spot-check sentinel + ELEM marker channels.
+    let recv_read = sum
+        .field_points_to
+        .param_field_reads
+        .iter()
+        .find(|(p, _)| *p == u32::MAX)
+        .expect("receiver read at u32::MAX sentinel");
+    assert!(recv_read.1.iter().any(|s| s == "kind"));
+
+    let elem_write = sum
+        .field_points_to
+        .param_field_writes
+        .iter()
+        .find(|(p, _)| *p == 0)
+        .expect("param 0 writes recorded");
+    assert!(
+        elem_write.1.iter().any(|s| s == "<elem>"),
+        "<elem> marker must survive round-trip without conversion",
+    );
+    assert!(!sum.field_points_to.overflow);
+}
+
+/// Pre-Phase-5 blob compatibility: a summary serialised without
+/// `field_points_to` deserialises with the empty default — no
+/// migration needed because the field is `#[serde(default)]`.
+#[test]
+fn ssa_summaries_pre_phase5_blob_decodes_with_empty_field_points_to() {
+    use crate::summary::ssa_summary::SsaFuncSummary;
+
+    // Hand-craft JSON without the `field_points_to` key.
+    let pre_phase5_json = r#"{
+        "param_to_return": [],
+        "param_to_sink": [],
+        "source_caps": 0,
+        "param_to_sink_param": [],
+        "param_container_to_return": [],
+        "param_to_container_store": [],
+        "return_type": null,
+        "return_abstract": null,
+        "source_to_callback": [],
+        "receiver_to_return": null,
+        "receiver_to_sink": 0,
+        "abstract_transfer": [],
+        "param_return_paths": [],
+        "return_path_facts": [],
+        "typed_call_receivers": []
+    }"#;
+    let sum: SsaFuncSummary = serde_json::from_str(pre_phase5_json).unwrap();
+    assert!(
+        sum.field_points_to.is_empty(),
+        "missing field_points_to must default to empty",
+    );
 }

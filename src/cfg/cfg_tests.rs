@@ -1107,6 +1107,7 @@ fn clone_preserves_all_sub_structs() {
         kind: StmtKind::Call,
         call: CallMeta {
             callee: Some("foo".into()),
+            callee_text: Some("obj.foo".into()),
             outer_callee: Some("bar".into()),
             callee_span: Some((7, 17)),
             call_ordinal: 5,
@@ -2039,5 +2040,859 @@ fn numeric_length_access_ignores_method_calls_with_args() {
     assert!(
         !node.is_numeric_length_access,
         "is_numeric_length_access must stay false for arg-bearing calls"
+    );
+}
+
+// ── Pointer-Phase 6 / W5: subscript lowering tests ────────────────────────
+
+/// Scope for tests that flip `NYX_POINTER_ANALYSIS=1` so the CFG-side
+/// subscript synthesis activates.  The env-var is restored afterwards
+/// so the rest of the test suite stays bit-identical to the unset
+/// state.  Mirrors the env-var serialisation pattern used elsewhere in
+/// the test suite (see `tests/pointer_disabled_bit_identity.rs`).
+use std::sync::Mutex;
+static POINTER_ENV_GUARD: Mutex<()> = Mutex::new(());
+
+fn with_pointer_env<R>(value: Option<&str>, f: impl FnOnce() -> R) -> R {
+    let _lock = POINTER_ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    let prev = std::env::var("NYX_POINTER_ANALYSIS").ok();
+    unsafe {
+        match value {
+            Some(v) => std::env::set_var("NYX_POINTER_ANALYSIS", v),
+            None => std::env::remove_var("NYX_POINTER_ANALYSIS"),
+        }
+    }
+    let r = f();
+    unsafe {
+        match prev {
+            Some(v) => std::env::set_var("NYX_POINTER_ANALYSIS", v),
+            None => std::env::remove_var("NYX_POINTER_ANALYSIS"),
+        }
+    }
+    r
+}
+
+fn with_pointer_on<R>(f: impl FnOnce() -> R) -> R {
+    with_pointer_env(Some("1"), f)
+}
+
+fn count_nodes_with_callee(cfg: &Cfg, callee: &str) -> usize {
+    cfg.node_indices()
+        .filter(|i| cfg[*i].call.callee.as_deref() == Some(callee))
+        .count()
+}
+
+fn find_node_with_callee<'a>(cfg: &'a Cfg, callee: &str) -> Option<&'a NodeInfo> {
+    cfg.node_indices()
+        .map(|i| &cfg[i])
+        .find(|n| n.call.callee.as_deref() == Some(callee))
+}
+
+#[test]
+fn js_subscript_read_lowers_to_index_get_call() {
+    with_pointer_on(|| {
+        // `arr[0]` as a sink call argument should be pre-emitted as a
+        // synth `__index_get__` call before the consuming sink.
+        let src = br#"function f(arr) {
+            sink(arr[0]);
+        }"#;
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+        let node = find_node_with_callee(&cfg, "__index_get__")
+            .expect("__index_get__ node should be present");
+        assert_eq!(node.call.receiver.as_deref(), Some("arr"));
+        assert_eq!(node.call.arg_uses.len(), 1, "expect one arg group (index)");
+        assert_eq!(node.call.arg_uses[0], vec!["0"]);
+        assert!(
+            node.taint
+                .defines
+                .as_deref()
+                .is_some_and(|d| d.starts_with("__nyx_idxget_")),
+            "synth defines should use the __nyx_idxget_ prefix"
+        );
+    });
+}
+
+#[test]
+fn js_subscript_write_lowers_to_index_set_call() {
+    with_pointer_on(|| {
+        let src = br#"function f(arr, v) {
+            arr[0] = v;
+        }"#;
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+        let node = find_node_with_callee(&cfg, "__index_set__")
+            .expect("__index_set__ node should be present");
+        assert_eq!(node.call.receiver.as_deref(), Some("arr"));
+        assert_eq!(
+            node.call.arg_uses.len(),
+            2,
+            "expect arg_uses [[idx], [val]]"
+        );
+        assert_eq!(node.call.arg_uses[0], vec!["0"]);
+        assert_eq!(node.call.arg_uses[1], vec!["v"]);
+    });
+}
+
+#[test]
+fn py_subscript_read_lowers_to_index_get_call() {
+    with_pointer_on(|| {
+        let src = br#"def f(arr):
+    sink(arr[0])
+"#;
+        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "python", ts_lang);
+        let node = find_node_with_callee(&cfg, "__index_get__")
+            .expect("python: __index_get__ node should be present");
+        assert_eq!(node.call.receiver.as_deref(), Some("arr"));
+    });
+}
+
+#[test]
+fn py_subscript_write_lowers_to_index_set_call() {
+    with_pointer_on(|| {
+        let src = br#"def f(arr, v):
+    arr[0] = v
+"#;
+        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "python", ts_lang);
+        let node = find_node_with_callee(&cfg, "__index_set__")
+            .expect("python: __index_set__ node should be present");
+        assert_eq!(node.call.receiver.as_deref(), Some("arr"));
+        assert_eq!(node.call.arg_uses.len(), 2);
+        assert_eq!(node.call.arg_uses[1], vec!["v"]);
+    });
+}
+
+#[test]
+fn go_index_expr_read_lowers_to_index_get_call() {
+    with_pointer_on(|| {
+        let src = br#"package main
+func f(arr []string) {
+    sink(arr[0])
+}
+"#;
+        let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "go", ts_lang);
+        let node = find_node_with_callee(&cfg, "__index_get__")
+            .expect("go: __index_get__ node should be present");
+        assert_eq!(node.call.receiver.as_deref(), Some("arr"));
+    });
+}
+
+#[test]
+fn go_index_expr_write_lowers_to_index_set_call() {
+    with_pointer_on(|| {
+        let src = br#"package main
+func f(m map[string]int, k string, v int) {
+    m[k] = v
+}
+"#;
+        let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "go", ts_lang);
+        let node = find_node_with_callee(&cfg, "__index_set__")
+            .expect("go: __index_set__ node should be present");
+        assert_eq!(node.call.receiver.as_deref(), Some("m"));
+        assert_eq!(node.call.arg_uses.len(), 2);
+        assert_eq!(node.call.arg_uses[0], vec!["k"]);
+        assert_eq!(node.call.arg_uses[1], vec!["v"]);
+    });
+}
+
+#[test]
+fn pointer_disabled_skips_subscript_synthesis() {
+    // Strict-additive contract: when NYX_POINTER_ANALYSIS=0 the CFG
+    // must contain zero __index_get__/__index_set__ nodes regardless
+    // of the source shape.  This is the off-by-default invariant the
+    // bit-identity gate relies on.
+    with_pointer_env(Some("0"), || {
+        let src = br#"function f(arr, v) {
+            sink(arr[0]);
+            arr[1] = v;
+        }"#;
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+        assert_eq!(count_nodes_with_callee(&cfg, "__index_get__"), 0);
+        assert_eq!(count_nodes_with_callee(&cfg, "__index_set__"), 0);
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────
+//   Gap-filling: switch / for / do-while / nested loops / re-throw
+// ─────────────────────────────────────────────────────────────────
+
+/// JS `switch` should produce one synthetic dispatch `If` node per
+/// case (default excluded when at the tail), plus True edges into
+/// each case body. Verifies the discriminant cascade is wired.
+#[test]
+fn js_switch_cascade_has_one_if_per_case() {
+    let src = br#"function f(x) {
+        switch (x) {
+            case 1: a(); break;
+            case 2: b(); break;
+            default: c();
+        }
+    }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    // Two non-default cases => 2 dispatch If nodes (the tail default
+    // is wired via the previous header's False edge, not its own If).
+    assert_eq!(
+        if_nodes(&cfg).len(),
+        2,
+        "switch with 2 explicit cases + default should emit 2 dispatch If nodes"
+    );
+
+    // Each dispatch If must have at least one True and one False edge
+    // (True → case body, False → next case / default).
+    for i in if_nodes(&cfg) {
+        let trues = cfg
+            .edges(i)
+            .filter(|e| matches!(e.weight(), EdgeKind::True))
+            .count();
+        let falses = cfg
+            .edges(i)
+            .filter(|e| matches!(e.weight(), EdgeKind::False))
+            .count();
+        assert!(
+            trues >= 1,
+            "case dispatch should have at least one True edge"
+        );
+        assert!(
+            falses >= 1,
+            "case dispatch should have at least one False edge"
+        );
+    }
+}
+
+/// Default case in the *middle* of a switch must be reordered to the
+/// tail so the dispatch cascade stays a clean True/False chain. The
+/// observable CFG shape (number of If nodes, presence of True/False
+/// edges per dispatch) should match the all-default-at-tail case.
+#[test]
+fn js_switch_default_in_middle_reorders_to_tail() {
+    let src = br#"function f(x) {
+        switch (x) {
+            case 1: a(); break;
+            default: c(); break;
+            case 2: b(); break;
+        }
+    }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    // 2 non-default cases ⇒ 2 If dispatch nodes (default reordered to tail).
+    assert_eq!(
+        if_nodes(&cfg).len(),
+        2,
+        "default-in-middle should still produce one If per non-default case"
+    );
+}
+
+/// JS switch fall-through (`case 1: a(); case 2: b();`) — case 1's
+/// exit should flow into case 2's body so taint from `first()`
+/// reaches `second()`'s sinks.
+///
+/// We assert two things:
+///   (a) Reachability: `second()` is reachable from `first()` over
+///       forward edges. This is the semantic property taint analysis
+///       depends on; checking it directly avoids over-fitting to the
+///       structural shape.
+///   (b) `first()` has a non-Back forward out-edge that lands inside
+///       the case-2 sub-graph (the actual fall-through wire), so we
+///       prove there *is* a fall-through edge — not just an
+///       Entry→…→Exit path that happens to walk through both calls
+///       via the dispatch chain.
+///
+/// Note on the structural shape: case bodies are wrapped in synthetic
+/// Seq passthrough nodes (one per surrounding scope), so the
+/// fall-through edge from `first()` lands on the *first wrapper
+/// Seq node* of case 2, not on `second()` itself. Asserting that
+/// `second()` has ≥2 in-edges would therefore be wrong — the True
+/// edge from the case-2 dispatch If targets the wrapper node, and
+/// only a single Seq chain leads from there to `second()`.
+#[test]
+fn js_switch_fallthrough_no_break() {
+    use std::collections::HashSet;
+    let src = br#"function f(x) {
+        switch (x) {
+            case 1: first();
+            case 2: second(); break;
+        }
+    }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let first = cfg
+        .node_indices()
+        .find(|&n| cfg[n].call.callee.as_deref() == Some("first"))
+        .expect("expected a Call node for `first`");
+    let second = cfg
+        .node_indices()
+        .find(|&n| cfg[n].call.callee.as_deref() == Some("second"))
+        .expect("expected a Call node for `second`");
+
+    // (a) Reachability from first → second over forward (non-Back) edges.
+    let mut seen: HashSet<NodeIndex> = HashSet::new();
+    let mut stack = vec![first];
+    while let Some(n) = stack.pop() {
+        if !seen.insert(n) {
+            continue;
+        }
+        for e in cfg.edges(n) {
+            if matches!(e.weight(), EdgeKind::Seq | EdgeKind::True | EdgeKind::False) {
+                stack.push(e.target());
+            }
+        }
+    }
+    assert!(
+        seen.contains(&second),
+        "fall-through: `second` must be reachable from `first` over forward edges"
+    );
+
+    // (b) Prove the fall-through edge exists: `first()` must have at
+    //     least one outgoing forward edge whose target is *not*
+    //     reachable from the function entry without first going
+    //     through `first()`. The straightforward check: `first()`
+    //     itself must have at least one outgoing Seq edge (the
+    //     fall-through wire is always Seq).
+    let first_seq_outs = cfg
+        .edges(first)
+        .filter(|e| matches!(e.weight(), EdgeKind::Seq))
+        .count();
+    assert!(
+        first_seq_outs >= 1,
+        "fall-through: `first()` must have a Seq out-edge (the fall-through wire)"
+    );
+}
+
+/// `for (i = 0; i < 10; i++) { body(); }` should produce a Loop node
+/// with at least one Back edge from the body back to the loop header.
+#[test]
+fn js_for_loop_has_back_edge() {
+    let src = br#"function f() { for (let i = 0; i < 10; i++) { body(); } }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let loop_nodes: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Loop)
+        .collect();
+    assert_eq!(loop_nodes.len(), 1, "expected exactly one Loop node");
+
+    let back_edges = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Back))
+        .count();
+    assert!(
+        back_edges >= 1,
+        "for loop must have at least one Back edge to its header"
+    );
+}
+
+/// `do { ... } while (cond);` is mapped to `Kind::While` for many
+/// languages but the grammar puts the body *before* the condition.
+/// The CFG must still produce a Loop node and at least one Back edge.
+#[test]
+fn js_do_while_has_loop_node_and_back_edge() {
+    let src = br#"function f() { do { body(); } while (cond); }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let loop_count = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Loop)
+        .count();
+    assert_eq!(loop_count, 1, "do-while should produce one Loop node");
+    assert!(
+        cfg.edge_references()
+            .any(|e| matches!(e.weight(), EdgeKind::Back)),
+        "do-while must have at least one Back edge"
+    );
+}
+
+/// In `outer: while (a) { while (b) { break; } }`, the `break`
+/// terminates only the *inner* loop. Equivalent for our CFG: the
+/// break's predecessors should reach the inner loop's exit frontier
+/// without crossing the outer loop's body again. We can verify this
+/// structurally: there must be exactly two Loop nodes and at least
+/// one Break node whose forward (Seq) successor is *not* the outer
+/// header.
+#[test]
+fn js_nested_while_break_targets_inner_loop() {
+    let src = br#"function f() {
+        while (a) {
+            while (b) { break; }
+            inner_after();
+        }
+    }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let loops: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Loop)
+        .collect();
+    assert_eq!(loops.len(), 2, "expected two Loop nodes");
+
+    let breaks: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Break)
+        .collect();
+    assert_eq!(breaks.len(), 1, "expected exactly one Break node");
+
+    // The inner loop body's break should NOT close back via Back edge
+    // onto the outer header (outer header is loops[0] in source order).
+    let outer_header = loops[0];
+    let brk = breaks[0];
+    let crosses_outer = cfg
+        .edges(brk)
+        .any(|e| e.target() == outer_header && matches!(e.weight(), EdgeKind::Back));
+    assert!(
+        !crosses_outer,
+        "inner break must not back-edge onto the outer loop header"
+    );
+}
+
+/// `continue` in the inner loop must back-edge onto the *inner*
+/// header, not the outer. With nested while loops we expect exactly
+/// one Continue node and at least one Back edge originating at it
+/// going to the inner (second-emitted) Loop header.
+#[test]
+fn js_nested_while_continue_targets_inner_loop() {
+    let src = br#"function f() {
+        while (a) {
+            while (b) { continue; }
+        }
+    }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let loops: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Loop)
+        .collect();
+    assert_eq!(loops.len(), 2, "expected two Loop nodes");
+    let outer_header = loops[0];
+    let inner_header = loops[1];
+
+    let cont = cfg
+        .node_indices()
+        .find(|&n| cfg[n].kind == StmtKind::Continue)
+        .expect("expected Continue node");
+
+    let back_edges_from_cont: Vec<_> = cfg
+        .edges(cont)
+        .filter(|e| matches!(e.weight(), EdgeKind::Back))
+        .collect();
+    assert!(
+        !back_edges_from_cont.is_empty(),
+        "continue must originate at least one Back edge"
+    );
+    assert!(
+        back_edges_from_cont
+            .iter()
+            .any(|e| e.target() == inner_header),
+        "continue's Back edge must target the inner loop header"
+    );
+    assert!(
+        !back_edges_from_cont
+            .iter()
+            .any(|e| e.target() == outer_header),
+        "continue must not back-edge onto the outer loop header"
+    );
+}
+
+/// `throw` inside a `catch` block should still register a throw
+/// target so a surrounding outer try (or function-level exit) can
+/// receive it. We verify here that the throw produces a Throw node
+/// even when it is reached only via an Exception edge from the inner
+/// try body (i.e. the re-throw path is preserved structurally).
+#[test]
+fn js_throw_inside_catch_emits_throw_node() {
+    let src = br#"function f() {
+        try {
+            try { foo(); } catch (e) { throw e; }
+        } catch (e2) {
+            handle();
+        }
+    }"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let throws: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Throw)
+        .collect();
+    assert_eq!(
+        throws.len(),
+        1,
+        "expected exactly one Throw node for the inner re-throw"
+    );
+
+    // The outer `catch (e2)` body must be reachable. Check that the
+    // `handle()` call exists and has at least one incoming edge.
+    let handle = cfg
+        .node_indices()
+        .find(|&n| cfg[n].call.callee.as_deref() == Some("handle"))
+        .expect("expected `handle()` call node");
+    let in_edges = cfg
+        .edges_directed(handle, petgraph::Direction::Incoming)
+        .count();
+    assert!(in_edges >= 1, "outer catch body must be reachable");
+}
+
+/// Empty if/else branches (e.g., `if (a) {} else {}`) must not panic
+/// and the resulting CFG must still have a single If node with both
+/// True and False edges going somewhere reachable. This guards
+/// against off-by-one bugs in `then_first_node`/exits handling.
+#[test]
+fn js_if_with_empty_branches_does_not_panic() {
+    let src = b"function f() { if (a) {} else {} return; }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let ifs = if_nodes(&cfg);
+    assert_eq!(ifs.len(), 1, "expected one If node");
+    let i = ifs[0];
+
+    let trues: Vec<_> = cfg
+        .edges(i)
+        .filter(|e| matches!(e.weight(), EdgeKind::True))
+        .collect();
+    let falses: Vec<_> = cfg
+        .edges(i)
+        .filter(|e| matches!(e.weight(), EdgeKind::False))
+        .collect();
+    assert!(!trues.is_empty(), "empty-then If must still emit True edge");
+    assert!(
+        !falses.is_empty(),
+        "empty-else If must still emit False edge"
+    );
+}
+
+/// A function body with no statements should still produce a
+/// well-formed CFG (entry/exit only); no panic, no orphan nodes from
+/// `build_sub` returning an empty exit set.
+#[test]
+fn js_empty_function_body_well_formed() {
+    let src = b"function f() {}";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    // We expect 2 bodies: top-level + the function body. Both must be
+    // valid graphs with at least an entry node.
+    assert!(
+        file_cfg.bodies.len() >= 2,
+        "expected at least 2 bodies (top-level + function)"
+    );
+    for body in &file_cfg.bodies {
+        assert!(
+            body.graph.node_count() >= 1,
+            "every body must have at least one node"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+//  Loop CFG structure: every loop variant must produce a Loop header
+//  with at least one Back edge that targets that header. Without these
+//  invariants the SSA loop-induction-variable phi placement is wrong
+//  and the abstract-interp widening points are missed.
+// ─────────────────────────────────────────────────────────────────────
+
+fn loop_headers(cfg: &Cfg) -> Vec<NodeIndex> {
+    cfg.node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Loop)
+        .collect()
+}
+
+fn back_edges(cfg: &Cfg) -> Vec<(NodeIndex, NodeIndex)> {
+    cfg.edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Back))
+        .map(|e| (e.source(), e.target()))
+        .collect()
+}
+
+fn assert_loop_with_back_edge(cfg: &Cfg, label: &str) {
+    let headers = loop_headers(cfg);
+    assert!(
+        !headers.is_empty(),
+        "{label}: expected at least one Loop header, found none"
+    );
+    let backs = back_edges(cfg);
+    assert!(
+        !backs.is_empty(),
+        "{label}: expected at least one Back edge"
+    );
+    for (_, dst) in &backs {
+        assert!(
+            headers.contains(dst),
+            "{label}: Back edge target {:?} is not a Loop header (headers={:?})",
+            dst,
+            headers
+        );
+    }
+}
+
+#[test]
+fn js_for_loop_back_edge() {
+    let src = b"function f() { for (let i = 0; i < 10; i++) { body(i); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    assert_loop_with_back_edge(&cfg, "js classic for");
+}
+
+#[test]
+fn js_do_while_back_edge() {
+    let src = b"function f() { do { body(); } while (cond()); }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    assert_loop_with_back_edge(&cfg, "js do-while");
+}
+
+#[test]
+fn js_for_in_back_edge() {
+    let src = b"function f() { for (let k in obj) { use(k); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    assert_loop_with_back_edge(&cfg, "js for-in");
+}
+
+#[test]
+fn js_for_of_back_edge() {
+    let src = b"function f() { for (const x of items) { use(x); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    // for-of is usually classified the same as for-in / for via
+    // for_in_statement. Still, body-with-back-edge invariant must hold.
+    assert_loop_with_back_edge(&cfg, "js for-of");
+}
+
+#[test]
+fn python_for_loop_back_edge() {
+    let src = b"def f():\n    for x in items:\n        use(x)\n";
+    let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "python", ts_lang);
+    assert_loop_with_back_edge(&cfg, "python for");
+}
+
+#[test]
+fn python_while_loop_back_edge() {
+    let src = b"def f():\n    while cond():\n        use(x)\n";
+    let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "python", ts_lang);
+    assert_loop_with_back_edge(&cfg, "python while");
+}
+
+#[test]
+fn java_enhanced_for_back_edge() {
+    let src = b"class A { void f(int[] xs) { for (int x : xs) { use(x); } } }";
+    let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "java", ts_lang);
+    assert_loop_with_back_edge(&cfg, "java enhanced-for");
+}
+
+#[test]
+fn java_do_while_back_edge() {
+    let src = b"class A { void f() { do { body(); } while (cond()); } }";
+    let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "java", ts_lang);
+    assert_loop_with_back_edge(&cfg, "java do-while");
+}
+
+#[test]
+fn cpp_range_for_back_edge() {
+    let src = b"void f(int* xs) { for (int x : range) { use(x); } }";
+    let ts_lang = Language::from(tree_sitter_cpp::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "cpp", ts_lang);
+    assert_loop_with_back_edge(&cfg, "cpp range-for");
+}
+
+#[test]
+fn c_do_while_back_edge() {
+    let src = b"void f() { do { body(); } while (cond()); }";
+    let ts_lang = Language::from(tree_sitter_c::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "c", ts_lang);
+    assert_loop_with_back_edge(&cfg, "c do-while");
+}
+
+#[test]
+fn go_for_loop_back_edge() {
+    let src = b"package p\nfunc f() { for i := 0; i < 10; i++ { body(i) } }";
+    let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "go", ts_lang);
+    assert_loop_with_back_edge(&cfg, "go for");
+}
+
+#[test]
+fn ruby_while_back_edge() {
+    let src = b"def f\n  while cond\n    body\n  end\nend\n";
+    let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "ruby", ts_lang);
+    assert_loop_with_back_edge(&cfg, "ruby while");
+}
+
+#[test]
+fn ruby_until_back_edge() {
+    // `until cond` is `while not cond`; should still produce a loop.
+    let src = b"def f\n  until done\n    body\n  end\nend\n";
+    let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "ruby", ts_lang);
+    assert_loop_with_back_edge(&cfg, "ruby until");
+}
+
+#[test]
+fn php_foreach_back_edge() {
+    let src = b"<?php function f($items) { foreach ($items as $x) { use($x); } }";
+    let ts_lang = Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let (cfg, _) = parse_and_build(src, "php", ts_lang);
+    assert_loop_with_back_edge(&cfg, "php foreach");
+}
+
+#[test]
+fn rust_for_loop_back_edge() {
+    let src = b"fn f() { for x in 0..10 { use_fn(x); } }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "rust", ts_lang);
+    assert_loop_with_back_edge(&cfg, "rust for");
+}
+
+#[test]
+fn rust_while_loop_back_edge() {
+    let src = b"fn f() { while cond() { body(); } }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "rust", ts_lang);
+    assert_loop_with_back_edge(&cfg, "rust while");
+}
+
+#[test]
+fn nested_loops_two_headers_two_back_edges() {
+    // Nested loops must produce two distinct loop headers and a back
+    // edge for each. This guards against headers being collapsed and
+    // back edges being mis-routed to the outer header.
+    let src = b"function f() { for (let i = 0; i < 10; i++) { for (let j = 0; j < 10; j++) { use(i, j); } } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    let headers = loop_headers(&cfg);
+    assert_eq!(headers.len(), 2, "expected 2 loop headers in nested loops");
+    let backs = back_edges(&cfg);
+    assert!(
+        backs.len() >= 2,
+        "expected ≥2 back edges in nested loops, got {}",
+        backs.len()
+    );
+    // Every back edge must target one of the two headers.
+    for (_, dst) in &backs {
+        assert!(headers.contains(dst), "back edge target not a loop header");
+    }
+    // Each header should be the target of at least one back edge.
+    let mut hit = std::collections::HashSet::new();
+    for (_, dst) in &backs {
+        hit.insert(*dst);
+    }
+    assert_eq!(
+        hit.len(),
+        2,
+        "each header must receive at least one back edge"
+    );
+}
+
+#[test]
+fn loop_with_break_no_back_edge_from_break() {
+    // A `break` short-circuits the loop body — its edge must NOT be a
+    // back edge to the header (it leaves the loop entirely).
+    let src = b"function f() { while (cond()) { if (done()) break; body(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    let headers = loop_headers(&cfg);
+    assert_eq!(headers.len(), 1, "expected 1 loop header");
+    let header = headers[0];
+
+    // Find any Break node and verify none of its outgoing edges are
+    // Back edges to the header.
+    for n in cfg.node_indices() {
+        if cfg[n].kind != StmtKind::Break {
+            continue;
+        }
+        for e in cfg.edges(n) {
+            assert!(
+                !(matches!(e.weight(), EdgeKind::Back) && e.target() == header),
+                "break must not produce a back edge to the loop header"
+            );
+        }
+    }
+}
+
+#[test]
+fn loop_with_continue_back_edge_to_header() {
+    // `continue` must produce a Back edge to the loop header.
+    let src = b"function f() { while (cond()) { if (skip()) continue; body(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+    let headers = loop_headers(&cfg);
+    assert_eq!(headers.len(), 1);
+    let header = headers[0];
+
+    let mut found = false;
+    for n in cfg.node_indices() {
+        if cfg[n].kind != StmtKind::Continue {
+            continue;
+        }
+        for e in cfg.edges(n) {
+            if matches!(e.weight(), EdgeKind::Back) && e.target() == header {
+                found = true;
+            }
+        }
+    }
+    assert!(
+        found,
+        "expected at least one Back edge from a Continue node to the loop header"
+    );
+}
+
+/// Regression guard for the 2026-04-27 chained-method-call inner-gate
+/// rebinding (CVE-2025-64430 hunt session).  Without the fix, the outer
+/// `.on('error', cb)` call swallows classification of the inner
+/// `http.get(uri, cb)` so neither the gate label nor `sink_payload_args`
+/// are populated for this CFG node.
+#[test]
+fn chained_method_call_rebinds_to_inner_gated_sink() {
+    // Use `https.get` (a gated SSRF sink) so the gate fires only when
+    // the inner-call rebinding works.  The outer `.on(...)` is a plain
+    // method call that does not classify on its own.
+    let src = b"function f(uri) { https.get(uri, r => {}).on('error', e => {}); }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "javascript", ts_lang);
+
+    // Find a Call node whose `text` was rebound to the inner gated callee.
+    let mut found = false;
+    for n in cfg.node_indices() {
+        let info = &cfg[n];
+        if info.kind != StmtKind::Call {
+            continue;
+        }
+        let Some(callee) = info.call.callee.as_deref() else {
+            continue;
+        };
+        // The inner callee is `https.get`; the outer chained `.on` should
+        // no longer be the recorded callee for this node.
+        if callee.ends_with("https.get") {
+            // The inner-gate path must have populated sink_payload_args
+            // (the gate's payload arg is position 0 — the URL string).
+            assert!(
+                info.call.sink_payload_args.is_some(),
+                "expected sink_payload_args to be populated for chained \
+                 inner-gate https.get; got None on call node with callee {callee:?}"
+            );
+            found = true;
+            break;
+        }
+    }
+    assert!(
+        found,
+        "expected at least one Call node whose callee was rebound from \
+         the outer `.on(...)` to the inner `https.get` after the chained- \
+         call inner-gate rebinding fired"
     );
 }

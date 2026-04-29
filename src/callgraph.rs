@@ -4,6 +4,7 @@ use crate::summary::{CalleeQuery, CalleeResolution, GlobalSummaries};
 use crate::symbol::{FuncKey, Lang};
 use petgraph::graph::NodeIndex;
 use petgraph::prelude::*;
+use smallvec::SmallVec;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -153,6 +154,279 @@ pub(crate) fn callee_container_hint(raw: &str) -> &str {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Class / container → method index
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-language `(container, method_name)` → candidate [`FuncKey`] index.
+///
+/// Built once per call-graph construction over every merged
+/// [`FuncSummary`].  Used by edge insertion to restrict an indirect method
+/// call (`receiver.method(...)`) to only those targets whose defining
+/// container matches the receiver's static type.  Without a container
+/// hint the index falls back to the bare-name list, matching today's
+/// name-only resolution byte-for-byte.
+///
+/// Key design notes:
+///
+/// * Keys are **language-scoped** — a Java `findById` and a Python
+///   `findById` never alias.  Every other index in this module is also
+///   language-scoped (`by_lang_name`, `by_lang_qualified`); keeping the
+///   same partition here means devirtualisation's "subset of today's
+///   targets" invariant is structurally preserved.
+/// * The container key carries the [`FuncKey::container`] verbatim
+///   (e.g. `"Repository"` or nested `"Outer::Inner"`).  Empty containers
+///   are not indexed in `by_container` — free top-level functions live
+///   only in `by_name` and are looked up via the `None` container path.
+/// * `SmallVec` inline capacity is sized for the common case (≤ 2 same-
+///   container overloads, ≤ 4 same-name candidates across containers);
+///   spillover allocates but keeps lookups O(1) amortised.
+#[derive(Debug, Default, Clone)]
+pub struct ClassMethodIndex {
+    /// `(lang, container, method_name)` → all candidate `FuncKey`s
+    /// whose defining container matches.  Empty containers are not
+    /// indexed here; use the `None` arm of [`Self::resolve`] for those.
+    by_container: HashMap<(Lang, String, String), SmallVec<[FuncKey; 2]>>,
+    /// `(lang, method_name)` → every `FuncKey` with that leaf name in
+    /// the language, regardless of container.  This is the fallback
+    /// path for calls with no resolvable receiver type and matches
+    /// today's name-only edge insertion.
+    by_name: HashMap<(Lang, String), SmallVec<[FuncKey; 4]>>,
+}
+
+impl ClassMethodIndex {
+    /// Build the index from a [`GlobalSummaries`] map.
+    ///
+    /// Iteration is over every `FuncKey` in the map; each key is
+    /// inserted into `by_name` and (when its container is non-empty)
+    /// into `by_container`.  No ordering guarantees on the candidate
+    /// vectors — call sites that need determinism should sort downstream.
+    pub fn build(summaries: &GlobalSummaries) -> Self {
+        let mut by_container: HashMap<(Lang, String, String), SmallVec<[FuncKey; 2]>> =
+            HashMap::new();
+        let mut by_name: HashMap<(Lang, String), SmallVec<[FuncKey; 4]>> = HashMap::new();
+
+        for (key, _) in summaries.iter() {
+            let name_key = (key.lang, key.name.clone());
+            by_name.entry(name_key).or_default().push(key.clone());
+
+            if !key.container.is_empty() {
+                let cont_key = (key.lang, key.container.clone(), key.name.clone());
+                by_container.entry(cont_key).or_default().push(key.clone());
+            }
+        }
+
+        ClassMethodIndex {
+            by_container,
+            by_name,
+        }
+    }
+
+    /// Resolve `(container, method)` to its candidate target set.
+    ///
+    /// * `container = Some(c)` — return only candidates whose defining
+    ///   container equals `c`.  Empty slice when no such target exists,
+    ///   even if a same-name function lives in another container.
+    ///   This is the **devirtualised** path: a hard subset of `by_name`.
+    /// * `container = None` — return every same-name candidate in the
+    ///   language.  This is the **fallback** path used when the receiver
+    ///   type is unknown; matches today's name-only behaviour.
+    ///
+    /// The returned slice is borrowed from the index; lifetime ties to
+    /// `&self`.  Callers may need to clone keys before mutating the
+    /// owning graph.
+    pub fn resolve(&self, lang: Lang, container: Option<&str>, method: &str) -> &[FuncKey] {
+        match container {
+            Some(c) if !c.is_empty() => self
+                .by_container
+                .get(&(lang, c.to_string(), method.to_string()))
+                .map(|v| v.as_slice())
+                .unwrap_or_default(),
+            _ => self
+                .by_name
+                .get(&(lang, method.to_string()))
+                .map(|v| v.as_slice())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Number of distinct `(lang, container, method)` keys.  Exposed
+    /// for diagnostics / tests; production code uses [`Self::resolve`].
+    #[allow(dead_code)]
+    pub fn container_keys_len(&self) -> usize {
+        self.by_container.len()
+    }
+
+    /// Number of distinct `(lang, method)` keys.  Exposed for
+    /// diagnostics / tests.
+    #[allow(dead_code)]
+    pub fn name_keys_len(&self) -> usize {
+        self.by_name.len()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Type hierarchy index — Phase 6 (subtype awareness)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-language `(super_type) → SmallVec<[sub_type]>` index built once
+/// per call-graph construction from every merged
+/// [`crate::summary::FuncSummary::hierarchy_edges`].  When a method
+/// call's receiver is statically typed as a super-class / trait /
+/// interface, the call-graph wedge fans out the edge to every concrete
+/// implementer's matching method — recovering the dispatch precision
+/// that would otherwise be lost to today's name-only resolution.
+///
+/// Subtype semantics covered:
+/// * Java `class X extends Y` / `class X implements I` / `interface
+///   I extends J`
+/// * Rust `impl Trait for Type`
+/// * TypeScript `class X extends Y implements I` /
+///   `interface I extends J`
+/// * Python `class X(Base)` (excludes `object`)
+/// * PHP, Ruby, C++ — see [`crate::cfg::hierarchy`] for the
+///   per-language extraction rules.
+///
+/// Go's structural / implicit interface satisfaction is intractable to
+/// enumerate from per-file information and is **deliberately omitted**
+/// — Go callers fall back to today's name-only resolution, so
+/// precision is unchanged from the pre-Phase-6 baseline.
+///
+/// Key design notes
+/// ────────────────
+///
+/// * **Language-scoped.**  Mirrors [`ClassMethodIndex`]: a Java
+///   `Repository` and a Python `Repository` never alias.
+/// * **Bare container names.**  No namespace qualification.  When
+///   container names alias across unrelated namespaces (rare in
+///   practice, common in mono-repos) the resolver may over-fan-out;
+///   that is conservative for *correctness* (a subset of dispatch
+///   targets is unsafe — virtual dispatch may genuinely reach any
+///   implementer) and may need namespace-qualified keying as a
+///   Phase 6.5 follow-up if benchmark precision regresses.
+/// * **`SmallVec` inline capacity.**  4 implementers per super-type
+///   covers most real-world hierarchies without spillover; spillover
+///   allocates but keeps lookups O(1) amortised.
+#[derive(Debug, Default, Clone)]
+pub struct TypeHierarchyIndex {
+    /// `(lang, super_type)` → distinct sub-type / impl container names.
+    by_super: HashMap<(Lang, String), SmallVec<[String; 4]>>,
+    /// `(lang, sub_type)` → super-types this type extends / implements.
+    /// Future use for `super.method()` resolution; populated for
+    /// completeness today.
+    #[allow(dead_code)]
+    by_sub: HashMap<(Lang, String), SmallVec<[String; 2]>>,
+}
+
+impl TypeHierarchyIndex {
+    /// Build the index from every merged
+    /// [`crate::summary::FuncSummary::hierarchy_edges`] vector.  Each
+    /// `(sub, super)` pair is inserted once per language; duplicates
+    /// across files (the same edge written into every per-file
+    /// summary) collapse via the membership check.
+    pub fn build(summaries: &GlobalSummaries) -> Self {
+        let mut by_super: HashMap<(Lang, String), SmallVec<[String; 4]>> = HashMap::new();
+        let mut by_sub: HashMap<(Lang, String), SmallVec<[String; 2]>> = HashMap::new();
+
+        for (key, summary) in summaries.iter() {
+            let lang = key.lang;
+            for (sub, sup) in &summary.hierarchy_edges {
+                if sub.is_empty() || sup.is_empty() {
+                    continue;
+                }
+                let subs = by_super.entry((lang, sup.clone())).or_default();
+                if !subs.iter().any(|s| s == sub) {
+                    subs.push(sub.clone());
+                }
+                let sups = by_sub.entry((lang, sub.clone())).or_default();
+                if !sups.iter().any(|s| s == sup) {
+                    sups.push(sup.clone());
+                }
+            }
+        }
+
+        TypeHierarchyIndex { by_super, by_sub }
+    }
+
+    /// Return the distinct sub-type / impl container names for
+    /// `super_type`.  Empty slice when the type has no recorded
+    /// subs (i.e. either it's a leaf type or no matching
+    /// hierarchy edges were extracted).
+    pub fn subs_of(&self, lang: Lang, super_type: &str) -> &[String] {
+        self.by_super
+            .get(&(lang, super_type.to_string()))
+            .map(|v| v.as_slice())
+            .unwrap_or_default()
+    }
+
+    /// Return the recorded super-types of `sub_type`.  Empty when
+    /// `sub_type` has no recorded super-types in this language.
+    #[allow(dead_code)]
+    pub fn supers_of(&self, lang: Lang, sub_type: &str) -> &[String] {
+        self.by_sub
+            .get(&(lang, sub_type.to_string()))
+            .map(|v| v.as_slice())
+            .unwrap_or_default()
+    }
+
+    /// Number of distinct `(lang, super_type)` keys.  Exposed for
+    /// diagnostics / tests.
+    #[allow(dead_code)]
+    pub fn super_keys_len(&self) -> usize {
+        self.by_super.len()
+    }
+
+    /// Resolve `(container, method)` widened by hierarchy lookup,
+    /// returning every concrete-implementer FuncKey whose container
+    /// is `container` itself OR a known sub-type of `container`.
+    ///
+    /// Behaviour:
+    /// * `container = None` → falls through to
+    ///   [`ClassMethodIndex::resolve`]'s name-only path; the
+    ///   hierarchy lookup is a no-op.
+    /// * `container = Some(c)` and `c` has no recorded sub-types →
+    ///   identical to `ClassMethodIndex::resolve(_, Some(c), _)`.
+    /// * `container = Some(c)` with sub-types `s1, s2, …` → union of
+    ///   `resolve(_, Some(c), m)` ∪ `resolve(_, Some(s1), m)` ∪
+    ///   `resolve(_, Some(s2), m)` ∪ ….  Dedup is applied.
+    ///
+    /// The returned `Vec` is a fresh allocation since the union is
+    /// computed across multiple borrowed slices in the underlying
+    /// [`ClassMethodIndex`] and cannot share storage with any of them.
+    /// Cost: O(k · m) where k = number of sub-types and m = average
+    /// candidates per `(container, method)` lookup; in practice k is
+    /// in the single digits.
+    pub fn resolve_with_hierarchy(
+        &self,
+        method_index: &ClassMethodIndex,
+        lang: Lang,
+        container: Option<&str>,
+        method: &str,
+    ) -> Vec<FuncKey> {
+        let Some(c) = container.filter(|s| !s.is_empty()) else {
+            return method_index.resolve(lang, None, method).to_vec();
+        };
+        let mut out: Vec<FuncKey> = Vec::new();
+        let push_unique = |dst: &mut Vec<FuncKey>, src: &[FuncKey]| {
+            for k in src {
+                if !dst.iter().any(|e| e == k) {
+                    dst.push(k.clone());
+                }
+            }
+        };
+        // Direct container match first.
+        push_unique(&mut out, method_index.resolve(lang, Some(c), method));
+        // Each known sub-type of `c`.
+        for sub in self.subs_of(lang, c) {
+            push_unique(
+                &mut out,
+                method_index.resolve(lang, Some(sub.as_str()), method),
+            );
+        }
+        out
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Call-graph construction
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -163,6 +437,16 @@ pub(crate) fn callee_container_hint(raw: &str) -> &str {
 ///   2. Same-language, arity-filtered, namespace-disambiguated lookup
 ///   3. On ambiguity: use two-segment qualified name to narrow candidates
 ///   4. Interop edges (explicit cross-language bridges)
+///
+/// **Phase 3 (typed call-graph devirtualisation):** when an SSA
+/// summary on the caller carries a `(call_ordinal, container_name)`
+/// entry in [`crate::summary::ssa_summary::SsaFuncSummary::typed_call_receivers`],
+/// the matching call site is first resolved via [`ClassMethodIndex`]
+/// restricted to the receiver-typed container.  An exact match (after
+/// arity filter) becomes the edge; a multi-candidate hit is fed back
+/// into the standard resolver via `CalleeQuery.receiver_type`; a
+/// zero-candidate hit falls through to today's name-only resolution
+/// so receiver-type misclassifications never silently drop edges.
 ///
 /// Unresolved and ambiguous callees are recorded for diagnostics but
 /// do **not** create edges.
@@ -175,6 +459,22 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
         let idx = graph.add_node(key.clone());
         index.insert(key.clone(), idx);
     }
+
+    // Phase 3: build a single `(lang, container, name) → candidates`
+    // index from the merged summaries.  Used below to devirtualise
+    // every method-call edge whose receiver has a recoverable type
+    // fact.  Cost is one allocation per FuncKey across the program;
+    // amortised against the per-call-site savings, this is a clear
+    // win on codebases with many same-name methods.
+    let method_index = ClassMethodIndex::build(summaries);
+
+    // Phase 6: build a sibling `(lang, super_type) → sub_types` index
+    // from every merged summary's `hierarchy_edges`.  Consumed below
+    // to fan out method-call edges to all known concrete
+    // implementers when a receiver's static type is a super-class /
+    // trait / interface.  Empty for languages without an extractor
+    // (Go, C) and for files with no inheritance / impl declarations.
+    let hierarchy = TypeHierarchyIndex::build(summaries);
 
     let mut unresolved_not_found = Vec::new();
     let mut unresolved_ambiguous = Vec::new();
@@ -197,6 +497,23 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
             None
         };
 
+        // Phase 3: per-caller `(call_ordinal → container_name)` map
+        // pulled from the caller's SSA summary, when one exists.
+        // Empty when the caller has no SSA summary (zero-param trivial
+        // bodies skip extraction unless they had typed receivers) or
+        // when no method call inside the caller had a recoverable
+        // receiver type.  Empty maps mean today's resolution path
+        // applies unchanged for every site in this caller.
+        let typed_receivers: HashMap<u32, &str> = summaries
+            .get_ssa(caller_key)
+            .map(|ssa| {
+                ssa.typed_call_receivers
+                    .iter()
+                    .map(|(ord, c)| (*ord, c.as_str()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         for site in &summary.callees {
             let raw_callee = site.name.as_str();
             // Use leaf name for the initial lookup (FuncKey.name is always leaf).
@@ -206,6 +523,132 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
             // Structured arity carried per call site — used to disambiguate
             // same-name/different-arity overloads during resolution.
             let arity_hint: Option<usize> = site.arity;
+
+            // Phase 3 devirtualisation entry point.  Only fires for
+            // method calls (sites carrying a structured receiver) when
+            // the caller's SSA summary recorded a typed container for
+            // this ordinal.  When `Some(container)` resolves to a
+            // single arity-matching target, we add the edge and skip
+            // the standard resolver.  When it resolves to multiple,
+            // we fall through with the container hinted as
+            // `receiver_type` so `resolve_callee`'s authoritative
+            // step-1 picks the right one.  When it resolves to zero,
+            // we fall through entirely so today's name-only path can
+            // still find the edge — preserving the
+            // "subset of today's targets, never a superset" rule
+            // even under type-fact misclassification.
+            let typed_container: Option<&str> = if site.receiver.is_some() {
+                typed_receivers.get(&site.ordinal).copied()
+            } else {
+                None
+            };
+
+            if let Some(container) = typed_container {
+                // Phase 6: resolve the typed container *plus* every
+                // known sub-type / impl in the hierarchy index, so a
+                // receiver typed as a super-class / trait / interface
+                // fans out to every concrete implementer.  When the
+                // hierarchy has no matching super-type entry, this
+                // collapses to the Phase 3 direct-container lookup.
+                let widened: Vec<FuncKey> = hierarchy.resolve_with_hierarchy(
+                    &method_index,
+                    caller_key.lang,
+                    Some(container),
+                    leaf,
+                );
+                let arity_filtered: Vec<&FuncKey> = widened
+                    .iter()
+                    .filter(|k| match arity_hint {
+                        Some(a) => k.arity == Some(a),
+                        None => true,
+                    })
+                    .collect();
+                if arity_filtered.len() == 1 {
+                    if let Some(&target_node) = index.get(arity_filtered[0]) {
+                        graph.add_edge(
+                            caller_node,
+                            target_node,
+                            CallEdge {
+                                call_site: raw_callee.to_string(),
+                            },
+                        );
+                    }
+                    continue;
+                }
+                // Phase 6: multiple arity-filtered candidates means
+                // genuine virtual dispatch through a super-type — fan
+                // out to *every* implementer.  This widens edges
+                // (correctly: the call genuinely may target any
+                // implementer at runtime) so SCC sizes may grow on
+                // codebases with deep inheritance hierarchies.
+                //
+                // Authoritative narrowing via `resolve_callee` only
+                // applies when the typed container is a *concrete*
+                // class (sub-types empty); we detect this by checking
+                // whether the direct method_index lookup would yield
+                // every arity-filtered candidate.  If hierarchy
+                // expansion produced extra candidates, fan out.
+                let direct_matches: Vec<&FuncKey> = method_index
+                    .resolve(caller_key.lang, Some(container), leaf)
+                    .iter()
+                    .filter(|k| match arity_hint {
+                        Some(a) => k.arity == Some(a),
+                        None => true,
+                    })
+                    .collect();
+                if !arity_filtered.is_empty() && arity_filtered.len() > direct_matches.len() {
+                    // Hierarchy fan-out path: add an edge per
+                    // implementer.  Continue past the
+                    // `resolve_callee` block so we don't double-add.
+                    for &target_key in &arity_filtered {
+                        if let Some(&target_node) = index.get(target_key) {
+                            graph.add_edge(
+                                caller_node,
+                                target_node,
+                                CallEdge {
+                                    call_site: raw_callee.to_string(),
+                                },
+                            );
+                        }
+                    }
+                    continue;
+                }
+                // Either zero matches (fall through to legacy path) or
+                // multiple matches on the direct container — let
+                // `resolve_callee` apply its authoritative
+                // receiver_type filter + tie-breakers.
+                if !arity_filtered.is_empty() {
+                    let caller_container: Option<&str> = if caller_key.container.is_empty() {
+                        None
+                    } else {
+                        Some(caller_key.container.as_str())
+                    };
+                    let resolution = summaries.resolve_callee(&CalleeQuery {
+                        name: leaf,
+                        caller_lang: caller_key.lang,
+                        caller_namespace: &caller_key.namespace,
+                        caller_container,
+                        receiver_type: Some(container),
+                        namespace_qualifier: site.qualifier.as_deref(),
+                        receiver_var: site.receiver.as_deref(),
+                        arity: arity_hint,
+                    });
+                    if let CalleeResolution::Resolved(key) = resolution
+                        && let Some(&target_node) = index.get(&key)
+                    {
+                        graph.add_edge(
+                            caller_node,
+                            target_node,
+                            CallEdge {
+                                call_site: raw_callee.to_string(),
+                            },
+                        );
+                        continue;
+                    }
+                    // Authoritative receiver_type miss with multiple
+                    // bare candidates: fall through to today's path.
+                }
+            }
 
             // Rust callers with a module-qualified call (no receiver) go
             // through the `use`-map aware resolver first.  When the call has
@@ -1569,6 +2012,821 @@ mod tests {
         let caller = make_summary("main", "src/lib.rs", "rust", 0, vec!["helper"]);
         let gs = merge_summaries(vec![helper, caller], None);
         let cg = build_call_graph(&gs, &[]);
+        assert_eq!(cg.graph.edge_count(), 1);
+        assert!(cg.unresolved_not_found.is_empty());
+        assert!(cg.unresolved_ambiguous.is_empty());
+    }
+
+    // ── ClassMethodIndex (Phase 1: structural index, no behaviour wiring) ──
+
+    /// Helper: `(name, container)` pairs in the same file.  Builds two
+    /// summaries with the same leaf name on different containers so the
+    /// container-keyed map has a non-trivial discriminator to preserve.
+    fn make_method_summary(
+        name: &str,
+        container: &str,
+        file_path: &str,
+        lang: &str,
+        param_count: usize,
+    ) -> FuncSummary {
+        let mut s = make_summary(name, file_path, lang, param_count, vec![]);
+        s.container = container.into();
+        s
+    }
+
+    #[test]
+    fn class_method_index_disambiguates_same_name_across_containers() {
+        // Two `findById` definitions on different classes in different
+        // files.  The container-keyed lookup must return only the
+        // container-matching candidate; the bare-name lookup must
+        // return both.
+        let repo = make_method_summary("findById", "Repository", "src/repo.rs", "rust", 1);
+        let cache = make_method_summary("findById", "Cache", "src/cache.rs", "rust", 1);
+
+        let gs = merge_summaries(vec![repo, cache], None);
+        let idx = ClassMethodIndex::build(&gs);
+
+        let repo_hits = idx.resolve(Lang::Rust, Some("Repository"), "findById");
+        assert_eq!(
+            repo_hits.len(),
+            1,
+            "Repository::findById should resolve to exactly one target"
+        );
+        assert_eq!(repo_hits[0].container, "Repository");
+
+        let cache_hits = idx.resolve(Lang::Rust, Some("Cache"), "findById");
+        assert_eq!(cache_hits.len(), 1);
+        assert_eq!(cache_hits[0].container, "Cache");
+
+        // Bare-name lookup keeps both candidates — fallback behaviour.
+        let bare_hits = idx.resolve(Lang::Rust, None, "findById");
+        assert_eq!(
+            bare_hits.len(),
+            2,
+            "bare-name lookup should keep both same-name candidates"
+        );
+    }
+
+    #[test]
+    fn class_method_index_falls_back_to_name_when_container_unknown() {
+        // `None` container or empty-string container both route to
+        // the bare-name index — equivalent to today's name-only edge
+        // insertion.
+        let svc = make_method_summary("process", "OrderService", "src/svc.rs", "rust", 1);
+        let helper = make_summary("process", "src/util.rs", "rust", 1, vec![]);
+
+        let gs = merge_summaries(vec![svc, helper], None);
+        let idx = ClassMethodIndex::build(&gs);
+
+        // None → bare-name list (both targets).
+        let none_hits = idx.resolve(Lang::Rust, None, "process");
+        assert_eq!(none_hits.len(), 2);
+
+        // Empty string container behaves identically to None — it is
+        // not stored under any container key.
+        let empty_hits = idx.resolve(Lang::Rust, Some(""), "process");
+        assert_eq!(empty_hits.len(), 2);
+
+        // Container `"OrderService"` narrows to the method only; the
+        // free-function helper lives under empty container and does
+        // not appear here.
+        let cont_hits = idx.resolve(Lang::Rust, Some("OrderService"), "process");
+        assert_eq!(cont_hits.len(), 1);
+        assert_eq!(cont_hits[0].container, "OrderService");
+    }
+
+    #[test]
+    fn class_method_index_empty_for_unknown_method() {
+        let svc = make_method_summary("findById", "Repository", "src/repo.rs", "rust", 1);
+        let gs = merge_summaries(vec![svc], None);
+        let idx = ClassMethodIndex::build(&gs);
+
+        // Wrong method name on the right container → empty.
+        assert!(
+            idx.resolve(Lang::Rust, Some("Repository"), "findByName")
+                .is_empty()
+        );
+        // Right method, wrong container → empty (no fallback to bare-name
+        // when a container is supplied — that's the whole devirtualisation
+        // promise).
+        assert!(
+            idx.resolve(Lang::Rust, Some("OtherClass"), "findById")
+                .is_empty()
+        );
+        // Unknown method name with no container → empty.
+        assert!(idx.resolve(Lang::Rust, None, "doesNotExist").is_empty());
+    }
+
+    #[test]
+    fn class_method_index_partitions_by_language() {
+        // Same `(container, name)` in Java and TypeScript → must not
+        // alias.  Cross-language calls are forbidden by the rest of the
+        // pipeline; the index reflects that partition.
+        let java_repo = make_method_summary("findById", "Repository", "Repo.java", "java", 1);
+        let ts_repo = make_method_summary("findById", "Repository", "repo.ts", "typescript", 1);
+
+        let gs = merge_summaries(vec![java_repo, ts_repo], None);
+        let idx = ClassMethodIndex::build(&gs);
+
+        let java_hits = idx.resolve(Lang::Java, Some("Repository"), "findById");
+        assert_eq!(java_hits.len(), 1);
+        assert_eq!(java_hits[0].lang, Lang::Java);
+
+        let ts_hits = idx.resolve(Lang::TypeScript, Some("Repository"), "findById");
+        assert_eq!(ts_hits.len(), 1);
+        assert_eq!(ts_hits[0].lang, Lang::TypeScript);
+    }
+
+    #[test]
+    fn class_method_index_handles_arity_overloads() {
+        // Two arity overloads on the same container are both kept under
+        // the same `(container, name)` key — arity narrowing is the
+        // caller's responsibility (today's resolver also does this).
+        let one = make_method_summary("encode", "Codec", "src/codec.rs", "rust", 1);
+        let two = make_method_summary("encode", "Codec", "src/codec.rs", "rust", 2);
+
+        let gs = merge_summaries(vec![one, two], None);
+        let idx = ClassMethodIndex::build(&gs);
+
+        let hits = idx.resolve(Lang::Rust, Some("Codec"), "encode");
+        assert_eq!(
+            hits.len(),
+            2,
+            "arity overloads should both appear under the same container key"
+        );
+    }
+
+    // ── Phase 3: devirtualised edge insertion via typed_call_receivers ──
+
+    /// Two `findById` definitions live on different containers in
+    /// different files.  A caller whose SSA summary records the
+    /// receiver type as `"Repository"` for the relevant ordinal must
+    /// produce an edge **only** to `Repository::findById`, not to
+    /// `Cache::findById`.  Without typed_call_receivers, today's
+    /// receiver_var-based resolution would have to guess between the
+    /// two and would record the call as ambiguous (no edge at all).
+    #[test]
+    fn typed_call_receivers_devirtualises_method_call() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        let repo = make_method_summary("findById", "Repository", "src/repo.rs", "rust", 1);
+        let cache = make_method_summary("findById", "Cache", "src/cache.rs", "rust", 1);
+        // Caller's SSA summary will record `(ordinal=0, "Repository")`
+        // for the single method call below.
+        let caller = summary_with_sites(
+            "lookup",
+            "src/main.rs",
+            "rust",
+            0,
+            vec![CalleeSite {
+                name: "findById".into(),
+                arity: Some(1),
+                receiver: Some("repo".into()),
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![repo, cache, caller], None);
+
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/main.rs".into(),
+            name: "lookup".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                typed_call_receivers: vec![(0, "Repository".to_string())],
+                ..Default::default()
+            },
+        );
+
+        let cg = build_call_graph(&gs, &[]);
+
+        let repo_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/repo.rs".into(),
+            container: "Repository".into(),
+            name: "findById".into(),
+            arity: Some(1),
+            ..Default::default()
+        };
+        let caller_node = cg.index[&caller_key];
+        let repo_node = cg.index[&repo_key];
+
+        let edges: Vec<_> = cg.graph.edges(caller_node).collect();
+        assert_eq!(
+            edges.len(),
+            1,
+            "typed receiver should resolve to exactly one target; got {edges:?}"
+        );
+        assert_eq!(
+            edges[0].target(),
+            repo_node,
+            "edge must point to Repository::findById, not Cache::findById"
+        );
+        assert!(cg.unresolved_ambiguous.is_empty());
+    }
+
+    /// Negative control: when typed_call_receivers points at a
+    /// container that doesn't define the method, devirtualisation
+    /// must NOT silently drop the edge.  We fall through to today's
+    /// name-only resolution so a stale or misclassified type fact
+    /// can never cause regression.
+    #[test]
+    fn typed_call_receivers_falls_through_on_zero_match() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        // Single `process` on `Worker`.  No `process` exists on
+        // `Other` — that's the receiver type the caller's SSA
+        // summary will (incorrectly) record.
+        let worker = make_method_summary("process", "Worker", "src/worker.rs", "rust", 1);
+        let caller = summary_with_sites(
+            "drive",
+            "src/main.rs",
+            "rust",
+            0,
+            vec![CalleeSite {
+                name: "process".into(),
+                arity: Some(1),
+                receiver: Some("worker".into()),
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![worker, caller], None);
+
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/main.rs".into(),
+            name: "drive".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                // Wrong receiver type — `Other::process` does not exist.
+                typed_call_receivers: vec![(0, "Other".to_string())],
+                ..Default::default()
+            },
+        );
+
+        let cg = build_call_graph(&gs, &[]);
+
+        let caller_node = cg.index[&caller_key];
+        let edges: Vec<_> = cg.graph.edges(caller_node).collect();
+        // Today's name-only resolution finds the unique `process`
+        // candidate (Worker::process) and records the edge.  The
+        // typed_call_receivers miss must not have suppressed it.
+        assert_eq!(
+            edges.len(),
+            1,
+            "stale/wrong type fact must fall through to today's resolution; \
+             got {edges:?} (cf. ambiguous: {:?})",
+            cg.unresolved_ambiguous,
+        );
+    }
+
+    // ── Phase 6: TypeHierarchyIndex ───────────────────────────────────
+
+    /// Helper: build a hierarchy index from a list of
+    /// `(lang, sub, super)` edges by injecting them onto a single
+    /// per-file FuncSummary.  Mirrors the production path:
+    /// `merge_summaries` would receive these via
+    /// `FuncSummary::hierarchy_edges`.
+    fn hierarchy_from_edges(edges: Vec<(Lang, &str, &str)>) -> TypeHierarchyIndex {
+        let mut summary = make_summary("dummy", "dummy.rs", "rust", 0, vec![]);
+        // The lang on the FuncSummary is per-edge, so we group by
+        // language and produce one summary per language.
+        let mut by_lang: std::collections::HashMap<Lang, Vec<(String, String)>> =
+            std::collections::HashMap::new();
+        for (lang, sub, sup) in edges {
+            by_lang
+                .entry(lang)
+                .or_default()
+                .push((sub.to_string(), sup.to_string()));
+        }
+        let _ = &mut summary; // silence the dummy
+        let mut all: Vec<FuncSummary> = Vec::new();
+        for (lang, edges) in by_lang {
+            let slug = match lang {
+                Lang::Rust => "rust",
+                Lang::Java => "java",
+                Lang::Python => "python",
+                Lang::TypeScript => "typescript",
+                Lang::JavaScript => "javascript",
+                Lang::Go => "go",
+                Lang::Php => "php",
+                Lang::Ruby => "ruby",
+                Lang::C => "c",
+                Lang::Cpp => "cpp",
+            };
+            let mut s = make_summary("dummy", "dummy.x", slug, 0, vec![]);
+            s.hierarchy_edges = edges;
+            all.push(s);
+        }
+        let gs = merge_summaries(all, None);
+        TypeHierarchyIndex::build(&gs)
+    }
+
+    /// B-1: Round-trip — a hierarchy built from a small set of edges
+    /// answers `subs_of` correctly and `super_keys_len` matches the
+    /// distinct super count.
+    #[test]
+    fn b1_type_hierarchy_index_round_trip() {
+        let h = hierarchy_from_edges(vec![
+            (Lang::Java, "UserRepo", "Repository"),
+            (Lang::Java, "CacheRepo", "Repository"),
+            (Lang::Java, "Derived", "Base"),
+        ]);
+        let mut subs: Vec<&str> = h
+            .subs_of(Lang::Java, "Repository")
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        subs.sort();
+        assert_eq!(subs, vec!["CacheRepo", "UserRepo"]);
+        assert_eq!(h.subs_of(Lang::Java, "Base"), &["Derived".to_string()]);
+        assert_eq!(h.subs_of(Lang::Java, "Unknown"), &[] as &[String]);
+        assert_eq!(h.super_keys_len(), 2);
+    }
+
+    /// B-2: Java interface dispatch — `Repository r; r.findById(...)`
+    /// fans out to every concrete implementer's `findById`.
+    #[test]
+    fn b2_java_interface_dispatch_fans_out_to_all_impls() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        let user_repo = make_method_summary("findById", "UserRepo", "src/UserRepo.java", "java", 1);
+        let cache_repo =
+            make_method_summary("findById", "CacheRepo", "src/CacheRepo.java", "java", 1);
+        let mut iface_marker = make_method_summary(
+            "__placeholder",
+            "Repository",
+            "src/Repository.java",
+            "java",
+            0,
+        );
+        iface_marker.hierarchy_edges = vec![
+            ("UserRepo".to_string(), "Repository".to_string()),
+            ("CacheRepo".to_string(), "Repository".to_string()),
+        ];
+        let caller = summary_with_sites(
+            "lookup",
+            "src/main.java",
+            "java",
+            0,
+            vec![CalleeSite {
+                name: "findById".into(),
+                arity: Some(1),
+                receiver: Some("r".into()),
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![user_repo, cache_repo, iface_marker, caller], None);
+        let caller_key = FuncKey {
+            lang: Lang::Java,
+            namespace: "src/main.java".into(),
+            name: "lookup".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                typed_call_receivers: vec![(0, "Repository".to_string())],
+                ..Default::default()
+            },
+        );
+
+        let cg = build_call_graph(&gs, &[]);
+        let caller_node = cg.index[&caller_key];
+        let targets: Vec<&FuncKey> = cg
+            .graph
+            .edges(caller_node)
+            .map(|e| &cg.graph[e.target()])
+            .collect();
+        let containers: Vec<&str> = targets.iter().map(|k| k.container.as_str()).collect();
+        assert!(
+            containers.contains(&"UserRepo") && containers.contains(&"CacheRepo"),
+            "B-2: edges must reach BOTH UserRepo::findById and CacheRepo::findById; got {targets:?}"
+        );
+        assert_eq!(targets.len(), 2, "B-2: exactly two fan-out edges expected");
+    }
+
+    /// B-3: Java extends — `Base b; b.foo()` reaches Base AND Derived
+    /// when Derived extends Base.  Pins inheritance fan-out separately
+    /// from interface implements.
+    #[test]
+    fn b3_java_extends_fans_out_to_subclass() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        let base = make_method_summary("foo", "Base", "src/Base.java", "java", 0);
+        let mut derived = make_method_summary("foo", "Derived", "src/Derived.java", "java", 0);
+        derived.hierarchy_edges = vec![("Derived".to_string(), "Base".to_string())];
+        let caller = summary_with_sites(
+            "go",
+            "src/main.java",
+            "java",
+            0,
+            vec![CalleeSite {
+                name: "foo".into(),
+                arity: Some(0),
+                receiver: Some("b".into()),
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![base, derived, caller], None);
+        let caller_key = FuncKey {
+            lang: Lang::Java,
+            namespace: "src/main.java".into(),
+            name: "go".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                typed_call_receivers: vec![(0, "Base".to_string())],
+                ..Default::default()
+            },
+        );
+
+        let cg = build_call_graph(&gs, &[]);
+        let caller_node = cg.index[&caller_key];
+        let targets: Vec<&FuncKey> = cg
+            .graph
+            .edges(caller_node)
+            .map(|e| &cg.graph[e.target()])
+            .collect();
+        let containers: Vec<&str> = targets.iter().map(|k| k.container.as_str()).collect();
+        assert!(
+            containers.contains(&"Base"),
+            "B-3: edge must reach Base::foo; got {targets:?}"
+        );
+        assert!(
+            containers.contains(&"Derived"),
+            "B-3: edge must reach Derived::foo; got {targets:?}"
+        );
+    }
+
+    /// B-4: Rust trait dispatch — `Box<dyn Repo>; r.find(...)` reaches
+    /// every `impl Repo for X` `find`.
+    #[test]
+    fn b4_rust_trait_dispatch_fans_out_to_impls() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        let user_repo = make_method_summary("find", "UserRepo", "src/user_repo.rs", "rust", 1);
+        let cache_repo = make_method_summary("find", "CacheRepo", "src/cache_repo.rs", "rust", 1);
+        let mut hierarchy_carrier = make_method_summary("__h", "Repo", "src/repo.rs", "rust", 0);
+        hierarchy_carrier.hierarchy_edges = vec![
+            ("UserRepo".to_string(), "Repo".to_string()),
+            ("CacheRepo".to_string(), "Repo".to_string()),
+        ];
+        let caller = summary_with_sites(
+            "lookup",
+            "src/main.rs",
+            "rust",
+            0,
+            vec![CalleeSite {
+                name: "find".into(),
+                arity: Some(1),
+                receiver: Some("r".into()),
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![user_repo, cache_repo, hierarchy_carrier, caller], None);
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/main.rs".into(),
+            name: "lookup".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                typed_call_receivers: vec![(0, "Repo".to_string())],
+                ..Default::default()
+            },
+        );
+
+        let cg = build_call_graph(&gs, &[]);
+        let caller_node = cg.index[&caller_key];
+        let targets: Vec<&FuncKey> = cg
+            .graph
+            .edges(caller_node)
+            .map(|e| &cg.graph[e.target()])
+            .collect();
+        let containers: Vec<&str> = targets.iter().map(|k| k.container.as_str()).collect();
+        assert!(
+            containers.contains(&"UserRepo") && containers.contains(&"CacheRepo"),
+            "B-4: edges must fan out to both impls; got {targets:?}"
+        );
+    }
+
+    /// B-7: Empty hierarchy — when the typed container has no recorded
+    /// sub-types, `resolve_with_hierarchy` collapses to the direct
+    /// `ClassMethodIndex::resolve` lookup.  Pin: Phase 6 is a no-op
+    /// when no inheritance was extracted.
+    #[test]
+    fn b7_empty_hierarchy_falls_back_to_single_container() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        let repo = make_method_summary("findById", "Repository", "src/repo.rs", "rust", 1);
+        let cache = make_method_summary("findById", "Cache", "src/cache.rs", "rust", 1);
+        let caller = summary_with_sites(
+            "lookup",
+            "src/main.rs",
+            "rust",
+            0,
+            vec![CalleeSite {
+                name: "findById".into(),
+                arity: Some(1),
+                receiver: Some("repo".into()),
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![repo, cache, caller], None);
+        // No hierarchy_edges set anywhere — Repository has no
+        // sub-types, so devirtualisation collapses to direct match.
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/main.rs".into(),
+            name: "lookup".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                typed_call_receivers: vec![(0, "Repository".to_string())],
+                ..Default::default()
+            },
+        );
+
+        let cg = build_call_graph(&gs, &[]);
+        let caller_node = cg.index[&caller_key];
+        let targets: Vec<&FuncKey> = cg
+            .graph
+            .edges(caller_node)
+            .map(|e| &cg.graph[e.target()])
+            .collect();
+        assert_eq!(targets.len(), 1, "B-7: empty hierarchy → single edge");
+        assert_eq!(targets[0].container, "Repository");
+    }
+
+    /// B-8: Concrete sub-type — when the receiver is typed as the
+    /// concrete sub-class (not the super-type), no hierarchy
+    /// expansion fires.  Pin: Phase 6 narrows on concrete types
+    /// exactly like Phase 3.
+    #[test]
+    fn b8_concrete_subtype_does_not_widen() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        let user_repo = make_method_summary("findById", "UserRepo", "src/user_repo.rs", "rust", 1);
+        let cache_repo =
+            make_method_summary("findById", "CacheRepo", "src/cache_repo.rs", "rust", 1);
+        let mut h = make_method_summary("__h", "Repo", "src/repo.rs", "rust", 0);
+        h.hierarchy_edges = vec![
+            ("UserRepo".to_string(), "Repo".to_string()),
+            ("CacheRepo".to_string(), "Repo".to_string()),
+        ];
+        let caller = summary_with_sites(
+            "lookup",
+            "src/main.rs",
+            "rust",
+            0,
+            vec![CalleeSite {
+                name: "findById".into(),
+                arity: Some(1),
+                receiver: Some("r".into()),
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![user_repo, cache_repo, h, caller], None);
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/main.rs".into(),
+            name: "lookup".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        // Caller types the receiver as `UserRepo` (concrete).
+        // `subs_of(Lang::Rust, "UserRepo")` returns `[]` so the
+        // hierarchy expansion is a no-op and only `UserRepo::findById`
+        // is reached.
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                typed_call_receivers: vec![(0, "UserRepo".to_string())],
+                ..Default::default()
+            },
+        );
+
+        let cg = build_call_graph(&gs, &[]);
+        let caller_node = cg.index[&caller_key];
+        let targets: Vec<&FuncKey> = cg
+            .graph
+            .edges(caller_node)
+            .map(|e| &cg.graph[e.target()])
+            .collect();
+        assert_eq!(
+            targets.len(),
+            1,
+            "B-8: concrete sub-type must not fan out; got {targets:?}"
+        );
+        assert_eq!(targets[0].container, "UserRepo");
+    }
+
+    /// B-9: Diamond — multiple impls sharing a super-type, dedup
+    /// applied per call site so each FuncKey is edged at most once.
+    #[test]
+    fn b9_diamond_dedup_one_edge_per_funckey() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        let a = make_method_summary("doIt", "A", "src/A.java", "java", 0);
+        let b = make_method_summary("doIt", "B", "src/B.java", "java", 0);
+        // A and B both extend Iface in two separate file emissions —
+        // hierarchy_edges duplicates across files; dedup expected.
+        let mut h1 = make_method_summary("__h", "Iface", "src/I1.java", "java", 0);
+        h1.hierarchy_edges = vec![
+            ("A".to_string(), "Iface".to_string()),
+            ("B".to_string(), "Iface".to_string()),
+        ];
+        let mut h2 = make_method_summary("__h2", "Iface", "src/I2.java", "java", 0);
+        h2.hierarchy_edges = vec![
+            ("A".to_string(), "Iface".to_string()),
+            ("B".to_string(), "Iface".to_string()),
+        ];
+        let caller = summary_with_sites(
+            "go",
+            "src/main.java",
+            "java",
+            0,
+            vec![CalleeSite {
+                name: "doIt".into(),
+                arity: Some(0),
+                receiver: Some("x".into()),
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![a, b, h1, h2, caller], None);
+        let caller_key = FuncKey {
+            lang: Lang::Java,
+            namespace: "src/main.java".into(),
+            name: "go".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                typed_call_receivers: vec![(0, "Iface".to_string())],
+                ..Default::default()
+            },
+        );
+
+        let cg = build_call_graph(&gs, &[]);
+        let caller_node = cg.index[&caller_key];
+        let targets: Vec<&FuncKey> = cg
+            .graph
+            .edges(caller_node)
+            .map(|e| &cg.graph[e.target()])
+            .collect();
+        // Each unique implementer reached at most once.
+        let containers: std::collections::HashSet<&str> =
+            targets.iter().map(|k| k.container.as_str()).collect();
+        assert_eq!(
+            containers.len(),
+            targets.len(),
+            "B-9: dedup must give one edge per FuncKey; got {targets:?}"
+        );
+        assert!(containers.contains("A") && containers.contains("B"));
+    }
+
+    /// B-13: Stale hierarchy edge — sub-type referenced by an edge
+    /// no longer has a matching FuncKey.  Resolver must not panic
+    /// and must still resolve to whatever IS present.
+    #[test]
+    fn b13_stale_subtype_no_panic() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        // `Base` exists; `Derived` referenced by hierarchy_edges but
+        // its `foo` is never defined.  Phase 6 must not panic and
+        // must still emit the Base::foo edge.
+        let base = make_method_summary("foo", "Base", "src/Base.java", "java", 0);
+        let mut h = make_method_summary("__h", "X", "src/X.java", "java", 0);
+        h.hierarchy_edges = vec![("Derived".to_string(), "Base".to_string())];
+        let caller = summary_with_sites(
+            "go",
+            "src/main.java",
+            "java",
+            0,
+            vec![CalleeSite {
+                name: "foo".into(),
+                arity: Some(0),
+                receiver: Some("b".into()),
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![base, h, caller], None);
+        let caller_key = FuncKey {
+            lang: Lang::Java,
+            namespace: "src/main.java".into(),
+            name: "go".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                typed_call_receivers: vec![(0, "Base".to_string())],
+                ..Default::default()
+            },
+        );
+
+        // Build must not panic.
+        let cg = build_call_graph(&gs, &[]);
+        let caller_node = cg.index[&caller_key];
+        let targets: Vec<&FuncKey> = cg
+            .graph
+            .edges(caller_node)
+            .map(|e| &cg.graph[e.target()])
+            .collect();
+        assert!(
+            targets
+                .iter()
+                .any(|k| k.container == "Base" && k.name == "foo"),
+            "B-13: stale Derived must not block Base::foo edge; got {targets:?}"
+        );
+    }
+
+    /// Free-function calls (no receiver on the CalleeSite) must
+    /// never trigger the devirtualisation path, even if some bogus
+    /// typed_call_receivers entry happened to match the ordinal.
+    /// Regression guard: today's namespace + use-map resolution
+    /// stays in charge for free-function calls.
+    #[test]
+    fn typed_call_receivers_skips_free_function_sites() {
+        use crate::summary::ssa_summary::SsaFuncSummary;
+
+        let helper = make_summary("helper", "src/lib.rs", "rust", 0, vec![]);
+        let caller = summary_with_sites(
+            "main",
+            "src/lib.rs",
+            "rust",
+            0,
+            // No receiver on the call site → free function.
+            vec![CalleeSite {
+                name: "helper".into(),
+                arity: Some(0),
+                receiver: None,
+                ordinal: 0,
+                ..Default::default()
+            }],
+        );
+
+        let mut gs = merge_summaries(vec![helper, caller], None);
+
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/lib.rs".into(),
+            name: "main".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        // A typed_call_receivers entry with ordinal=0 — but since the
+        // site has receiver=None, this MUST be ignored.
+        gs.insert_ssa(
+            caller_key.clone(),
+            SsaFuncSummary {
+                typed_call_receivers: vec![(0, "FakeContainer".to_string())],
+                ..Default::default()
+            },
+        );
+
+        let cg = build_call_graph(&gs, &[]);
+        // Standard same-namespace resolution still finds `helper`.
         assert_eq!(cg.graph.edge_count(), 1);
         assert!(cg.unresolved_not_found.is_empty());
         assert!(cg.unresolved_ambiguous.is_empty());

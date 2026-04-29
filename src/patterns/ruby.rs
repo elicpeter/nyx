@@ -11,7 +11,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Code execution ─────────────────────────────────────────
     Pattern {
         id: "rb.code_exec.eval",
-        description: "Kernel#eval — dynamic code execution",
+        description: "Kernel#eval runs dynamic code",
         query: r#"(call (identifier) @id (#eq? @id "eval")) @vuln"#,
         severity: Severity::High,
         tier: PatternTier::A,
@@ -20,7 +20,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "rb.code_exec.instance_eval",
-        description: "instance_eval — evaluates string in object context",
+        description: "instance_eval evaluates a string in object context",
         query: r#"(call
                      method: (identifier) @id (#eq? @id "instance_eval"))
                    @vuln"#,
@@ -31,7 +31,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "rb.code_exec.class_eval",
-        description: "class_eval / module_eval — evaluates string in class context",
+        description: "class_eval / module_eval evaluates a string in class context",
         query: r#"(call
                      method: (identifier) @id (#match? @id "^(class_eval|module_eval)$"))
                    @vuln"#,
@@ -53,7 +53,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Shell execution ─────────────────────────────────────────
     Pattern {
         id: "rb.cmdi.system_interp",
-        description: "system/exec call — command execution risk",
+        description: "system/exec call runs a command",
         query: r#"(call
                      method: (identifier) @m (#match? @m "^(system|exec)$"))
                    @vuln"#,
@@ -65,7 +65,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Deserialization ────────────────────────────────────────
     Pattern {
         id: "rb.deser.yaml_load",
-        description: "YAML.load — arbitrary object deserialization (use safe_load instead)",
+        description: "YAML.load deserializes arbitrary objects (use safe_load instead)",
         query: r#"(call
                      receiver: (constant) @recv (#match? @recv "^(YAML|Psych)$")
                      method: (identifier) @m (#eq? @m "load"))
@@ -77,7 +77,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "rb.deser.marshal_load",
-        description: "Marshal.load — arbitrary Ruby object deserialization",
+        description: "Marshal.load deserializes arbitrary Ruby objects",
         query: r#"(call
                      receiver: (constant) @recv (#eq? @recv "Marshal")
                      method: (identifier) @m (#eq? @m "load"))
@@ -90,7 +90,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Reflection ─────────────────────────────────────────────
     Pattern {
         id: "rb.reflection.send_dynamic",
-        description: "send() with non-symbol argument — arbitrary method dispatch",
+        description: "send() with a non-symbol argument is arbitrary method dispatch",
         query: r#"(call
                      method: (identifier) @m (#eq? @m "send")
                      arguments: (argument_list
@@ -103,7 +103,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "rb.reflection.constantize",
-        description: "constantize / safe_constantize — dynamic class resolution",
+        description: "constantize / safe_constantize performs dynamic class resolution",
         query: r#"(call
                      method: (identifier) @m (#match? @m "^(constantize|safe_constantize)$"))
                    @vuln"#,
@@ -115,7 +115,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: SSRF ───────────────────────────────────────────────────
     Pattern {
         id: "rb.ssrf.open_uri",
-        description: "Kernel#open with HTTP URL — SSRF via open-uri",
+        description: "Kernel#open with an HTTP URL is an SSRF sink via open-uri",
         query: r#"(call
                      method: (identifier) @m (#eq? @m "open")
                      arguments: (argument_list
@@ -129,7 +129,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Crypto ─────────────────────────────────────────────────
     Pattern {
         id: "rb.crypto.md5",
-        description: "Digest::MD5 — weak hash algorithm",
+        description: "Digest::MD5 is a weak hash algorithm",
         query: r#"(scope_resolution
                      name: (constant) @c (#eq? @c "MD5"))
                    @vuln"#,

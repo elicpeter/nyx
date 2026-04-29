@@ -215,6 +215,8 @@ mod tests {
             value_defs: defs,
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
+            field_interner: crate::ssa::ir::FieldInterner::default(),
+            field_writes: std::collections::HashMap::new(),
         }
     }
 

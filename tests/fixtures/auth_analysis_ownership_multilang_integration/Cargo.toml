@@ -5,3 +5,9 @@ edition = "2021"
 
 [dependencies]
 actix-web = "4"
+
+# Sources live at the crate root rather than under src/, so cargo-machete's
+# manifest scan misses the `use` lines and flags this as unused. Nyx scans
+# the .rs files directly; the dep is real.
+[package.metadata.cargo-machete]
+ignored = ["actix-web"]

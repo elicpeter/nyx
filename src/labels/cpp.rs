@@ -34,13 +34,19 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     // Type conversion sanitizers (C++ STL forms).
+    // The full `std::sto*` family (including 64-bit `*ll`/`*ull` and `*ld`)
+    // returns an integral or floating value; downstream string-injection
+    // caps no longer apply.
     LabelRule {
         matchers: &[
             "std::stoi",
             "std::stol",
+            "std::stoll",
             "std::stoul",
+            "std::stoull",
             "std::stof",
             "std::stod",
+            "std::stold",
         ],
         label: DataLabel::Sanitizer(Cap::all()),
         case_sensitive: false,
@@ -111,9 +117,19 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "lambda_expression"     => Kind::Function,
     // Namespace bodies and C++ class bodies descend as plain Blocks so the
     // CFG builder can reach the nested function_definitions/lambdas inside
-    // and extract them as separate bodies.
+    // and extract them as separate bodies.  Without these, a
+    // `class_specifier` / `struct_specifier` falls through to the
+    // generic `_ =>` arm in `build_sub`, which records a leaf `Seq`
+    // node and never walks the body — so inline member-function
+    // definitions (and methods of nested classes) are silently dropped.
     "declaration_list"      => Kind::Block,
     "field_declaration_list" => Kind::Block,
+    "class_specifier"        => Kind::Block,
+    "struct_specifier"       => Kind::Block,
+    "union_specifier"        => Kind::Block,
+    "enum_specifier"         => Kind::Block,
+    "template_declaration"   => Kind::Block,
+    "linkage_specification"  => Kind::Block,
 
     // data-flow
     "call_expression"       => Kind::CallFn,

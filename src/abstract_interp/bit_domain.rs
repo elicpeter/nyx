@@ -570,4 +570,158 @@ mod tests {
     fn is_non_negative_unknown() {
         assert!(!BitFact::top().is_non_negative());
     }
+
+    // ── Additional lattice algebra laws ──────────────────────────────
+
+    fn sample_bits() -> Vec<BitFact> {
+        vec![
+            BitFact::bottom(),
+            BitFact::top(),
+            BitFact::from_const(0),
+            BitFact::from_const(1),
+            BitFact::from_const(-1),
+            BitFact::from_const(0xFF),
+            BitFact::from_const(i64::MIN),
+            BitFact::from_const(i64::MAX),
+        ]
+    }
+
+    #[test]
+    fn join_associative_bit() {
+        let xs = sample_bits();
+        for a in &xs {
+            for b in &xs {
+                for c in &xs {
+                    let lhs = a.join(b).join(c);
+                    let rhs = a.join(&b.join(c));
+                    assert_eq!(
+                        lhs, rhs,
+                        "join not associative for {:?}, {:?}, {:?}",
+                        a, b, c
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn meet_idempotent_bit() {
+        for a in sample_bits() {
+            assert_eq!(a.meet(&a), a, "meet not idempotent for {:?}", a);
+        }
+    }
+
+    #[test]
+    fn meet_associative_bit() {
+        let xs = sample_bits();
+        for a in &xs {
+            for b in &xs {
+                for c in &xs {
+                    let lhs = a.meet(b).meet(c);
+                    let rhs = a.meet(&b.meet(c));
+                    assert_eq!(
+                        lhs, rhs,
+                        "meet not associative for {:?}, {:?}, {:?}",
+                        a, b, c
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn meet_top_identity_bit() {
+        for a in sample_bits() {
+            assert_eq!(a.meet(&BitFact::top()), a, "x ⊓ ⊤ failed for {:?}", a);
+        }
+    }
+
+    #[test]
+    fn meet_bottom_absorbing_bit() {
+        for a in sample_bits() {
+            assert_eq!(
+                a.meet(&BitFact::bottom()),
+                BitFact::bottom(),
+                "x ⊓ ⊥ failed for {:?}",
+                a
+            );
+        }
+    }
+
+    #[test]
+    fn join_top_absorbing_bit() {
+        for a in sample_bits() {
+            assert_eq!(
+                a.join(&BitFact::top()),
+                BitFact::top(),
+                "x ⊔ ⊤ failed for {:?}",
+                a
+            );
+        }
+    }
+
+    #[test]
+    fn widen_idempotent_bit() {
+        for a in sample_bits() {
+            assert_eq!(a.widen(&a), a, "widen(x, x) failed for {:?}", a);
+        }
+    }
+
+    /// **Soundness**: `widen(a, b) ⊒ join(a, b)` for the bit lattice.
+    #[test]
+    fn widen_over_approximates_join_bit() {
+        let xs = sample_bits();
+        for a in &xs {
+            for b in &xs {
+                let j = a.join(b);
+                let w = a.widen(b);
+                assert!(
+                    j.leq(&w),
+                    "widen({:?}, {:?}) = {:?} does not over-approx join = {:?}",
+                    a,
+                    b,
+                    w,
+                    j
+                );
+            }
+        }
+    }
+
+    /// `a ⊓ b ⊑ a` and `a ⊓ b ⊑ b` — meet is the greatest lower bound.
+    #[test]
+    fn meet_is_lower_bound_bit() {
+        let xs = sample_bits();
+        for a in &xs {
+            for b in &xs {
+                let m = a.meet(b);
+                assert!(m.leq(a), "a ⊓ b ⊑ a failed for {:?}, {:?}", a, b);
+                assert!(m.leq(b), "a ⊓ b ⊑ b failed for {:?}, {:?}", a, b);
+            }
+        }
+    }
+
+    /// `a ⊑ a ⊔ b` and `b ⊑ a ⊔ b` — join is the least upper bound.
+    #[test]
+    fn join_is_upper_bound_bit() {
+        let xs = sample_bits();
+        for a in &xs {
+            for b in &xs {
+                let j = a.join(b);
+                assert!(a.leq(&j), "a ⊑ a ⊔ b failed for {:?}, {:?}", a, b);
+                assert!(b.leq(&j), "b ⊑ a ⊔ b failed for {:?}, {:?}", a, b);
+            }
+        }
+    }
+
+    /// Joining `i64::MIN` and `i64::MAX` (extreme sign-bit-different
+    /// constants) must not panic and must produce a valid Top-or-bottom
+    /// bit fact (used in path-merging).
+    #[test]
+    fn join_min_max_signbit_safe() {
+        let a = BitFact::from_const(i64::MIN);
+        let b = BitFact::from_const(i64::MAX);
+        let _ = a.join(&b); // must not panic
+        let _ = a.meet(&b);
+        let _ = a.widen(&b);
+    }
 }

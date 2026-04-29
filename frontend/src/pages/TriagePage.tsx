@@ -21,6 +21,7 @@ import {
 import { LoadingState } from '../components/ui/LoadingState';
 import { ErrorState } from '../components/ui/ErrorState';
 import { Dropdown, DropdownItem } from '../components/ui/Dropdown';
+import { usePageTitle } from '../hooks/usePageTitle';
 import type { FindingView, AuditEntry, SuppressionRule } from '../api/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -917,6 +918,7 @@ function AuditLogTab({ entries }: { entries: AuditEntry[] }) {
 type TriageTab = 'findings' | 'rules' | 'audit';
 
 export function TriagePage() {
+  usePageTitle('Triage');
   const [triageFilter, setTriageFilter] = useState('needs_attention');
   const [activeTab, setActiveTab] = useState<TriageTab>('findings');
   const [selectedRules, setSelectedRules] = useState<Set<string>>(new Set());

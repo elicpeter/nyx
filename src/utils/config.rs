@@ -938,7 +938,7 @@ fn create_example_config(config_dir: &Path) -> NyxResult<()> {
 
 /// Merge user config into default config, preserving defaults where the user didn't
 /// supply new exclusions and overriding everything else.
-fn merge_configs(mut default: Config, user: Config) -> Config {
+pub(crate) fn merge_configs(mut default: Config, user: Config) -> Config {
     // --- ScannerConfig ---
     default.scanner.mode = user.scanner.mode;
     default.scanner.min_severity = user.scanner.min_severity;

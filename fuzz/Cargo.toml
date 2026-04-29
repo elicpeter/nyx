@@ -1,0 +1,33 @@
+[package]
+name = "nyx-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+nyx-scanner = { path = ".." }
+
+[[bin]]
+name = "scan_bytes"
+path = "fuzz_targets/scan_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extract_summaries"
+path = "fuzz_targets/extract_summaries.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cross_file_taint"
+path = "fuzz_targets/cross_file_taint.rs"
+test = false
+doc = false
+bench = false
