@@ -24,8 +24,8 @@ pub mod analysis;
 pub mod domain;
 
 pub use analysis::{
-    analyse_body, extract_field_points_to, is_container_read_callee_pub,
-    is_container_write_callee, PointsToFacts,
+    PointsToFacts, analyse_body, extract_field_points_to, is_container_read_callee_pub,
+    is_container_write_callee,
 };
 pub use domain::{AbsLoc, LocId, LocInterner, PointsToSet, PtrProxyHint};
 

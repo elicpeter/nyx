@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use crate::cfg::BodyId;
 use crate::ssa::ir::{FieldId, SsaBody, SsaInst, SsaOp, SsaValue};
 
-use super::domain::{AbsLoc, LocId, LocInterner, PointsToSet, PtrProxyHint, LOC_TOP};
+use super::domain::{AbsLoc, LOC_TOP, LocId, LocInterner, PointsToSet, PtrProxyHint};
 
 /// Maximum constraint-solver iterations before bailing.  Each pass
 /// walks every instruction once; in practice the analysis converges
@@ -160,11 +160,11 @@ pub fn extract_field_points_to(
     };
     // Apply a single read or write to the summary, dispatching on
     // the abstract location's parameter / receiver shape.
-    let record = |loc: LocId,
-                  name: &str,
-                  out: &mut FieldPointsToSummary,
-                  is_write: bool| {
-        match facts.interner.resolve(loc) {
+    let record =
+        |loc: LocId, name: &str, out: &mut FieldPointsToSummary, is_write: bool| match facts
+            .interner
+            .resolve(loc)
+        {
             crate::pointer::AbsLoc::Param(_, idx) => {
                 if is_write {
                     out.add_write(*idx as u32, name);
@@ -180,8 +180,7 @@ pub fn extract_field_points_to(
                 }
             }
             _ => {}
-        }
-    };
+        };
 
     // Channel 1: reads from FieldProj.
     for block in &body.blocks {
@@ -312,7 +311,10 @@ impl PointsToFacts {
     /// last (post-renaming) SSA definition for each name wins.  Used by
     /// the resource-lifecycle pass to look up `pt(receiver_text)` in
     /// `apply_call` without re-walking the SSA body.
-    pub fn name_proxy_hints(&self, body: &SsaBody) -> std::collections::HashMap<String, PtrProxyHint> {
+    pub fn name_proxy_hints(
+        &self,
+        body: &SsaBody,
+    ) -> std::collections::HashMap<String, PtrProxyHint> {
         let mut out = std::collections::HashMap::new();
         for (idx, def) in body.value_defs.iter().enumerate().rev() {
             let Some(name) = def.var_name.as_ref() else {
@@ -505,8 +507,7 @@ impl AnalysisState {
                         let rcv_pt = self.pt[rcv_rep].clone();
                         if !rcv_pt.is_empty() && !rcv_pt.is_top() {
                             for parent_loc in rcv_pt.iter() {
-                                let proj =
-                                    self.interner.intern_field(parent_loc, FieldId::ELEM);
+                                let proj = self.interner.intern_field(parent_loc, FieldId::ELEM);
                                 self.add_loc(v, proj);
                             }
                         }
@@ -551,7 +552,9 @@ impl AnalysisState {
             return false;
         }
         match &inst.op {
-            SsaOp::FieldProj { receiver, field, .. } => {
+            SsaOp::FieldProj {
+                receiver, field, ..
+            } => {
                 if (receiver.0 as usize) >= self.parent.len() {
                     return false;
                 }
@@ -633,7 +636,7 @@ mod tests {
         ValueDef,
     };
     use petgraph::graph::NodeIndex;
-    use smallvec::{smallvec, SmallVec};
+    use smallvec::{SmallVec, smallvec};
     use std::collections::HashMap;
 
     fn body_id() -> BodyId {
@@ -973,10 +976,7 @@ mod tests {
             "stack.peek",
             "vec.first",
         ] {
-            assert!(
-                is_container_read_callee(c),
-                "expected container read: {c}"
-            );
+            assert!(is_container_read_callee(c), "expected container read: {c}");
         }
         for c in ["push", "append", "insert", "myMethod", "process"] {
             assert!(
@@ -1258,7 +1258,10 @@ mod tests {
         let body = b.build();
         let facts = analyse_body(&body, BodyId(0));
         let hints = facts.name_proxy_hints(&body);
-        assert_eq!(hints.get("m"), Some(&crate::pointer::PtrProxyHint::FieldOnly));
+        assert_eq!(
+            hints.get("m"),
+            Some(&crate::pointer::PtrProxyHint::FieldOnly)
+        );
         assert!(
             !hints.contains_key("c"),
             "root receiver must not appear in the FieldOnly map"

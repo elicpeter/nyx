@@ -341,7 +341,10 @@ fn op_view(op: &SsaOp) -> (String, Vec<String>) {
             receiver, field, ..
         } => (
             "FieldProj".into(),
-            vec![format!("recv=v{}", receiver.0), format!("field={}", field.0)],
+            vec![
+                format!("recv=v{}", receiver.0),
+                format!("field={}", field.0),
+            ],
         ),
     }
 }
@@ -944,8 +947,7 @@ impl PointerView {
     pub fn from_facts(facts: &PointsToFacts, ssa: &SsaBody) -> Self {
         // Determine which LocIds are referenced by any pt set so we only
         // emit those (plus Top when referenced).
-        let mut referenced: std::collections::BTreeSet<u32> =
-            std::collections::BTreeSet::new();
+        let mut referenced: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
         for v in 0..ssa.num_values() as u32 {
             let set = facts.pt(SsaValue(v));
             for loc in set.iter() {
@@ -964,21 +966,13 @@ impl PointerView {
             let abs = facts.interner.resolve(loc_id);
             let (kind, display, parent, field) = match abs {
                 AbsLoc::Top => ("Top".to_string(), "⊤".to_string(), None, None),
-                AbsLoc::Alloc(_, ssa_v) => (
-                    "Alloc".to_string(),
-                    format!("alloc#v{}", ssa_v),
-                    None,
-                    None,
-                ),
-                AbsLoc::Param(_, idx) => (
-                    "Param".to_string(),
-                    format!("param[{}]", idx),
-                    None,
-                    None,
-                ),
-                AbsLoc::SelfParam(_) => {
-                    ("SelfParam".to_string(), "self".to_string(), None, None)
+                AbsLoc::Alloc(_, ssa_v) => {
+                    ("Alloc".to_string(), format!("alloc#v{}", ssa_v), None, None)
                 }
+                AbsLoc::Param(_, idx) => {
+                    ("Param".to_string(), format!("param[{}]", idx), None, None)
+                }
+                AbsLoc::SelfParam(_) => ("SelfParam".to_string(), "self".to_string(), None, None),
                 AbsLoc::Field { parent, field } => {
                     let field_name = if *field == FieldId::ELEM {
                         "<elem>".to_string()
@@ -1271,16 +1265,8 @@ pub struct AuthAnalysisView {
 
 impl AuthAnalysisView {
     pub fn from_model(model: &AuthorizationModel, bytes: &[u8], enabled: bool) -> Self {
-        let routes = model
-            .routes
-            .iter()
-            .map(|r| route_view(r, bytes))
-            .collect();
-        let units = model
-            .units
-            .iter()
-            .map(|u| unit_view(u, bytes))
-            .collect();
+        let routes = model.routes.iter().map(|r| route_view(r, bytes)).collect();
+        let units = model.units.iter().map(|u| unit_view(u, bytes)).collect();
         AuthAnalysisView {
             routes,
             units,
@@ -1305,7 +1291,11 @@ fn auth_check_view(c: &AuthCheck, bytes: &[u8]) -> AuthCheckView {
         kind: format!("{:?}", c.kind),
         callee: c.callee.clone(),
         line: c.line,
-        subjects: c.subjects.iter().map(|s| value_ref_view(s, bytes)).collect(),
+        subjects: c
+            .subjects
+            .iter()
+            .map(|s| value_ref_view(s, bytes))
+            .collect(),
         args: c.args.clone(),
         condition_text: c.condition_text.clone(),
     }
@@ -1339,8 +1329,7 @@ fn unit_view(unit: &AnalysisUnit, bytes: &[u8]) -> AuthUnitView {
     self_actor_vars.sort();
     let mut typed_bounded_vars: Vec<String> = unit.typed_bounded_vars.iter().cloned().collect();
     typed_bounded_vars.sort();
-    let mut authorized_sql_vars: Vec<String> =
-        unit.authorized_sql_vars.iter().cloned().collect();
+    let mut authorized_sql_vars: Vec<String> = unit.authorized_sql_vars.iter().cloned().collect();
     authorized_sql_vars.sort();
     let mut const_bound_vars: Vec<String> = unit.const_bound_vars.iter().cloned().collect();
     const_bound_vars.sort();

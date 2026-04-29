@@ -1179,11 +1179,7 @@ mod tests {
                 for c in &xs {
                     let lhs = a.meet(b).meet(c);
                     let rhs = a.meet(&b.meet(c));
-                    assert_eq!(
-                        lhs, rhs,
-                        "meet not associative for {:?},{:?},{:?}",
-                        a, b, c
-                    );
+                    assert_eq!(lhs, rhs, "meet not associative for {:?},{:?},{:?}", a, b, c);
                 }
             }
         }
@@ -1232,7 +1228,10 @@ mod tests {
                 assert!(
                     j.leq(&w),
                     "widen({:?}, {:?}) = {:?} does not over-approximate join = {:?}",
-                    a, b, w, j
+                    a,
+                    b,
+                    w,
+                    j
                 );
             }
         }

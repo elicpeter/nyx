@@ -2054,9 +2054,7 @@ use std::sync::Mutex;
 static POINTER_ENV_GUARD: Mutex<()> = Mutex::new(());
 
 fn with_pointer_env<R>(value: Option<&str>, f: impl FnOnce() -> R) -> R {
-    let _lock = POINTER_ENV_GUARD
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = POINTER_ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     let prev = std::env::var("NYX_POINTER_ANALYSIS").ok();
     unsafe {
         match value {
@@ -2106,7 +2104,10 @@ fn js_subscript_read_lowers_to_index_get_call() {
         assert_eq!(node.call.arg_uses.len(), 1, "expect one arg group (index)");
         assert_eq!(node.call.arg_uses[0], vec!["0"]);
         assert!(
-            node.taint.defines.as_deref().is_some_and(|d| d.starts_with("__nyx_idxget_")),
+            node.taint
+                .defines
+                .as_deref()
+                .is_some_and(|d| d.starts_with("__nyx_idxget_")),
             "synth defines should use the __nyx_idxget_ prefix"
         );
     });
@@ -2254,7 +2255,10 @@ fn js_switch_cascade_has_one_if_per_case() {
             .edges(i)
             .filter(|e| matches!(e.weight(), EdgeKind::False))
             .count();
-        assert!(trues >= 1, "case dispatch should have at least one True edge");
+        assert!(
+            trues >= 1,
+            "case dispatch should have at least one True edge"
+        );
         assert!(
             falses >= 1,
             "case dispatch should have at least one False edge"
@@ -2337,10 +2341,7 @@ fn js_switch_fallthrough_no_break() {
             continue;
         }
         for e in cfg.edges(n) {
-            if matches!(
-                e.weight(),
-                EdgeKind::Seq | EdgeKind::True | EdgeKind::False
-            ) {
+            if matches!(e.weight(), EdgeKind::Seq | EdgeKind::True | EdgeKind::False) {
                 stack.push(e.target());
             }
         }
@@ -2620,7 +2621,10 @@ fn assert_loop_with_back_edge(cfg: &Cfg, label: &str) {
         "{label}: expected at least one Loop header, found none"
     );
     let backs = back_edges(cfg);
-    assert!(!backs.is_empty(), "{label}: expected at least one Back edge");
+    assert!(
+        !backs.is_empty(),
+        "{label}: expected at least one Back edge"
+    );
     for (_, dst) in &backs {
         assert!(
             headers.contains(dst),
@@ -2787,7 +2791,11 @@ fn nested_loops_two_headers_two_back_edges() {
     for (_, dst) in &backs {
         hit.insert(*dst);
     }
-    assert_eq!(hit.len(), 2, "each header must receive at least one back edge");
+    assert_eq!(
+        hit.len(),
+        2,
+        "each header must receive at least one back edge"
+    );
 }
 
 #[test]

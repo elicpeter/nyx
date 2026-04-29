@@ -3276,10 +3276,7 @@ fn insert_ssa_arity_overflow_iterative_rescan_stays_at_original_key() {
     // discovered cross-file).
     let round2 = SsaFuncSummary {
         param_to_return: vec![(0, TaintTransform::Identity)],
-        typed_call_receivers: vec![
-            (1, "FileHandle".to_string()),
-            (2, "Cache".to_string()),
-        ],
+        typed_call_receivers: vec![(1, "FileHandle".to_string()), (2, "Cache".to_string())],
         ..Default::default()
     };
     gs.insert_ssa(key.clone(), round2.clone());
@@ -3954,8 +3951,14 @@ mod hierarchy_widened_tests {
             ("NetLogger".to_string(), "ILogger".to_string()),
             ("StdLogger".to_string(), "ILogger".to_string()),
         ];
-        let (k_file, s_file) =
-            java_method("src/file_logger.java", "FileLogger", "log", 1, 0x01, edges.clone());
+        let (k_file, s_file) = java_method(
+            "src/file_logger.java",
+            "FileLogger",
+            "log",
+            1,
+            0x01,
+            edges.clone(),
+        );
         let (k_net, s_net) =
             java_method("src/net_logger.java", "NetLogger", "log", 1, 0x02, vec![]);
         let (k_std, s_std) =
@@ -3991,10 +3994,8 @@ mod hierarchy_widened_tests {
             ("OneArg".to_string(), "IBase".to_string()),
             ("TwoArg".to_string(), "IBase".to_string()),
         ];
-        let (k_one, s_one) =
-            java_method("src/one.java", "OneArg", "do_it", 1, 0x01, edges.clone());
-        let (k_two, s_two) =
-            java_method("src/two.java", "TwoArg", "do_it", 2, 0x02, vec![]);
+        let (k_one, s_one) = java_method("src/one.java", "OneArg", "do_it", 1, 0x01, edges.clone());
+        let (k_two, s_two) = java_method("src/two.java", "TwoArg", "do_it", 2, 0x02, vec![]);
         gs.insert(k_one.clone(), s_one);
         gs.insert(k_two.clone(), s_two);
         gs.install_hierarchy();
@@ -4031,8 +4032,7 @@ mod hierarchy_widened_tests {
 
         // Carrier — first impl carries every edge so the index is
         // populated in one shot.
-        let (k0, s0) =
-            java_method("src/impl00.java", "Impl00", "run", 0, 0x01, edges);
+        let (k0, s0) = java_method("src/impl00.java", "Impl00", "run", 0, 0x01, edges);
         gs.insert(k0.clone(), s0);
         for i in 1..total {
             let (k, s) = java_method(
@@ -4080,9 +4080,8 @@ mod hierarchy_widened_tests {
         // receiver_type rules, that function MUST NOT be picked when
         // the call is annotated with receiver_type "IUnused".
         let edges = vec![("Used".to_string(), "IUnused".to_string())];
-        let (k_carrier, s_carrier) = java_method(
-            "src/util.java", "Used", "carrier", 0, 0x00, edges,
-        );
+        let (k_carrier, s_carrier) =
+            java_method("src/util.java", "Used", "carrier", 0, 0x00, edges);
         let (k_free, s_free) = free_summary("src/app.java", "something", 0, 0x01);
         gs.insert(k_carrier, s_carrier);
         gs.insert(k_free, s_free);
@@ -4163,8 +4162,7 @@ mod hierarchy_widened_tests {
     fn merge_invalidates_hierarchy_cache() {
         let mut gs_a = GlobalSummaries::new();
         let edges = vec![("Sub".to_string(), "Super".to_string())];
-        let (k_super, s_super) =
-            java_method("src/super.java", "Super", "m", 0, 0x00, edges);
+        let (k_super, s_super) = java_method("src/super.java", "Super", "m", 0, 0x00, edges);
         let (k_sub, s_sub) = java_method("src/sub.java", "Sub", "m", 0, 0x01, vec![]);
         gs_a.insert(k_super.clone(), s_super);
         gs_a.insert(k_sub.clone(), s_sub);

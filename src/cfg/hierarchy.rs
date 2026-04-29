@@ -22,7 +22,11 @@ use super::helpers::text_of;
 /// contain duplicates across files (each file emits its own edges).
 /// The downstream [`crate::callgraph::TypeHierarchyIndex::build`]
 /// dedups across files.
-pub(crate) fn collect_hierarchy_edges(root: Node<'_>, lang: &str, code: &[u8]) -> Vec<(String, String)> {
+pub(crate) fn collect_hierarchy_edges(
+    root: Node<'_>,
+    lang: &str,
+    code: &[u8],
+) -> Vec<(String, String)> {
     let mut acc: Vec<(String, String)> = Vec::new();
     let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut push = |sub: String, sup: String| {
@@ -122,7 +126,10 @@ fn type_identifier_text(n: Node<'_>, code: &[u8]) -> Option<String> {
             // `Foo<T>` — the leading child is the bare type identifier.
             let mut cursor = n.walk();
             for c in n.named_children(&mut cursor) {
-                if matches!(c.kind(), "type_identifier" | "identifier" | "scoped_type_identifier") {
+                if matches!(
+                    c.kind(),
+                    "type_identifier" | "identifier" | "scoped_type_identifier"
+                ) {
                     return text_of(c, code);
                 }
             }
@@ -485,7 +492,10 @@ mod tests {
     fn rust_inherent_impl_emits_no_edge() {
         let src = "impl UserRepo { fn new() {} }";
         let edges = collect("rust", src);
-        assert!(edges.is_empty(), "inherent impl must not emit; got {edges:?}");
+        assert!(
+            edges.is_empty(),
+            "inherent impl must not emit; got {edges:?}"
+        );
     }
 
     #[test]
@@ -531,10 +541,7 @@ class A extends B {}
 class A extends B {}
 "#;
         let edges = collect("java", src);
-        let count = edges
-            .iter()
-            .filter(|(s, p)| s == "A" && p == "B")
-            .count();
+        let count = edges.iter().filter(|(s, p)| s == "A" && p == "B").count();
         assert_eq!(count, 1, "duplicates within a file must be deduped");
     }
 }

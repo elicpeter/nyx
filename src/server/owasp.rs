@@ -34,15 +34,13 @@ pub fn owasp_bucket_for(rule_id: &str) -> Option<(&'static str, &'static str)> {
 
     Some(match family {
         // A01 — Broken Access Control
-        "auth" | "csrf" | "mass_assign" | "path" | "redirect" => {
-            ("A01", "Broken Access Control")
-        }
+        "auth" | "csrf" | "mass_assign" | "path" | "redirect" => ("A01", "Broken Access Control"),
         // A02 — Cryptographic Failures
         "crypto" | "secrets" => ("A02", "Cryptographic Failures"),
         // A03 — Injection (covers SQLi, XSS, command, code-eval, template, NoSQL, LDAP, reflection,
         // and engine-level taint findings without a more specific family tag).
-        "sqli" | "xss" | "cmdi" | "code_exec" | "template" | "nosql" | "ldap"
-        | "reflection" | "taint" => ("A03", "Injection"),
+        "sqli" | "xss" | "cmdi" | "code_exec" | "template" | "nosql" | "ldap" | "reflection"
+        | "taint" => ("A03", "Injection"),
         // A05 — Security Misconfiguration (TLS verify off, cookie flags, prototype pollution)
         "config" | "transport" | "prototype" => ("A05", "Security Misconfiguration"),
         // A08 — Software and Data Integrity Failures
@@ -94,10 +92,12 @@ pub fn issue_categories(
     }
     let mut out: Vec<_> = totals
         .into_iter()
-        .map(|(label, count)| crate::server::models::IssueCategoryBucket {
-            label: label.to_string(),
-            count,
-        })
+        .map(
+            |(label, count)| crate::server::models::IssueCategoryBucket {
+                label: label.to_string(),
+                count,
+            },
+        )
         .collect();
     out.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.label.cmp(&b.label)));
     out
@@ -139,7 +139,10 @@ mod tests {
 
     #[test]
     fn maps_xss_to_a03() {
-        assert_eq!(owasp_bucket_for("js.xss.outer_html"), Some(("A03", "Injection")));
+        assert_eq!(
+            owasp_bucket_for("js.xss.outer_html"),
+            Some(("A03", "Injection"))
+        );
     }
 
     #[test]
@@ -189,9 +192,18 @@ mod tests {
     #[test]
     fn issue_category_handles_engine_ids() {
         assert_eq!(issue_category_label("rs.quality.unwrap"), "Code Quality");
-        assert_eq!(issue_category_label("state-resource-leak"), "Resource Lifecycle");
-        assert_eq!(issue_category_label("cfg-error-fallthrough"), "Control-Flow");
-        assert_eq!(issue_category_label("taint-unsanitised-flow"), "Tainted Flow");
+        assert_eq!(
+            issue_category_label("state-resource-leak"),
+            "Resource Lifecycle"
+        );
+        assert_eq!(
+            issue_category_label("cfg-error-fallthrough"),
+            "Control-Flow"
+        );
+        assert_eq!(
+            issue_category_label("taint-unsanitised-flow"),
+            "Tainted Flow"
+        );
     }
 
     #[test]
@@ -211,8 +223,14 @@ mod tests {
 
     #[test]
     fn issue_category_label_recognises_simple_families() {
-        assert_eq!(issue_category_label("js.xss.outer_html"), "Cross-Site Scripting");
-        assert_eq!(issue_category_label("py.cmdi.os_system"), "Command Injection");
+        assert_eq!(
+            issue_category_label("js.xss.outer_html"),
+            "Cross-Site Scripting"
+        );
+        assert_eq!(
+            issue_category_label("py.cmdi.os_system"),
+            "Command Injection"
+        );
         assert_eq!(issue_category_label("garbage"), "Other");
     }
 }

@@ -15,12 +15,7 @@ use tree_sitter::Node;
 /// returns `None` otherwise so callers can fall through to the
 /// pre-Phase-6 behaviour (Object / Unknown).
 fn lookup_dto_class(class_name: &str) -> Option<TypeKind> {
-    DTO_CLASSES.with(|cell| {
-        cell.borrow()
-            .get(class_name)
-            .cloned()
-            .map(TypeKind::Dto)
-    })
+    DTO_CLASSES.with(|cell| cell.borrow().get(class_name).cloned().map(TypeKind::Dto))
 }
 
 /// Extract parameter names + per-position [`TypeKind`] from a function
@@ -573,7 +568,13 @@ fn classify_param_type_ts<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeKin
         param,
         code,
         &[
-            "@Param", "@Body", "@Query", "@Headers", "@Header", "@Cookie", "@UploadedFile",
+            "@Param",
+            "@Body",
+            "@Query",
+            "@Headers",
+            "@Header",
+            "@Cookie",
+            "@UploadedFile",
         ],
     ) {
         return None;
@@ -804,8 +805,8 @@ pub(super) fn is_configured_terminator(
 #[cfg(test)]
 mod typed_extractor_tests {
     use super::{
-        contains_fastapi_marker, java_type_to_kind, python_primitive_to_kind,
-        python_type_to_kind, rust_primitive_to_kind, rust_type_to_kind,
+        contains_fastapi_marker, java_type_to_kind, python_primitive_to_kind, python_type_to_kind,
+        rust_primitive_to_kind, rust_type_to_kind,
     };
     use crate::ssa::type_facts::TypeKind;
 

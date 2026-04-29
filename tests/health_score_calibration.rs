@@ -181,7 +181,12 @@ fn calibration_one_confirmed_high_caps_at_b() {
 fn calibration_three_high_caps_below_b() {
     // 3 HIGHs all credible → effective_high ~3 → ceiling 68 → max D+.
     let findings: Vec<Diag> = (0..3)
-        .map(|_| with_verdict(diag(Severity::High, "rs.taint.x", Some(Confidence::High)), Verdict::Confirmed))
+        .map(|_| {
+            with_verdict(
+                diag(Severity::High, "rs.taint.x", Some(Confidence::High)),
+                Verdict::Confirmed,
+            )
+        })
         .collect();
     let s = summary_of(&findings);
     let h = compute(&first_scan(&s, &findings, 0.0, 100));
@@ -192,7 +197,12 @@ fn calibration_three_high_caps_below_b() {
 #[test]
 fn calibration_six_confirmed_high_grades_f() {
     let findings: Vec<Diag> = (0..6)
-        .map(|_| with_verdict(diag(Severity::High, "rs.taint.x", Some(Confidence::High)), Verdict::Confirmed))
+        .map(|_| {
+            with_verdict(
+                diag(Severity::High, "rs.taint.x", Some(Confidence::High)),
+                Verdict::Confirmed,
+            )
+        })
         .collect();
     let s = summary_of(&findings);
     let h = compute(&first_scan(&s, &findings, 0.0, 1000));
@@ -207,7 +217,9 @@ fn calibration_no_high_floor_holds_at_c() {
     let mut findings: Vec<Diag> = (0..200)
         .map(|_| diag(Severity::Medium, "rs.taint.x", Some(Confidence::High)))
         .collect();
-    findings.extend((0..2000).map(|_| diag(Severity::Low, "rs.quality.unwrap", Some(Confidence::High))));
+    findings.extend(
+        (0..2000).map(|_| diag(Severity::Low, "rs.quality.unwrap", Some(Confidence::High))),
+    );
     findings.extend((0..50).map(|_| diag(Severity::Low, "rs.taint.low", Some(Confidence::Medium))));
     let s = summary_of(&findings);
     let h = compute(&first_scan(&s, &findings, 0.0, 200));
@@ -226,7 +238,11 @@ fn calibration_thousand_low_only_floor_at_c() {
     let s = summary_of(&findings);
     let h = compute(&first_scan(&s, &findings, 0.0, 200));
     // No HIGH → floor 70.  Density would naturally be lower.
-    assert!(h.score >= 65, "1000 LOW only floor protection, got {}", h.score);
+    assert!(
+        h.score >= 65,
+        "1000 LOW only floor protection, got {}",
+        h.score
+    );
 }
 
 #[test]
@@ -328,7 +344,11 @@ fn calibration_triage_drops_when_total_under_floor() {
         .collect();
     let s = summary_of(&findings);
     let h = compute(&first_scan(&s, &findings, 0.0, 100));
-    let tri = h.components.iter().find(|c| c.label == "Triage coverage").unwrap();
+    let tri = h
+        .components
+        .iter()
+        .find(|c| c.label == "Triage coverage")
+        .unwrap();
     assert_eq!(tri.weight, 0.0);
     assert!(tri.detail.contains("Not applicable"));
 }
@@ -378,9 +398,24 @@ fn calibration_stale_high_lowers_regression_component() {
     };
     let fresh = compute(&fresh_inputs);
     let rotting = compute(&rotting_inputs);
-    let f_reg = fresh.components.iter().find(|c| c.label == "Regression resistance").unwrap().score;
-    let r_reg = rotting.components.iter().find(|c| c.label == "Regression resistance").unwrap().score;
-    assert!(r_reg < f_reg, "stale should lower regression: fresh {} vs rotting {}", f_reg, r_reg);
+    let f_reg = fresh
+        .components
+        .iter()
+        .find(|c| c.label == "Regression resistance")
+        .unwrap()
+        .score;
+    let r_reg = rotting
+        .components
+        .iter()
+        .find(|c| c.label == "Regression resistance")
+        .unwrap()
+        .score;
+    assert!(
+        r_reg < f_reg,
+        "stale should lower regression: fresh {} vs rotting {}",
+        f_reg,
+        r_reg
+    );
 }
 
 #[test]

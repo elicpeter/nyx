@@ -66,9 +66,7 @@ async fn get_file(
 
 fn map_path_error(err: RepoPathError, path: &str) -> ApiError {
     match err {
-        RepoPathError::InvalidPath => {
-            ApiError::forbidden(format!("invalid path: {path}"))
-        }
+        RepoPathError::InvalidPath => ApiError::forbidden(format!("invalid path: {path}")),
         RepoPathError::OutsideRoot => {
             ApiError::forbidden(format!("path outside scan root: {path}"))
         }

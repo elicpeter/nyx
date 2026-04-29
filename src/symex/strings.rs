@@ -8,7 +8,7 @@
 //! etc.) for witness enrichment and heuristic mismatch diagnostics. They do
 //! NOT affect taint semantics.
 
-use crate::labels::{bare_method_name, Cap};
+use crate::labels::{Cap, bare_method_name};
 use crate::symbol::Lang;
 
 use super::value::SymbolicValue;

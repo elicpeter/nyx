@@ -1703,14 +1703,8 @@ mod tests {
         // The minio `w.Header().Get(constName)` cluster — `Get` would
         // match the `Get` read indicator on a bare receiver but the
         // chained-call shape masks the receiver type.
-        assert_eq!(
-            rules.classify_sink_class("w.Header().Get", &empty),
-            None
-        );
-        assert_eq!(
-            rules.classify_sink_class("r.URL.Query().Get", &empty),
-            None
-        );
+        assert_eq!(rules.classify_sink_class("w.Header().Get", &empty), None);
+        assert_eq!(rules.classify_sink_class("r.URL.Query().Get", &empty), None);
         // Bare-identifier receiver: verb-name fallback still fires.
         // Pin the regression guard so this fix doesn't over-suppress
         // canonical data-layer shapes.

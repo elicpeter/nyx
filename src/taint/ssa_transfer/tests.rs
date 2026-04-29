@@ -1433,12 +1433,12 @@ mod receiver_candidates_field_proj_tests {
         // Phase 4 we walk through FieldProj.receiver to recover v0 (the
         // typed root `c`).
         let body = body_with_field_proj_chain();
-        let cands = super::super::receiver_candidates_for_type_lookup(
-            SsaValue(2),
-            Some(&body),
-            Lang::Go,
+        let cands =
+            super::super::receiver_candidates_for_type_lookup(SsaValue(2), Some(&body), Lang::Go);
+        assert!(
+            cands.contains(&SsaValue(2)),
+            "starts with the immediate receiver"
         );
-        assert!(cands.contains(&SsaValue(2)), "starts with the immediate receiver");
         assert!(
             cands.contains(&SsaValue(0)),
             "must walk FieldProj.receiver to reach the typed root v0 (`c`); got {cands:?}",
@@ -1449,11 +1449,8 @@ mod receiver_candidates_field_proj_tests {
     fn field_proj_receiver_walks_in_python_and_java() {
         let body = body_with_field_proj_chain();
         for lang in [Lang::Python, Lang::Java, Lang::JavaScript, Lang::TypeScript] {
-            let cands = super::super::receiver_candidates_for_type_lookup(
-                SsaValue(2),
-                Some(&body),
-                lang,
-            );
+            let cands =
+                super::super::receiver_candidates_for_type_lookup(SsaValue(2), Some(&body), lang);
             assert!(
                 cands.contains(&SsaValue(0)),
                 "{:?}: FieldProj.receiver walk must reach v0; got {cands:?}",
@@ -1468,21 +1465,14 @@ mod receiver_candidates_field_proj_tests {
         // now ALSO walks FieldProj.receiver for any intermediate field
         // accesses in the chain.
         let body = body_with_field_proj_chain();
-        let cands = super::super::receiver_candidates_for_type_lookup(
-            SsaValue(2),
-            Some(&body),
-            Lang::Rust,
-        );
+        let cands =
+            super::super::receiver_candidates_for_type_lookup(SsaValue(2), Some(&body), Lang::Rust);
         assert!(cands.contains(&SsaValue(0)));
     }
 
     #[test]
     fn no_ssa_body_returns_only_start() {
-        let cands = super::super::receiver_candidates_for_type_lookup(
-            SsaValue(2),
-            None,
-            Lang::Go,
-        );
+        let cands = super::super::receiver_candidates_for_type_lookup(SsaValue(2), None, Lang::Go);
         assert_eq!(cands.as_slice(), &[SsaValue(2)]);
     }
 
@@ -1519,11 +1509,8 @@ mod receiver_candidates_field_proj_tests {
             field_interner: interner,
             field_writes: std::collections::HashMap::new(),
         };
-        let cands = super::super::receiver_candidates_for_type_lookup(
-            SsaValue(0),
-            Some(&body),
-            Lang::Go,
-        );
+        let cands =
+            super::super::receiver_candidates_for_type_lookup(SsaValue(0), Some(&body), Lang::Go);
         // Cycle: only the start value is recorded; no infinite walk.
         assert_eq!(cands.as_slice(), &[SsaValue(0)]);
     }
@@ -1587,7 +1574,11 @@ mod fanout_merge_tests {
         assert_eq!(m.source_caps.bits(), 0b0111, "source_caps must OR");
         assert_eq!(m.sanitizer_caps.bits(), 0b0110, "sanitizer_caps must AND");
         assert_eq!(m.sink_caps.bits(), 0b1001, "sink_caps must OR");
-        assert_eq!(m.receiver_to_sink.bits(), 0b0011, "receiver_to_sink must OR");
+        assert_eq!(
+            m.receiver_to_sink.bits(),
+            0b0011,
+            "receiver_to_sink must OR"
+        );
     }
 
     /// B2 — propagates_taint is OR'd; propagating_params is the union
@@ -1626,8 +1617,11 @@ mod fanout_merge_tests {
         ];
 
         let m = merge_resolved_summaries_fanout(a, b);
-        let mut sorted: Vec<(usize, u16)> =
-            m.param_to_sink.iter().map(|(i, c)| (*i, c.bits())).collect();
+        let mut sorted: Vec<(usize, u16)> = m
+            .param_to_sink
+            .iter()
+            .map(|(i, c)| (*i, c.bits()))
+            .collect();
         sorted.sort();
         assert_eq!(
             sorted,
@@ -1671,7 +1665,11 @@ mod fanout_merge_tests {
         assert_eq!(m.param_to_sink_sites.len(), 1);
         let (idx, sites) = &m.param_to_sink_sites[0];
         assert_eq!(*idx, 0);
-        assert_eq!(sites.len(), 3, "shared site must dedup, unique sites preserved");
+        assert_eq!(
+            sites.len(),
+            3,
+            "shared site must dedup, unique sites preserved"
+        );
         assert!(sites.iter().any(|s| s == &shared));
         assert!(sites.iter().any(|s| s == &unique_a));
         assert!(sites.iter().any(|s| s == &unique_b));
@@ -1780,14 +1778,20 @@ mod field_write_tests {
         let mut cfg = Graph::new();
         let n_param = cfg.add_node(NodeInfo {
             kind: StmtKind::Seq,
-            ast: AstMeta { span: (0, 3), ..Default::default() },
+            ast: AstMeta {
+                span: (0, 3),
+                ..Default::default()
+            },
             taint: TaintMeta::default(),
             call: CallMeta::default(),
             ..Default::default()
         });
         let n_source = cfg.add_node(NodeInfo {
             kind: StmtKind::Seq,
-            ast: AstMeta { span: (5, 12), ..Default::default() },
+            ast: AstMeta {
+                span: (5, 12),
+                ..Default::default()
+            },
             taint: TaintMeta {
                 labels: smallvec![DataLabel::Source(Cap::ENV_VAR)],
                 ..Default::default()
@@ -1797,14 +1801,20 @@ mod field_write_tests {
         });
         let n_assign = cfg.add_node(NodeInfo {
             kind: StmtKind::Seq,
-            ast: AstMeta { span: (14, 30), ..Default::default() },
+            ast: AstMeta {
+                span: (14, 30),
+                ..Default::default()
+            },
             taint: TaintMeta::default(),
             call: CallMeta::default(),
             ..Default::default()
         });
         let n_proj = cfg.add_node(NodeInfo {
             kind: StmtKind::Seq,
-            ast: AstMeta { span: (32, 45), ..Default::default() },
+            ast: AstMeta {
+                span: (32, 45),
+                ..Default::default()
+            },
             taint: TaintMeta::default(),
             call: CallMeta::default(),
             ..Default::default()
@@ -1868,10 +1878,26 @@ mod field_write_tests {
             succs: smallvec![],
         }];
         let value_defs = vec![
-            ValueDef { var_name: Some("obj".into()), cfg_node: n_param, block: BlockId(0) },
-            ValueDef { var_name: Some("src".into()), cfg_node: n_source, block: BlockId(0) },
-            ValueDef { var_name: Some("obj".into()), cfg_node: n_assign, block: BlockId(0) },
-            ValueDef { var_name: Some("read".into()), cfg_node: n_proj, block: BlockId(0) },
+            ValueDef {
+                var_name: Some("obj".into()),
+                cfg_node: n_param,
+                block: BlockId(0),
+            },
+            ValueDef {
+                var_name: Some("src".into()),
+                cfg_node: n_source,
+                block: BlockId(0),
+            },
+            ValueDef {
+                var_name: Some("obj".into()),
+                cfg_node: n_assign,
+                block: BlockId(0),
+            },
+            ValueDef {
+                var_name: Some("read".into()),
+                cfg_node: n_proj,
+                block: BlockId(0),
+            },
         ];
         let mut field_writes = HashMap::new();
         field_writes.insert(SsaValue(2), (SsaValue(0), cache_id));
@@ -1962,7 +1988,10 @@ mod field_write_tests {
         assert!(!pt_v0.is_empty() && !pt_v0.is_top());
         let parent_loc = pt_v0.iter().next().unwrap();
         let cell = state
-            .get_field(FieldTaintKey { loc: parent_loc, field: cache_id })
+            .get_field(FieldTaintKey {
+                loc: parent_loc,
+                field: cache_id,
+            })
             .expect("field cell should be populated by the W1 hook");
         assert!(cell.taint.caps.contains(Cap::ENV_VAR));
     }
@@ -2089,7 +2118,10 @@ mod field_write_tests {
         let pt_v0 = pf.pt(SsaValue(0));
         let parent_loc = pt_v0.iter().next().unwrap();
         let cell = state
-            .get_field(FieldTaintKey { loc: parent_loc, field: cache_id })
+            .get_field(FieldTaintKey {
+                loc: parent_loc,
+                field: cache_id,
+            })
             .expect("W1 cell present");
         assert!(
             cell.validated_must,
@@ -2150,9 +2182,21 @@ mod field_write_tests {
             }],
             entry: BlockId(0),
             value_defs: vec![
-                ValueDef { var_name: Some("c".into()), cfg_node: n0, block: BlockId(0) },
-                ValueDef { var_name: Some("src".into()), cfg_node: n1, block: BlockId(0) },
-                ValueDef { var_name: Some("c".into()), cfg_node: n2, block: BlockId(0) },
+                ValueDef {
+                    var_name: Some("c".into()),
+                    cfg_node: n0,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("src".into()),
+                    cfg_node: n1,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("c".into()),
+                    cfg_node: n2,
+                    block: BlockId(0),
+                },
             ],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
@@ -2368,10 +2412,26 @@ mod container_elem_tests {
             blocks,
             entry: BlockId(0),
             value_defs: vec![
-                ValueDef { var_name: Some("arr".into()), cfg_node: n_param, block: BlockId(0) },
-                ValueDef { var_name: Some("src".into()), cfg_node: n_source, block: BlockId(0) },
-                ValueDef { var_name: None, cfg_node: n_push, block: BlockId(0) },
-                ValueDef { var_name: Some("e".into()), cfg_node: n_shift, block: BlockId(0) },
+                ValueDef {
+                    var_name: Some("arr".into()),
+                    cfg_node: n_param,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("src".into()),
+                    cfg_node: n_source,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: None,
+                    cfg_node: n_push,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("e".into()),
+                    cfg_node: n_shift,
+                    block: BlockId(0),
+                },
             ],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
@@ -2409,9 +2469,13 @@ mod container_elem_tests {
         let pt_arr = pf.pt(SsaValue(0));
         assert!(!pt_arr.is_empty() && !pt_arr.is_top());
         for loc in pt_arr.iter() {
-            let cell = state.get_field(FieldTaintKey { loc, field: FieldId::ELEM });
+            let cell = state.get_field(FieldTaintKey {
+                loc,
+                field: FieldId::ELEM,
+            });
             assert!(
-                cell.map(|c| c.taint.caps.contains(Cap::ENV_VAR)).unwrap_or(false),
+                cell.map(|c| c.taint.caps.contains(Cap::ENV_VAR))
+                    .unwrap_or(false),
                 "ELEM cell on pt(arr) {:?} must carry the source's ENV_VAR cap",
                 loc,
             );
@@ -2486,10 +2550,26 @@ mod container_elem_tests {
             blocks,
             entry: BlockId(0),
             value_defs: vec![
-                ValueDef { var_name: Some("arr".into()), cfg_node: n_param, block: BlockId(0) },
-                ValueDef { var_name: Some("src".into()), cfg_node: n_source, block: BlockId(0) },
-                ValueDef { var_name: None, cfg_node: n_push, block: BlockId(0) },
-                ValueDef { var_name: Some("cmd".into()), cfg_node: n_shift, block: BlockId(0) },
+                ValueDef {
+                    var_name: Some("arr".into()),
+                    cfg_node: n_param,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("src".into()),
+                    cfg_node: n_source,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: None,
+                    cfg_node: n_push,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("cmd".into()),
+                    cfg_node: n_shift,
+                    block: BlockId(0),
+                },
             ],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
@@ -2549,7 +2629,10 @@ mod container_elem_tests {
         let pt_arr = pf.pt(SsaValue(0));
         for loc in pt_arr.iter() {
             let cell = state
-                .get_field(FieldTaintKey { loc, field: FieldId::ELEM })
+                .get_field(FieldTaintKey {
+                    loc,
+                    field: FieldId::ELEM,
+                })
                 .expect("push must have populated the ELEM cell");
             assert!(
                 cell.validated_must,
@@ -2612,9 +2695,21 @@ mod container_elem_tests {
             }],
             entry: BlockId(0),
             value_defs: vec![
-                ValueDef { var_name: Some("arr".into()), cfg_node: n_param, block: BlockId(0) },
-                ValueDef { var_name: Some("src".into()), cfg_node: n_source, block: BlockId(0) },
-                ValueDef { var_name: None, cfg_node: n_push, block: BlockId(0) },
+                ValueDef {
+                    var_name: Some("arr".into()),
+                    cfg_node: n_param,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("src".into()),
+                    cfg_node: n_source,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: None,
+                    cfg_node: n_push,
+                    block: BlockId(0),
+                },
             ],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
@@ -2728,8 +2823,16 @@ mod cross_call_field_tests {
             }],
             entry: BlockId(0),
             value_defs: vec![
-                ValueDef { var_name: Some("obj".into()), cfg_node: NodeIndex::new(0), block: BlockId(0) },
-                ValueDef { var_name: Some("src".into()), cfg_node: NodeIndex::new(0), block: BlockId(0) },
+                ValueDef {
+                    var_name: Some("obj".into()),
+                    cfg_node: NodeIndex::new(0),
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("src".into()),
+                    cfg_node: NodeIndex::new(0),
+                    block: BlockId(0),
+                },
             ],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
@@ -2812,16 +2915,29 @@ mod cross_call_field_tests {
         let mut summary = FieldPointsToSummary::empty();
         summary.add_write(0, "cache");
 
-        let args: Vec<smallvec::SmallVec<[SsaValue; 2]>> =
-            vec![smallvec![SsaValue(0)]];
+        let args: Vec<smallvec::SmallVec<[SsaValue; 2]>> = vec![smallvec![SsaValue(0)]];
         let receiver = None;
-        apply_field_points_to_writes(&summary, &args, &receiver, &mut state, &body, &pf, &empty_interner());
+        apply_field_points_to_writes(
+            &summary,
+            &args,
+            &receiver,
+            &mut state,
+            &body,
+            &pf,
+            &empty_interner(),
+        );
 
         // pt(SsaValue(0)) is `{Param(_, 0)}`.
         let pt_v0 = pf.pt(SsaValue(0));
-        let loc = pt_v0.iter().next().expect("Param value must have non-empty pt");
+        let loc = pt_v0
+            .iter()
+            .next()
+            .expect("Param value must have non-empty pt");
         let cell = state
-            .get_field(FieldTaintKey { loc, field: cache_id })
+            .get_field(FieldTaintKey {
+                loc,
+                field: cache_id,
+            })
             .expect("W3 hook should populate (Param, cache) cell");
         assert!(cell.taint.caps.contains(Cap::ENV_VAR));
     }
@@ -2846,13 +2962,26 @@ mod cross_call_field_tests {
 
         let args: Vec<smallvec::SmallVec<[SsaValue; 2]>> = vec![];
         let receiver = Some(SsaValue(0));
-        apply_field_points_to_writes(&summary, &args, &receiver, &mut state, &body, &pf, &empty_interner());
+        apply_field_points_to_writes(
+            &summary,
+            &args,
+            &receiver,
+            &mut state,
+            &body,
+            &pf,
+            &empty_interner(),
+        );
 
         let pt_recv = pf.pt(SsaValue(0));
         let loc = pt_recv.iter().next().unwrap();
-        assert!(state
-            .get_field(FieldTaintKey { loc, field: cache_id })
-            .is_some());
+        assert!(
+            state
+                .get_field(FieldTaintKey {
+                    loc,
+                    field: cache_id
+                })
+                .is_some()
+        );
     }
 
     /// `<elem>` field name routes to `FieldId::ELEM` directly without
@@ -2863,20 +2992,36 @@ mod cross_call_field_tests {
         let mut state = SsaTaintState::initial();
         state.set(
             SsaValue(0),
-            VarTaint { caps: Cap::ENV_VAR, origins: smallvec![], uses_summary: false },
+            VarTaint {
+                caps: Cap::ENV_VAR,
+                origins: smallvec![],
+                uses_summary: false,
+            },
         );
 
         let mut summary = FieldPointsToSummary::empty();
         summary.add_write(0, "<elem>");
 
         let args: Vec<smallvec::SmallVec<[SsaValue; 2]>> = vec![smallvec![SsaValue(0)]];
-        apply_field_points_to_writes(&summary, &args, &None, &mut state, &body, &pf, &empty_interner());
+        apply_field_points_to_writes(
+            &summary,
+            &args,
+            &None,
+            &mut state,
+            &body,
+            &pf,
+            &empty_interner(),
+        );
 
         let pt_v0 = pf.pt(SsaValue(0));
         let loc = pt_v0.iter().next().unwrap();
-        assert!(state
-            .get_field(FieldTaintKey { loc, field: FieldId::ELEM })
-            .is_some(),
+        assert!(
+            state
+                .get_field(FieldTaintKey {
+                    loc,
+                    field: FieldId::ELEM
+                })
+                .is_some(),
             "ELEM cell must be populated when summary uses '<elem>' marker",
         );
     }
@@ -2889,7 +3034,11 @@ mod cross_call_field_tests {
         let mut state = SsaTaintState::initial();
         state.set(
             SsaValue(0),
-            VarTaint { caps: Cap::ENV_VAR, origins: smallvec![], uses_summary: false },
+            VarTaint {
+                caps: Cap::ENV_VAR,
+                origins: smallvec![],
+                uses_summary: false,
+            },
         );
 
         let mut summary = FieldPointsToSummary::empty();
@@ -2897,7 +3046,15 @@ mod cross_call_field_tests {
         summary.add_write(0, "unknown");
 
         let args: Vec<smallvec::SmallVec<[SsaValue; 2]>> = vec![smallvec![SsaValue(0)]];
-        apply_field_points_to_writes(&summary, &args, &None, &mut state, &body, &pf, &empty_interner());
+        apply_field_points_to_writes(
+            &summary,
+            &args,
+            &None,
+            &mut state,
+            &body,
+            &pf,
+            &empty_interner(),
+        );
 
         assert!(
             state.field_taint.is_empty(),
@@ -2913,7 +3070,11 @@ mod cross_call_field_tests {
         let mut state = SsaTaintState::initial();
         state.set(
             SsaValue(0),
-            VarTaint { caps: Cap::ENV_VAR, origins: smallvec![], uses_summary: false },
+            VarTaint {
+                caps: Cap::ENV_VAR,
+                origins: smallvec![],
+                uses_summary: false,
+            },
         );
 
         let mut summary = FieldPointsToSummary::empty();
@@ -2921,7 +3082,15 @@ mod cross_call_field_tests {
         summary.overflow = true; // Force overflow
 
         let args: Vec<smallvec::SmallVec<[SsaValue; 2]>> = vec![smallvec![SsaValue(0)]];
-        apply_field_points_to_writes(&summary, &args, &None, &mut state, &body, &pf, &empty_interner());
+        apply_field_points_to_writes(
+            &summary,
+            &args,
+            &None,
+            &mut state,
+            &body,
+            &pf,
+            &empty_interner(),
+        );
         assert!(state.field_taint.is_empty());
     }
 
@@ -2975,14 +3144,20 @@ mod field_taint_origin_cap_tests {
         let mut cfg = Graph::new();
         let n_param = cfg.add_node(NodeInfo {
             kind: StmtKind::Seq,
-            ast: AstMeta { span: (0, 3), ..Default::default() },
+            ast: AstMeta {
+                span: (0, 3),
+                ..Default::default()
+            },
             taint: TaintMeta::default(),
             call: CallMeta::default(),
             ..Default::default()
         });
         let n_proj = cfg.add_node(NodeInfo {
             kind: StmtKind::Seq,
-            ast: AstMeta { span: (5, 12), ..Default::default() },
+            ast: AstMeta {
+                span: (5, 12),
+                ..Default::default()
+            },
             taint: TaintMeta::default(),
             call: CallMeta::default(),
             ..Default::default()
@@ -3020,8 +3195,16 @@ mod field_taint_origin_cap_tests {
             }],
             entry: BlockId(0),
             value_defs: vec![
-                ValueDef { var_name: Some("obj".into()), cfg_node: n_param, block: BlockId(0) },
-                ValueDef { var_name: Some("read".into()), cfg_node: n_proj, block: BlockId(0) },
+                ValueDef {
+                    var_name: Some("obj".into()),
+                    cfg_node: n_param,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("read".into()),
+                    cfg_node: n_proj,
+                    block: BlockId(0),
+                },
             ],
             cfg_node_map: HashMap::new(),
             exception_edges: vec![],
@@ -3049,7 +3232,10 @@ mod field_taint_origin_cap_tests {
         let pt_v0 = pf.pt(SsaValue(0));
         let parent_loc = pt_v0.iter().next().unwrap();
         for i in 0..4 {
-            let key = FieldTaintKey { loc: parent_loc, field: cache_id };
+            let key = FieldTaintKey {
+                loc: parent_loc,
+                field: cache_id,
+            };
             state.add_field(
                 key,
                 VarTaint {
@@ -3067,7 +3253,12 @@ mod field_taint_origin_cap_tests {
         }
         // After 4 add_field calls under cap=2, the cell should have ≤ 2
         // origins (merge_origins truncates).
-        let cell = state.get_field(FieldTaintKey { loc: parent_loc, field: cache_id }).unwrap();
+        let cell = state
+            .get_field(FieldTaintKey {
+                loc: parent_loc,
+                field: cache_id,
+            })
+            .unwrap();
         assert!(
             cell.taint.origins.len() <= 2,
             "field cell origin count must respect cap=2; got {}",
@@ -3298,12 +3489,36 @@ mod pointer_lattice_worklist_tests {
         };
 
         let value_defs = vec![
-            ValueDef { var_name: Some("obj".into()), cfg_node: n_param, block: BlockId(0) },
-            ValueDef { var_name: Some("src".into()), cfg_node: n_source, block: BlockId(0) },
-            ValueDef { var_name: Some("obj".into()), cfg_node: n_assign1, block: BlockId(1) },
-            ValueDef { var_name: Some("obj".into()), cfg_node: n_assign2, block: BlockId(2) },
-            ValueDef { var_name: Some("obj".into()), cfg_node: n_proj, block: BlockId(3) },
-            ValueDef { var_name: Some("read".into()), cfg_node: n_proj, block: BlockId(3) },
+            ValueDef {
+                var_name: Some("obj".into()),
+                cfg_node: n_param,
+                block: BlockId(0),
+            },
+            ValueDef {
+                var_name: Some("src".into()),
+                cfg_node: n_source,
+                block: BlockId(0),
+            },
+            ValueDef {
+                var_name: Some("obj".into()),
+                cfg_node: n_assign1,
+                block: BlockId(1),
+            },
+            ValueDef {
+                var_name: Some("obj".into()),
+                cfg_node: n_assign2,
+                block: BlockId(2),
+            },
+            ValueDef {
+                var_name: Some("obj".into()),
+                cfg_node: n_proj,
+                block: BlockId(3),
+            },
+            ValueDef {
+                var_name: Some("read".into()),
+                cfg_node: n_proj,
+                block: BlockId(3),
+            },
         ];
 
         let mut field_writes = HashMap::new();
@@ -3442,7 +3657,10 @@ mod pointer_lattice_worklist_tests {
         // Predecessor 1: cell with validated_must=true, validated_may=true.
         let mut pred1 = SsaTaintState::initial();
         pred1.add_field(
-            FieldTaintKey { loc: parent_loc, field: _cache_id },
+            FieldTaintKey {
+                loc: parent_loc,
+                field: _cache_id,
+            },
             crate::taint::domain::VarTaint {
                 caps: Cap::ENV_VAR,
                 origins: SmallVec::new(),
@@ -3458,7 +3676,10 @@ mod pointer_lattice_worklist_tests {
         // Worklist join semantics.
         let joined = pred1.join(&pred2);
         let cell = joined
-            .get_field(FieldTaintKey { loc: parent_loc, field: _cache_id })
+            .get_field(FieldTaintKey {
+                loc: parent_loc,
+                field: _cache_id,
+            })
             .expect("cell present on the writer's side");
         assert!(
             !cell.validated_must,
@@ -3471,4 +3692,3 @@ mod pointer_lattice_worklist_tests {
         assert!(cell.taint.caps.contains(Cap::ENV_VAR));
     }
 }
-

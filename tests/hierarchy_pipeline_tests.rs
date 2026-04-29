@@ -48,8 +48,9 @@ fn build_gs(files: &[File<'_>]) -> GlobalSummaries {
     let mut all_ssa: Vec<(FuncKey, SsaFuncSummary)> = Vec::new();
     for f in files {
         let path = Path::new(f.namespace);
-        let (func, ssa, _bodies, _auth) = extract_all_summaries_from_bytes(f.bytes, path, &cfg, None)
-            .expect("extract_all_summaries_from_bytes must succeed");
+        let (func, ssa, _bodies, _auth) =
+            extract_all_summaries_from_bytes(f.bytes, path, &cfg, None)
+                .expect("extract_all_summaries_from_bytes must succeed");
         all_func.extend(func);
         all_ssa.extend(ssa);
     }
@@ -440,8 +441,16 @@ public class ConsoleLogger implements ILogger {
         },
     ]);
 
-    let first = gs.hierarchy().unwrap().subs_of(Lang::Java, "ILogger").to_vec();
+    let first = gs
+        .hierarchy()
+        .unwrap()
+        .subs_of(Lang::Java, "ILogger")
+        .to_vec();
     gs.install_hierarchy();
-    let second = gs.hierarchy().unwrap().subs_of(Lang::Java, "ILogger").to_vec();
+    let second = gs
+        .hierarchy()
+        .unwrap()
+        .subs_of(Lang::Java, "ILogger")
+        .to_vec();
     assert_eq!(first, second, "install_hierarchy must be idempotent");
 }

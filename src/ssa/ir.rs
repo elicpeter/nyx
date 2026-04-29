@@ -591,7 +591,9 @@ mod tests {
 
         let inst = &restored.blocks[0].body[0];
         match &inst.op {
-            SsaOp::FieldProj { receiver, field, .. } => {
+            SsaOp::FieldProj {
+                receiver, field, ..
+            } => {
                 assert_eq!(*receiver, SsaValue(0));
                 assert_eq!(restored.field_name(*field), "mu");
             }

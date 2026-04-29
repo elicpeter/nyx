@@ -39,10 +39,7 @@ fn fused_walltime() {
     let (rx, handle) = nyx_scanner::walk::spawn_file_walker(&fixtures, &cfg);
     handle.join().unwrap();
     let paths: Vec<_> = rx.into_iter().flatten().collect();
-    let bytes_per: Vec<Vec<u8>> = paths
-        .iter()
-        .map(|p| std::fs::read(p).unwrap())
-        .collect();
+    let bytes_per: Vec<Vec<u8>> = paths.iter().map(|p| std::fs::read(p).unwrap()).collect();
     eprintln!("=== fused_walltime: {} files", paths.len());
 
     let mut t_total = vec![];
@@ -84,13 +81,7 @@ fn fused_walltime() {
         let p2_start = Instant::now();
         for (i, path) in paths.iter().enumerate() {
             let s = Instant::now();
-            let _ = analyse_file_fused(
-                &bytes_per[i],
-                path,
-                &cfg,
-                Some(&local_gs),
-                Some(&fixtures),
-            );
+            let _ = analyse_file_fused(&bytes_per[i], path, &cfg, Some(&local_gs), Some(&fixtures));
             per_file_pass2[i].push(s.elapsed().as_micros());
         }
         t_pass2.push(p2_start.elapsed().as_micros());
@@ -120,7 +111,10 @@ fn fused_walltime() {
     );
     eprintln!();
     eprintln!("=== Per-file µs (median across iterations) ===");
-    eprintln!("{:<22} | {:>9} | {:>9} | {:>9}", "fixture", "pass1", "pass2", "p1+p2");
+    eprintln!(
+        "{:<22} | {:>9} | {:>9} | {:>9}",
+        "fixture", "pass1", "pass2", "p1+p2"
+    );
     let mut tot1 = 0u128;
     let mut tot2 = 0u128;
     for (i, path) in paths.iter().enumerate() {
@@ -133,7 +127,10 @@ fn fused_walltime() {
     }
     eprintln!(
         "{:<22} | {:>9} | {:>9} | {:>9}",
-        "TOTAL", tot1, tot2, tot1 + tot2
+        "TOTAL",
+        tot1,
+        tot2,
+        tot1 + tot2
     );
 }
 
@@ -150,10 +147,7 @@ fn fused_stage_breakdown() {
     let (rx, handle) = nyx_scanner::walk::spawn_file_walker(&fixtures, &cfg);
     handle.join().unwrap();
     let paths: Vec<_> = rx.into_iter().flatten().collect();
-    let bytes_per: Vec<Vec<u8>> = paths
-        .iter()
-        .map(|p| std::fs::read(p).unwrap())
-        .collect();
+    let bytes_per: Vec<Vec<u8>> = paths.iter().map(|p| std::fs::read(p).unwrap()).collect();
     eprintln!("=== fused_stage_breakdown: {} files", paths.len());
 
     // Drive pass 1 once so pass 2 has realistic GlobalSummaries.
@@ -179,17 +173,19 @@ fn fused_stage_breakdown() {
     local_gs.install_hierarchy();
 
     // 8 outer slots, 7 lower sub-slots.
-    let mut outer: [Vec<Vec<u128>>; 8] = std::array::from_fn(|_| {
-        (0..paths.len()).map(|_| Vec::new()).collect()
-    });
-    let mut inner: [Vec<Vec<u128>>; 7] = std::array::from_fn(|_| {
-        (0..paths.len()).map(|_| Vec::new()).collect()
-    });
+    let mut outer: [Vec<Vec<u128>>; 8] =
+        std::array::from_fn(|_| (0..paths.len()).map(|_| Vec::new()).collect());
+    let mut inner: [Vec<Vec<u128>>; 7] =
+        std::array::from_fn(|_| (0..paths.len()).map(|_| Vec::new()).collect());
 
     for _iter in 0..ITERATIONS {
         for (i, path) in paths.iter().enumerate() {
             if let Some((o, l)) = perf_stage_breakdown_fused(
-                &bytes_per[i], path, &cfg, Some(&local_gs), Some(&fixtures),
+                &bytes_per[i],
+                path,
+                &cfg,
+                Some(&local_gs),
+                Some(&fixtures),
             ) {
                 for (s, t) in o.iter().enumerate() {
                     outer[s][i].push(*t);
@@ -202,8 +198,14 @@ fn fused_stage_breakdown() {
     }
 
     let outer_names = [
-        "parse+CFG", "shared_lower", "taint_flow", "build_eligible",
-        "ast_queries", "suppression", "auth", "state(reserved)",
+        "parse+CFG",
+        "shared_lower",
+        "taint_flow",
+        "build_eligible",
+        "ast_queries",
+        "suppression",
+        "auth",
+        "state(reserved)",
     ];
     let inner_names = [
         "lower_to_ssa(per-body)",
@@ -240,22 +242,31 @@ fn fused_stage_breakdown() {
     }
     eprintln!();
     eprintln!("=== shared_lower sub-stages (sum of medians, µs) ===");
-    eprintln!("  inner sum          : {inner_sum:>8} µs   (vs outer shared_lower {} µs)", tot_outer[1]);
+    eprintln!(
+        "  inner sum          : {inner_sum:>8} µs   (vs outer shared_lower {} µs)",
+        tot_outer[1]
+    );
     for (s, n) in inner_names.iter().enumerate() {
         let p_lower = 100.0 * tot_inner[s] as f64 / lower_total as f64;
         let p_outer = 100.0 * tot_inner[s] as f64 / outer_sum.max(1) as f64;
-        eprintln!("  {:<32} {:>8} µs   {:>5.1}% of shared_lower   {:>5.1}% of total",
-            n, tot_inner[s], p_lower, p_outer);
+        eprintln!(
+            "  {:<32} {:>8} µs   {:>5.1}% of shared_lower   {:>5.1}% of total",
+            n, tot_inner[s], p_lower, p_outer
+        );
     }
     eprintln!();
     eprintln!("=== Per-file outer µs (median) ===");
-    eprintln!("{:<22} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8}",
-        "fixture", "parseCFG", "lower", "taint", "elig", "astQ", "suppr", "auth");
+    eprintln!(
+        "{:<22} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8}",
+        "fixture", "parseCFG", "lower", "taint", "elig", "astQ", "suppr", "auth"
+    );
     for (i, path) in paths.iter().enumerate() {
         let m: Vec<u128> = (0..7).map(|s| pct(&mut outer[s][i].clone(), 0.5)).collect();
         let name = path.file_name().unwrap().to_string_lossy();
-        eprintln!("{:<22} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8}",
-            name, m[0], m[1], m[2], m[3], m[4], m[5], m[6]);
+        eprintln!(
+            "{:<22} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8}",
+            name, m[0], m[1], m[2], m[3], m[4], m[5], m[6]
+        );
     }
 }
 
@@ -268,12 +279,15 @@ fn stage_breakdown() {
     let (rx, handle) = nyx_scanner::walk::spawn_file_walker(&fixtures, &cfg);
     handle.join().unwrap();
     let paths: Vec<_> = rx.into_iter().flatten().collect();
-    eprintln!("=== perf_breakdown: {} files in {:?}", paths.len(), fixtures);
+    eprintln!(
+        "=== perf_breakdown: {} files in {:?}",
+        paths.len(),
+        fixtures
+    );
 
     // Stage timings: [parse+CFG, taint+SSA, suppression, ast queries, auth, extract_ssa_artifacts]
-    let mut stage: [Vec<Vec<u128>>; 6] = std::array::from_fn(|_| {
-        (0..paths.len()).map(|_| Vec::new()).collect()
-    });
+    let mut stage: [Vec<Vec<u128>>; 6] =
+        std::array::from_fn(|_| (0..paths.len()).map(|_| Vec::new()).collect());
     let mut t_pass1_total = vec![];
     let mut t_pass2_total = vec![];
 
@@ -295,9 +309,9 @@ fn stage_breakdown() {
         let p2_start = Instant::now();
         for (i, path) in paths.iter().enumerate() {
             let bytes = std::fs::read(path).unwrap();
-            if let Some(timings) = ast::perf_stage_breakdown(
-                &bytes, path, &cfg, Some(&global), Some(&fixtures),
-            ) {
+            if let Some(timings) =
+                ast::perf_stage_breakdown(&bytes, path, &cfg, Some(&global), Some(&fixtures))
+            {
                 for (s, t) in timings.iter().enumerate() {
                     stage[s][i].push(*t);
                 }

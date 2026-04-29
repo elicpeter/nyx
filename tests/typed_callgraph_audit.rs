@@ -669,5 +669,9 @@ fn audit_r6_anonymous_caller_without_ssa_summary_is_safe() {
     let cg = build_call_graph(&gs, &[]);
     // Build must finish without panic; the bare call resolves
     // through today's path.
-    assert_eq!(cg.graph.edge_count(), 1, "R-6: bare caller must still resolve");
+    assert_eq!(
+        cg.graph.edge_count(),
+        1,
+        "R-6: bare caller must still resolve"
+    );
 }

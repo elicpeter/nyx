@@ -480,7 +480,11 @@ mod tests {
                     value_args,
                     index_arg,
                 }) => {
-                    assert_eq!(value_args.as_slice(), &[1], "{lang:?} value arg should be 1");
+                    assert_eq!(
+                        value_args.as_slice(),
+                        &[1],
+                        "{lang:?} value arg should be 1"
+                    );
                     assert_eq!(index_arg, Some(0), "{lang:?} index arg should be 0");
                 }
                 other => panic!("{lang:?}: expected indexed Store, got {other:?}"),

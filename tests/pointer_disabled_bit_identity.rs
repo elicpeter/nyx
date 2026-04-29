@@ -116,7 +116,8 @@ fn pointer_toggle_preserves_finding_set() {
         let disabled = with_env("0", || collect_finding_ids(fixture));
         let enabled = with_env("1", || collect_finding_ids(fixture));
         assert_eq!(
-            disabled, enabled,
+            disabled,
+            enabled,
             "NYX_POINTER_ANALYSIS toggle must preserve the finding \
              set on fixture {fixture:?}.  off-only: {:#?}\non-only: {:#?}",
             disabled.difference(&enabled).collect::<Vec<_>>(),
@@ -160,8 +161,7 @@ fn pointer_disabled_finding_set_matches_baseline() {
         if let Some(parent) = snapshot_path.parent() {
             std::fs::create_dir_all(parent).expect("failed to create snapshots dir");
         }
-        let json =
-            serde_json::to_string_pretty(&current).expect("failed to serialize finding set");
+        let json = serde_json::to_string_pretty(&current).expect("failed to serialize finding set");
         std::fs::write(&snapshot_path, &json).expect("failed to write snapshot");
         eprintln!("Snapshot written: {}", snapshot_path.display());
         return;
@@ -176,8 +176,8 @@ fn pointer_disabled_finding_set_matches_baseline() {
             if let Some(parent) = snapshot_path.parent() {
                 std::fs::create_dir_all(parent).expect("failed to create snapshots dir");
             }
-            let json = serde_json::to_string_pretty(&current)
-                .expect("failed to serialize finding set");
+            let json =
+                serde_json::to_string_pretty(&current).expect("failed to serialize finding set");
             std::fs::write(&snapshot_path, &json).expect("failed to write snapshot");
             eprintln!(
                 "Initial snapshot written to {}; re-run to verify.",

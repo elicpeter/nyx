@@ -134,9 +134,7 @@ async fn overview(State(state): State<AppState>) -> Json<OverviewResponse> {
             has_history: history.scans.len() >= 2,
             // Suppression-hygiene modifier — populated when the
             // suppression panel was computable for this scan.
-            blanket_suppression_rate: suppression_hygiene
-                .as_ref()
-                .map(|s| s.blanket_rate),
+            blanket_suppression_rate: suppression_hygiene.as_ref().map(|s| s.blanket_rate),
         },
     ));
 
@@ -244,8 +242,7 @@ fn set_baseline_inner(state: &AppState, scan_id: &str) -> Result<StatusCode, Sta
         .db_pool
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let idx =
-        Indexer::from_pool("_scans", pool).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let idx = Indexer::from_pool("_scans", pool).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     idx.set_metadata(BASELINE_KEY, scan_id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
@@ -257,8 +254,7 @@ async fn clear_baseline(State(state): State<AppState>) -> Result<StatusCode, Sta
         .db_pool
         .as_ref()
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let idx =
-        Indexer::from_pool("_scans", pool).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let idx = Indexer::from_pool("_scans", pool).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     idx.delete_metadata(BASELINE_KEY)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
@@ -290,16 +286,10 @@ impl ScanHistory {
         let mut first_seen: HashMap<String, String> = HashMap::new();
 
         let Some(ref pool) = state.db_pool else {
-            return Self {
-                scans,
-                first_seen,
-            };
+            return Self { scans, first_seen };
         };
         let Ok(idx) = Indexer::from_pool("_scans", pool) else {
-            return Self {
-                scans,
-                first_seen,
-            };
+            return Self { scans, first_seen };
         };
 
         let mut records = match idx.list_scans(limit as i64) {
@@ -324,12 +314,10 @@ impl ScanHistory {
             // Seed first_seen for new fingerprints.
             if let Some(ref ts) = started_at {
                 for fp in &fps {
-                    first_seen
-                        .entry(fp.clone())
-                        .or_insert_with(|| {
-                            bulk_inserts.push((fp.clone(), ts.clone()));
-                            ts.clone()
-                        });
+                    first_seen.entry(fp.clone()).or_insert_with(|| {
+                        bulk_inserts.push((fp.clone(), ts.clone()));
+                        ts.clone()
+                    });
                 }
             }
             scans.push(HistoricScan {
@@ -345,10 +333,7 @@ impl ScanHistory {
             let _ = idx.record_finding_first_seen_bulk(&bulk_inserts);
         }
 
-        Self {
-            scans,
-            first_seen,
-        }
+        Self { scans, first_seen }
     }
 
     /// Compare current findings against the most-recent historical scan and
@@ -807,13 +792,7 @@ fn compute_scanner_quality(
     // Engine metrics from scan_metrics table (if available via Indexer).
     let (functions_analyzed, call_edges, unresolved_calls) = latest_scan_id
         .and_then(|id| idx.get_scan_metrics(id).ok().flatten())
-        .map(|m| {
-            (
-                m.functions_analyzed,
-                m.call_edges,
-                m.unresolved_calls,
-            )
-        })
+        .map(|m| (m.functions_analyzed, m.call_edges, m.unresolved_calls))
         .unwrap_or((0, 0, 0));
 
     let call_resolution_rate = if call_edges + unresolved_calls > 0 {
@@ -949,8 +928,7 @@ fn compute_suppression_hygiene(state: &AppState, findings: &[Diag]) -> Suppressi
         }
     }
     if total_suppressed > 0 {
-        let blanket =
-            hygiene.rule_level + hygiene.file_level + hygiene.rule_in_file_level;
+        let blanket = hygiene.rule_level + hygiene.file_level + hygiene.rule_in_file_level;
         hygiene.blanket_rate = blanket as f64 / total_suppressed as f64;
     }
     hygiene

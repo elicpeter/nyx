@@ -319,9 +319,7 @@ mod tests {
     ///   v0 = Const, v1 = Assign(v0)
     /// with `node1_decorator` applied to v1's CFG node so individual
     /// skip-conditions can be exercised.
-    fn build_two_inst_body(
-        decorate: impl FnOnce(&mut NodeInfo),
-    ) -> (Cfg, SsaBody) {
+    fn build_two_inst_body(decorate: impl FnOnce(&mut NodeInfo)) -> (Cfg, SsaBody) {
         let mut cfg: Cfg = Graph::new();
         let n0 = cfg.add_node(make_cfg_node(StmtKind::Seq));
         let mut n1_info = make_cfg_node(StmtKind::Seq);
@@ -574,15 +572,9 @@ mod tests {
         assert_eq!(eliminated, 1, "v1 should be eliminated");
         let call_inst = &body.blocks[0].body[2];
         match &call_inst.op {
-            SsaOp::Call {
-                args, receiver, ..
-            } => {
+            SsaOp::Call { args, receiver, .. } => {
                 assert_eq!(receiver, &Some(SsaValue(0)), "receiver rewritten to root");
-                assert_eq!(
-                    args[0][0],
-                    SsaValue(0),
-                    "call arg rewritten to root"
-                );
+                assert_eq!(args[0][0], SsaValue(0), "call arg rewritten to root");
             }
             other => panic!("expected Call op, got {:?}", other),
         }

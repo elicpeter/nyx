@@ -85,8 +85,8 @@ async fn put_config_raw(
         .to_string();
 
     // Validate by parsing into Config (round-trip check).
-    let parsed: Config = toml::from_str(&content)
-        .map_err(|e| bad_request(&format!("invalid TOML: {e}")))?;
+    let parsed: Config =
+        toml::from_str(&content).map_err(|e| bad_request(&format!("invalid TOML: {e}")))?;
     if let Err(errs) = parsed.validate() {
         let joined = errs
             .iter()

@@ -110,7 +110,11 @@ impl IntoResponse for ApiError {
             code: self.code.as_str(),
             detail: self.detail.as_ref(),
         };
-        (self.code.status(), Json(serde_json::to_value(&body).unwrap())).into_response()
+        (
+            self.code.status(),
+            Json(serde_json::to_value(&body).unwrap()),
+        )
+            .into_response()
     }
 }
 

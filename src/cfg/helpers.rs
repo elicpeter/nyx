@@ -718,7 +718,10 @@ pub(crate) fn collect_idents(n: Node, code: &[u8], out: &mut Vec<String>) {
 /// initial W5 rollout (Java/Ruby/PHP/C/C++).
 #[inline]
 pub(crate) fn is_subscript_kind(kind: &str) -> bool {
-    matches!(kind, "subscript_expression" | "subscript" | "index_expression")
+    matches!(
+        kind,
+        "subscript_expression" | "subscript" | "index_expression"
+    )
 }
 
 /// Pointer-Phase 6 / W5: when the LHS of an assignment statement is a
@@ -750,10 +753,7 @@ pub(crate) fn subscript_lhs_node<'a>(lhs: Node<'a>, lang: &str) -> Option<Node<'
 /// receiver resolves cleanly to a SSA-renamed local, since the W2/W4
 /// container hooks need a stable receiver var_name to drive
 /// `pt(receiver)`.
-pub(crate) fn subscript_components<'a>(
-    n: Node<'a>,
-    code: &'a [u8],
-) -> Option<(String, String)> {
+pub(crate) fn subscript_components<'a>(n: Node<'a>, code: &'a [u8]) -> Option<(String, String)> {
     if !is_subscript_kind(n.kind()) {
         return None;
     }

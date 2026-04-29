@@ -749,10 +749,7 @@ impl<'a> ParsedSource<'a> {
                     // dynamic / variable values (let those fire).
                     if cq.meta.id == "php.deser.unserialize"
                         && self.lang_slug == "php"
-                        && is_php_unserialize_allowed_classes_restricted(
-                            cap.node,
-                            self.bytes,
-                        )
+                        && is_php_unserialize_allowed_classes_restricted(cap.node, self.bytes)
                     {
                         continue;
                     }
@@ -772,11 +769,7 @@ impl<'a> ParsedSource<'a> {
                     // (only width-bounded numeric / char specifiers, or
                     // precision-bounded `%.<N>s` / `%.*s`).
                     if (self.lang_slug == "c" || self.lang_slug == "cpp")
-                        && is_c_buffer_call_literal_safe(
-                            cq.meta.id,
-                            cap.node,
-                            self.bytes,
-                        )
+                        && is_c_buffer_call_literal_safe(cq.meta.id, cap.node, self.bytes)
                     {
                         continue;
                     }
@@ -1101,8 +1094,7 @@ impl<'a> ParsedFile<'a> {
         // path-safe-suppressed sink spans that state analysis consumes.
         // See the equivalent reset in `analyse_file_fused`.
         crate::taint::ssa_transfer::reset_path_safe_suppressed_spans();
-        let (ssa_summaries, callee_bodies) =
-            self.lower_ssa_for_fused(global_summaries, scan_root);
+        let (ssa_summaries, callee_bodies) = self.lower_ssa_for_fused(global_summaries, scan_root);
         self.run_cfg_analyses_with_lowered(
             cfg,
             global_summaries,
@@ -1931,11 +1923,7 @@ fn find_named_child_of_kind<'a>(
     None
 }
 
-fn param_list_contains_name(
-    params: tree_sitter::Node,
-    target_name: &str,
-    bytes: &[u8],
-) -> bool {
+fn param_list_contains_name(params: tree_sitter::Node, target_name: &str, bytes: &[u8]) -> bool {
     for i in 0..params.named_child_count() as u32 {
         let Some(param) = params.named_child(i) else {
             continue;
@@ -2186,11 +2174,7 @@ fn is_php_unserialize_allowed_classes_restricted(
 ///   - format is `concatenated_string` containing identifier macros (e.g.
 ///     `"%" PRId64`) — we cannot statically expand the macro, so refuse
 ///   - bare `%s` in format → keep firing (could read unbounded length)
-fn is_c_buffer_call_literal_safe(
-    rule_id: &str,
-    cap_node: tree_sitter::Node,
-    bytes: &[u8],
-) -> bool {
+fn is_c_buffer_call_literal_safe(rule_id: &str, cap_node: tree_sitter::Node, bytes: &[u8]) -> bool {
     let kind = match rule_id {
         "c.memory.strcpy" | "cpp.memory.strcpy" => CBufferRule::StrcpyOrCat,
         "c.memory.strcat" | "cpp.memory.strcat" => CBufferRule::StrcpyOrCat,
@@ -2343,7 +2327,9 @@ fn c_string_literal_payload(node: tree_sitter::Node, bytes: &[u8]) -> Option<Str
         .trim_start_matches("u8")
         .trim_start_matches('u')
         .trim_start_matches('U');
-    let s = after_prefix.strip_prefix('"').and_then(|s| s.strip_suffix('"'));
+    let s = after_prefix
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'));
     s.map(|s| s.to_string())
 }
 
@@ -2395,7 +2381,8 @@ pub(crate) fn sprintf_format_is_safe(fmt: &str) -> bool {
             }
         }
         // Length modifiers: h hh l ll L q z j t
-        while i < bytes.len() && matches!(bytes[i], b'h' | b'l' | b'L' | b'q' | b'z' | b'j' | b't') {
+        while i < bytes.len() && matches!(bytes[i], b'h' | b'l' | b'L' | b'q' | b'z' | b'j' | b't')
+        {
             i += 1;
         }
         if i >= bytes.len() {
@@ -2405,8 +2392,8 @@ pub(crate) fn sprintf_format_is_safe(fmt: &str) -> bool {
         i += 1;
         match conv {
             // Numeric / char / pointer specifiers — bounded output for any input
-            b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'c' | b'e' | b'E' | b'f' | b'F'
-            | b'g' | b'G' | b'a' | b'A' | b'p' | b'n' => continue,
+            b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'c' | b'e' | b'E' | b'f' | b'F' | b'g'
+            | b'G' | b'a' | b'A' | b'p' | b'n' => continue,
             // String specifier: only safe when precision-bounded
             b's' => {
                 if !has_precision {
@@ -2544,11 +2531,9 @@ impl TaintSuppressionCtx {
                 // would silently silence AST-pattern findings on every Go
                 // CRUD handler whose Decode destination is an `&req`-style
                 // address-of-local.
-                let is_synth_source = info
-                    .taint
-                    .defines
-                    .as_deref()
-                    .is_some_and(|d| d.starts_with("__nyx_src_") || d.starts_with("__nyx_chainsrc_"));
+                let is_synth_source = info.taint.defines.as_deref().is_some_and(|d| {
+                    d.starts_with("__nyx_src_") || d.starts_with("__nyx_chainsrc_")
+                });
                 let byte = info.classification_span().0;
                 let point = byte_offset_to_point(tree, byte);
                 let line = point.row + 1;
@@ -2836,8 +2821,7 @@ pub fn analyse_file_fused(
             &lowered_summaries,
             &lowered_bodies,
         ));
-        let eligible_bodies =
-            crate::taint::build_eligible_bodies(&parsed.file_cfg, lowered_bodies);
+        let eligible_bodies = crate::taint::build_eligible_bodies(&parsed.file_cfg, lowered_bodies);
         let summaries_vec: Vec<_> = lowered_summaries.into_iter().collect();
         (summaries_vec, eligible_bodies)
     } else {

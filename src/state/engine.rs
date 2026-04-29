@@ -671,10 +671,7 @@ mod tests {
         );
         // Every reachable node must have a state.
         for n in [entry, a, b, loop_body, exit] {
-            assert!(
-                result.states.contains_key(&n),
-                "node {n:?} must be visited"
-            );
+            assert!(result.states.contains_key(&n), "node {n:?} must be visited");
         }
     }
 }

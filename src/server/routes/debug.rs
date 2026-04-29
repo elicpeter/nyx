@@ -298,7 +298,11 @@ async fn get_type_facts(
     let config = state.config.read();
     let analysis = debug::analyse_file(&path, &config)?;
     let (ssa, opt, _cfg) = debug::analyse_function_ssa(&analysis, &q.function)?;
-    Ok(Json(TypeFactsView::from_optimize(&opt, &ssa, &analysis.bytes)))
+    Ok(Json(TypeFactsView::from_optimize(
+        &opt,
+        &ssa,
+        &analysis.bytes,
+    )))
 }
 
 /// GET /api/debug/auth?file=<path>

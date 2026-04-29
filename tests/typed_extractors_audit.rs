@@ -43,10 +43,7 @@ fn first_node_of_kind<'a>(
     tree: &'a tree_sitter::Tree,
     func_kinds: &[&str],
 ) -> tree_sitter::Node<'a> {
-    fn walk<'a>(
-        node: tree_sitter::Node<'a>,
-        kinds: &[&str],
-    ) -> Option<tree_sitter::Node<'a>> {
+    fn walk<'a>(node: tree_sitter::Node<'a>, kinds: &[&str]) -> Option<tree_sitter::Node<'a>> {
         if kinds.contains(&node.kind()) {
             return Some(node);
         }

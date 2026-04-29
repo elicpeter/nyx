@@ -23,7 +23,7 @@
 #![allow(clippy::collapsible_if, clippy::unnecessary_map_or)]
 
 use crate::cfg::Cfg;
-use crate::labels::{bare_method_name, Cap};
+use crate::labels::{Cap, bare_method_name};
 use crate::ssa::ir::*;
 use crate::ssa::pointsto::{ContainerOp, classify_container_op};
 use crate::symbol::Lang;

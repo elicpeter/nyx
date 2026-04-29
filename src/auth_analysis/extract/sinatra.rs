@@ -4,10 +4,10 @@ use super::common::{
     collect_top_level_units, named_children, span, string_literal_value,
 };
 use crate::auth_analysis::config::{AuthAnalysisRules, matches_name};
-use crate::labels::bare_method_name;
 use crate::auth_analysis::model::{
     AnalysisUnitKind, AuthorizationModel, CallSite, Framework, HttpMethod, RouteRegistration,
 };
+use crate::labels::bare_method_name;
 use crate::utils::project::{DetectedFramework, FrameworkContext};
 use std::path::Path;
 use tree_sitter::{Node, Tree};

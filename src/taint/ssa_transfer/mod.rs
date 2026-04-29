@@ -1068,20 +1068,12 @@ fn compute_succ_states(
                     .any(|(_, s)| s.has_contradiction());
                 if true_pred_contra {
                     true_state = SsaTaintState::bot();
-                } else if true_state
-                    .path_env
-                    .as_ref()
-                    .is_some_and(|e| e.is_unsat())
-                {
+                } else if true_state.path_env.as_ref().is_some_and(|e| e.is_unsat()) {
                     true_state.path_env = None;
                 }
                 if false_pred_contra {
                     false_state = SsaTaintState::bot();
-                } else if false_state
-                    .path_env
-                    .as_ref()
-                    .is_some_and(|e| e.is_unsat())
-                {
+                } else if false_state.path_env.as_ref().is_some_and(|e| e.is_unsat()) {
                     false_state.path_env = None;
                 }
 
@@ -2500,10 +2492,7 @@ fn apply_field_points_to_writes(
                     continue;
                 }
                 for loc in pt.iter() {
-                    let key = crate::taint::ssa_transfer::state::FieldTaintKey {
-                        loc,
-                        field: fid,
-                    };
+                    let key = crate::taint::ssa_transfer::state::FieldTaintKey { loc, field: fid };
                     state.add_field(key, cell_taint.clone(), combined_must, combined_may);
                 }
             }
@@ -2530,8 +2519,15 @@ fn apply_container_elem_read_w4(
     transfer: &SsaTaintTransfer,
     state: &mut SsaTaintState,
 ) {
-    let SsaOp::Call { callee, receiver, .. } = &inst.op else { return };
-    let (Some(pf), Some(rcv)) = (transfer.pointer_facts, *receiver) else { return };
+    let SsaOp::Call {
+        callee, receiver, ..
+    } = &inst.op
+    else {
+        return;
+    };
+    let (Some(pf), Some(rcv)) = (transfer.pointer_facts, *receiver) else {
+        return;
+    };
     if !crate::pointer::is_container_read_callee_pub(callee) {
         return;
     }
@@ -2610,7 +2606,11 @@ fn ssa_value_validated_bits(
     interner: &crate::state::symbol::SymbolInterner,
     state: &SsaTaintState,
 ) -> (bool, bool) {
-    let name = match ssa.value_defs.get(v.0 as usize).and_then(|vd| vd.var_name.as_deref()) {
+    let name = match ssa
+        .value_defs
+        .get(v.0 as usize)
+        .and_then(|vd| vd.var_name.as_deref())
+    {
         Some(n) => n,
         None => return (false, false),
     };
@@ -2731,12 +2731,8 @@ pub(super) fn transfer_inst(
                                         push_origin_bounded(&mut elem_origins, *o);
                                     }
                                 }
-                                let (am, av) = ssa_value_validated_bits(
-                                    arg_v,
-                                    ssa,
-                                    transfer.interner,
-                                    state,
-                                );
+                                let (am, av) =
+                                    ssa_value_validated_bits(arg_v, ssa, transfer.interner, state);
                                 elem_must_all &= am;
                                 elem_may_any |= av;
                             }
@@ -2757,12 +2753,7 @@ pub(super) fn transfer_inst(
                                     loc,
                                     field: crate::ssa::ir::FieldId::ELEM,
                                 };
-                                state.add_field(
-                                    key,
-                                    cell.clone(),
-                                    elem_must_all,
-                                    elem_may_any,
-                                );
+                                state.add_field(key, cell.clone(), elem_must_all, elem_may_any);
                             }
                         }
                     }
@@ -3741,7 +3732,6 @@ pub(super) fn transfer_inst(
                     },
                 );
             }
-
         }
 
         SsaOp::Assign(uses) => {
@@ -3866,12 +3856,8 @@ pub(super) fn transfer_inst(
                         if let SsaOp::Assign(uses) = &inst.op {
                             for &u in uses {
                                 saw_use = true;
-                                let (am, av) = ssa_value_validated_bits(
-                                    u,
-                                    ssa,
-                                    transfer.interner,
-                                    state,
-                                );
+                                let (am, av) =
+                                    ssa_value_validated_bits(u, ssa, transfer.interner, state);
                                 must_all &= am;
                                 may_any |= av;
                             }
@@ -3884,12 +3870,7 @@ pub(super) fn transfer_inst(
                                 loc,
                                 field: fid,
                             };
-                            state.add_field(
-                                key,
-                                rhs_taint.clone(),
-                                must_all,
-                                may_any,
-                            );
+                            state.add_field(key, rhs_taint.clone(), must_all, may_any);
                         }
                     }
                 }
@@ -4050,7 +4031,9 @@ pub(super) fn transfer_inst(
             // predecessors whose incoming edge carries no definition.
         }
 
-        SsaOp::FieldProj { receiver, field, .. } => {
+        SsaOp::FieldProj {
+            receiver, field, ..
+        } => {
             // Field projection: propagate the receiver's full taint
             // record to the projected value.  Phase 1 keeps the simple
             // pass-through behaviour — `obj.f` carries `obj`'s caps and
@@ -4095,16 +4078,9 @@ pub(super) fn transfer_inst(
                         // avoid a struct-with-`length`-field reading
                         // taint from a sibling array's `push` writes.
                         let mut hit_specific = false;
-                        for field_id in [
-                            *field,
-                            crate::ssa::ir::FieldId::ANY_FIELD,
-                        ]
-                        .iter()
-                        .copied()
+                        for field_id in [*field, crate::ssa::ir::FieldId::ANY_FIELD].iter().copied()
                         {
-                            if field_id == crate::ssa::ir::FieldId::ANY_FIELD
-                                && hit_specific
-                            {
+                            if field_id == crate::ssa::ir::FieldId::ANY_FIELD && hit_specific {
                                 break;
                             }
                             if field_id == crate::ssa::ir::FieldId::ANY_FIELD
@@ -5148,14 +5124,13 @@ fn collect_block_events(
         // (`return_bits &= !sanitizer_bits`); without this mirror at the
         // sink-detection site, the sink still fires on the call's own
         // arguments / receiver despite the sanitizer label.
-        let same_node_sanitizer_caps =
-            info.taint.labels.iter().fold(Cap::empty(), |acc, lbl| {
-                if let DataLabel::Sanitizer(caps) = lbl {
-                    acc | *caps
-                } else {
-                    acc
-                }
-            });
+        let same_node_sanitizer_caps = info.taint.labels.iter().fold(Cap::empty(), |acc, lbl| {
+            if let DataLabel::Sanitizer(caps) = lbl {
+                acc | *caps
+            } else {
+                acc
+            }
+        });
         if !same_node_sanitizer_caps.is_empty() {
             sink_caps &= !same_node_sanitizer_caps;
             if sink_caps.is_empty() {
@@ -7984,10 +7959,8 @@ fn resolve_callee_full(
                 let mut covered: usize = 0;
                 for key in &widened {
                     if let Some(ssa_sum) = gs.get_ssa(key) {
-                        let r = convert_ssa_to_resolved_for_caller(
-                            ssa_sum,
-                            Some(transfer.namespace),
-                        );
+                        let r =
+                            convert_ssa_to_resolved_for_caller(ssa_sum, Some(transfer.namespace));
                         accum = Some(match accum {
                             None => r,
                             Some(a) => merge_resolved_summaries_fanout(a, r),
@@ -8400,11 +8373,7 @@ fn merge_resolved_summaries_fanout(
     // dedup, so the same callee-internal sink isn't reported twice when
     // multiple impls share an inherited definition.
     for (idx, sites) in r.param_to_sink_sites {
-        if let Some(slot) = acc
-            .param_to_sink_sites
-            .iter_mut()
-            .find(|(i, _)| *i == idx)
-        {
+        if let Some(slot) = acc.param_to_sink_sites.iter_mut().find(|(i, _)| *i == idx) {
             for site in sites {
                 if !slot.1.iter().any(|s| s == &site) {
                     slot.1.push(site);

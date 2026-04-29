@@ -84,8 +84,16 @@ impl StringFact {
         let prefix = truncate_prefix(s);
         let suffix = truncate_suffix(s);
         Self {
-            prefix: if prefix.is_empty() { None } else { Some(prefix) },
-            suffix: if suffix.is_empty() { None } else { Some(suffix) },
+            prefix: if prefix.is_empty() {
+                None
+            } else {
+                Some(prefix)
+            },
+            suffix: if suffix.is_empty() {
+                None
+            } else {
+                Some(suffix)
+            },
             domain: Some(vec![s.to_string()]),
             is_bottom: false,
         }
@@ -95,7 +103,11 @@ impl StringFact {
     pub fn from_prefix(p: &str) -> Self {
         let prefix = truncate_prefix(p);
         Self {
-            prefix: if prefix.is_empty() { None } else { Some(prefix) },
+            prefix: if prefix.is_empty() {
+                None
+            } else {
+                Some(prefix)
+            },
             suffix: None,
             domain: None,
             is_bottom: false,
@@ -107,7 +119,11 @@ impl StringFact {
         let suffix = truncate_suffix(s);
         Self {
             prefix: None,
-            suffix: if suffix.is_empty() { None } else { Some(suffix) },
+            suffix: if suffix.is_empty() {
+                None
+            } else {
+                Some(suffix)
+            },
             domain: None,
             is_bottom: false,
         }
@@ -783,7 +799,8 @@ mod tests {
                     a.join(b),
                     b.join(a),
                     "join not commutative for {:?} / {:?}",
-                    a, b
+                    a,
+                    b
                 );
             }
         }
@@ -807,7 +824,8 @@ mod tests {
                     a.meet(b),
                     b.meet(a),
                     "meet not commutative for {:?} / {:?}",
-                    a, b
+                    a,
+                    b
                 );
             }
         }
@@ -846,7 +864,10 @@ mod tests {
                 assert!(
                     j.leq(&w),
                     "widen({:?}, {:?}) = {:?} does not over-approximate join = {:?}",
-                    a, b, w, j
+                    a,
+                    b,
+                    w,
+                    j
                 );
             }
         }
@@ -869,12 +890,16 @@ mod tests {
                 assert!(
                     a.leq(&j),
                     "a ⊑ a ⊔ b failed for {:?}, {:?} (join={:?})",
-                    a, b, j
+                    a,
+                    b,
+                    j
                 );
                 assert!(
                     b.leq(&j),
                     "b ⊑ a ⊔ b failed for {:?}, {:?} (join={:?})",
-                    a, b, j
+                    a,
+                    b,
+                    j
                 );
             }
         }

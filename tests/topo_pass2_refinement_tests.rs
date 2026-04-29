@@ -162,16 +162,14 @@ fn refinement_does_not_lose_required_findings_vs_legacy() {
         let _scope = EnvScope::set("NYX_TOPO_REFINE", "0");
         scan_fixture_dir(&dir, AnalysisMode::Full)
     };
-    let off_ids: std::collections::BTreeSet<String> =
-        off.iter().map(|d| d.id.clone()).collect();
+    let off_ids: std::collections::BTreeSet<String> = off.iter().map(|d| d.id.clone()).collect();
 
     // Run with refinement ON.
     let on = {
         let _scope = EnvScope::set("NYX_TOPO_REFINE", "1");
         scan_fixture_dir(&dir, AnalysisMode::Full)
     };
-    let on_ids: std::collections::BTreeSet<String> =
-        on.iter().map(|d| d.id.clone()).collect();
+    let on_ids: std::collections::BTreeSet<String> = on.iter().map(|d| d.id.clone()).collect();
 
     // Refinement must be a superset of legacy findings.  Strict
     // equality is too tight (refinement may legitimately surface

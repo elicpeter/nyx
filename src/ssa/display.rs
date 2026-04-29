@@ -72,9 +72,7 @@ impl fmt::Display for SsaBody {
                     } => {
                         // Resolve the field name through the body's interner
                         // so display output matches the original source field.
-                        let name = self
-                            .field_interner
-                            .resolve(*field);
+                        let name = self.field_interner.resolve(*field);
                         if let Some(ty) = projected_type {
                             write!(f, "field_proj(v{}, {name:?}) :: {ty:?}", receiver.0)?;
                         } else {

@@ -409,10 +409,7 @@ mod tests {
                 assert_eq!(a.join(b), b.join(a), "commutativity broken ({a:?},{b:?})");
                 // leq consistent with join: a ⊑ b iff a ⊔ b = b
                 let consistent = a.leq(b) == (a.join(b) == *b);
-                assert!(
-                    consistent,
-                    "leq/join consistency broken ({a:?} ⊑ {b:?})"
-                );
+                assert!(consistent, "leq/join consistency broken ({a:?} ⊑ {b:?})");
                 for c in &vals {
                     // Associativity
                     assert_eq!(
@@ -436,7 +433,11 @@ mod tests {
         for a in &vals {
             assert_eq!(a.join(a), *a, "AuthLevel idempotence broken on {a:?}");
             for b in &vals {
-                assert_eq!(a.join(b), b.join(a), "AuthLevel commutativity ({a:?},{b:?})");
+                assert_eq!(
+                    a.join(b),
+                    b.join(a),
+                    "AuthLevel commutativity ({a:?},{b:?})"
+                );
                 for c in &vals {
                     assert_eq!(
                         a.join(b).join(c),

@@ -71,10 +71,7 @@ pub enum AbsLoc {
     /// Heap field of a parent location: `parent.f`.  `parent` is
     /// itself a [`LocId`] — chains of field accesses produce nested
     /// `Field` locations.  Depth is bounded by [`MAX_FIELD_DEPTH`].
-    Field {
-        parent: LocId,
-        field: FieldId,
-    },
+    Field { parent: LocId, field: FieldId },
 }
 
 /// Per-body interner mapping [`AbsLoc`] → dense [`LocId`].

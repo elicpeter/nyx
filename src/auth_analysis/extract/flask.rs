@@ -4,9 +4,9 @@ use super::common::{
     push_route_registration, string_literal_value, text, visit_named_nodes,
 };
 use crate::auth_analysis::config::{AuthAnalysisRules, matches_name};
-use crate::labels::bare_method_name;
 use crate::auth_analysis::extract::common::{collect_top_level_units, decorated_definition_child};
 use crate::auth_analysis::model::{AuthorizationModel, CallSite, Framework, HttpMethod};
+use crate::labels::bare_method_name;
 use crate::utils::project::{DetectedFramework, FrameworkContext};
 use std::path::Path;
 use tree_sitter::{Node, Tree};

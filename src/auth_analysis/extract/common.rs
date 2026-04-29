@@ -1,10 +1,10 @@
 use crate::auth_analysis::config::{AuthAnalysisRules, canonical_name, matches_name, strip_quotes};
-use crate::labels::bare_method_name;
 use crate::auth_analysis::model::{
     AnalysisUnit, AnalysisUnitKind, AuthCheck, AuthCheckKind, AuthorizationModel, CallSite,
     Framework, HttpMethod, OperationKind, RouteRegistration, SensitiveOperation, SinkClass,
     ValueRef, ValueSourceKind,
 };
+use crate::labels::bare_method_name;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tree_sitter::Node;
@@ -897,7 +897,11 @@ fn collect_member_alias_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitSt
     let target = unwrap_try_like(value);
     if !matches!(
         target.kind(),
-        "member_expression" | "attribute" | "selector_expression" | "field_expression" | "field_access"
+        "member_expression"
+            | "attribute"
+            | "selector_expression"
+            | "field_expression"
+            | "field_access"
     ) {
         return;
     }
@@ -967,7 +971,9 @@ fn collect_row_population(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
         arg_refs.extend(extract_value_refs(arg, bytes));
     }
     let call_line = call_node.start_position().row + 1;
-    state.row_population_data.insert(var_name, (call_line, arg_refs));
+    state
+        .row_population_data
+        .insert(var_name, (call_line, arg_refs));
 }
 
 /// A3: record `let V = CALL(..)` (or `.await?` / `?` / reference
@@ -1172,10 +1178,7 @@ fn chain_text_from_value(node: Node<'_>, bytes: &[u8]) -> Option<String> {
             let t = text(node, bytes);
             if t.is_empty() { None } else { Some(t) }
         }
-        "field_expression"
-        | "member_expression"
-        | "field_access"
-        | "scoped_identifier" => {
+        "field_expression" | "member_expression" | "field_access" | "scoped_identifier" => {
             let chain = member_chain(node, bytes);
             if chain.is_empty() {
                 None
@@ -1241,10 +1244,7 @@ fn process_destructure_entry(
     let key_lower = key.to_ascii_lowercase();
     match kind {
         DestructureRhsKind::SessionContainer => {
-            if matches!(
-                key_lower.as_str(),
-                "user" | "currentuser" | "current_user"
-            ) {
+            if matches!(key_lower.as_str(), "user" | "currentuser" | "current_user") {
                 state.self_actor_vars.insert(local.to_string());
             }
         }
@@ -1276,11 +1276,7 @@ fn value_is_session_provider_chain(node: Node<'_>, bytes: &[u8]) -> bool {
             // `request.session`, plus the Koa `ctx.state` shape.
             matches!(
                 joined.as_str(),
-                "ctx.session"
-                    | "ctx.state"
-                    | "req.session"
-                    | "request.session"
-                    | "session"
+                "ctx.session" | "ctx.state" | "req.session" | "request.session" | "session"
             )
         }
         "identifier" => {
@@ -3788,10 +3784,7 @@ mod tests {
         assert!(type_text_is_trpc_options("GetOptions", &aliases));
 
         // Generic-wrapped alias.
-        assert!(type_text_is_trpc_options(
-            ": Promise<GetOptions>",
-            &aliases
-        ));
+        assert!(type_text_is_trpc_options(": Promise<GetOptions>", &aliases));
         assert!(type_text_is_trpc_options(
             ": NonNullable<UpdateOptions>",
             &aliases
@@ -3802,10 +3795,7 @@ mod tests {
         assert!(!type_text_is_trpc_options(": Promise<Foo>", &aliases));
         assert!(!type_text_is_trpc_options(": SomeRandomType", &aliases));
         // Substring of a longer identifier must NOT match.
-        assert!(!type_text_is_trpc_options(
-            ": MyGetOptionsX",
-            &aliases
-        ));
+        assert!(!type_text_is_trpc_options(": MyGetOptionsX", &aliases));
     }
 
     #[test]

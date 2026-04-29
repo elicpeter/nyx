@@ -678,7 +678,10 @@ mod tests {
                 assert!(
                     j.leq(&w),
                     "widen({:?}, {:?}) = {:?} does not over-approx join = {:?}",
-                    a, b, w, j
+                    a,
+                    b,
+                    w,
+                    j
                 );
             }
         }

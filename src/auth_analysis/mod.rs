@@ -253,8 +253,7 @@ fn apply_typed_bounded_params(model: &mut model::AuthorizationModel, var_types: 
                         }
                     }
                     if !bounded.is_empty() {
-                        unit.typed_bounded_dto_fields
-                            .insert(name.clone(), bounded);
+                        unit.typed_bounded_dto_fields.insert(name.clone(), bounded);
                     }
                 }
                 _ => {}

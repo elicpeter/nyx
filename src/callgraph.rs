@@ -333,15 +333,11 @@ impl TypeHierarchyIndex {
                 if sub.is_empty() || sup.is_empty() {
                     continue;
                 }
-                let subs = by_super
-                    .entry((lang, sup.clone()))
-                    .or_default();
+                let subs = by_super.entry((lang, sup.clone())).or_default();
                 if !subs.iter().any(|s| s == sub) {
                     subs.push(sub.clone());
                 }
-                let sups = by_sub
-                    .entry((lang, sub.clone()))
-                    .or_default();
+                let sups = by_sub.entry((lang, sub.clone())).or_default();
                 if !sups.iter().any(|s| s == sup) {
                     sups.push(sup.clone());
                 }
@@ -425,7 +421,10 @@ impl TypeHierarchyIndex {
         push_unique(&mut out, method_index.resolve(lang, Some(c), method));
         // Each known sub-type of `c`.
         for sub in self.subs_of(lang, c) {
-            push_unique(&mut out, method_index.resolve(lang, Some(sub.as_str()), method));
+            push_unique(
+                &mut out,
+                method_index.resolve(lang, Some(sub.as_str()), method),
+            );
         }
         out
     }
@@ -555,8 +554,12 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                 // fans out to every concrete implementer.  When the
                 // hierarchy has no matching super-type entry, this
                 // collapses to the Phase 3 direct-container lookup.
-                let widened: Vec<FuncKey> =
-                    hierarchy.resolve_with_hierarchy(&method_index, caller_key.lang, Some(container), leaf);
+                let widened: Vec<FuncKey> = hierarchy.resolve_with_hierarchy(
+                    &method_index,
+                    caller_key.lang,
+                    Some(container),
+                    leaf,
+                );
                 let arity_filtered: Vec<&FuncKey> = widened
                     .iter()
                     .filter(|k| match arity_hint {
@@ -2366,8 +2369,13 @@ mod tests {
         let user_repo = make_method_summary("findById", "UserRepo", "src/UserRepo.java", "java", 1);
         let cache_repo =
             make_method_summary("findById", "CacheRepo", "src/CacheRepo.java", "java", 1);
-        let mut iface_marker =
-            make_method_summary("__placeholder", "Repository", "src/Repository.java", "java", 0);
+        let mut iface_marker = make_method_summary(
+            "__placeholder",
+            "Repository",
+            "src/Repository.java",
+            "java",
+            0,
+        );
         iface_marker.hierarchy_edges = vec![
             ("UserRepo".to_string(), "Repository".to_string()),
             ("CacheRepo".to_string(), "Repository".to_string()),
@@ -2483,8 +2491,7 @@ mod tests {
 
         let user_repo = make_method_summary("find", "UserRepo", "src/user_repo.rs", "rust", 1);
         let cache_repo = make_method_summary("find", "CacheRepo", "src/cache_repo.rs", "rust", 1);
-        let mut hierarchy_carrier =
-            make_method_summary("__h", "Repo", "src/repo.rs", "rust", 0);
+        let mut hierarchy_carrier = make_method_summary("__h", "Repo", "src/repo.rs", "rust", 0);
         hierarchy_carrier.hierarchy_edges = vec![
             ("UserRepo".to_string(), "Repo".to_string()),
             ("CacheRepo".to_string(), "Repo".to_string()),
@@ -2503,8 +2510,7 @@ mod tests {
             }],
         );
 
-        let mut gs =
-            merge_summaries(vec![user_repo, cache_repo, hierarchy_carrier, caller], None);
+        let mut gs = merge_summaries(vec![user_repo, cache_repo, hierarchy_carrier, caller], None);
         let caller_key = FuncKey {
             lang: Lang::Rust,
             namespace: "src/main.rs".into(),

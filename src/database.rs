@@ -291,11 +291,7 @@ pub mod index {
             // parallel indexing pass.  Size the pool to comfortably hold
             // a connection per rayon thread plus a small slack.
             let max_conns = (num_cpus::get() as u32 + 4).max(16);
-            let pool = Arc::new(
-                Pool::builder()
-                    .max_size(max_conns)
-                    .build(manager)?,
-            );
+            let pool = Arc::new(Pool::builder().max_size(max_conns).build(manager)?);
 
             {
                 let conn = pool.get()?;
@@ -3786,7 +3782,8 @@ fn ssa_summaries_round_trip_preserves_field_points_to() {
         crate::symbol::FuncKind::Function,
         summary,
     );
-    idx.replace_ssa_summaries_for_file(&f, &hash, &[row]).unwrap();
+    idx.replace_ssa_summaries_for_file(&f, &hash, &[row])
+        .unwrap();
 
     let loaded = idx.load_all_ssa_summaries().unwrap();
     assert_eq!(loaded.len(), 1, "single summary stored, single returned");

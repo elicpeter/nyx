@@ -1260,7 +1260,11 @@ mod field_taint_tests {
                     field: FieldId((i % 4) as u32),
                 };
                 let taint = VarTaint {
-                    caps: if i % 2 == 0 { Cap::ENV_VAR } else { Cap::FILE_IO },
+                    caps: if i % 2 == 0 {
+                        Cap::ENV_VAR
+                    } else {
+                        Cap::FILE_IO
+                    },
                     origins: smallvec::SmallVec::from_iter([TaintOrigin {
                         node: NodeIndex::new(i + 10),
                         source_kind: crate::labels::SourceKind::UserInput,

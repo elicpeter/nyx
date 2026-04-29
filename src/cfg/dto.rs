@@ -140,8 +140,7 @@ fn collect_ts(root: Node<'_>, code: &[u8], out: &mut HashMap<String, DtoFields>)
             let mut fields = DtoFields::new(class_name.clone());
             let mut cursor = body.walk();
             for child in body.named_children(&mut cursor) {
-                if child.kind() != "public_field_definition" && child.kind() != "field_definition"
-                {
+                if child.kind() != "public_field_definition" && child.kind() != "field_definition" {
                     continue;
                 }
                 let Some((field_name, kind)) = extract_ts_property(child, code) else {

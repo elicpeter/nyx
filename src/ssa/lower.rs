@@ -66,8 +66,8 @@ fn try_lower_field_proj_chain(
     // `::` (Rust/C++ paths) is folded into the broader `:` check.
     for ch in callee.chars() {
         match ch {
-            '(' | ')' | '[' | ']' | '<' | '>' | '?' | '*' | '&' | ':' | ' ' | '\t' | '\n'
-            | '-' | '!' | ',' | ';' | '"' | '\'' | '\\' => return None,
+            '(' | ')' | '[' | ']' | '<' | '>' | '?' | '*' | '&' | ':' | ' ' | '\t' | '\n' | '-'
+            | '!' | ',' | ';' | '"' | '\'' | '\\' => return None,
             _ => {}
         }
     }
@@ -1151,9 +1151,7 @@ fn rename_variables(
                         if let Some(base_ident) = callee.split('.').next() {
                             if let Some(base_v) = var_stacks.get(base_ident).and_then(|s| s.last())
                             {
-                                args.retain(|grp| {
-                                    !(grp.len() == 1 && grp.first() == Some(base_v))
-                                });
+                                args.retain(|grp| !(grp.len() == 1 && grp.first() == Some(base_v)));
                             }
                         }
                         (bare_method, Some(callee.clone()))
@@ -1273,9 +1271,7 @@ fn rename_variables(
                         if let Some(base_ident) = callee.split('.').next() {
                             if let Some(base_v) = var_stacks.get(base_ident).and_then(|s| s.last())
                             {
-                                args.retain(|grp| {
-                                    !(grp.len() == 1 && grp.first() == Some(base_v))
-                                });
+                                args.retain(|grp| !(grp.len() == 1 && grp.first() == Some(base_v)));
                             }
                         }
                         (bare_method, Some(callee.clone()))
@@ -1365,9 +1361,8 @@ fn rename_variables(
                         // Snapshot prior reaching def of `parent` BEFORE we
                         // push the new synth_v.  Used by the field-write
                         // side-table as the receiver SsaValue.
-                        let prior_parent_value: Option<SsaValue> = var_stacks
-                            .get(parent)
-                            .and_then(|s| s.last().copied());
+                        let prior_parent_value: Option<SsaValue> =
+                            var_stacks.get(parent).and_then(|s| s.last().copied());
                         let synth_v = SsaValue(*next_value);
                         *next_value += 1;
                         let synth_uses: SmallVec<[SsaValue; 4]> =
@@ -3203,13 +3198,13 @@ mod tests {
         // Each of these contains a token signaling complexity that breaks
         // the simple `<ident>.<ident>...` shape; helper must bail.
         let cases = [
-            "Foo::bar::baz",   // Rust path
-            "ptr->field.f",    // C-style arrow
-            "obj.f().g",       // intermediate call
-            "vec[0].field",    // index expression
-            "obj.f.<T>",       // template-ish
-            "obj.f g",         // whitespace
-            "obj?.f.g",        // optional chain
+            "Foo::bar::baz", // Rust path
+            "ptr->field.f",  // C-style arrow
+            "obj.f().g",     // intermediate call
+            "vec[0].field",  // index expression
+            "obj.f.<T>",     // template-ish
+            "obj.f g",       // whitespace
+            "obj?.f.g",      // optional chain
         ];
         let (mut vs, mut interner, mut blocks, mut defs, mut nv) = fresh_proj_scratch();
         seed_var(&mut vs, &mut defs, &mut nv, "obj");
@@ -3349,7 +3344,10 @@ mod tests {
         }
         // var_names form a readable chain
         assert_eq!(blocks[0].body[0].var_name.as_deref(), Some("c.writer"));
-        assert_eq!(blocks[0].body[1].var_name.as_deref(), Some("c.writer.header"));
+        assert_eq!(
+            blocks[0].body[1].var_name.as_deref(),
+            Some("c.writer.header")
+        );
     }
 
     #[test]
@@ -3466,8 +3464,7 @@ mod tests {
             )
             .expect("SSA lowering should succeed")
         } else {
-            lower_to_ssa(&body.graph, body.entry, None, true)
-                .expect("SSA lowering should succeed")
+            lower_to_ssa(&body.graph, body.entry, None, true).expect("SSA lowering should succeed")
         }
     }
 
@@ -3525,8 +3522,14 @@ mod tests {
         );
         // Field names match the source-level field structure.
         let names: Vec<&str> = projs.iter().map(|(_, _, n)| n.as_str()).collect();
-        assert!(names.contains(&"writer"), "missing 'writer' projection in {names:?}");
-        assert!(names.contains(&"header"), "missing 'header' projection in {names:?}");
+        assert!(
+            names.contains(&"writer"),
+            "missing 'writer' projection in {names:?}"
+        );
+        assert!(
+            names.contains(&"header"),
+            "missing 'header' projection in {names:?}"
+        );
 
         // The Call op carries the bare method name and callee_text retains the path.
         let calls = collect_calls(&body);
@@ -3701,9 +3704,9 @@ mod tests {
         );
         let calls = collect_calls(&body);
         assert!(
-            calls.iter().any(|(c, ct, r)| c == "lock"
-                && ct.as_deref() == Some("c.mu.lock")
-                && r.is_some()),
+            calls
+                .iter()
+                .any(|(c, ct, r)| c == "lock" && ct.as_deref() == Some("c.mu.lock") && r.is_some()),
             "expected bare 'lock' Call with callee_text='c.mu.lock'; got {calls:?}"
         );
     }

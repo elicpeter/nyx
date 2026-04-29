@@ -387,9 +387,7 @@ impl FieldPointsToSummary {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.param_field_reads.is_empty()
-            && self.param_field_writes.is_empty()
-            && !self.overflow
+        self.param_field_reads.is_empty() && self.param_field_writes.is_empty() && !self.overflow
     }
 
     fn insert_into(

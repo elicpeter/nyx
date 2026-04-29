@@ -358,13 +358,16 @@ fn has_prior_subject_auth(
 /// exemption.
 fn has_row_fetch_exemption(unit: &AnalysisUnit, op: &SensitiveOperation) -> bool {
     // Find the row var (if any) declared at this op's line.
-    let row_var: Option<&str> = unit.row_population_data.iter().find_map(|(var, (line, _))| {
-        if *line == op.line {
-            Some(var.as_str())
-        } else {
-            None
-        }
-    });
+    let row_var: Option<&str> = unit
+        .row_population_data
+        .iter()
+        .find_map(|(var, (line, _))| {
+            if *line == op.line {
+                Some(var.as_str())
+            } else {
+                None
+            }
+        });
     let Some(row_var) = row_var else {
         return false;
     };
@@ -377,13 +380,14 @@ fn has_row_fetch_exemption(unit: &AnalysisUnit, op: &SensitiveOperation) -> bool
     unit.auth_checks.iter().any(|check| {
         if matches!(
             check.kind,
-            AuthCheckKind::LoginGuard
-                | AuthCheckKind::TokenExpiry
-                | AuthCheckKind::TokenRecipient
+            AuthCheckKind::LoginGuard | AuthCheckKind::TokenExpiry | AuthCheckKind::TokenRecipient
         ) {
             return false;
         }
-        check.subjects.iter().any(|subj| chain_root(subj) == row_var)
+        check
+            .subjects
+            .iter()
+            .any(|subj| chain_root(subj) == row_var)
     })
 }
 
@@ -871,10 +875,17 @@ fn is_external_input_param_name(name: &str) -> bool {
     // variable) to include without an additional type signal.
     matches!(
         lower.as_str(),
-        "req" | "request"
-            | "ctx" | "context" | "info"
-            | "path" | "payload" | "body" | "dto"
-            | "form" | "query"
+        "req"
+            | "request"
+            | "ctx"
+            | "context"
+            | "info"
+            | "path"
+            | "payload"
+            | "body"
+            | "dto"
+            | "form"
+            | "query"
     )
 }
 
@@ -1168,8 +1179,10 @@ mod tests {
 
         let mut unit = empty_unit();
         // `let community = Community::read(pool, data.community_id)?;` at line 10
-        unit.row_population_data
-            .insert("community".to_string(), (10, vec![member("data", "community_id")]));
+        unit.row_population_data.insert(
+            "community".to_string(),
+            (10, vec![member("data", "community_id")]),
+        );
         // Auth check at line 20 with `community` as a subject base.
         unit.auth_checks.push(AuthCheck {
             kind: AuthCheckKind::Membership,
@@ -1212,8 +1225,10 @@ mod tests {
         use crate::auth_analysis::model::{OperationKind, SensitiveOperation};
 
         let mut unit = empty_unit();
-        unit.row_population_data
-            .insert("community".to_string(), (10, vec![member("data", "community_id")]));
+        unit.row_population_data.insert(
+            "community".to_string(),
+            (10, vec![member("data", "community_id")]),
+        );
         // No auth check pushed — exemption must NOT apply.
 
         let fetch_op = SensitiveOperation {
@@ -1236,8 +1251,10 @@ mod tests {
         };
 
         let mut unit = empty_unit();
-        unit.row_population_data
-            .insert("community".to_string(), (10, vec![member("data", "community_id")]));
+        unit.row_population_data.insert(
+            "community".to_string(),
+            (10, vec![member("data", "community_id")]),
+        );
         // Login-only check on the row should NOT exempt the row-fetch
         // — login proves identity, not authorization.
         unit.auth_checks.push(AuthCheck {
@@ -1276,8 +1293,10 @@ mod tests {
         use crate::auth_analysis::model::{AuthCheck, AuthCheckKind};
 
         let mut unit = empty_unit();
-        unit.row_population_data
-            .insert("community".to_string(), (10, vec![member("data", "community_id")]));
+        unit.row_population_data.insert(
+            "community".to_string(),
+            (10, vec![member("data", "community_id")]),
+        );
         let check = AuthCheck {
             kind: AuthCheckKind::Membership,
             callee: "check_community_user_action".into(),
@@ -1335,7 +1354,11 @@ mod tests {
             condition_text: None,
         };
 
-        assert!(auth_check_covers_subject(&check, &plain("community_id"), &unit));
+        assert!(auth_check_covers_subject(
+            &check,
+            &plain("community_id"),
+            &unit
+        ));
         // Different plain id is not covered.
         assert!(!auth_check_covers_subject(&check, &plain("post_id"), &unit));
     }
@@ -1355,8 +1378,10 @@ mod tests {
         use crate::auth_analysis::model::{AuthCheck, AuthCheckKind};
 
         let mut unit = empty_unit();
-        unit.row_population_data
-            .insert("community".to_string(), (10, vec![member("req", "community_id")]));
+        unit.row_population_data.insert(
+            "community".to_string(),
+            (10, vec![member("req", "community_id")]),
+        );
         unit.var_alias_chain
             .insert("community_id".to_string(), "req.community_id".to_string());
         let check = AuthCheck {
@@ -1370,7 +1395,11 @@ mod tests {
         };
 
         // Sink subject is the bare alias — covered via the chain.
-        assert!(auth_check_covers_subject(&check, &plain("community_id"), &unit));
+        assert!(auth_check_covers_subject(
+            &check,
+            &plain("community_id"),
+            &unit
+        ));
 
         // The original member-access subject is still covered (no
         // regression in the existing reverse-walk path).

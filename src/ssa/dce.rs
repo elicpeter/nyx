@@ -463,7 +463,10 @@ mod tests {
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
-        assert_eq!(removed, 0, "FieldProj reachable from terminator must survive");
+        assert_eq!(
+            removed, 0,
+            "FieldProj reachable from terminator must survive"
+        );
         assert_eq!(body.blocks[0].body.len(), 2);
     }
 
@@ -529,7 +532,10 @@ mod tests {
         let removed = eliminate_dead_defs(&mut body, &cfg);
         // First pass removes the FieldProj (no uses), second removes the Const
         // (no uses after FieldProj is gone).
-        assert_eq!(removed, 2, "dead FieldProj and its dead receiver const must be removed");
+        assert_eq!(
+            removed, 2,
+            "dead FieldProj and its dead receiver const must be removed"
+        );
         assert!(body.blocks[0].body.is_empty());
     }
 
@@ -712,13 +718,9 @@ mod tests {
                     block: BlockId(1),
                 },
             ],
-            cfg_node_map: [
-                (n0, SsaValue(0)),
-                (n1, SsaValue(1)),
-                (n2, SsaValue(2)),
-            ]
-            .into_iter()
-            .collect(),
+            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1)), (n2, SsaValue(2))]
+                .into_iter()
+                .collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
             field_writes: std::collections::HashMap::new(),
@@ -793,13 +795,9 @@ mod tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: [
-                (n0, SsaValue(0)),
-                (n1, SsaValue(1)),
-                (n2, SsaValue(2)),
-            ]
-            .into_iter()
-            .collect(),
+            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1)), (n2, SsaValue(2))]
+                .into_iter()
+                .collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
             field_writes: std::collections::HashMap::new(),

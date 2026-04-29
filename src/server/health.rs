@@ -358,8 +358,8 @@ fn quality_drag(quality_count: usize) -> f64 {
 fn high_total_ceiling(effective_high: usize) -> f64 {
     match effective_high {
         0 => 100.0,
-        1 => 85.0,    // 1 credible HIGH → max B
-        2 => 78.0,    // 2 → max C+
+        1 => 85.0,     // 1 credible HIGH → max B
+        2 => 78.0,     // 2 → max C+
         3..=5 => 68.0, // 3-5 → max D+
         6..=10 => 58.0,
         _ => 45.0,
@@ -425,7 +425,10 @@ fn build_components(
     let triage_score = (inp.triage_coverage * 100.0).round().clamp(0.0, 100.0) as u8;
     let triage_weight = if triage_active { 0.20 } else { 0.0 };
     let triage_detail = if triage_active {
-        format!("{:.0}% of findings have a triage state", inp.triage_coverage * 100.0)
+        format!(
+            "{:.0}% of findings have a triage state",
+            inp.triage_coverage * 100.0
+        )
     } else {
         format!(
             "Not applicable: only {} finding{} (need ≥{} to evaluate)",
@@ -566,10 +569,7 @@ fn severity_detail(
     let stale = stale_high_penalty(w.effective_high, backlog);
     if stale > 0.0 {
         if let Some(b) = backlog {
-            parts.push(format!(
-                "−{:.0} stale-HIGH ({} >30d)",
-                stale, b.stale_count
-            ));
+            parts.push(format!("−{:.0} stale-HIGH ({} >30d)", stale, b.stale_count));
         }
     }
     parts.join(" · ")
@@ -698,7 +698,9 @@ mod tests {
         let mut findings: Vec<Diag> = (0..200)
             .map(|_| diag(Severity::Medium, "rs.taint.foo", Some(Confidence::High)))
             .collect();
-        findings.extend((0..2000).map(|_| diag(Severity::Low, "rs.quality.unwrap", Some(Confidence::High))));
+        findings.extend(
+            (0..2000).map(|_| diag(Severity::Low, "rs.quality.unwrap", Some(Confidence::High))),
+        );
         let s = summary_of(&findings);
         let h = compute(&first_scan(&s, &findings, 0.0, 200));
         assert!(h.score >= 70, "0 HIGH must grade ≥C (70), got {}", h.score);
@@ -779,7 +781,11 @@ mod tests {
             Severity::High,
             Some(Confidence::High),
         )];
-        let in_prod = vec![diag_in("src/feature/handler.ts", Severity::High, Some(Confidence::High))];
+        let in_prod = vec![diag_in(
+            "src/feature/handler.ts",
+            Severity::High,
+            Some(Confidence::High),
+        )];
         let st = summary_of(&in_test);
         let sp = summary_of(&in_prod);
 
@@ -803,8 +809,18 @@ mod tests {
         let mid = compute(&first_scan(&s, &findings, 0.0, 5000));
         let big = compute(&first_scan(&s, &findings, 0.0, 50_000));
         let huge = compute(&first_scan(&s, &findings, 0.0, 500_000));
-        assert!(small.score <= mid.score, "small {} mid {}", small.score, mid.score);
-        assert!(mid.score <= big.score, "mid {} big {}", mid.score, big.score);
+        assert!(
+            small.score <= mid.score,
+            "small {} mid {}",
+            small.score,
+            mid.score
+        );
+        assert!(
+            mid.score <= big.score,
+            "mid {} big {}",
+            mid.score,
+            big.score
+        );
         assert!(
             (big.score as i32 - huge.score as i32).abs() <= 1,
             "size cap broken: big {} huge {}",
@@ -820,7 +836,11 @@ mod tests {
             .collect();
         let s = summary_of(&findings);
         let h = compute(&first_scan(&s, &findings, 0.0, 100));
-        let triage = h.components.iter().find(|c| c.label == "Triage coverage").unwrap();
+        let triage = h
+            .components
+            .iter()
+            .find(|c| c.label == "Triage coverage")
+            .unwrap();
         assert_eq!(triage.weight, 0.0);
         assert!(triage.detail.contains("Not applicable"));
     }
@@ -867,9 +887,24 @@ mod tests {
         };
         let fresh = compute(&fresh_inputs);
         let rotting = compute(&rotting_inputs);
-        let fresh_reg = fresh.components.iter().find(|c| c.label == "Regression resistance").unwrap().score;
-        let rot_reg = rotting.components.iter().find(|c| c.label == "Regression resistance").unwrap().score;
-        assert!(rot_reg < fresh_reg, "stale should lower regression score: fresh {} vs rotting {}", fresh_reg, rot_reg);
+        let fresh_reg = fresh
+            .components
+            .iter()
+            .find(|c| c.label == "Regression resistance")
+            .unwrap()
+            .score;
+        let rot_reg = rotting
+            .components
+            .iter()
+            .find(|c| c.label == "Regression resistance")
+            .unwrap()
+            .score;
+        assert!(
+            rot_reg < fresh_reg,
+            "stale should lower regression score: fresh {} vs rotting {}",
+            fresh_reg,
+            rot_reg
+        );
     }
 
     #[test]

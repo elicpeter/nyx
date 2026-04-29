@@ -30,8 +30,8 @@ use petgraph::graph::NodeIndex;
 fn try_chain_decompose(callee: &str) -> Option<(&str, &str)> {
     for ch in callee.chars() {
         match ch {
-            '(' | ')' | '[' | ']' | '<' | '>' | '?' | '*' | '&' | ':' | ' ' | '\t' | '\n'
-            | '-' | '!' | ',' | ';' | '"' | '\'' | '\\' => return None,
+            '(' | ')' | '[' | ']' | '<' | '>' | '?' | '*' | '&' | ':' | ' ' | '\t' | '\n' | '-'
+            | '!' | ',' | ';' | '"' | '\'' | '\\' => return None,
             _ => {}
         }
     }
@@ -183,7 +183,8 @@ pub struct DefaultTransfer<'a> {
     /// of marking the local with a `SymbolId` that would later be flagged
     /// as a leak.  Strict-additive: when `None`, behaviour matches the
     /// pointer-unaware fallback exactly.
-    pub ptr_proxy_hints: Option<&'a std::collections::HashMap<String, crate::pointer::PtrProxyHint>>,
+    pub ptr_proxy_hints:
+        Option<&'a std::collections::HashMap<String, crate::pointer::PtrProxyHint>>,
 }
 
 impl Transfer<ProductState> for DefaultTransfer<'_> {
@@ -429,9 +430,7 @@ impl DefaultTransfer<'_> {
                             );
                         }
                         ResourceEffect::Release => {
-                            if let Some(entry) =
-                                state.chain_proxies.get_mut(receiver_text)
-                            {
+                            if let Some(entry) = state.chain_proxies.get_mut(receiver_text) {
                                 if entry.class_group == summary.class_group
                                     && entry.lifecycle.contains(ResourceLifecycle::OPEN)
                                 {
@@ -466,9 +465,7 @@ impl DefaultTransfer<'_> {
                             state.proxy_acquire_spans.insert(sym, summary.original_span);
                         }
                         ResourceEffect::Release => {
-                            if state.receiver_class_group.get(&sym)
-                                == Some(&summary.class_group)
-                            {
+                            if state.receiver_class_group.get(&sym) == Some(&summary.class_group) {
                                 let current = state.resource.get(sym);
                                 if current.contains(ResourceLifecycle::OPEN) {
                                     state.resource.set(sym, ResourceLifecycle::CLOSED);
@@ -1428,10 +1425,7 @@ mod tests {
     #[test]
     fn try_chain_decompose_rejects_empty_segments() {
         for s in [".x.f", "x..f", "x.f.", "."] {
-            assert!(
-                try_chain_decompose(s).is_none(),
-                "expected bail on {s}"
-            );
+            assert!(try_chain_decompose(s).is_none(), "expected bail on {s}");
         }
     }
 
@@ -1601,10 +1595,13 @@ mod tests {
             },
             ..Default::default()
         };
-        let (state, _) =
-            transfer.apply(NodeIndex::new(0), &mk_call("c.mu.Lock"), None, ProductState::initial());
-        let (state, _) =
-            transfer.apply(NodeIndex::new(1), &mk_call("c.other.Lock"), None, state);
+        let (state, _) = transfer.apply(
+            NodeIndex::new(0),
+            &mk_call("c.mu.Lock"),
+            None,
+            ProductState::initial(),
+        );
+        let (state, _) = transfer.apply(NodeIndex::new(1), &mk_call("c.other.Lock"), None, state);
         assert!(state.chain_proxies.contains_key("c.mu"));
         assert!(state.chain_proxies.contains_key("c.other"));
         assert_eq!(state.chain_proxies.len(), 2);
@@ -1653,8 +1650,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let (state, _) =
-            transfer.apply(NodeIndex::new(0), &info, None, ProductState::initial());
+        let (state, _) = transfer.apply(NodeIndex::new(0), &info, None, ProductState::initial());
 
         // SymbolId path fired: receiver_class_group has the SymbolId entry.
         assert_eq!(
@@ -1691,11 +1687,7 @@ mod tests {
             resource_method_summaries: std::slice::from_ref(&lock),
             ptr_proxy_hints: None,
         };
-        for callee in [
-            "c.writer.header().Lock",
-            "Foo::bar::Lock",
-            "c[i].mu.Lock",
-        ] {
+        for callee in ["c.writer.header().Lock", "Foo::bar::Lock", "c[i].mu.Lock"] {
             let info = NodeInfo {
                 kind: StmtKind::Call,
                 ast: AstMeta {
@@ -1894,12 +1886,8 @@ mod tests {
             },
             ..Default::default()
         };
-        let (state, _) = transfer.apply(
-            NodeIndex::new(0),
-            &lock_info,
-            None,
-            ProductState::initial(),
-        );
+        let (state, _) =
+            transfer.apply(NodeIndex::new(0), &lock_info, None, ProductState::initial());
         assert_eq!(state.chain_proxies["m"].lifecycle, ResourceLifecycle::OPEN);
 
         let unlock_info = NodeInfo {
@@ -1950,8 +1938,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let (state, _) =
-            transfer.apply(NodeIndex::new(0), &info, None, ProductState::initial());
+        let (state, _) = transfer.apply(NodeIndex::new(0), &info, None, ProductState::initial());
         assert_eq!(
             state.receiver_class_group.get(&sym_f),
             Some(&class_group),
@@ -1993,8 +1980,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let (state, _) =
-            transfer.apply(NodeIndex::new(0), &info, None, ProductState::initial());
+        let (state, _) = transfer.apply(NodeIndex::new(0), &info, None, ProductState::initial());
         assert_eq!(state.receiver_class_group.get(&sym_f), Some(&class_group));
         assert!(state.chain_proxies.is_empty());
     }

@@ -1202,11 +1202,7 @@ fn extract_member_field_name(node: Node, code: &[u8]) -> Option<String> {
             // Defensive: reject anything that doesn't look like an
             // identifier (e.g. numeric subscripts).  Allows ASCII
             // letters / digits / underscore.
-            if text
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_')
-                && !text.is_empty()
-            {
+            if text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !text.is_empty() {
                 Some(text)
             } else {
                 None
@@ -1690,14 +1686,7 @@ pub(super) fn push_node<'a>(
     if labels.is_empty()
         && let Some(outer) = call_ast
         && let Some((inner, inner_callee_text)) = find_chained_inner_call(outer, lang, code)
-        && classify_gated_sink(
-            lang,
-            &inner_callee_text,
-            |_| None,
-            |_| None,
-            |_| false,
-        )
-        .is_some()
+        && classify_gated_sink(lang, &inner_callee_text, |_| None, |_| None, |_| false).is_some()
     {
         call_ast = Some(inner);
         outer_callee = Some(text.clone());
@@ -1829,8 +1818,7 @@ pub(super) fn push_node<'a>(
             .rsplit(|c: char| c == '.' || c == ':')
             .next()
             .unwrap_or(&text);
-        const AR_QUERY_METHODS: &[&str] =
-            &["where", "order", "group", "having", "joins", "pluck"];
+        const AR_QUERY_METHODS: &[&str] = &["where", "order", "group", "having", "joins", "pluck"];
         if AR_QUERY_METHODS.iter().any(|m| *m == leaf) {
             // Try the outer call's arg 0 first (handles direct calls);
             // fall back to walking the receiver chain for collapsed
@@ -2565,8 +2553,7 @@ fn pre_emit_arg_source_nodes(
             }
             let src_label = first_member_label(arg, lang, code, extra);
             if let Some(DataLabel::Source(caps)) = src_label {
-                let synth_name =
-                    format!("__nyx_chainsrc_{}_{}", g.node_count(), uses_only.len());
+                let synth_name = format!("__nyx_chainsrc_{}_{}", g.node_count(), uses_only.len());
                 let member_text = first_member_text(arg, code);
                 let span = (arg.start_byte(), arg.end_byte());
 
@@ -3430,8 +3417,7 @@ pub(super) fn build_sub<'a>(
             let is_anon = is_anon_fn_name(&fn_name);
             let param_meta = extract_param_meta(ast, lang, code);
             let param_count = param_meta.len();
-            let param_names: Vec<String> =
-                param_meta.iter().map(|(n, _)| n.clone()).collect();
+            let param_names: Vec<String> = param_meta.iter().map(|(n, _)| n.clone()).collect();
             let param_types: Vec<Option<crate::ssa::type_facts::TypeKind>> =
                 param_meta.iter().map(|(_, t)| t.clone()).collect();
 

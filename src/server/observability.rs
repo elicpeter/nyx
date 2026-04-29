@@ -102,7 +102,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let id = resp.headers().get("x-request-id").unwrap().to_str().unwrap();
+        let id = resp
+            .headers()
+            .get("x-request-id")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(!id.is_empty());
         assert_eq!(id.len(), 12);
     }
@@ -124,7 +129,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            resp.headers().get("x-request-id").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("x-request-id")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "abc-123"
         );
     }

@@ -1568,8 +1568,7 @@ pub(crate) fn lower_all_functions_from_bodies(
         // container.  Free-function calls (`receiver: None`) and
         // unknown receiver types are silently skipped — the bare-name
         // resolution path applies unchanged in that case.
-        let typed_receivers =
-            collect_typed_call_receivers(&func_ssa, &body.graph, &opt.type_facts);
+        let typed_receivers = collect_typed_call_receivers(&func_ssa, &body.graph, &opt.type_facts);
         if !typed_receivers.is_empty() {
             // The summary may not have been inserted above (zero-param,
             // no-fresh-alloc bodies are skipped).  Force-insert in that
@@ -1704,8 +1703,8 @@ fn rerun_extraction_with_augmented_summaries(
     bodies: &std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
     summaries: &mut std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
 ) {
-    use crate::state::symbol::SymbolInterner;
     use crate::ssa::ir::SsaOp;
+    use crate::state::symbol::SymbolInterner;
 
     // Fast-out: rerun matters only when at least one body in the file has
     // an SSA summary entry that *another* body in the same file might
@@ -1806,9 +1805,7 @@ fn merge_sink_fields(
     src: &crate::summary::ssa_summary::SsaFuncSummary,
 ) {
     for (idx, sites) in &src.param_to_sink {
-        if let Some((_, dst_sites)) =
-            dst.param_to_sink.iter_mut().find(|(i, _)| i == idx)
-        {
+        if let Some((_, dst_sites)) = dst.param_to_sink.iter_mut().find(|(i, _)| i == idx) {
             for site in sites {
                 let key = site.dedup_key();
                 if !dst_sites.iter().any(|s| s.dedup_key() == key) {
@@ -1915,8 +1912,7 @@ fn augment_summaries_with_child_sinks(
             Some(g) => g,
             None => continue,
         };
-        let parent_interner =
-            crate::state::symbol::SymbolInterner::from_cfg(parent_cfg);
+        let parent_interner = crate::state::symbol::SymbolInterner::from_cfg(parent_cfg);
 
         // Collect (formal_param_idx, var_name, ssa_value) for the parent's
         // formal params — mirrors `extract_ssa_func_summary`'s param scan.
@@ -2013,8 +2009,7 @@ fn augment_summaries_with_child_sinks(
                     continue;
                 };
 
-                let child_interner =
-                    crate::state::symbol::SymbolInterner::from_cfg(child_cfg);
+                let child_interner = crate::state::symbol::SymbolInterner::from_cfg(child_cfg);
 
                 let child_transfer = ssa_transfer::SsaTaintTransfer {
                     lang,
@@ -2070,8 +2065,10 @@ fn augment_summaries_with_child_sinks(
                 let entry = summaries.entry(parent_key.clone()).or_default();
                 let new_site = SinkSite::cap_only(union_caps);
                 let new_key = new_site.dedup_key();
-                if let Some((_, sites)) =
-                    entry.param_to_sink.iter_mut().find(|(i, _)| *i == *param_idx)
+                if let Some((_, sites)) = entry
+                    .param_to_sink
+                    .iter_mut()
+                    .find(|(i, _)| *i == *param_idx)
                 {
                     if !sites.iter().any(|s| s.dedup_key() == new_key) {
                         sites.push(new_site);

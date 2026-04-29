@@ -60,7 +60,7 @@ fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
         static_map: None,
         auto_seed_handler_params: false,
         cross_file_bodies: None,
-            pointer_facts: None,
+        pointer_facts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, cfg, &transfer);
     let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, cfg);
@@ -3783,7 +3783,7 @@ fn assert_ssa_integration(src: &[u8]) {
         static_map: None,
         auto_seed_handler_params: false,
         cross_file_bodies: None,
-            pointer_facts: None,
+        pointer_facts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
@@ -3919,7 +3919,7 @@ fn integ_php_echo_simple_var() {
         static_map: None,
         auto_seed_handler_params: false,
         cross_file_bodies: None,
-            pointer_facts: None,
+        pointer_facts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
@@ -3987,7 +3987,7 @@ fn integ_c_curl_handle_ssrf() {
         static_map: None,
         auto_seed_handler_params: false,
         cross_file_bodies: None,
-            pointer_facts: None,
+        pointer_facts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);

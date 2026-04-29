@@ -1317,29 +1317,14 @@ fn run_topo_batches(
                             if let Some(p) = progress {
                                 p.inc_analyzed(1);
                             }
-                            return (
-                                path.to_path_buf(),
-                                vec![],
-                                vec![],
-                                vec![],
-                                vec![],
-                                vec![],
-                            );
+                            return (path.to_path_buf(), vec![], vec![], vec![], vec![], vec![]);
                         }
                     };
                     match recover_or_propagate(
                         cfg.scanner.enable_panic_recovery,
                         path,
                         logs,
-                        || {
-                            analyse_file_fused(
-                                &bytes,
-                                path,
-                                cfg,
-                                Some(global_summaries),
-                                scan_root,
-                            )
-                        },
+                        || analyse_file_fused(&bytes, path, cfg, Some(global_summaries), scan_root),
                     ) {
                         Ok(r) => {
                             pb.inc(1);
@@ -1368,14 +1353,7 @@ fn run_topo_batches(
                             if let Some(p) = progress {
                                 p.inc_analyzed(1);
                             }
-                            (
-                                path.to_path_buf(),
-                                vec![],
-                                vec![],
-                                vec![],
-                                vec![],
-                                vec![],
-                            )
+                            (path.to_path_buf(), vec![], vec![], vec![], vec![], vec![])
                         }
                     }
                 })
@@ -1410,10 +1388,8 @@ fn run_topo_batches(
                     refined_auth += 1;
                 }
             }
-            let total_refinements =
-                refined_summaries + refined_ssa + refined_bodies + refined_auth;
-            LAST_TOPO_NONRECURSIVE_REFINEMENTS
-                .fetch_add(total_refinements, Ordering::Relaxed);
+            let total_refinements = refined_summaries + refined_ssa + refined_bodies + refined_auth;
+            LAST_TOPO_NONRECURSIVE_REFINEMENTS.fetch_add(total_refinements, Ordering::Relaxed);
 
             tracing::debug!(
                 batch = batch_idx,
@@ -2197,12 +2173,7 @@ pub fn scan_with_index_parallel_observer(
                                 // Single transaction for all four caches:
                                 // one fsync per file instead of four.
                                 if let Err(e) = idx.replace_all_for_file(
-                                    path,
-                                    &hash,
-                                    &func_sums,
-                                    &ssa_rows,
-                                    &body_rows,
-                                    &auth_rows,
+                                    path, &hash, &func_sums, &ssa_rows, &body_rows, &auth_rows,
                                 ) {
                                     record_persist_error(
                                         &persist_errors_ref,

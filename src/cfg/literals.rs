@@ -347,8 +347,7 @@ fn subtree_has_interpolation(n: Node) -> bool {
         return true;
     }
     let mut cursor = n.walk();
-    n.named_children(&mut cursor)
-        .any(subtree_has_interpolation)
+    n.named_children(&mut cursor).any(subtree_has_interpolation)
 }
 
 /// For a chained method call (`a.b().c().d()`), walk down the receiver
@@ -368,10 +367,7 @@ pub(super) fn find_chained_inner_call<'a>(
     lang: &str,
     code: &[u8],
 ) -> Option<(Node<'a>, String)> {
-    if !matches!(
-        lookup(lang, outer.kind()),
-        Kind::CallFn | Kind::CallMethod
-    ) {
+    if !matches!(lookup(lang, outer.kind()), Kind::CallFn | Kind::CallMethod) {
         return None;
     }
     let function = outer
@@ -382,10 +378,7 @@ pub(super) fn find_chained_inner_call<'a>(
     // receiver expression.  Only proceed when that receiver is itself a
     // call.
     let object = function.child_by_field_name("object")?;
-    if !matches!(
-        lookup(lang, object.kind()),
-        Kind::CallFn | Kind::CallMethod
-    ) {
+    if !matches!(lookup(lang, object.kind()), Kind::CallFn | Kind::CallMethod) {
         return None;
     }
     // Recurse: the inner call may itself be chained
@@ -434,11 +427,7 @@ pub(super) fn find_chained_inner_call<'a>(
 /// outer callee text un-classifiable).  The helper itself is
 /// language-neutral, but callers should gate per-language until each
 /// language's regression coverage catches up.
-pub(super) fn walk_chain_inner_call_args<'a>(
-    outer: Node<'a>,
-    lang: &str,
-    out: &mut Vec<Node<'a>>,
-) {
+pub(super) fn walk_chain_inner_call_args<'a>(outer: Node<'a>, lang: &str, out: &mut Vec<Node<'a>>) {
     if !matches!(lookup(lang, outer.kind()), Kind::CallFn | Kind::CallMethod) {
         return;
     }

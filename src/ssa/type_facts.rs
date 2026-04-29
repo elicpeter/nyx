@@ -1257,12 +1257,36 @@ mod tests {
         ];
         // (kind_name, kind, [suppress for each cap in `caps` order])
         let rows: &[(&str, TypeKind, [bool; 7])] = &[
-            ("Int", TypeKind::Int, [true, true, true, true, true, false, false]),
-            ("Bool", TypeKind::Bool, [true, true, true, true, true, false, false]),
-            ("String", TypeKind::String, [false, false, false, false, false, false, false]),
-            ("Url", TypeKind::Url, [false, false, false, false, false, false, false]),
-            ("Object", TypeKind::Object, [false, false, false, false, false, false, false]),
-            ("Unknown", TypeKind::Unknown, [false, false, false, false, false, false, false]),
+            (
+                "Int",
+                TypeKind::Int,
+                [true, true, true, true, true, false, false],
+            ),
+            (
+                "Bool",
+                TypeKind::Bool,
+                [true, true, true, true, true, false, false],
+            ),
+            (
+                "String",
+                TypeKind::String,
+                [false, false, false, false, false, false, false],
+            ),
+            (
+                "Url",
+                TypeKind::Url,
+                [false, false, false, false, false, false, false],
+            ),
+            (
+                "Object",
+                TypeKind::Object,
+                [false, false, false, false, false, false, false],
+            ),
+            (
+                "Unknown",
+                TypeKind::Unknown,
+                [false, false, false, false, false, false, false],
+            ),
         ];
         for (kind_name, kind, expected) in rows {
             let mut facts = HashMap::new();
@@ -1397,13 +1421,8 @@ mod tests {
         let cfg: Cfg = petgraph::Graph::new();
         let param_types = vec![Some(TypeKind::Int)];
 
-        let result = analyze_types_with_param_types(
-            &body,
-            &cfg,
-            &consts,
-            Some(Lang::Java),
-            &param_types,
-        );
+        let result =
+            analyze_types_with_param_types(&body, &cfg, &consts, Some(Lang::Java), &param_types);
         assert_eq!(result.get_type(SsaValue(0)), Some(&TypeKind::Int));
         // Index 99 is out of range → falls back to Unknown.
         assert_eq!(result.get_type(SsaValue(1)), Some(&TypeKind::Unknown));
