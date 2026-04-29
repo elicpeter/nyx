@@ -72,7 +72,7 @@
 
   /* Layout */
   --sidebar-width: 240px;
-  --header-height: 52px;
+  --header-height: 40px;
   --explorer-header-height: 96px;
 }
 
@@ -254,6 +254,12 @@ a:hover {
   align-items: center;
   gap: var(--space-2);
   flex-shrink: 0;
+}
+.header-right .btn {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 0.8rem;
+  line-height: 1;
 }
 
 /* ── Breadcrumbs ───────────────────────────────────────────────────── */

@@ -56,7 +56,6 @@ export function OverviewPage() {
         <OverviewIcon size={48} />
         <h2>Welcome to Nyx</h2>
         <p>Run your first scan to see security findings and analytics.</p>
-        <code className="cli-hint">nyx scan .</code>
       </div>
     );
   }

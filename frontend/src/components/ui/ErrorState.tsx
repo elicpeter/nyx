@@ -23,7 +23,6 @@ function friendly(error: unknown, fallbackTitle: string): FriendlyError {
       return {
         title: 'Network error',
         message: error.message || 'Could not reach the Nyx server.',
-        hint: 'Check that the server is still running.',
       };
     }
     if (error.status === 404) {
@@ -69,17 +68,6 @@ export function ErrorState({
     <div className="error-state" role="alert">
       <h3>{resolved.title}</h3>
       <p>{resolved.message}</p>
-      {resolved.hint && <p className="error-hint">{resolved.hint}</p>}
-      {onRetry && (
-        <button
-          type="button"
-          className="btn btn-sm btn-secondary error-retry"
-          onClick={onRetry}
-        >
-          <RefreshIcon size={14} />
-          {retryLabel}
-        </button>
-      )}
     </div>
   );
 }

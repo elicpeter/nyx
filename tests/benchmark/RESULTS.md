@@ -25,7 +25,7 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2023-26159 | TypeScript | follow-redirects           | MIT                  | SSRF            | detected |
 | CVE-2022-30323 | Go         | hashicorp/go-getter        | MPL-2.0              | CMDI            | detected |
 | CVE-2023-3188  | Go         | owncast                    | MIT                  | SSRF            | detected |
-| CVE-2024-31450 | Go         | owncast                    | MIT                  | path_traversal  | deferred |
+| CVE-2024-31450 | Go         | owncast                    | MIT                  | path_traversal  | detected |
 | CVE-2015-7501  | Java       | Apache Commons Collections | Apache-2.0           | Deserialization | detected |
 | CVE-2017-12629 | Java       | Apache Solr                | Apache-2.0           | CMDI            | detected |
 | CVE-2013-0156  | Ruby       | Ruby on Rails              | MIT                  | Deserialization | detected |
