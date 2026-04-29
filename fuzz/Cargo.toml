@@ -9,10 +9,6 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-# The lib only compiles with default features. build.rs short-circuits
-# when `src/server/assets/dist/index.html` already exists, so callers
-# (including the fuzz CI job) stub that file out instead of running a
-# real frontend build.
 nyx-scanner = { path = ".." }
 
 [[bin]]

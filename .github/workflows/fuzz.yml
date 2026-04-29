@@ -55,13 +55,23 @@ jobs:
         with:
           tool: cargo-fuzz
 
-      # build.rs short-circuits when this file exists, skipping the
-      # frontend npm fallback. The fuzz harness never touches the
-      # server/UI, so a placeholder is sufficient.
-      - name: Stub frontend dist
+      # The lib's `serve` feature is on by default and `assets.rs`
+      # `include_str!`s files from `src/server/assets/dist/`, which is
+      # gitignored. Build the frontend for real instead of stubbing —
+      # ~30s here is noise next to a 10m–5h fuzz budget, and it keeps
+      # the fuzz environment honest about what the lib actually compiles
+      # against.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
         run: |
-          mkdir -p src/server/assets/dist
-          : > src/server/assets/dist/index.html
+          npm ci
+          npm run build
 
       # Persist generated corpus across runs so coverage compounds. The
       # SHA-keyed primary key makes each run save a fresh entry; the

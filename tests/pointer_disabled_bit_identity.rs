@@ -69,9 +69,17 @@ type FindingId = (String, usize, usize, String);
 fn collect_finding_ids(fixture: &str) -> BTreeSet<FindingId> {
     let dir = fixture_path(fixture);
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
     diags
         .into_iter()
-        .map(|d| (d.path, d.line, d.col, d.id))
+        .map(|d| {
+            let rel = d
+                .path
+                .strip_prefix(manifest_dir)
+                .map(|s| s.trim_start_matches('/').to_string())
+                .unwrap_or(d.path);
+            (rel, d.line, d.col, d.id)
+        })
         .collect()
 }
 

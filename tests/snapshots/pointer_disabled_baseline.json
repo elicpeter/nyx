@@ -3,7 +3,7 @@
     "container_taint_js",
     [
       [
-        "/Users/elipeter/nyx/tests/fixtures/container_taint_js/main.js",
+        "tests/fixtures/container_taint_js/main.js",
         6,
         1,
         "taint-unsanitised-flow (source 6:1)"
@@ -14,13 +14,13 @@
     "container_taint_py",
     [
       [
-        "/Users/elipeter/nyx/tests/fixtures/container_taint_py/main.py",
+        "tests/fixtures/container_taint_py/main.py",
         12,
         1,
         "py.cmdi.subprocess_shell"
       ],
       [
-        "/Users/elipeter/nyx/tests/fixtures/container_taint_py/main.py",
+        "tests/fixtures/container_taint_py/main.py",
         12,
         1,
         "taint-unsanitised-flow (source 12:1)"
@@ -31,7 +31,7 @@
     "cross_file_py_object_field",
     [
       [
-        "/Users/elipeter/nyx/tests/fixtures/cross_file_py_object_field/handler.py",
+        "tests/fixtures/cross_file_py_object_field/handler.py",
         16,
         5,
         "py.cmdi.subprocess_shell"
