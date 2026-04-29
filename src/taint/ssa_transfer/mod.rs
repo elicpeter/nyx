@@ -3764,6 +3764,25 @@ pub(super) fn transfer_inst(
                 }
             }
 
+            // Synthetic field-write inheritance.  When SSA lowering emits
+            // `u_new = Assign(rhs)` to model `u.f = rhs` (an obj-update
+            // synth), `u_new` represents the same logical object after the
+            // field write — it retains every other field's taint.  The
+            // base-only Assign uses include only the rhs, so without this
+            // step a clean rhs (`u.Path = "/foo"`) would zero out every
+            // tainted field on the prior `u`.  Owncast CVE-2023-3188 hit
+            // this: `requestURL.Path = "/.well-known/webfinger"` killed the
+            // tainted host carried by `requestURL` from `url.Parse(tainted)`.
+            if let Some((receiver, _fid)) = ssa.field_writes.get(&inst.value).copied() {
+                if let Some(taint) = state.get(receiver) {
+                    combined_caps |= taint.caps;
+                    inherited_summary |= taint.uses_summary;
+                    for orig in &taint.origins {
+                        push_origin_bounded(&mut combined_origins, *orig);
+                    }
+                }
+            }
+
             // Apply sanitizer
             combined_caps &= !sanitizer_bits;
 
@@ -6334,11 +6353,20 @@ fn apply_field_aware_suppression(
         };
         // Collect all field values matching "base.X" (excluding method-call
         // expressions and the callee itself).
+        //
+        // Phantom Param ops with dotted var_names (e.g. `u.String` for the
+        // method ref in `u.String()`) represent free-identifier references
+        // hoisted by SSA lowering, not real data field accesses.  Treating
+        // them as fields would let an untainted method ref suppress the
+        // tainted base — Owncast-style cross-fn SSRF (CVE-2023-3188) hit
+        // this when summary extraction saw `http.DefaultClient.Get(u.String())`
+        // with `u` tainted but `u.String` (a phantom Param) untainted.
         let field_values: SmallVec<[SsaValue; 4]> = all_used
             .iter()
             .copied()
             .filter(|&u| {
                 u != *v
+                    && !is_phantom_param_value(u, ssa)
                     && ssa.def_of(u).var_name.as_deref().is_some_and(|uname| {
                         uname.starts_with(&prefix)
                             && callee_name.map_or(true, |cn| uname != cn)
@@ -6355,6 +6383,21 @@ fn apply_field_aware_suppression(
             });
         !all_fields_clean
     });
+}
+
+/// Check whether an SSA value is defined by a phantom `Param` op (a free
+/// identifier like `u.String` hoisted by SSA lowering, not a real positional
+/// parameter).  Used by field-aware suppression to skip method/function
+/// references that share a base name with a tainted variable.
+fn is_phantom_param_value(v: SsaValue, ssa: &SsaBody) -> bool {
+    let def = ssa.def_of(v);
+    let block = &ssa.blocks[def.block.0 as usize];
+    block
+        .phis
+        .iter()
+        .chain(block.body.iter())
+        .find(|inst| inst.value == v)
+        .is_some_and(|inst| matches!(inst.op, SsaOp::Param { .. } | SsaOp::SelfParam))
 }
 
 /// Check if a dotted var_name looks like a method call expression rather than
