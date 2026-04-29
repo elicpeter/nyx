@@ -135,7 +135,7 @@ fn deduplicate_units_by_span(model: &mut AuthorizationModel) {
     // by (span, callee).  Operations are not merged: both extractor
     // passes recompute the same operation list from the AST, so the
     // winner already carries the canonical set.
-    for old_idx in 0..model.units.len() {
+    for (old_idx, checks) in moved_checks.iter_mut().enumerate() {
         let span = model.units[old_idx].span;
         let winner = *winner_by_span.get(&span).unwrap_or(&old_idx);
         if winner == old_idx {
@@ -144,7 +144,7 @@ fn deduplicate_units_by_span(model: &mut AuthorizationModel) {
         let Some(&new_winner_idx) = new_idx_for_old.get(&winner) else {
             continue;
         };
-        for check in moved_checks[old_idx].drain(..) {
+        for check in checks.drain(..) {
             let already_present = surviving[new_winner_idx]
                 .auth_checks
                 .iter()

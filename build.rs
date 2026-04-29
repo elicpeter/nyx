@@ -266,10 +266,10 @@ fn is_rust_fence_needing_ignore(lang: &str) -> bool {
 }
 
 fn utf8_seq_len(lead: u8) -> usize {
-    if lead < 0x80 {
+    // lead < 0xC0 covers ASCII and unexpected continuation bytes; treat both as
+    // single-byte to make progress.
+    if lead < 0xC0 {
         1
-    } else if lead < 0xC0 {
-        1 // unexpected continuation; treat as single byte to make progress
     } else if lead < 0xE0 {
         2
     } else if lead < 0xF0 {
