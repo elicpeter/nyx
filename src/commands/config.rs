@@ -18,8 +18,7 @@ use std::path::Path;
 /// always plain valid TOML.
 pub fn show(config: &Config, all: bool) -> NyxResult<()> {
     let toml_str = if all {
-        toml::to_string_pretty(config)
-            .map_err(|e| format!("Failed to serialize config: {e}"))?
+        toml::to_string_pretty(config).map_err(|e| format!("Failed to serialize config: {e}"))?
     } else {
         diff_from_defaults_toml(config)?
     };
@@ -29,9 +28,7 @@ pub fn show(config: &Config, all: bool) -> NyxResult<()> {
 
     if !all {
         let header = if override_count == 0 {
-            format!(
-                "# No overrides, using built-in defaults. Run `nyx config show --all` for the full effective config."
-            )
+            "# No overrides, using built-in defaults. Run `nyx config show --all` for the full effective config.".to_string()
         } else {
             format!(
                 "# {} override(s) shown — `nyx config show --all` for the full effective config.",
@@ -55,9 +52,7 @@ pub fn show(config: &Config, all: bool) -> NyxResult<()> {
 fn print_toml_with_highlights(toml_str: &str) {
     for line in toml_str.lines() {
         let trimmed = line.trim_start();
-        if (trimmed.starts_with('[') && trimmed.contains(']'))
-            || trimmed.starts_with("[[")
-        {
+        if (trimmed.starts_with('[') && trimmed.contains(']')) || trimmed.starts_with("[[") {
             println!("{}", style(line).cyan().bold());
             continue;
         }
@@ -121,9 +116,8 @@ fn diff_from_defaults_toml(config: &Config) -> NyxResult<String> {
     let defaults: toml::Value = toml::Value::try_from(&normalized_default)
         .map_err(|e| format!("Failed to serialize default config: {e}"))?;
 
-    let pruned = prune_matching(&effective, &defaults).unwrap_or(toml::Value::Table(
-        toml::value::Table::new(),
-    ));
+    let pruned = prune_matching(&effective, &defaults)
+        .unwrap_or(toml::Value::Table(toml::value::Table::new()));
 
     let table = match pruned {
         toml::Value::Table(t) => t,
@@ -143,10 +137,7 @@ fn diff_from_defaults_toml(config: &Config) -> NyxResult<String> {
 /// can drop the key entirely).  Non-table values compare by equality;
 /// arrays are kept whole when they differ at all (TOML lacks a clean
 /// per-element diff representation).
-fn prune_matching(
-    effective: &toml::Value,
-    defaults: &toml::Value,
-) -> Option<toml::Value> {
+fn prune_matching(effective: &toml::Value, defaults: &toml::Value) -> Option<toml::Value> {
     match (effective, defaults) {
         (toml::Value::Table(eff), toml::Value::Table(def)) => {
             let mut out = toml::value::Table::new();
@@ -206,11 +197,7 @@ fn count_top_level_keys(toml_str: &str) -> usize {
             count += 1;
             // A `key = [` or `key = {` opens a multi-line block whose
             // continuation lines should not be counted as new keys.
-            let after_eq = line
-                .splitn(2, '=')
-                .nth(1)
-                .map(str::trim_start)
-                .unwrap_or("");
+            let after_eq = line.split_once('=').map(|x| x.1.trim_start()).unwrap_or("");
             if (after_eq.starts_with('[') && !after_eq.contains(']'))
                 || (after_eq.starts_with('{') && !after_eq.contains('}'))
             {
