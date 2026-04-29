@@ -24,3 +24,10 @@ path = "fuzz_targets/extract_summaries.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "cross_file_taint"
+path = "fuzz_targets/cross_file_taint.rs"
+test = false
+doc = false
+bench = false

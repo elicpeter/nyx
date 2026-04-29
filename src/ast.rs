@@ -1091,9 +1091,12 @@ impl<'a> ParsedFile<'a> {
         scan_root: Option<&Path>,
     ) -> Vec<Diag> {
         // Reset before lowering: probes during lowering may publish
-        // path-safe-suppressed sink spans that state analysis consumes.
-        // See the equivalent reset in `analyse_file_fused`.
+        // path-safe-suppressed sink spans that state analysis consumes,
+        // and the SSA engine may publish all-validated sink spans that
+        // AST-pattern suppression consumes.  See the equivalent resets
+        // in `analyse_file_fused`.
         crate::taint::ssa_transfer::reset_path_safe_suppressed_spans();
+        crate::taint::ssa_transfer::reset_all_validated_spans();
         let (ssa_summaries, callee_bodies) = self.lower_ssa_for_fused(global_summaries, scan_root);
         self.run_cfg_analyses_with_lowered(
             cfg,
@@ -1542,6 +1545,7 @@ pub fn perf_stage_breakdown_fused(
     let t_parse_cfg = s_parse.elapsed().as_micros();
 
     crate::taint::ssa_transfer::reset_path_safe_suppressed_spans();
+    crate::taint::ssa_transfer::reset_all_validated_spans();
     crate::taint::perf_lower_timings_start();
 
     let s_lower = Instant::now();
@@ -2489,6 +2493,39 @@ struct TaintSuppressionCtx {
     /// [`should_suppress`] alongside [`sanitizer_lines_by_func`] to
     /// distinguish "taint proved safe" from "taint failed to track".
     taint_finding_lines_by_func: HashMap<Option<String>, HashSet<usize>>,
+    /// Functions where the SSA engine emitted at least one
+    /// `all_validated` event — every tainted input to *some* sink in
+    /// the function passed through a recognised validation/
+    /// sanitisation predicate.  Drained from
+    /// `take_all_validated_spans`; positive evidence that the engine
+    /// reached a sink in this function and proved safety, even when no
+    /// `taint-unsanitised-flow` finding fired and no Sanitizer label
+    /// is present.  Covers validation, dominator-based pruning,
+    /// early-return guards, type-check predicates, and interprocedural
+    /// sanitiser wrappers — all of which legitimately clear taint via
+    /// SSA branch-narrowing rather than a labelled sanitiser node.
+    engine_validated_funcs: HashSet<Option<String>>,
+    /// Functions where some Source's defining variable is later
+    /// rebound to a literal RHS (carries `TaintMeta.const_text`) in
+    /// the same scope, with no Source label on the rebinding node.
+    /// Positive evidence that the engine's SSA renaming structurally
+    /// kills the source's taint before any sink can read it — covers
+    /// `cmd = getenv(); cmd = "echo hello"; system(cmd)` patterns
+    /// where the rebind is what makes the code safe but the engine
+    /// has no `Sanitizer` label or `taint-unsanitised-flow` finding to
+    /// witness it.
+    source_killed_funcs: HashSet<Option<String>>,
+    /// Functions that call a same-file helper which itself contains a
+    /// labelled Sanitizer node.  Positive evidence that the engine's
+    /// interprocedural analysis cleared the flow through a
+    /// user-defined wrapper (e.g. `def sanitize(s): return
+    /// shlex.quote(s)`).  The current per-function `Sanitizer` check
+    /// only sees direct sanitisers in the *caller's* scope — without
+    /// this signal, every helper-wrapped sanitiser fires as an
+    /// AST-pattern FP because the engine cleared the value via Phase
+    /// 11 inline analysis but the sink's enclosing scope has no
+    /// labelled Sanitizer of its own.
+    interproc_sanitizer_callers: HashSet<Option<String>>,
 }
 
 impl TaintSuppressionCtx {
@@ -2501,6 +2538,27 @@ impl TaintSuppressionCtx {
         let mut source_lines_by_func: HashMap<Option<String>, HashSet<usize>> = HashMap::new();
         let mut sanitizer_lines_by_func: HashMap<Option<String>, HashSet<usize>> = HashMap::new();
         let mut sink_func_at_line: HashMap<usize, Option<String>> = HashMap::new();
+        // Per-function (var_name, source_line) pairs for Source nodes whose
+        // `defines` is set.  Used below to detect SSA source kills via
+        // const reassignment (`cmd = getenv(); cmd = "echo hello"`).
+        let mut source_var_defs_by_func: HashMap<Option<String>, Vec<(String, usize)>> =
+            HashMap::new();
+        // Per-function (var_name, line) pairs for nodes that bind a
+        // variable to a literal RHS (carry `TaintMeta.const_text`).
+        // Used to match against `source_var_defs_by_func` for kill
+        // detection.
+        let mut const_def_var_by_func: HashMap<Option<String>, Vec<(String, usize)>> =
+            HashMap::new();
+        // Set of `enclosing_func` names whose body contains at least
+        // one labelled Sanitizer.  These are user-defined sanitiser
+        // wrappers callable from other functions in the same file
+        // (e.g. `def sanitize(s): return shlex.quote(s)`).
+        let mut sanitizer_funcs: HashSet<String> = HashSet::new();
+        // Per-function set of bare callee names invoked from this
+        // function's body.  Bare = last `.`-separated segment, so
+        // `this.sanitize`, `obj.sanitize`, and `sanitize` all collapse
+        // to the same key for matching against `sanitizer_funcs`.
+        let mut callees_by_func: HashMap<Option<String>, HashSet<String>> = HashMap::new();
 
         for body in &file_cfg.bodies {
             for idx in body.graph.node_indices() {
@@ -2538,16 +2596,125 @@ impl TaintSuppressionCtx {
                         .entry(info.ast.enclosing_func.clone())
                         .or_default()
                         .insert(line);
+                    if let Some(var) = info.taint.defines.as_deref() {
+                        source_var_defs_by_func
+                            .entry(info.ast.enclosing_func.clone())
+                            .or_default()
+                            .push((var.to_string(), line));
+                    }
                 }
                 if has_sanitizer {
                     sanitizer_lines_by_func
                         .entry(info.ast.enclosing_func.clone())
                         .or_default()
                         .insert(line);
+                    if let Some(func_name) = info.ast.enclosing_func.as_deref() {
+                        sanitizer_funcs.insert(func_name.to_string());
+                    }
                 }
                 if has_sink {
                     sink_func_at_line.insert(line, info.ast.enclosing_func.clone());
                 }
+                // Const-rebind detection: a node that defines a variable
+                // from a literal RHS and carries no Source label is a
+                // candidate kill site.  Skip nodes that are themselves
+                // Sources (a literal-init source like `cmd := "ls"` is
+                // not a kill).
+                if !has_source
+                    && let (Some(var), Some(_)) = (
+                        info.taint.defines.as_deref(),
+                        info.taint.const_text.as_ref(),
+                    )
+                {
+                    const_def_var_by_func
+                        .entry(info.ast.enclosing_func.clone())
+                        .or_default()
+                        .push((var.to_string(), line));
+                }
+                // Per-function callee inventory for interprocedural
+                // sanitiser detection.  `bare_method_name` collapses
+                // `this.sanitize` / `obj.sanitize` / `sanitize` to the
+                // same key so receiver-prefixed Java/Ruby/etc. calls
+                // match a bare-named helper definition.  Also include
+                // `arg_callees` so `println(... + sanitize(name) +
+                // ...)` recognises the inline sanitiser call buried
+                // inside the sink's argument expression.
+                let bare_inserts: Vec<&str> = info
+                    .call
+                    .callee
+                    .as_deref()
+                    .into_iter()
+                    .chain(info.arg_callees.iter().filter_map(|c| c.as_deref()))
+                    .collect();
+                if !bare_inserts.is_empty() {
+                    let entry = callees_by_func
+                        .entry(info.ast.enclosing_func.clone())
+                        .or_default();
+                    for callee in bare_inserts {
+                        let bare = crate::labels::bare_method_name(callee);
+                        if !bare.is_empty() {
+                            entry.insert(bare.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Source-kill detection: a function is "source-killed" when at
+        // least one of its Source-defined variables is re-bound to a
+        // literal at a later line in the same scope.  Captures
+        // `safe_reassigned`-style fixtures: the SSA engine renames the
+        // sink-read SSA value to a clean constant before any sink can
+        // observe taint, but neither a `Sanitizer` label nor a
+        // `taint-unsanitised-flow` finding fires to witness the kill.
+        let mut source_killed_funcs: HashSet<Option<String>> = HashSet::new();
+        for (func, src_defs) in &source_var_defs_by_func {
+            let Some(kills) = const_def_var_by_func.get(func) else {
+                continue;
+            };
+            for (src_var, src_line) in src_defs {
+                if kills
+                    .iter()
+                    .any(|(kill_var, kill_line)| kill_var == src_var && kill_line > src_line)
+                {
+                    source_killed_funcs.insert(func.clone());
+                    break;
+                }
+            }
+        }
+
+        // Interprocedural sanitiser caller detection: a function is
+        // an "interproc sanitiser caller" when its body invokes any
+        // helper whose own body contains a labelled Sanitizer.  This
+        // handles wrappers like `def sanitize(s): return
+        // shlex.quote(s)` — the engine clears taint via Phase 11
+        // inline analysis, but the caller's scope has no labelled
+        // Sanitizer of its own to satisfy Condition 4(b).
+        let mut interproc_sanitizer_callers: HashSet<Option<String>> = HashSet::new();
+        if !sanitizer_funcs.is_empty() {
+            for (func, callees) in &callees_by_func {
+                if callees.iter().any(|c| sanitizer_funcs.contains(c)) {
+                    interproc_sanitizer_callers.insert(func.clone());
+                }
+            }
+        }
+
+        // Drain the SSA engine's all-validated sink spans, attribute
+        // each to its enclosing function via `sink_func_at_line`, and
+        // record the function as "engine-validated".  The set was
+        // populated by `ssa_events_to_findings` whenever the engine
+        // emitted an `SsaTaintEvent { all_validated: true, .. }` —
+        // i.e. the engine reached a sink and proved every tainted
+        // input passed validation.  This is the broadest form of
+        // engine-success evidence, covering predicate validation
+        // (`if !allowed[x]`), dominator early-return, type-check
+        // (`Atoi` / `typeof`), and interprocedural sanitiser
+        // wrappers.
+        let mut engine_validated_funcs: HashSet<Option<String>> = HashSet::new();
+        for (start, _end) in crate::taint::ssa_transfer::take_all_validated_spans() {
+            let line = byte_offset_to_point(tree, start).row + 1;
+            if let Some(func) = sink_func_at_line.get(&line) {
+                engine_validated_funcs.insert(func.clone());
             }
         }
 
@@ -2577,6 +2744,9 @@ impl TaintSuppressionCtx {
             sink_func_at_line,
             taint_finding_lines,
             taint_finding_lines_by_func,
+            engine_validated_funcs,
+            source_killed_funcs,
+            interproc_sanitizer_callers,
         }
     }
 
@@ -2614,14 +2784,34 @@ impl TaintSuppressionCtx {
         //       OR
         //   (b) the function contains an explicit Sanitizer node (the
         //       canonical mechanism by which a flow is cleared, e.g.
-        //       `escapeshellarg` between $_GET and `system`).
+        //       `escapeshellarg` between $_GET and `system`),
+        //       OR
+        //   (c) the SSA engine emitted at least one `all_validated`
+        //       event in this function (engine reached *some* sink and
+        //       proved every tainted input was validated — covers
+        //       predicate validation, dominator early-return,
+        //       type-check predicates, and interprocedural sanitiser
+        //       wrappers that don't carry an explicit Sanitizer
+        //       label),
+        //       OR
+        //   (d) the function rebinds a Source's defining variable to
+        //       a literal RHS at a later line (engine's SSA renaming
+        //       structurally kills taint before any sink reads it —
+        //       covers `cmd = getenv(); cmd = "echo"; system(cmd)`),
+        //       OR
+        //   (e) the function calls a same-file helper whose body
+        //       contains a labelled Sanitizer (interprocedural
+        //       sanitiser wrapper — covers `def sanitize(s): return
+        //       shlex.quote(s)` patterns where the engine clears
+        //       taint via Phase 11 inline analysis but the caller's
+        //       scope has no Sanitizer label of its own).
         //
-        // When the function has neither, we can't distinguish silent
-        // engine failure from real safety — e.g. Go points-to limitation
-        // on `&local` Decode destinations leaves the chain writeback
-        // fired but the field-cell propagation dead, suppressing
-        // legitimate AST-pattern findings on every Go CRUD handler whose
-        // Decode destination is a stack-local address-of.
+        // When none hold, we can't distinguish silent engine failure
+        // from real safety — e.g. Go points-to limitation on `&local`
+        // Decode destinations leaves the chain writeback fired but the
+        // field-cell propagation dead, suppressing legitimate
+        // AST-pattern findings on every Go CRUD handler whose Decode
+        // destination is a stack-local address-of.
         let func_has_taint_finding = self
             .taint_finding_lines_by_func
             .get(func)
@@ -2630,7 +2820,15 @@ impl TaintSuppressionCtx {
             .sanitizer_lines_by_func
             .get(func)
             .is_some_and(|s| !s.is_empty());
-        if !func_has_taint_finding && !func_has_sanitizer {
+        let func_engine_validated = self.engine_validated_funcs.contains(func);
+        let func_source_killed = self.source_killed_funcs.contains(func);
+        let func_interproc_sanitizer = self.interproc_sanitizer_callers.contains(func);
+        if !func_has_taint_finding
+            && !func_has_sanitizer
+            && !func_engine_validated
+            && !func_source_killed
+            && !func_interproc_sanitizer
+        {
             return false;
         }
         true
@@ -2806,8 +3004,11 @@ pub fn analyse_file_fused(
         // (`record_path_safe_suppressed_span`), and the state-analysis
         // pass downstream relies on those spans surviving until
         // `take_path_safe_suppressed_spans` drains the set inside
-        // `run_cfg_analyses_with_lowered`.
+        // `run_cfg_analyses_with_lowered`.  The all-validated span set
+        // (cap-agnostic, AST-pattern suppression evidence) follows the
+        // same lifecycle and is drained inside `TaintSuppressionCtx`.
         crate::taint::ssa_transfer::reset_path_safe_suppressed_spans();
+        crate::taint::ssa_transfer::reset_all_validated_spans();
         let (lowered_summaries, lowered_bodies) =
             parsed.lower_ssa_for_fused(global_summaries, scan_root);
         out.extend(parsed.run_cfg_analyses_with_lowered(

@@ -109,7 +109,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: bnjbvr/cargo-machete@v0.7.0
+      - uses: bnjbvr/cargo-machete@v0.9.2
 
   third-party-licenses:
     name: third-party-licenses

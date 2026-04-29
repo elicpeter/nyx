@@ -154,6 +154,29 @@ thread_local! {
     /// Reset at start of `analyse_file`, drained before state analysis.
     static PATH_SAFE_SUPPRESSED_SPANS: RefCell<std::collections::HashSet<(usize, usize)>> =
         RefCell::new(std::collections::HashSet::new());
+
+    /// File-level set of CFG sink spans where the SSA engine emitted an
+    /// `all_validated` event — every tainted input to the sink passed
+    /// through a recognised validation/sanitisation predicate before
+    /// reaching it.  Distinct from `PATH_SAFE_SUPPRESSED_SPANS`, which
+    /// is FILE_IO-scoped and feeds state analysis: this set is
+    /// cap-agnostic and feeds AST-pattern suppression, providing
+    /// positive evidence that the engine reached the sink and proved
+    /// safety so that downstream AST-pattern findings on the same line
+    /// can be safely silenced.
+    ///
+    /// Without this signal the suppression gate has to fall back to
+    /// "function emitted at least one taint-unsanitised-flow finding"
+    /// or "function contains a labelled Sanitizer node" — both of
+    /// which miss validated/dominated/early-return safety where the
+    /// engine cleared the flow without firing or hitting an explicit
+    /// sanitiser.
+    ///
+    /// Reset at start of `analyse_file` (mirrors the existing
+    /// path-safe span lifecycle); drained inside
+    /// `TaintSuppressionCtx::build`.
+    static ALL_VALIDATED_SPANS: RefCell<std::collections::HashSet<(usize, usize)>> =
+        RefCell::new(std::collections::HashSet::new());
 }
 
 /// Record an engine note for the body currently being analysed.  Safe to
@@ -200,6 +223,33 @@ pub fn reset_path_safe_suppressed_spans() {
 /// the taint engine already proved safe.
 pub fn take_path_safe_suppressed_spans() -> std::collections::HashSet<(usize, usize)> {
     PATH_SAFE_SUPPRESSED_SPANS.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
+/// Record a sink CFG-node span where the SSA engine proved every
+/// tainted input was validated (`SsaTaintEvent::all_validated`).
+/// Cap-agnostic — fires for any sink the engine evaluated and cleared.
+/// Consumed by `TaintSuppressionCtx::build` as positive evidence that
+/// taint analysis reached this line and proved safety, so AST-pattern
+/// findings on the same line can be suppressed without misclassifying
+/// silent engine failures as "safe by validation".
+pub(crate) fn record_all_validated_span(span: (usize, usize)) {
+    ALL_VALIDATED_SPANS.with(|c| {
+        c.borrow_mut().insert(span);
+    });
+}
+
+/// Reset the file-level all-validated sink-span set.  Called at the
+/// start of `analyse_file` alongside `reset_path_safe_suppressed_spans`
+/// so each file scan starts clean.
+pub fn reset_all_validated_spans() {
+    ALL_VALIDATED_SPANS.with(|c| c.borrow_mut().clear());
+}
+
+/// Take the file-level all-validated sink-span set, leaving it empty.
+/// Called inside `TaintSuppressionCtx::build` to attribute each
+/// validated sink to its enclosing function for the suppression gate.
+pub fn take_all_validated_spans() -> std::collections::HashSet<(usize, usize)> {
+    ALL_VALIDATED_SPANS.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
 /// Stable identity for a variable binding at body boundaries.

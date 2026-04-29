@@ -285,6 +285,16 @@ pub fn ssa_events_to_findings(
         // Suppress findings where all tainted variables were validated
         // (passed through an allowlist, type-check, or validation branch).
         if event.all_validated {
+            let span = cfg[event.sink_node].ast.span;
+            // Cap-agnostic: record the validated sink span so the
+            // AST-pattern suppression gate (`TaintSuppressionCtx`) has
+            // positive evidence that the SSA engine reached this sink
+            // and proved safety.  Without this, validation/dominator/
+            // early-return-style safe code is indistinguishable from
+            // silent engine failure when the function emitted no
+            // findings and contains no labelled Sanitizer.
+            crate::taint::ssa_transfer::state::record_all_validated_span(span);
+
             // Mirror the path-safety pathway: when the SSA engine has
             // already proved every tainted input to a privileged
             // FILE_IO sink passed through validation, publish the sink
@@ -296,7 +306,6 @@ pub fn ssa_events_to_findings(
             // currently fires on; broadening would risk stretching
             // validator-name heuristics into unrelated finding classes.
             if event.sink_caps.intersects(Cap::FILE_IO) {
-                let span = cfg[event.sink_node].ast.span;
                 crate::taint::ssa_transfer::state::record_path_safe_suppressed_span(span);
             }
             continue;

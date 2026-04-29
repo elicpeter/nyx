@@ -37,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [scan_bytes, extract_summaries]
+        target: [scan_bytes, extract_summaries, cross_file_taint]
     steps:
       - uses: actions/checkout@v6
 
@@ -78,12 +78,88 @@ jobs:
       # restore-keys prefix falls back to whatever the most recent run
       # produced.
       - name: Restore fuzz corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.sha }}
           restore-keys: |
             fuzz-corpus-${{ matrix.target }}-
+
+      # Layer real source files on top of whatever the cache restored.
+      # The harness format is `<lang_idx_byte><source>`, so we prefix
+      # each candidate file with its language index and drop it into
+      # the corpus dir. `cp -n` (here: `[ -e ... ] || ...`) keeps cache
+      # entries authoritative.
+      #
+      # Seed pool, in order of precedence:
+      #   benches/fixtures/sample.<ext>      — single canonical sample
+      #                                        per language (10 files,
+      #                                        guaranteed to parse).
+      #   tests/benchmark/corpus/**/*.<ext>  — 400 labeled vulnerability
+      #                                        fixtures already in-tree.
+      #                                        Drives diversity: distinct
+      #                                        sink/source/sanitizer
+      #                                        shapes per vuln class.
+      #   fuzz/seed_corpus/<target>/         — target-specific
+      #                                        hand-crafted seeds (e.g.
+      #                                        cross_file_taint inputs
+      #                                        that call the synthetic
+      #                                        helpers — those names
+      #                                        appear nowhere in
+      #                                        benchmark corpus).
+      #
+      # Files are content-hashed into corpus entry names so reruns are
+      # idempotent and adding new fixtures doesn't churn the cache.
+      - name: Layer seed corpus
+        run: |
+          set -euo pipefail
+          target=${{ matrix.target }}
+          dest="fuzz/corpus/$target"
+          mkdir -p "$dest"
+          ext_to_idx() {
+            case "$1" in
+              rs)   echo 0 ;;
+              js)   echo 1 ;;
+              ts)   echo 2 ;;
+              py)   echo 3 ;;
+              go)   echo 4 ;;
+              java) echo 5 ;;
+              rb)   echo 6 ;;
+              php)  echo 7 ;;
+              c)    echo 8 ;;
+              cpp)  echo 9 ;;
+              *)    return 1 ;;
+            esac
+          }
+          stage() {
+            src="$1"
+            ext="${src##*.}"
+            idx=$(ext_to_idx "$ext") || return 0
+            hash=$(sha256sum "$src" | cut -c1-16)
+            out="$dest/seed-${ext}-${hash}"
+            [ -e "$out" ] && return 0
+            printf '%b' "$(printf '\\%03o' "$idx")" > "$out"
+            cat "$src" >> "$out"
+          }
+          for f in benches/fixtures/sample.*; do
+            [ -e "$f" ] && stage "$f"
+          done
+          while IFS= read -r f; do
+            stage "$f"
+          done < <(find tests/benchmark/corpus -type f \( \
+                     -name '*.rs' -o -name '*.js' -o -name '*.ts' \
+                  -o -name '*.py' -o -name '*.go' -o -name '*.java' \
+                  -o -name '*.rb' -o -name '*.php' -o -name '*.c' \
+                  -o -name '*.cpp' \))
+          if [ -d "fuzz/seed_corpus/$target" ]; then
+            for f in "fuzz/seed_corpus/$target"/*; do
+              [ -e "$f" ] || continue
+              # Already prefixed; copy under their own name.
+              name="$(basename "$f")"
+              [ -e "$dest/$name" ] || cp "$f" "$dest/$name"
+            done
+          fi
+          echo "Corpus dir: $(ls "$dest" | wc -l) files"
 
       - name: Choose fuzz duration
         id: budget
@@ -110,8 +186,31 @@ jobs:
       # Without this override it would hand cargo `--target ...-musl`,
       # which is incompatible with `-Zsanitizer=address` (statically
       # linked libc), failing the build before fuzzing starts.
+      #
+      # libFuzzer flags:
+      #   -max_len=65536      Cap input size at 64KB. Real source files
+      #                       sit well under this; uncapped inputs let
+      #                       libFuzzer waste budget on million-byte
+      #                       parse stress instead of structural mutation.
+      #   -timeout=60         Flag any single iteration over 60s as a
+      #                       hang. Tree-sitter / CFG / taint should
+      #                       never need that long on 64KB; if they do,
+      #                       it's an algorithmic-complexity bug worth
+      #                       surfacing immediately rather than at the
+      #                       1200s libFuzzer default.
+      #   -dict=...           Token dictionary for cross-language
+      #                       keywords + injection markers + the
+      #                       synthetic helper names registered by
+      #                       cross_file_taint, so mutations bias toward
+      #                       structurally-meaningful tokens instead of
+      #                       random byte salads.
       - name: Run fuzz target
-        run: cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=${{ steps.budget.outputs.seconds }}
+        run: |
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- \
+            -max_total_time=${{ steps.budget.outputs.seconds }} \
+            -max_len=65536 \
+            -timeout=60 \
+            -dict=fuzz/dict/all.dict
 
       # libFuzzer drops repro inputs into fuzz/artifacts/<target>/ on
       # crash. Keep them around for triage; corpus already lives in the

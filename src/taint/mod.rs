@@ -344,7 +344,11 @@ pub fn analyse_file(
     // while letting both the probe phase and the taint flow phase
     // accumulate into the same set, which is what
     // `take_path_safe_suppressed_spans` then drains for state analysis.
+    // The all-validated span set (cap-agnostic, drained by AST-pattern
+    // suppression in `TaintSuppressionCtx::build`) follows the same
+    // lifecycle.
     ssa_transfer::reset_path_safe_suppressed_spans();
+    ssa_transfer::reset_all_validated_spans();
     // No locator: pass-2 intra-file summaries are transient (not persisted)
     // and behavior depends on SinkSite.cap only, which is always populated.
     let (ssa_summaries, callee_bodies) = lower_all_functions_from_bodies(

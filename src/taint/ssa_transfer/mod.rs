@@ -25,9 +25,9 @@ pub use inline::{CalleeSsaBody, CrossFileNodeMeta, populate_node_meta, rebuild_b
 pub(crate) use inline::{inline_cache_clear_epoch, inline_cache_fingerprint};
 pub use state::{
     BindingKey, SsaTaintState, max_worklist_iterations, origins_truncation_count,
-    reset_origins_observability, reset_path_safe_suppressed_spans, reset_worklist_observability,
-    seed_lookup, set_max_origins_override, set_worklist_cap_override,
-    take_path_safe_suppressed_spans, worklist_cap_hit_count,
+    reset_all_validated_spans, reset_origins_observability, reset_path_safe_suppressed_spans,
+    reset_worklist_observability, seed_lookup, set_max_origins_override, set_worklist_cap_override,
+    take_all_validated_spans, take_path_safe_suppressed_spans, worklist_cap_hit_count,
 };
 use state::{
     MAX_WORKLIST_ITERATIONS, ORIGINS_TRUNCATION_COUNT, WORKLIST_CAP_HITS, effective_max_origins,
