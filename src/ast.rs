@@ -1914,10 +1914,10 @@ fn find_named_child_of_kind<'a>(
     kind: &str,
 ) -> Option<tree_sitter::Node<'a>> {
     for i in 0..parent.named_child_count() as u32 {
-        if let Some(child) = parent.named_child(i) {
-            if child.kind() == kind {
-                return Some(child);
-            }
+        if let Some(child) = parent.named_child(i)
+            && child.kind() == kind
+        {
+            return Some(child);
         }
     }
     None
@@ -1952,10 +1952,10 @@ fn param_list_contains_name(params: tree_sitter::Node, target_name: &str, bytes:
         let Some(name_node) = name_node else {
             continue;
         };
-        if let Ok(name) = std::str::from_utf8(&bytes[name_node.byte_range()]) {
-            if name == target_name {
-                return true;
-            }
+        if let Ok(name) = std::str::from_utf8(&bytes[name_node.byte_range()])
+            && name == target_name
+        {
+            return true;
         }
     }
     false
@@ -1986,16 +1986,13 @@ fn is_var_reassigned_before(
             let lhs = node
                 .child_by_field_name("left")
                 .or_else(|| node.named_child(0));
-            if let Some(lhs) = lhs {
-                if lhs.kind() == "variable_name" {
-                    if let Some(n) = lhs.named_child(0) {
-                        if let Ok(s) = std::str::from_utf8(&bytes[n.byte_range()]) {
-                            if s == target_name {
-                                return true;
-                            }
-                        }
-                    }
-                }
+            if let Some(lhs) = lhs
+                && lhs.kind() == "variable_name"
+                && let Some(n) = lhs.named_child(0)
+                && let Ok(s) = std::str::from_utf8(&bytes[n.byte_range()])
+                && s == target_name
+            {
+                return true;
             }
         }
         for i in 0..node.named_child_count() as u32 {
@@ -2051,10 +2048,10 @@ fn is_php_unserialize_allowed_classes_restricted(
     // arg 0 is the data; arg 1 is the options array.
     let mut args = Vec::new();
     for i in 0..arg_list.named_child_count() as u32 {
-        if let Some(c) = arg_list.named_child(i) {
-            if c.kind() == "argument" {
-                args.push(c);
-            }
+        if let Some(c) = arg_list.named_child(i)
+            && c.kind() == "argument"
+        {
+            args.push(c);
         }
     }
     if args.len() < 2 {
@@ -2101,10 +2098,10 @@ fn is_php_unserialize_allowed_classes_restricted(
         //                                    the unsafe default.
         match value.kind() {
             "boolean" => {
-                if let Ok(s) = std::str::from_utf8(&bytes[value.byte_range()]) {
-                    if s.eq_ignore_ascii_case("false") {
-                        return true;
-                    }
+                if let Ok(s) = std::str::from_utf8(&bytes[value.byte_range()])
+                    && s.eq_ignore_ascii_case("false")
+                {
+                    return true;
                 }
             }
             "array_creation_expression"
@@ -2145,8 +2142,9 @@ fn is_php_unserialize_allowed_classes_restricted(
 ///   (`must_match: true`) in the taint fixtures:
 ///     - `tests/fixtures/real_world/c/taint/buffer_overflow.c`
 ///     - `tests/fixtures/real_world/cpp/taint/gets_strcpy.cpp`
-///   Removing this function or weakening its predicate would be caught
-///   by neither — it would be caught by the unit tests below.
+///
+/// Removing this function or weakening its predicate would be caught by
+/// neither — it would be caught by the unit tests below.
 ///
 /// Pattern rules `c.memory.strcpy` / `c.memory.strcat` / `c.memory.sprintf`
 /// (and the `cpp.memory.*` mirrors) flag the call syntactically; their
@@ -2160,13 +2158,12 @@ fn is_php_unserialize_allowed_classes_restricted(
 /// Shapes recognised:
 ///   - `strcpy(dst, "literal")`            → suppress
 ///   - `strcpy(dst, COND ? "a" : "b")`     → suppress (ternary of two
-///                                            string-literal branches; the
-///                                            postgres `formatting.c` shape)
+///     string-literal branches; the postgres `formatting.c` shape)
 ///   - `strcat(dst, "literal")`            → same
 ///   - `sprintf(dst, "format")` where the format string is a literal
 ///     containing no bare `%s` (only width/precision-bounded specifiers
 ///     like `%d`, `%lld`, `%c`, `%.*s`, `%.5s`)
-///                                          → suppress
+///     → suppress
 ///
 /// Conservative refusals:
 ///   - source / format is an identifier (could be tainted, e.g.
@@ -2292,11 +2289,11 @@ fn is_all_caps_macro_name(s: &str) -> bool {
 
 fn unwrap_c_paren(mut node: tree_sitter::Node) -> tree_sitter::Node {
     for _ in 0..4 {
-        if node.kind() == "parenthesized_expression" {
-            if let Some(inner) = node.named_child(0) {
-                node = inner;
-                continue;
-            }
+        if node.kind() == "parenthesized_expression"
+            && let Some(inner) = node.named_child(0)
+        {
+            node = inner;
+            continue;
         }
         break;
     }
@@ -2310,12 +2307,11 @@ fn unwrap_c_paren(mut node: tree_sitter::Node) -> tree_sitter::Node {
 fn c_string_literal_payload(node: tree_sitter::Node, bytes: &[u8]) -> Option<String> {
     // Prefer a `string_content` child if tree-sitter exposes one.
     for i in 0..node.named_child_count() as u32 {
-        if let Some(c) = node.named_child(i) {
-            if c.kind() == "string_content" {
-                if let Ok(s) = std::str::from_utf8(&bytes[c.byte_range()]) {
-                    return Some(s.to_string());
-                }
-            }
+        if let Some(c) = node.named_child(i)
+            && c.kind() == "string_content"
+            && let Ok(s) = std::str::from_utf8(&bytes[c.byte_range()])
+        {
+            return Some(s.to_string());
         }
     }
     // Fall back: strip the surrounding quotes from the full literal text.
@@ -2415,11 +2411,11 @@ fn is_string_literal_with_text(node: tree_sitter::Node, text: &str, bytes: &[u8]
     // Look for a single string_content / string_value child.
     let mut payload = None;
     for i in 0..node.named_child_count() as u32 {
-        if let Some(c) = node.named_child(i) {
-            if c.kind() == "string_content" || c.kind() == "string_value" {
-                payload = Some(c);
-                break;
-            }
+        if let Some(c) = node.named_child(i)
+            && (c.kind() == "string_content" || c.kind() == "string_value")
+        {
+            payload = Some(c);
+            break;
         }
     }
     let Some(payload) = payload else {

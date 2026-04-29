@@ -403,11 +403,7 @@ impl TypeHierarchyIndex {
         method: &str,
     ) -> Vec<FuncKey> {
         let Some(c) = container.filter(|s| !s.is_empty()) else {
-            return method_index
-                .resolve(lang, None, method)
-                .iter()
-                .cloned()
-                .collect();
+            return method_index.resolve(lang, None, method).to_vec();
         };
         let mut out: Vec<FuncKey> = Vec::new();
         let push_unique = |dst: &mut Vec<FuncKey>, src: &[FuncKey]| {

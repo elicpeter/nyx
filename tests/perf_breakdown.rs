@@ -14,7 +14,7 @@ use std::time::Instant;
 const FIXTURES: &str = "benches/fixtures";
 const ITERATIONS: usize = 30;
 
-fn pct(samples: &mut Vec<u128>, p: f64) -> u128 {
+fn pct(samples: &mut [u128], p: f64) -> u128 {
     if samples.is_empty() {
         return 0;
     }
@@ -219,14 +219,14 @@ fn fused_stage_breakdown() {
 
     let mut tot_outer = [0u128; 8];
     for s in 0..8 {
-        for i in 0..paths.len() {
-            tot_outer[s] += pct(&mut outer[s][i].clone(), 0.5);
+        for samples in outer[s].iter().take(paths.len()) {
+            tot_outer[s] += pct(&mut samples.clone(), 0.5);
         }
     }
     let mut tot_inner = [0u128; 7];
     for s in 0..7 {
-        for i in 0..paths.len() {
-            tot_inner[s] += pct(&mut inner[s][i].clone(), 0.5);
+        for samples in inner[s].iter().take(paths.len()) {
+            tot_inner[s] += pct(&mut samples.clone(), 0.5);
         }
     }
     let outer_sum: u128 = tot_outer.iter().sum();
@@ -334,8 +334,8 @@ fn stage_breakdown() {
     let mut tot_per_stage = [0u128; 6];
     for s in 0..6 {
         let mut sum = 0u128;
-        for i in 0..paths.len() {
-            sum += pct(&mut stage[s][i].clone(), 0.5);
+        for samples in stage[s].iter().take(paths.len()) {
+            sum += pct(&mut samples.clone(), 0.5);
         }
         tot_per_stage[s] = sum;
     }

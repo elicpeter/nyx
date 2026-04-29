@@ -1117,10 +1117,10 @@ mod field_taint_tests {
             source_span: Some((10, 11)),
         };
         let mut t1 = taint(Cap::ENV_VAR);
-        t1.origins.push(o1.clone());
+        t1.origins.push(o1);
         let mut t2 = taint(Cap::ENV_VAR);
-        t2.origins.push(o1.clone());
-        t2.origins.push(o2.clone());
+        t2.origins.push(o1);
+        t2.origins.push(o2);
 
         let mut a = SsaTaintState::initial();
         let mut b = SsaTaintState::initial();

@@ -137,9 +137,9 @@ fn type_identifier_text(n: Node<'_>, code: &[u8]) -> Option<String> {
         }
         "scoped_type_identifier" => {
             // `pkg.Foo` — return last segment.
-            text_of(n, code).and_then(|s| {
+            text_of(n, code).map(|s| {
                 let last = s.rsplit('.').next().unwrap_or(&s);
-                Some(last.to_string())
+                last.to_string()
             })
         }
         _ => None,

@@ -63,30 +63,32 @@ fn diag_at(path: &str, severity: Severity, conf: Option<Confidence>) -> Diag {
 }
 
 fn with_verdict(mut d: Diag, verdict: Verdict) -> Diag {
-    let mut ev = Evidence::default();
-    ev.symbolic = Some(SymbolicVerdict {
-        verdict,
-        constraints_checked: 0,
-        paths_explored: 0,
-        witness: None,
-        interproc_call_chains: Vec::new(),
-        cutoff_notes: Vec::new(),
-    });
     // Add a single flow step so context_factor sees this as a real
     // taint flow (1.0×) rather than AST-only (0.75×).  Confirmed +
     // intra-file flow puts credibility at 1.2.
-    ev.flow_steps.push(nyx_scanner::evidence::FlowStep {
-        step: 0,
-        kind: nyx_scanner::evidence::FlowStepKind::Source,
-        file: d.path.clone(),
-        line: d.line as u32,
-        col: d.col as u32,
-        snippet: None,
-        variable: None,
-        callee: None,
-        function: None,
-        is_cross_file: false,
-    });
+    let ev = Evidence {
+        symbolic: Some(SymbolicVerdict {
+            verdict,
+            constraints_checked: 0,
+            paths_explored: 0,
+            witness: None,
+            interproc_call_chains: Vec::new(),
+            cutoff_notes: Vec::new(),
+        }),
+        flow_steps: vec![nyx_scanner::evidence::FlowStep {
+            step: 0,
+            kind: nyx_scanner::evidence::FlowStepKind::Source,
+            file: d.path.clone(),
+            line: d.line as u32,
+            col: d.col as u32,
+            snippet: None,
+            variable: None,
+            callee: None,
+            function: None,
+            is_cross_file: false,
+        }],
+        ..Default::default()
+    };
     d.evidence = Some(ev);
     d
 }

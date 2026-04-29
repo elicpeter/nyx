@@ -1400,10 +1400,11 @@ fn is_require_resource_role_call(name: &str) -> bool {
     // Pattern 2: `is_<role>` and `is_<role>_(or|and)_<role>...`.
     // Conservative role list — excludes `user` / `staff` to avoid
     // matching ambiguous predicates like `is_user`.
-    if let Some(rest) = lower.strip_prefix("is_") {
-        if !rest.is_empty() && all_tokens_are_predicate_roles(rest) {
-            return true;
-        }
+    if let Some(rest) = lower.strip_prefix("is_")
+        && !rest.is_empty()
+        && all_tokens_are_predicate_roles(rest)
+    {
+        return true;
     }
 
     false

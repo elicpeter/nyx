@@ -136,7 +136,7 @@ pub fn compute(inp: &HealthInputs<'_>) -> HealthScore {
     let modifier_sum = components
         .iter()
         .filter(|c| c.label != "Severity pressure")
-        .map(|c| signed_modifier_contribution(c))
+        .map(signed_modifier_contribution)
         .sum::<f64>();
 
     // Reapply ceiling AND floor after modifiers.  Ceiling: modifiers
@@ -220,15 +220,15 @@ fn aggregate_findings(findings: &[Diag]) -> WeightedAggregate {
 
         // Symex coverage tracking — only meaningful for findings with
         // taint-flow evidence (the ones symex even attempts).
-        if let Some(ev) = f.evidence.as_ref() {
-            if ev.symbolic.is_some() {
-                taint_total += 1;
-                if !matches!(
-                    ev.symbolic.as_ref().map(|s| s.verdict),
-                    Some(Verdict::NotAttempted) | None
-                ) {
-                    taint_with_verdict += 1;
-                }
+        if let Some(ev) = f.evidence.as_ref()
+            && ev.symbolic.is_some()
+        {
+            taint_total += 1;
+            if !matches!(
+                ev.symbolic.as_ref().map(|s| s.verdict),
+                Some(Verdict::NotAttempted) | None
+            ) {
+                taint_with_verdict += 1;
             }
         }
     }
@@ -445,14 +445,14 @@ fn build_components(
         .clamp(0.0, 100.0)
         .round() as u8;
     let regression_detail = match (inp.reintroduced, stale_penalty) {
-        (0, p) if p == 0.0 => "No reintroduced or stale-HIGH findings".into(),
+        (0, 0.0) => "No reintroduced or stale-HIGH findings".into(),
         (0, p) => format!(
             "{} stale finding{} affecting HIGH severity (−{:.0})",
             inp.backlog.map(|b| b.stale_count).unwrap_or(0),
             plural_s(inp.backlog.map(|b| b.stale_count).unwrap_or(0)),
             p
         ),
-        (n, p) if p == 0.0 => format!(
+        (n, 0.0) => format!(
             "{} previously-fixed finding{} reintroduced (−{:.0})",
             n,
             plural_s(n),
@@ -561,16 +561,16 @@ fn severity_detail(
             w.effective_high
         ));
     }
-    if let Some(f) = repo_files {
-        if (size_divisor - 1.0).abs() > 0.01 {
-            parts.push(format!("size factor 1/{:.2}× ({} files)", size_divisor, f));
-        }
+    if let Some(f) = repo_files
+        && (size_divisor - 1.0).abs() > 0.01
+    {
+        parts.push(format!("size factor 1/{:.2}× ({} files)", size_divisor, f));
     }
     let stale = stale_high_penalty(w.effective_high, backlog);
-    if stale > 0.0 {
-        if let Some(b) = backlog {
-            parts.push(format!("−{:.0} stale-HIGH ({} >30d)", stale, b.stale_count));
-        }
+    if stale > 0.0
+        && let Some(b) = backlog
+    {
+        parts.push(format!("−{:.0} stale-HIGH ({} >30d)", stale, b.stale_count));
     }
     parts.join(" · ")
 }
@@ -661,6 +661,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn with_history<'a>(
         summary: &'a FindingSummary,
         findings: &'a [Diag],
@@ -673,6 +674,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn sev_score(h: &HealthScore) -> u8 {
         h.components
             .iter()
@@ -733,15 +735,17 @@ mod tests {
         let findings: Vec<Diag> = (0..8)
             .map(|_| {
                 let mut d = diag(Severity::High, "rs.taint.x", Some(Confidence::High));
-                let mut ev = crate::evidence::Evidence::default();
-                ev.symbolic = Some(crate::evidence::SymbolicVerdict {
-                    verdict: crate::evidence::Verdict::Confirmed,
-                    constraints_checked: 0,
-                    paths_explored: 0,
-                    witness: None,
-                    interproc_call_chains: Vec::new(),
-                    cutoff_notes: Vec::new(),
-                });
+                let ev = crate::evidence::Evidence {
+                    symbolic: Some(crate::evidence::SymbolicVerdict {
+                        verdict: crate::evidence::Verdict::Confirmed,
+                        constraints_checked: 0,
+                        paths_explored: 0,
+                        witness: None,
+                        interproc_call_chains: Vec::new(),
+                        cutoff_notes: Vec::new(),
+                    }),
+                    ..Default::default()
+                };
                 d.evidence = Some(ev);
                 d
             })

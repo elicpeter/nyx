@@ -11,7 +11,42 @@ env:
   BIN_NAME: nyx
 
 jobs:
+  frontend:
+    # Build the Vite bundle once on Linux and share it with every matrix
+    # build. `build.rs` skips its own npm fallback when
+    # `src/server/assets/dist/index.html` already exists, so downloading
+    # the artifact into that path before `cargo build` keeps Node off the
+    # cross-compile and macOS/Windows runners.
+    name: build-frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-dist
+          path: src/server/assets/dist/
+          if-no-files-found: error
+          retention-days: 1
+
   build:
+    needs: frontend
     strategy:
       matrix:
         include:
@@ -30,6 +65,12 @@ jobs:
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
+
+      - name: Download prebuilt frontend dist
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: src/server/assets/dist/
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -107,10 +148,17 @@ jobs:
     # determinism; failures on other targets would be investigated
     # separately.
     name: reproducibility-check
+    needs: frontend
     runs-on: ubuntu-latest
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
+
+      - name: Download prebuilt frontend dist
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: src/server/assets/dist/
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1

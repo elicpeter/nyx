@@ -3811,7 +3811,7 @@ mod tests {
             body.field_writes,
         );
         // Every recorded field name resolves to "cache".
-        for (_synth_v, (_rcv, fid)) in &body.field_writes {
+        for (_rcv, fid) in body.field_writes.values() {
             assert_eq!(body.field_interner.resolve(*fid), "cache");
         }
     }

@@ -394,7 +394,7 @@ fn has_row_fetch_exemption(unit: &AnalysisUnit, op: &SensitiveOperation) -> bool
 /// Root segment of a subject's chain.  Subjects produced from
 /// `a.b.c` carry `name = "a.b.c"` and `base = Some("a.b")`; the root
 /// is `a`.  Bare identifiers carry `base = None` and use `name`.
-fn chain_root<'a>(subj: &'a ValueRef) -> &'a str {
+fn chain_root(subj: &ValueRef) -> &str {
     let raw = subj.base.as_deref().unwrap_or(subj.name.as_str());
     raw.split('.').next().unwrap_or(raw)
 }

@@ -265,7 +265,7 @@ impl PointsToSet {
     /// True when the set contains [`LOC_TOP`] (i.e. has saturated to
     /// the over-approximation).
     pub fn is_top(&self) -> bool {
-        self.ids.iter().any(|id| *id == LOC_TOP)
+        self.ids.contains(&LOC_TOP)
     }
 
     pub fn is_empty(&self) -> bool {

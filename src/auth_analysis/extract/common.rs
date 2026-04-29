@@ -2279,7 +2279,7 @@ fn matches_self_actor_user_form(base: &str) -> bool {
         if after_user.is_empty() {
             return true;
         }
-        if SUFFIXES.iter().any(|sfx| *sfx == after_user) {
+        if SUFFIXES.contains(&after_user) {
             return true;
         }
     }

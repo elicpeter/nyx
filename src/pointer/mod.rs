@@ -37,8 +37,8 @@ pub use domain::{AbsLoc, LocId, LocInterner, PointsToSet, PtrProxyHint};
 /// override is removed entirely in the next release.
 #[inline]
 pub fn is_enabled() -> bool {
-    match std::env::var("NYX_POINTER_ANALYSIS").ok().as_deref() {
-        Some("0") | Some("false") | Some("FALSE") => false,
-        _ => true,
-    }
+    !matches!(
+        std::env::var("NYX_POINTER_ANALYSIS").ok().as_deref(),
+        Some("0") | Some("false") | Some("FALSE")
+    )
 }

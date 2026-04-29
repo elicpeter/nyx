@@ -261,11 +261,11 @@ mod tests {
             var_name: Some("a".into()),
             span: (0, 1),
         }];
-        for i in 1..4 {
+        for (i, node) in nodes.iter().enumerate().take(4).skip(1) {
             block_body.push(SsaInst {
                 value: SsaValue(i as u32),
                 op: SsaOp::Assign(SmallVec::from_elem(SsaValue((i - 1) as u32), 1)),
-                cfg_node: nodes[i],
+                cfg_node: *node,
                 var_name: Some(format!("v{i}")),
                 span: (i, i + 1),
             });

@@ -281,18 +281,40 @@ const AR_QUERY_SAFE_ARG0_KINDS: &[&str] = &[
 /// * `Model.where(some_string_var)` — dynamic identifier (conservative)
 pub fn ar_query_safe_shape(callee_text: &str, arg0_kind: &str, has_interpolation: bool) -> bool {
     // Match the callee's last segment ("Model.where" → "where", "where" → "where").
-    let leaf = callee_text
-        .rsplit(|c: char| c == '.' || c == ':')
-        .next()
-        .unwrap_or(callee_text);
-    if !AR_QUERY_METHOD_NAMES.iter().any(|m| *m == leaf) {
+    let leaf = callee_text.rsplit(['.', ':']).next().unwrap_or(callee_text);
+    if !AR_QUERY_METHOD_NAMES.contains(&leaf) {
         return false;
     }
     // Strings are safe only when they don't contain `#{...}` interpolation.
     if matches!(arg0_kind, "string" | "string_literal") && has_interpolation {
         return false;
     }
-    AR_QUERY_SAFE_ARG0_KINDS.iter().any(|k| *k == arg0_kind)
+    AR_QUERY_SAFE_ARG0_KINDS.contains(&arg0_kind)
+}
+
+/// Framework-conditional rules for Ruby.
+pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
+    let mut rules = Vec::new();
+
+    if ctx.has(DetectedFramework::Rails) {
+        // Strong parameters — permit/require sanitize user input
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["permit".into(), "require".into()],
+            label: DataLabel::Sanitizer(Cap::all()),
+            case_sensitive: false,
+        });
+    }
+
+    if ctx.has(DetectedFramework::Sinatra) {
+        // Sinatra template rendering — user content flows to rendered output
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["erb".into(), "haml".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: false,
+        });
+    }
+
+    rules
 }
 
 #[cfg(test)]
@@ -351,29 +373,4 @@ mod ar_query_tests {
         assert!(ar_query_safe_shape("Foo::Bar.where", "pair", false));
         assert!(ar_query_safe_shape("a.b.c.where", "pair", false));
     }
-}
-
-/// Framework-conditional rules for Ruby.
-pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
-    let mut rules = Vec::new();
-
-    if ctx.has(DetectedFramework::Rails) {
-        // Strong parameters — permit/require sanitize user input
-        rules.push(RuntimeLabelRule {
-            matchers: vec!["permit".into(), "require".into()],
-            label: DataLabel::Sanitizer(Cap::all()),
-            case_sensitive: false,
-        });
-    }
-
-    if ctx.has(DetectedFramework::Sinatra) {
-        // Sinatra template rendering — user content flows to rendered output
-        rules.push(RuntimeLabelRule {
-            matchers: vec!["erb".into(), "haml".into()],
-            label: DataLabel::Sink(Cap::HTML_ESCAPE),
-            case_sensitive: false,
-        });
-    }
-
-    rules
 }

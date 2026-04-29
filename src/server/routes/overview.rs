@@ -292,10 +292,7 @@ impl ScanHistory {
             return Self { scans, first_seen };
         };
 
-        let mut records = match idx.list_scans(limit as i64) {
-            Ok(r) => r,
-            Err(_) => Vec::new(),
-        };
+        let mut records = idx.list_scans(limit as i64).unwrap_or_default();
         // Filter to completed and reverse to oldest-first.
         records.retain(|r| r.status == "completed");
         records.reverse();

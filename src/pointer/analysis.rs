@@ -207,7 +207,7 @@ pub fn extract_field_points_to(
     // entry maps the synthetic Assign's defined value → (receiver
     // SsaValue, FieldId).  The receiver's pt set determines which
     // parameter index the write attributes to.
-    for (_synth_v, (receiver, field)) in &body.field_writes {
+    for (receiver, field) in body.field_writes.values() {
         let pt = facts.pt(*receiver);
         if pt.is_empty() || pt.is_top() {
             continue;
@@ -273,6 +273,11 @@ impl PointsToFacts {
     /// Number of SSA values covered by the facts table.
     pub fn len(&self) -> usize {
         self.by_value.len()
+    }
+
+    /// True when no SSA values are covered by the facts table.
+    pub fn is_empty(&self) -> bool {
+        self.by_value.is_empty()
     }
 
     /// Classify a value's points-to set into a [`PtrProxyHint`] for
@@ -434,7 +439,7 @@ impl AnalysisState {
         };
         self.parent[loser as usize] = winner;
         // Move the loser's points-to set into the winner's slot.
-        let loser_pt = std::mem::replace(&mut self.pt[loser as usize], PointsToSet::empty());
+        let loser_pt = std::mem::take(&mut self.pt[loser as usize]);
         let _ = self.pt[winner as usize].union_in_place(&loser_pt);
         winner
     }
@@ -501,15 +506,16 @@ impl AnalysisState {
                 // converges.
                 let loc = self.interner.intern_alloc(body_id, v);
                 self.add_loc(v, loc);
-                if let Some(rcv) = receiver {
-                    if is_container_read_callee(callee) && (rcv.0 as usize) < self.parent.len() {
-                        let rcv_rep = self.find(rcv.0) as usize;
-                        let rcv_pt = self.pt[rcv_rep].clone();
-                        if !rcv_pt.is_empty() && !rcv_pt.is_top() {
-                            for parent_loc in rcv_pt.iter() {
-                                let proj = self.interner.intern_field(parent_loc, FieldId::ELEM);
-                                self.add_loc(v, proj);
-                            }
+                if let Some(rcv) = receiver
+                    && is_container_read_callee(callee)
+                    && (rcv.0 as usize) < self.parent.len()
+                {
+                    let rcv_rep = self.find(rcv.0) as usize;
+                    let rcv_pt = self.pt[rcv_rep].clone();
+                    if !rcv_pt.is_empty() && !rcv_pt.is_top() {
+                        for parent_loc in rcv_pt.iter() {
+                            let proj = self.interner.intern_field(parent_loc, FieldId::ELEM);
+                            self.add_loc(v, proj);
                         }
                     }
                 }
@@ -1036,11 +1042,11 @@ mod tests {
         // The result must include at least one Field(_, ELEM) member.
         let mut saw_elem = false;
         for loc in pt_e.iter() {
-            if let crate::pointer::AbsLoc::Field { field, .. } = facts.interner.resolve(loc) {
-                if *field == FieldId::ELEM {
-                    saw_elem = true;
-                    break;
-                }
+            if let crate::pointer::AbsLoc::Field { field, .. } = facts.interner.resolve(loc)
+                && *field == FieldId::ELEM
+            {
+                saw_elem = true;
+                break;
             }
         }
         assert!(

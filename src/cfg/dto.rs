@@ -419,7 +419,7 @@ mod tests {
         let dtos = collect("rust", src);
         // Tuple structs have no named fields and must NOT produce a
         // DtoFields entry — Phase 6 only handles named-field DTOs.
-        assert!(dtos.get("Wrap").is_none());
+        assert!(!dtos.contains_key("Wrap"));
     }
 
     #[test]
@@ -445,6 +445,6 @@ class NotADto:
     email: str
 "#;
         let dtos = collect("python", src);
-        assert!(dtos.get("NotADto").is_none());
+        assert!(!dtos.contains_key("NotADto"));
     }
 }

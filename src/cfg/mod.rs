@@ -1814,12 +1814,9 @@ pub(super) fn push_node<'a>(
     {
         // Identify the matched AR query method from the callee `text`
         // (e.g. "Issue.where" → "where", "joins(:project).where" → "where").
-        let leaf = text
-            .rsplit(|c: char| c == '.' || c == ':')
-            .next()
-            .unwrap_or(&text);
+        let leaf = text.rsplit(['.', ':']).next().unwrap_or(&text);
         const AR_QUERY_METHODS: &[&str] = &["where", "order", "group", "having", "joins", "pluck"];
-        if AR_QUERY_METHODS.iter().any(|m| *m == leaf) {
+        if AR_QUERY_METHODS.contains(&leaf) {
             // Try the outer call's arg 0 first (handles direct calls);
             // fall back to walking the receiver chain for collapsed
             // chained-call CFG nodes.
@@ -2371,6 +2368,8 @@ fn try_lower_subscript_write(
 ///
 /// Step 2 (`apply_arg_source_bindings`): after `push_node` creates the Call
 /// node, add the synthetic variable names to its `arg_uses` and `uses`.
+type PreEmitArgSourceResult = (SmallVec<[NodeIndex; 4]>, Vec<(usize, String)>, Vec<String>);
+
 fn pre_emit_arg_source_nodes(
     g: &mut Cfg,
     ast: Node,
@@ -2379,7 +2378,7 @@ fn pre_emit_arg_source_nodes(
     enclosing_func: Option<&str>,
     analysis_rules: Option<&LangAnalysisRules>,
     preds: &[NodeIndex],
-) -> (SmallVec<[NodeIndex; 4]>, Vec<(usize, String)>, Vec<String>) {
+) -> PreEmitArgSourceResult {
     let mut effective_preds: SmallVec<[NodeIndex; 4]> = SmallVec::from_slice(preds);
     let mut bindings: Vec<(usize, String)> = Vec::new();
     let mut uses_only: Vec<String> = Vec::new();

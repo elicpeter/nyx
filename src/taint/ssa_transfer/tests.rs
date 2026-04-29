@@ -2286,7 +2286,7 @@ mod container_elem_tests {
             let nidx = cfg.add_node(NodeInfo {
                 kind: if i == 1 { StmtKind::Seq } else { StmtKind::Seq },
                 ast: AstMeta {
-                    span: ((i * 10) as usize, (i * 10 + 5) as usize),
+                    span: (i * 10, i * 10 + 5),
                     ..Default::default()
                 },
                 taint: if i == 1 {
@@ -2305,10 +2305,10 @@ mod container_elem_tests {
         (cfg, nodes)
     }
 
-    fn run_with_pointer<'a>(
+    fn run_with_pointer(
         body: &SsaBody,
         cfg: &Cfg,
-        pf: &'a crate::pointer::PointsToFacts,
+        pf: &crate::pointer::PointsToFacts,
     ) -> SsaTaintState {
         let interner = SymbolInterner::new();
         let local_summaries: FuncSummaries = HashMap::new();
@@ -3355,7 +3355,7 @@ mod pointer_lattice_worklist_tests {
             let nidx = cfg.add_node(NodeInfo {
                 kind: StmtKind::Seq,
                 ast: AstMeta {
-                    span: ((i * 10) as usize, (i * 10 + 5) as usize),
+                    span: (i * 10, i * 10 + 5),
                     ..Default::default()
                 },
                 taint: if i == 1 {
