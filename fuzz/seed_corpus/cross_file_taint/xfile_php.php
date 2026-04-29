@@ -1,4 +1,4 @@
-<?php
+<?php
 function main() {
     $x = nyx_taint_source();
     nyx_dangerous_sink($x);

@@ -1,4 +1,4 @@
-	#include <string>
+#include <string>
 int main() {
     std::string x = nyx_taint_source();
     nyx_dangerous_sink(x);

@@ -88,10 +88,9 @@ jobs:
       # Layer real source files on top of whatever the cache restored.
       # The harness format is `<lang_idx_byte><source>`, so we prefix
       # each candidate file with its language index and drop it into
-      # the corpus dir. `cp -n` (here: `[ -e ... ] || ...`) keeps cache
-      # entries authoritative.
+      # the corpus dir.
       #
-      # Seed pool, in order of precedence:
+      # Seed pool, all routed through the same `stage()` prefixing path:
       #   benches/fixtures/sample.<ext>      — single canonical sample
       #                                        per language (10 files,
       #                                        guaranteed to parse).
@@ -100,13 +99,19 @@ jobs:
       #                                        Drives diversity: distinct
       #                                        sink/source/sanitizer
       #                                        shapes per vuln class.
-      #   fuzz/seed_corpus/<target>/         — target-specific
+      #   fuzz/seed_corpus/<target>/*.<ext>  — target-specific
       #                                        hand-crafted seeds (e.g.
       #                                        cross_file_taint inputs
       #                                        that call the synthetic
       #                                        helpers — those names
       #                                        appear nowhere in
       #                                        benchmark corpus).
+      #
+      # Crucially, `fuzz/seed_corpus/` files are committed as **plain
+      # source** without the prefix byte. The prefix is applied here at
+      # stage time. Otherwise IDEs (RustRover, IntelliJ, etc.) silently
+      # strip 0x00 / corrupt low control bytes on save and the seed
+      # would feed libFuzzer the wrong language selector.
       #
       # Files are content-hashed into corpus entry names so reruns are
       # idempotent and adding new fixtures doesn't churn the cache.
@@ -152,12 +157,13 @@ jobs:
                   -o -name '*.rb' -o -name '*.php' -o -name '*.c' \
                   -o -name '*.cpp' \))
           if [ -d "fuzz/seed_corpus/$target" ]; then
-            for f in "fuzz/seed_corpus/$target"/*; do
-              [ -e "$f" ] || continue
-              # Already prefixed; copy under their own name.
-              name="$(basename "$f")"
-              [ -e "$dest/$name" ] || cp "$f" "$dest/$name"
-            done
+            while IFS= read -r f; do
+              stage "$f"
+            done < <(find "fuzz/seed_corpus/$target" -type f \( \
+                       -name '*.rs' -o -name '*.js' -o -name '*.ts' \
+                    -o -name '*.py' -o -name '*.go' -o -name '*.java' \
+                    -o -name '*.rb' -o -name '*.php' -o -name '*.c' \
+                    -o -name '*.cpp' \))
           fi
           echo "Corpus dir: $(ls "$dest" | wc -l) files"
 

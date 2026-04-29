@@ -1,4 +1,4 @@
-package main
+package main
 
 func main() {
     x := nyx_taint_source()
