@@ -12,11 +12,6 @@ env:
 
 jobs:
   frontend:
-    # Build the Vite bundle once on Linux and share it with every matrix
-    # build. `build.rs` skips its own npm fallback when
-    # `src/server/assets/dist/index.html` already exists, so downloading
-    # the artifact into that path before `cargo build` keeps Node off the
-    # cross-compile and macOS/Windows runners.
     name: build-frontend
     runs-on: ubuntu-latest
     steps:
@@ -93,12 +88,6 @@ jobs:
       - name: Build
         run: cargo build --release --bin ${{ env.BIN_NAME }} --target ${{ matrix.target }}
 
-      # THIRDPARTY-LICENSES.html is committed at the repo root and kept in
-      # sync with the dependency graph by the `third-party-licenses` CI
-      # job. Release builds ship the committed copy directly — no
-      # regeneration (and no per-runner cargo-about install) on the
-      # release hot path.
-
       - name: Package (Linux & macOS)
         if: runner.os != 'Windows'
         shell: bash
@@ -124,7 +113,6 @@ jobs:
           New-Item -ItemType Directory -Path dist -Force | Out-Null
           $Archive  = "$Bin-$Target.zip"
 
-          # PowerShell’s native ZIP
           Compress-Archive `
               -Path $BinPath, 'THIRDPARTY-LICENSES.html', 'LICENSE*', 'COPYING*' `
               -DestinationPath "dist/$Archive" `
@@ -141,16 +129,6 @@ jobs:
           retention-days: 1
 
   reproducibility:
-    # Informational supply-chain smoke test: build the release binary
-    # twice with pinned SOURCE_DATE_EPOCH and path remapping, then diff
-    # the SHA256 hashes. Scoped to x86_64-linux — the most tractable
-    # target for byte-for-byte determinism.
-    #
-    # Non-gating: `continue-on-error: true` + not in `publish.needs`.
-    # Stable Rust point releases can change codegen and snap a build
-    # that was reproducible the day before; we don't want that to
-    # block shipping. Failures show up as a yellow warning and get
-    # investigated outside the release hot path.
     name: reproducibility-check
     needs: frontend
     runs-on: ubuntu-latest
@@ -204,10 +182,6 @@ jobs:
           echo "::notice::Reproducible build verified (sha256=$HASH1)"
 
   publish:
-    # Collect all matrix build outputs, generate a single SHA256SUMS file,
-    # then push everything to the GitHub release in one shot. Doing this
-    # centrally (rather than per-matrix job) is the only way to produce a
-    # checksum file that covers every published artifact.
     name: publish-release
     runs-on: ubuntu-latest
     needs: [build]
@@ -219,10 +193,6 @@ jobs:
       - name: Check out sources
         uses: actions/checkout@v6
 
-      # Generate the SBOM from the source tree BEFORE downloading
-      # artifacts. Syft scans `path: .` recursively; if release-artifacts/
-      # exists at scan time, it would walk into the zipped binaries and
-      # produce a polluted manifest.
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -247,9 +217,7 @@ jobs:
           sha256sum *.zip > SHA256SUMS
           cat SHA256SUMS
 
-      # Sigstore keyless signing — single source of artifact attestation.
-      # Cert is OIDC-bound to this workflow run, recorded in Rekor, no
-      # secrets at rest. Verifiers can check with:
+      # Sigstore keyless signing. Verify with:
       #   cosign verify-blob --certificate <file>.pem \
       #     --signature <file>.sig \
       #     --certificate-identity-regexp 'https://github.com/elicpeter/nyx/.*' \
@@ -277,10 +245,7 @@ jobs:
             --output-certificate "$SBOM.pem" \
             "$SBOM"
 
-      # SLSA v1 build provenance: signed attestation that these exact
-      # bytes were produced by this workflow run from this commit.
-      # Attestations are stored in the GitHub attestations API and can
-      # be verified with `gh attestation verify <file> --repo <repo>`.
+      # SLSA v1 provenance. Verify with `gh attestation verify <file> --repo <repo>`.
       - name: Generate SLSA build provenance
         uses: actions/attest-build-provenance@v4
         with:

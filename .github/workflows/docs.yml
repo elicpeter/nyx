@@ -36,8 +36,6 @@ jobs:
         if: steps.cache-mdbook.outputs.cache-hit != 'true'
         run: cargo install mdbook --version 0.5.2 --locked
 
-      # mdbook follows the committed docs/assets symlink (→ ../assets) so
-      # image references in docs resolve both in `mdbook serve` and in CI.
       - name: Build
         run: mdbook build
 

@@ -3,14 +3,11 @@ name: OSSF Scorecard
 on:
   branch_protection_rule:
   schedule:
-    # Weekly Monday 05:17 UTC. Off-hour to dodge runner contention.
-    - cron: "17 5 * * 1"
+    - cron: "0 7 * * 1"
   push:
     branches: ["master"]
   workflow_dispatch:
 
-# Top-level locked to read; the analysis job re-grants the narrow
-# write scopes it actually needs.
 permissions: read-all
 
 jobs:
@@ -18,11 +15,8 @@ jobs:
     name: scorecard
     runs-on: ubuntu-latest
     permissions:
-      # Required to upload SARIF to the Security tab.
       security-events: write
-      # Required for keyless OIDC signing of scorecard results.
       id-token: write
-      # Required for branch protection scoring.
       contents: read
 
     steps:
@@ -35,13 +29,9 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
-          # Keep results private until we're happy with the score.
-          # Flip to `true` later to expose the score on the public
-          # Scorecard API (and earn the badge).
+          # Flip to true once we're happy with the score and want the badge.
           publish_results: false
 
-      # SARIF artifact for download / triage if the Security-tab view
-      # ever lags or Scorecard changes its rule set.
       - name: Upload SARIF artifact
         uses: actions/upload-artifact@v7
         with:

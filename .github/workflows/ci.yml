@@ -101,9 +101,6 @@ jobs:
         run: cargo deny check advisories licenses bans sources
 
   unused-deps:
-    # Token-free, runs on stable (unlike cargo-udeps which needs nightly
-    # and a full compile). Pure manifest scan — finishes in seconds and
-    # is safe to gate PRs on.
     name: unused-deps
     runs-on: ubuntu-latest
     steps:
@@ -171,9 +168,6 @@ jobs:
         run: cargo check --all-features --tests
 
   msrv:
-    # Pinned to the `rust-version` declared in Cargo.toml. Bump both
-    # together when raising MSRV. `cargo check` (not test) keeps the job
-    # fast and matches what downstream packagers actually need.
     name: msrv
     runs-on: ubuntu-latest
     steps:
