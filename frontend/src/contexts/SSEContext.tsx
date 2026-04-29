@@ -43,7 +43,9 @@ export function SSEProvider({ children }: { children: ReactNode }) {
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [isScanRunning, setIsScanRunning] = useState(false);
   const esRef = useRef<EventSource | null>(null);
-  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
 
   const connect = useCallback(() => {
     if (esRef.current) {
