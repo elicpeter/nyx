@@ -146,7 +146,10 @@ pub(super) fn extract_const_string_arg(
     let mut cursor = args.walk();
     let arg = args.named_children(&mut cursor).nth(index)?;
     match arg.kind() {
-        "string" | "string_literal" => {
+        // `string` / `string_literal` cover JS/TS, Python, Java, PHP, C/C++, Ruby, Rust;
+        // `interpreted_string_literal` / `raw_string_literal` cover Go's
+        // tree-sitter grammar (double-quoted vs. backtick-quoted forms).
+        "string" | "string_literal" | "interpreted_string_literal" | "raw_string_literal" => {
             let raw = text_of(arg, code)?;
             if raw.len() >= 2 {
                 Some(raw[1..raw.len() - 1].to_string())
@@ -906,8 +909,10 @@ pub(super) fn extract_kwargs(call_node: Node, code: &[u8]) -> Vec<(String, Vec<S
 /// Policy is deliberately narrow and conservative: only literals that contain
 /// *known-dangerous* payloads earn a strip credit, so an arbitrary
 /// `.replace("foo", "bar")` is never promoted to a sanitizer.
-///   * `..`, `/`, `\\`  → path-traversal → `Cap::FILE_IO`
-///   * `<`, `>`         → HTML metachars → `Cap::HTML_ESCAPE`
+///   * `..`, `/`, `\\`         → path-traversal     → `Cap::FILE_IO`
+///   * `<`, `>`                → HTML metachars     → `Cap::HTML_ESCAPE`
+///   * `;`, `|`, `&`, `$`, `\`` → shell metachars   → `Cap::SHELL_ESCAPE`
+///   * `'`, `"`, `--`          → SQL metachars      → `Cap::SQL_QUERY`
 pub(super) fn caps_stripped_by_literal_pattern(search: &str) -> Cap {
     let mut caps = Cap::empty();
     if search.contains("..") || search.contains('/') || search.contains('\\') {
@@ -915,6 +920,17 @@ pub(super) fn caps_stripped_by_literal_pattern(search: &str) -> Cap {
     }
     if search.contains('<') || search.contains('>') {
         caps |= Cap::HTML_ESCAPE;
+    }
+    if search.contains(';')
+        || search.contains('|')
+        || search.contains('&')
+        || search.contains('$')
+        || search.contains('`')
+    {
+        caps |= Cap::SHELL_ESCAPE;
+    }
+    if search.contains('\'') || search.contains('"') || search.contains("--") {
+        caps |= Cap::SQL_QUERY;
     }
     caps
 }
@@ -1030,6 +1046,51 @@ pub(super) fn detect_rust_replace_chain_sanitizer(call_ast: Node, code: &[u8]) -
     }
 
     None
+}
+
+/// Recognise a Go `strings.Replace(s, OLD, NEW, n)` /
+/// `strings.ReplaceAll(s, OLD, NEW)` call that provably strips one of the
+/// known-dangerous metacharacter classes from its first argument.
+///
+/// Returns the union of caps stripped, or `None` when the pattern doesn't
+/// apply (so the caller falls back to normal unresolved-call propagation).
+///
+/// Mirrors [`detect_rust_replace_chain_sanitizer`] but for the single-call
+/// (non-method-chain) Go shape.  The caller wires the resulting cap into
+/// the call's [`crate::labels::DataLabel::Sanitizer`] label, which the
+/// taint engine consumes via the standard sanitizer pathway — taint flows
+/// in on `s`, the matching cap is stripped from the result.
+pub(super) fn detect_go_replace_call_sanitizer(call_ast: Node, code: &[u8]) -> Option<Cap> {
+    if call_ast.kind() != "call_expression" {
+        return None;
+    }
+    // The call's `function` field is a `selector_expression` — `operand`
+    // is the package ident (`strings`), `field` is the method ident.
+    let func = call_ast.child_by_field_name("function")?;
+    if func.kind() != "selector_expression" {
+        return None;
+    }
+    let operand = func.child_by_field_name("operand")?;
+    if text_of(operand, code).as_deref() != Some("strings") {
+        return None;
+    }
+    let field = func.child_by_field_name("field")?;
+    let method_name = text_of(field, code)?;
+    if method_name != "Replace" && method_name != "ReplaceAll" {
+        return None;
+    }
+    // Args layout: (s, old, new[, n]).  Need positional args 1 (old) and
+    // 2 (new) to be string literals.
+    let old_lit = extract_const_string_arg(call_ast, 1, code)?;
+    let new_lit = extract_const_string_arg(call_ast, 2, code)?;
+
+    // If the replacement itself reintroduces a dangerous sequence, don't
+    // credit the strip — matches the Rust chain detector's policy.
+    if !caps_stripped_by_literal_pattern(&new_lit).is_empty() {
+        return None;
+    }
+    let caps = caps_stripped_by_literal_pattern(&old_lit);
+    if caps.is_empty() { None } else { Some(caps) }
 }
 
 /// Like `first_call_ident`, but also checks if `n` itself is a call node.

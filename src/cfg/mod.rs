@@ -49,12 +49,13 @@ use imports::{extract_import_bindings, extract_promisify_aliases};
 #[cfg(test)]
 use literals::has_sql_placeholders;
 use literals::{
-    arg0_kind_and_interpolation, call_ident_of, def_use, detect_rust_replace_chain_sanitizer,
-    extract_arg_callees, extract_arg_string_literals, extract_arg_uses, extract_const_keyword_arg,
-    extract_const_string_arg, extract_destination_field_idents, extract_kwargs,
-    extract_literal_rhs, find_call_node, find_call_node_deep, find_chained_inner_call,
-    has_keyword_arg, has_only_literal_args, is_parameterized_query_call,
-    java_chain_arg0_kind_for_method, ruby_chain_arg0_for_method, walk_chain_inner_call_args,
+    arg0_kind_and_interpolation, call_ident_of, def_use, detect_go_replace_call_sanitizer,
+    detect_rust_replace_chain_sanitizer, extract_arg_callees, extract_arg_string_literals,
+    extract_arg_uses, extract_const_keyword_arg, extract_const_string_arg,
+    extract_destination_field_idents, extract_kwargs, extract_literal_rhs, find_call_node,
+    find_call_node_deep, find_chained_inner_call, has_keyword_arg, has_only_literal_args,
+    is_parameterized_query_call, java_chain_arg0_kind_for_method, ruby_chain_arg0_for_method,
+    walk_chain_inner_call_args,
 };
 use params::{
     compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
@@ -1782,6 +1783,27 @@ pub(super) fn push_node<'a>(
         if let Some(cn) = call_ast {
             if cn.kind() == "call_expression" || cn.kind() == "method_call_expression" {
                 if let Some(caps) = detect_rust_replace_chain_sanitizer(cn, code) {
+                    labels.push(DataLabel::Sanitizer(caps));
+                }
+            }
+        }
+    }
+
+    // Pattern-based sanitizer synthesis for Go's `strings.Replace` /
+    // `strings.ReplaceAll`.  When the call's OLD literal contains a known
+    // dangerous payload (shell metachars, path-traversal, HTML, SQL) and
+    // the NEW literal does not reintroduce one, treat the call as a
+    // Sanitizer over the matching caps.  Same precedence as the Rust
+    // chain synthesis: explicit Sanitizer labels win, but otherwise the
+    // synthesised label feeds the standard sanitizer pathway in the
+    // taint engine.  Motivated by helpers like
+    //   `func validate(s string) string { return strings.ReplaceAll(s, ";", "") }`
+    // whose return is appended to a slice that later flows into
+    // `exec.Command(slice[i])`.
+    if lang == "go" && !labels.iter().any(|l| matches!(l, DataLabel::Sanitizer(_))) {
+        if let Some(cn) = call_ast {
+            if cn.kind() == "call_expression" {
+                if let Some(caps) = detect_go_replace_call_sanitizer(cn, code) {
                     labels.push(DataLabel::Sanitizer(caps));
                 }
             }

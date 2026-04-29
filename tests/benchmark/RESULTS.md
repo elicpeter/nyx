@@ -24,7 +24,7 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2025-64430 | JavaScript | Parse Server               | Apache-2.0           | SSRF            | detected |
 | CVE-2023-26159 | TypeScript | follow-redirects           | MIT                  | SSRF            | detected |
 | CVE-2022-30323 | Go         | hashicorp/go-getter        | MPL-2.0              | CMDI            | detected |
-| CVE-2023-3188  | Go         | owncast                    | MIT                  | SSRF            | open FN  |
+| CVE-2023-3188  | Go         | owncast                    | MIT                  | SSRF            | detected |
 | CVE-2024-31450 | Go         | owncast                    | MIT                  | path_traversal  | detected |
 | CVE-2015-7501  | Java       | Apache Commons Collections | Apache-2.0           | Deserialization | detected |
 | CVE-2017-12629 | Java       | Apache Solr                | Apache-2.0           | CMDI            | detected |
@@ -60,6 +60,7 @@ Most recent first. Metrics are rule-level on the corpus size at that point.
 
 | Date       | Change                                                                       | Corpus | P     | R     | F1    |
 |------------|------------------------------------------------------------------------------|--------|-------|-------|-------|
+| 2026-04-29 | Phantom-Param-aware field suppression: CVE-2023-3188 detected, FP guards hold | 432    | 0.995 | 1.000 | 0.998 |
 | 2026-04-28 | Ruby bare `Kernel#open` CMDI sink, exact-match sigil on label matchers        | 428    | 0.995 | 1.000 | 0.998 |
 | 2026-04-28 | Go SSRF/FILE_IO sink expansion (`http.DefaultClient.*`, `os.Remove`/`WriteFile`) plus Decode-writeback container op | 426 | 0.995 | 1.000 | 0.998 |
 | 2026-04-27 | JS chained-method inner-gate classification (`http.get(u, cb).on(...)`)      | 422    | 0.994 | 1.000 | 0.997 |
