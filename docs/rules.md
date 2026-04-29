@@ -112,12 +112,14 @@ The tables below are generated from `src/patterns/<lang>.rs` by [`tools/docgen`]
 | `go.crypto.md5` | Low | A | Medium |
 | `go.crypto.sha1` | Low | A | Medium |
 
-### Java: 8 patterns
+### Java: 10 patterns
 
 | Rule ID | Severity | Tier | Confidence |
 |---|---|---|---|
 | `java.cmdi.runtime_exec` | High | A | High |
+| `java.code_exec.text4shell_interpolator` | High | A | High |
 | `java.deser.readobject` | High | A | High |
+| `java.deser.snakeyaml_unsafe_constructor` | High | A | High |
 | `java.reflection.class_forname` | Medium | A | High |
 | `java.reflection.method_invoke` | Medium | A | High |
 | `java.sqli.execute_concat` | Medium | B | Medium |
@@ -168,7 +170,7 @@ The tables below are generated from `src/patterns/<lang>.rs` by [`tools/docgen`]
 | `php.crypto.rand` | Low | A | Medium |
 | `php.crypto.sha1` | Low | A | Medium |
 
-### Python: 13 patterns
+### Python: 14 patterns
 
 | Rule ID | Severity | Tier | Confidence |
 |---|---|---|---|
@@ -182,6 +184,7 @@ The tables below are generated from `src/patterns/<lang>.rs` by [`tools/docgen`]
 | `py.code_exec.compile` | Medium | A | High |
 | `py.deser.shelve_open` | Medium | A | High |
 | `py.sqli.execute_format` | Medium | B | Medium |
+| `py.sqli.text_format` | Medium | B | Medium |
 | `py.xss.jinja_from_string` | Medium | A | High |
 | `py.crypto.md5` | Low | A | Medium |
 | `py.crypto.sha1` | Low | A | Medium |
