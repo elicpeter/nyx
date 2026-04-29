@@ -42,7 +42,7 @@ impl Commands {
             Commands::Scan { explain_engine, .. } => *explain_engine,
             Commands::List { .. } => true,
             Commands::Config { action } => {
-                matches!(action, ConfigAction::Show | ConfigAction::Path)
+                matches!(action, ConfigAction::Show { .. } | ConfigAction::Path)
             }
             Commands::Index { action } => matches!(action, IndexAction::Status { .. }),
             _ => false,
@@ -473,8 +473,15 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum ConfigAction {
-    /// Print effective merged configuration as TOML
-    Show,
+    /// Print configuration as TOML.  By default shows only the values
+    /// that differ from built-in defaults.  Pass `--all` for the full
+    /// effective configuration.
+    Show {
+        /// Print the full effective configuration instead of just
+        /// the user's overrides.
+        #[arg(long)]
+        all: bool,
+    },
 
     /// Print configuration directory path
     Path,

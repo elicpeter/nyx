@@ -327,7 +327,7 @@ pub fn handle_command(
         Commands::Config { action } => {
             use crate::cli::ConfigAction;
             match action {
-                ConfigAction::Show => self::config::show(config)?,
+                ConfigAction::Show { all } => self::config::show(config, all)?,
                 ConfigAction::Path => self::config::path(config_dir)?,
                 ConfigAction::AddRule {
                     lang,
