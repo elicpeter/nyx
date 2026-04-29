@@ -218,8 +218,7 @@ jobs:
           cat SHA256SUMS
 
       # Sigstore keyless signing. Verify with:
-      #   cosign verify-blob --certificate <file>.pem \
-      #     --signature <file>.sig \
+      #   cosign verify-blob --bundle <file>.bundle \
       #     --certificate-identity-regexp 'https://github.com/elicpeter/nyx/.*' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
       #     <file>
@@ -235,14 +234,12 @@ jobs:
             cd release-artifacts
             for f in *.zip SHA256SUMS; do
               cosign sign-blob --yes \
-                --output-signature "$f.sig" \
-                --output-certificate "$f.pem" \
+                --bundle "$f.bundle" \
                 "$f"
             done
           )
           cosign sign-blob --yes \
-            --output-signature "$SBOM.sig" \
-            --output-certificate "$SBOM.pem" \
+            --bundle "$SBOM.bundle" \
             "$SBOM"
 
       # SLSA v1 provenance. Verify with `gh attestation verify <file> --repo <repo>`.
@@ -259,13 +256,10 @@ jobs:
         with:
           files: |
             release-artifacts/*.zip
-            release-artifacts/*.zip.sig
-            release-artifacts/*.zip.pem
+            release-artifacts/*.zip.bundle
             release-artifacts/SHA256SUMS
-            release-artifacts/SHA256SUMS.sig
-            release-artifacts/SHA256SUMS.pem
+            release-artifacts/SHA256SUMS.bundle
             nyx-${{ github.event.release.tag_name }}.cdx.json
-            nyx-${{ github.event.release.tag_name }}.cdx.json.sig
-            nyx-${{ github.event.release.tag_name }}.cdx.json.pem
+            nyx-${{ github.event.release.tag_name }}.cdx.json.bundle
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
