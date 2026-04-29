@@ -33,6 +33,12 @@ The biggest release since launch. The taint engine was rebuilt on top of an SSA 
 - Cross-file SCC fixed-point. Mutually recursive functions across files now reach a joint convergence.
 - Demand-driven backwards analysis (off by default) annotates findings with cutoff diagnostics.
 - Direction-aware engine notes (`UnderReport`, `OverReport`, `Bail`) flow into confidence scoring, ranking, and the new `--require-converged` strict mode.
+- Synthetic field-write inheritance: `u.Path = "/foo"` no longer drops taint carried by other fields of `u`. Fixes Owncast CVE-2023-3188 (SSRF).
+- Phantom-Param-aware field suppression skips method/function references that share a base name with a tainted variable.
+- Validation err-check narrowing for the two-statement Go idiom `_, err := strconv.Atoi(input); if err != nil { return }` — `input` is marked validated on the surviving `err == nil` branch.
+- Go: `strings.Replace` / `strings.ReplaceAll` recognised as a sanitizer when the OLD literal contains a known-dangerous payload (shell metachars, path-traversal, HTML, SQL) and the NEW literal does not reintroduce one.
+- Go: literal-strip cap detection extended to shell metachars (`;`, `|`, `&`, `$`, backtick) and SQL metachars (`'`, `"`, `--`).
+- Go: `interpreted_string_literal` / `raw_string_literal` handled in tree-sitter so const-string arg extraction works for Go's double-quoted and backtick forms.
 
 ### Symbolic Execution
 
@@ -53,6 +59,12 @@ The biggest release since launch. The taint engine was rebuilt on top of an SSA 
 - Framework rule packs: Express, Flask/Django, Spring/JNDI, Rails. Per-language label depth significantly expanded.
 - C/C++ taint depth: output-parameter source propagation, implicit definitions for uninitialized declarations.
 - Negative test corpus (30 fixtures) and a 262-case benchmark with CI gates on rule-level Precision/Recall/F1.
+
+### Detection metrics
+
+- Aggregate rule-level F1 reaches **0.998** (P=0.995, R=1.000). All real-CVE fixtures fire; only one open FP (`go-safe-009`).
+- Go: 98.0% F1 on the 53-case corpus (1 FP / 0 FNs).
+- CVE-2023-3188 (owncast SSRF) now detects.
 
 ### CLI & Output
 
@@ -89,6 +101,10 @@ The biggest release since launch. The taint engine was rebuilt on top of an SSA 
 - Triage UI with database-backed decisions (true positive, false positive, deferred, suppressed) and `.nyx/triage.json` round-trip.
 - Scan history, rules management, and finding detail panels with evidence and flow visualization.
 - Vitest browser-side test suite wired into CI.
+- Bumped to React 19, Vite 8, TypeScript 6.0, ESLint 10, `@vitejs/plugin-react` 6, with aligned `@types/react*`.
+- `SSEContext`: typed `reconnectTimer` ref as `ReturnType<typeof setTimeout> | undefined` to satisfy TS 6's stricter `useRef` overloads.
+- `FindingsPage`: included `toast` in `useCallback` deps to avoid stale-closure warnings.
+- `tsconfig.json`: dropped `baseUrl`, using a relative `./src/*` path mapping instead.
 
 ### Removed
 

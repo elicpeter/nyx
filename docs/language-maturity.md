@@ -18,15 +18,15 @@ The classifications here are grounded in three concrete signals:
    limitations the corpus does not stress, documented release-by-release in
    [`RESULTS.md`](https://github.com/elicpeter/nyx/blob/master/tests/benchmark/RESULTS.md).
 
-As of 2026-04-29 the synthetic corpus has effectively saturated: nine of ten
-languages report rule-level F1 = 100.0% and Go reports 94.1% (two FPs and
-one FN on a real-CVE SSRF case, `cve-go-2023-3188-vulnerable`). Aggregate
-rule-level P=0.991, R=0.995, F1=0.993. That means F1 alone no longer
-differentiates tiers, so the differentiators are **rule depth**,
-**gated-sink coverage**, and **structural idioms the corpus does not fully
-stress** (deep pointer aliasing in C/C++, framework-specific context). All
-parser integrations use tree-sitter and are stable; parsing is not a
-differentiator.
+As of 2026-04-29 the synthetic corpus has effectively saturated: every
+real-CVE fixture fires and rule-level recall is 100%. Nine of ten
+languages report rule-level F1 = 100.0%; Go reports 98.0% on the back of
+a single safe-fixture FP. Aggregate rule-level P=0.995, R=1.000, F1=0.998.
+That means F1 alone no longer differentiates tiers, so the differentiators
+are **rule depth**, **gated-sink coverage**, and **structural idioms the
+corpus does not fully stress** (deep pointer aliasing in C/C++,
+framework-specific context). All parser integrations use tree-sitter and
+are stable; parsing is not a differentiator.
 
 ---
 
@@ -35,7 +35,7 @@ differentiator.
 | Tier | Languages | F1 | What to expect |
 |------|-----------|----|----------------|
 | **Stable** | Python, JavaScript, TypeScript | 100% | Deep rule sets, gated sinks (argument-role-aware), framework detection, extensive fixtures, and the bulk of advanced-analysis (SSA two-level solve, context-sensitivity, symbolic execution, abstract interpretation) coverage. Safe to depend on in CI gates. |
-| **Beta** | Go, Java, PHP, Ruby, Rust | 94.1% to 100% | Solid mid-depth rule sets with narrower cap coverage and **no gated sinks**. Cross-file flows work; some idioms (variable-typed method receivers, framework context, string interpolation, match-arm guards) are partially modeled. Usable in CI; review FP/FN lists before tightening gates. |
+| **Beta** | Go, Java, PHP, Ruby, Rust | 98.0% to 100% | Solid mid-depth rule sets with narrower cap coverage and **no gated sinks**. Cross-file flows work; some idioms (variable-typed method receivers, framework context, string interpolation, match-arm guards) are partially modeled. Usable in CI; review FP/FN lists before tightening gates. |
 | **Preview** | C, C++ | 100% on synthetic corpus | Recent work taught the engine to follow taint through `std::vector` / `std::string` / map containers (including `c_str()`), through fluent builder chains like `Socket::builder().host(h).connect()`, and through inline class member functions. Function pointers and deeper pointer aliasing through `*p` / `p->field` are still not tracked. Rule-level scores against a corpus of obvious unsafe-API uses look perfect, but that is not the same as a clean audit on a real codebase. Pair with clang-tidy, Clang Static Analyzer, or Infer. |
 
 ---
@@ -90,15 +90,13 @@ differentiator.
 
 ### Beta tier
 
-#### Go: 92.3% P / 96.0% R / 94.1% F1 *(53-case corpus, 2 FPs, 1 FN)*
+#### Go: 96.2% P / 100.0% R / 98.0% F1 *(53-case corpus, 1 FP, 0 FNs)*
 
 - **Rule depth**: 4 source families, 4 sanitizer families, 9 sink matchers
   covering HTML, URL, Shell, SQL, SSRF, Crypto, and File I/O.
 - **Framework context**: Gin, Echo source matchers.
-- **Open weak spots**: `cve-go-2023-3188-vulnerable` (owncast SSRF) goes
-  undetected, and two safe Go fixtures (`go-safe-007`, `go-safe-009`) draw
-  spurious SQLi and CMDi findings respectively. These are the only
-  imperfect language scores in the current corpus.
+- **Open weak spots**: one safe Go fixture (`go-safe-009`) draws a spurious
+  CMDi finding.
 - **Known gaps**: no gated sinks, no deserialization class. `fmt.Sprintf`
   is deliberately not a sink. Cap coverage is narrower than the Stable
   tier and argument-role-aware sink modeling is not yet implemented for Go,

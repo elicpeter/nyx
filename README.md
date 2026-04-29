@@ -123,7 +123,7 @@ All 10 languages parse via tree-sitter and run through the full pipeline, but ru
 | **Beta** | Java, PHP, Ruby, Rust, Go | 94.1% to 100% | Yes, with light FP triage |
 | **Preview** | C, C++ | 100% on synthetic corpus | No. STL container flow, builder chains, and inline class member functions are tracked, but deep pointer aliasing and function pointers are not. Pair with clang-tidy or Clang Static Analyzer |
 
-Aggregate rule-level F1: 99.3% (P=0.991, R=0.995). The single open FN is `cve-go-2023-3188-vulnerable` (owncast SSRF); the two open FPs (`go-safe-007`, `go-safe-009`) also sit on the Go side. Per-dimension detail and known blind spots live on the [Language maturity page](https://elicpeter.github.io/nyx/language-maturity.html).
+Aggregate rule-level F1: 99.8% (P=0.995, R=1.000). All real-CVE fixtures fire; the single open FP is `go-safe-009`. Per-dimension detail and known blind spots live on the [Language maturity page](https://elicpeter.github.io/nyx/language-maturity.html).
 
 ### Validated against real CVEs
 
@@ -138,6 +138,7 @@ The corpus also holds a small set of vulnerable/patched pairs extracted from pub
 | [CVE-2023-26159](https://nvd.nist.gov/vuln/detail/CVE-2023-26159) | follow-redirects | TypeScript | SSRF |
 | [CVE-2022-30323](https://nvd.nist.gov/vuln/detail/CVE-2022-30323) | hashicorp/go-getter | Go | Command injection |
 | [CVE-2024-31450](https://nvd.nist.gov/vuln/detail/CVE-2024-31450) | owncast | Go | Path traversal |
+| [CVE-2023-3188](https://nvd.nist.gov/vuln/detail/CVE-2023-3188) | owncast | Go | SSRF |
 | [CVE-2015-7501](https://nvd.nist.gov/vuln/detail/CVE-2015-7501) | Apache Commons Collections | Java | Deserialization |
 | [CVE-2017-12629](https://nvd.nist.gov/vuln/detail/CVE-2017-12629) | Apache Solr | Java | Command injection |
 | [CVE-2013-0156](https://nvd.nist.gov/vuln/detail/CVE-2013-0156) | Ruby on Rails | Ruby | Deserialization |
@@ -148,8 +149,6 @@ The corpus also holds a small set of vulnerable/patched pairs extracted from pub
 | [CVE-2019-18634](https://nvd.nist.gov/vuln/detail/CVE-2019-18634) | sudo (pwfeedback) | C | Memory safety |
 | [CVE-2019-13132](https://nvd.nist.gov/vuln/detail/CVE-2019-13132) | ZeroMQ libzmq | C++ | Memory safety |
 | [CVE-2022-1941](https://nvd.nist.gov/vuln/detail/CVE-2022-1941) | Protocol Buffers | C++ | Memory safety |
-
-`cve-go-2023-3188-vulnerable` (owncast SSRF) ships in the corpus too but is currently a known FN; it will move into the table once the engine fires on it.
 
 Fixtures live under [`tests/benchmark/cve_corpus/`](tests/benchmark/cve_corpus/) with upstream attribution headers.
 

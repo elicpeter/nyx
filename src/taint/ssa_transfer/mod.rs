@@ -988,6 +988,30 @@ fn compute_succ_states(
                     Some(transfer.interner),
                 );
 
+                // Validation-call err-check narrowing.  When the condition
+                // is an `err`-check (e.g. `if err != nil`) and `err` is the
+                // result of a known value-producing validator
+                // (`strconv.Atoi`, `parseInt`, etc.), mark the validator's
+                // input argument(s) as validated on the success branch
+                // (where `err` is null / `Ok` / no exception).  Mirrors the
+                // ValidationCall pathway but for the two-statement
+                // validation idiom common in Go:
+                //   `_, err := strconv.Atoi(input); if err != nil { return }`
+                // post-condition: input is provably a numeric string on the
+                // surviving (`err == nil`) branch, so downstream sinks like
+                // `db.Query("... " + input)` should suppress.
+                if matches!(kind, PredicateKind::ErrorCheck) {
+                    apply_validation_err_check_narrowing(
+                        &mut true_state,
+                        &mut false_state,
+                        cond_text,
+                        &cond_info.condition_vars,
+                        ssa,
+                        block.id,
+                        transfer.interner,
+                    );
+                }
+
                 // Constraint refinement
                 //
                 // `lower_condition` returns a ConditionExpr that represents the
@@ -1182,6 +1206,152 @@ fn apply_branch_predicates(
             }
         }
     }
+}
+
+/// Mark the input arguments of a value-producing validator as validated
+/// on the success branch of a downstream `err`-check.
+///
+/// Recognised idiom (most idiomatic in Go):
+///
+/// ```text
+/// _, err := strconv.Atoi(input)
+/// if err != nil { return }
+/// // → input is provably a valid integer string on the surviving branch
+/// ```
+///
+/// Walks `cond_info.condition_vars` to locate the SSA value bound to the
+/// condition's `err`/result variable, finds the SsaInst that defined that
+/// value, and — if the defining op is a [`SsaOp::Call`] to a
+/// [`crate::ssa::type_facts::is_int_producing_callee`] — copies the call's
+/// argument variable names into `validated_must` / `validated_may` on the
+/// `err == null` branch.
+///
+/// The "success" branch direction is determined from `cond_text`:
+///
+/// * `err == nil` / `err == None` / `error == nil` / `is_ok()` → TRUE branch
+/// * `err != nil` / `error != nil` / `is_err()`               → FALSE branch
+///
+/// Strict-additive: when the condition does not match the err-check shape,
+/// the defining op is not a Call, the callee is not recognised as a
+/// validator, or the arg has no SSA-level var_name to mark, the function
+/// is a no-op.
+fn apply_validation_err_check_narrowing(
+    true_state: &mut SsaTaintState,
+    false_state: &mut SsaTaintState,
+    cond_text: &str,
+    condition_vars: &[String],
+    ssa: &SsaBody,
+    block: BlockId,
+    interner: &SymbolInterner,
+) {
+    if condition_vars.is_empty() {
+        return;
+    }
+    // Determine which branch corresponds to "err is null / Ok / no error".
+    // Defaults to FALSE for `err != nil`-style; flips to TRUE for
+    // `err == nil`-style and `is_ok()`.
+    let lower = cond_text.to_ascii_lowercase();
+    let success_branch_is_true = lower.contains("== nil")
+        || lower.contains("== none")
+        || lower.contains("is none")
+        || lower.contains("is_ok")
+        || lower.contains("=== null")
+        || lower.contains("== null");
+
+    // Resolve `err`'s reaching SSA value (last def in this or earlier block).
+    // We restrict to single-var conditions to avoid mis-attributing
+    // validation when the condition mixes err and another variable
+    // (e.g. `err != nil || other`).
+    if condition_vars.len() != 1 {
+        return;
+    }
+    let err_name = condition_vars[0].as_str();
+    let err_val = match resolve_var_to_ssa_value(err_name, ssa, block) {
+        Some(v) => v,
+        None => return,
+    };
+
+    // Find the defining SsaInst.  Search across blocks because the
+    // assignment might have happened in a predecessor.
+    let def_inst = ssa
+        .blocks
+        .iter()
+        .flat_map(|b| b.body.iter())
+        .find(|i| i.value == err_val);
+    let Some(def_inst) = def_inst else { return };
+
+    let SsaOp::Call {
+        ref callee,
+        ref args,
+        ..
+    } = def_inst.op
+    else {
+        return;
+    };
+    if !crate::ssa::type_facts::is_int_producing_callee(callee) {
+        return;
+    }
+    // Collect candidate input arg variable names: every SSA value across
+    // every positional arg group, looked up by var_name.  Conservative —
+    // we mark *all* of them validated rather than guessing which arg the
+    // validator narrows.  The validators we recognise here
+    // (`strconv.Atoi`, `parseInt`, `ParseFloat`, …) all take exactly one
+    // primary string argument, so in practice this collects one name.
+    let mut arg_names: SmallVec<[String; 2]> = SmallVec::new();
+    for arg_group in args {
+        for &v in arg_group {
+            if let Some(name) = ssa
+                .value_defs
+                .get(v.0 as usize)
+                .and_then(|vd| vd.var_name.as_deref())
+            {
+                if !arg_names.iter().any(|s: &String| s == name) {
+                    arg_names.push(name.to_string());
+                }
+            }
+        }
+    }
+    if arg_names.is_empty() {
+        return;
+    }
+    let success_state = if success_branch_is_true {
+        true_state
+    } else {
+        false_state
+    };
+    for name in &arg_names {
+        if let Some(sym) = interner.get(name) {
+            success_state.validated_may.insert(sym);
+            success_state.validated_must.insert(sym);
+        }
+    }
+}
+
+/// Find the latest reaching SSA definition for `var_name` at the end of
+/// `block`.  Mirrors `crate::constraint::lower::resolve_single_var` but
+/// avoids the cross-module privacy leak: callers in this module need it
+/// for branch narrowing on err-check shapes.
+fn resolve_var_to_ssa_value(var_name: &str, ssa: &SsaBody, block: BlockId) -> Option<SsaValue> {
+    let mut best_in_block: Option<SsaValue> = None;
+    let mut best_outside: Option<SsaValue> = None;
+    for (idx, vd) in ssa.value_defs.iter().enumerate() {
+        if vd.var_name.as_deref() != Some(var_name) {
+            continue;
+        }
+        let v = SsaValue(idx as u32);
+        if vd.block == block {
+            best_in_block = Some(match best_in_block {
+                Some(existing) if existing.0 > v.0 => existing,
+                _ => v,
+            });
+        } else {
+            best_outside = Some(match best_outside {
+                Some(existing) if existing.0 > v.0 => existing,
+                _ => v,
+            });
+        }
+    }
+    best_in_block.or(best_outside)
 }
 
 /// Apply Rust path-rejection / path-assertion branch narrowing to the
@@ -3764,6 +3934,25 @@ pub(super) fn transfer_inst(
                 }
             }
 
+            // Synthetic field-write inheritance.  When SSA lowering emits
+            // `u_new = Assign(rhs)` to model `u.f = rhs` (an obj-update
+            // synth), `u_new` represents the same logical object after the
+            // field write — it retains every other field's taint.  The
+            // base-only Assign uses include only the rhs, so without this
+            // step a clean rhs (`u.Path = "/foo"`) would zero out every
+            // tainted field on the prior `u`.  Owncast CVE-2023-3188 hit
+            // this: `requestURL.Path = "/.well-known/webfinger"` killed the
+            // tainted host carried by `requestURL` from `url.Parse(tainted)`.
+            if let Some((receiver, _fid)) = ssa.field_writes.get(&inst.value).copied() {
+                if let Some(taint) = state.get(receiver) {
+                    combined_caps |= taint.caps;
+                    inherited_summary |= taint.uses_summary;
+                    for orig in &taint.origins {
+                        push_origin_bounded(&mut combined_origins, *orig);
+                    }
+                }
+            }
+
             // Apply sanitizer
             combined_caps &= !sanitizer_bits;
 
@@ -6254,7 +6443,7 @@ fn collect_tainted_sink_values(
                     }
                 }
             }
-            apply_field_aware_suppression(&mut result, inst, state, sink_caps, ssa);
+            apply_field_aware_suppression(&mut result, inst, info, state, sink_caps, ssa);
             return result;
         }
     }
@@ -6283,7 +6472,7 @@ fn collect_tainted_sink_values(
                     }
                 }
             }
-            apply_field_aware_suppression(&mut result, inst, state, sink_caps, ssa);
+            apply_field_aware_suppression(&mut result, inst, info, state, sink_caps, ssa);
             return result;
         }
     }
@@ -6298,7 +6487,7 @@ fn collect_tainted_sink_values(
         check_heap_taint(v, &mut result);
     }
 
-    apply_field_aware_suppression(&mut result, inst, state, sink_caps, ssa);
+    apply_field_aware_suppression(&mut result, inst, info, state, sink_caps, ssa);
     result
 }
 
@@ -6308,6 +6497,7 @@ fn collect_tainted_sink_values(
 fn apply_field_aware_suppression(
     result: &mut Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)>,
     inst: &SsaInst,
+    info: &NodeInfo,
     state: &SsaTaintState,
     sink_caps: Cap,
     ssa: &SsaBody,
@@ -6334,16 +6524,48 @@ fn apply_field_aware_suppression(
         };
         // Collect all field values matching "base.X" (excluding method-call
         // expressions and the callee itself).
+        //
+        // Phantom Param ops with dotted var_names (e.g. `u.String` for the
+        // method ref in `u.String()`) represent free-identifier references
+        // hoisted by SSA lowering, not real data field accesses.  Owncast
+        // CVE-2023-3188 hit this: `http.DefaultClient.Get(u.String())`
+        // includes both `u` (tainted) and `u.String` (untainted phantom)
+        // as uses; treating `u.String` as a clean field of `u` suppressed
+        // the SSRF.  But JS object-field FP guards (e.g.
+        // `db.query(obj.safeField)` with `obj.unsafeField` tainted) need
+        // the opposite — `obj.safeField` is a real field access and SHOULD
+        // count as a clean field.  The CFG distinguishes the two via
+        // `arg_callees`: when an argument expression is itself a call, its
+        // callee text is recorded; pure member-access args leave the slot
+        // `None`.  Skip phantoms whose var_name appears as an arg_callee
+        // (the Go case), keep phantoms representing field reads (the JS
+        // case) so suppression still fires.
         let field_values: SmallVec<[SsaValue; 4]> = all_used
             .iter()
             .copied()
             .filter(|&u| {
-                u != *v
-                    && ssa.def_of(u).var_name.as_deref().is_some_and(|uname| {
-                        uname.starts_with(&prefix)
-                            && callee_name.map_or(true, |cn| uname != cn)
-                            && !is_likely_method_expression(uname)
-                    })
+                if u == *v {
+                    return false;
+                }
+                let uname = match ssa.def_of(u).var_name.as_deref() {
+                    Some(n) => n,
+                    None => return false,
+                };
+                if !uname.starts_with(&prefix) {
+                    return false;
+                }
+                if callee_name.is_some_and(|cn| uname == cn) {
+                    return false;
+                }
+                if is_likely_method_expression(uname) {
+                    return false;
+                }
+                if is_phantom_param_value(u, ssa)
+                    && info.arg_callees.iter().any(|c| c.as_deref() == Some(uname))
+                {
+                    return false;
+                }
+                true
             })
             .collect();
         // Suppress base only if there ARE field values AND ALL of them
@@ -6355,6 +6577,21 @@ fn apply_field_aware_suppression(
             });
         !all_fields_clean
     });
+}
+
+/// Check whether an SSA value is defined by a phantom `Param` op (a free
+/// identifier like `u.String` hoisted by SSA lowering, not a real positional
+/// parameter).  Used by field-aware suppression to skip method/function
+/// references that share a base name with a tainted variable.
+fn is_phantom_param_value(v: SsaValue, ssa: &SsaBody) -> bool {
+    let def = ssa.def_of(v);
+    let block = &ssa.blocks[def.block.0 as usize];
+    block
+        .phis
+        .iter()
+        .chain(block.body.iter())
+        .find(|inst| inst.value == v)
+        .is_some_and(|inst| matches!(inst.op, SsaOp::Param { .. } | SsaOp::SelfParam))
 }
 
 /// Check if a dotted var_name looks like a method call expression rather than
