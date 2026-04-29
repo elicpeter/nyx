@@ -59,9 +59,12 @@ impl ConstLattice {
             return ConstLattice::Int(i);
         }
 
-        // String: strip surrounding quotes
-        if (trimmed.starts_with('"') && trimmed.ends_with('"'))
-            || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+        // String: strip surrounding quotes. Require len >= 2 so a lone `'`
+        // or `"` (where starts_with and ends_with both match the same byte)
+        // does not produce an empty `[1..0]` slice and panic.
+        if trimmed.len() >= 2
+            && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+                || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
         {
             let inner = &trimmed[1..trimmed.len() - 1];
             return ConstLattice::Str(inner.to_string());
@@ -880,5 +883,9 @@ mod tests {
         );
         // Empty string parses as empty Str (not panic).
         assert_eq!(ConstLattice::parse(""), ConstLattice::Str("".into()));
+        // Lone quote characters must not panic in the quote-stripping path
+        // (regression for fuzz crash-2f943c14: `'` triggered &s[1..0]).
+        assert_eq!(ConstLattice::parse("'"), ConstLattice::Str("'".into()));
+        assert_eq!(ConstLattice::parse("\""), ConstLattice::Str("\"".into()));
     }
 }
