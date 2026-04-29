@@ -95,12 +95,12 @@ export function HeaderBar({ onStartScan, onOpenPalette }: HeaderBarProps) {
         {onOpenPalette && (
           <button
             type="button"
-            className="btn btn-ghost palette-trigger"
+            className="btn btn-ghost btn-sm palette-trigger"
             onClick={onOpenPalette}
             aria-label="Open command palette"
             title={`Command palette (${PALETTE_HINT})`}
           >
-            <CommandIcon size={14} />
+            <CommandIcon size={12} />
             <span>Search</span>
             <kbd>{PALETTE_HINT}</kbd>
           </button>
@@ -108,7 +108,7 @@ export function HeaderBar({ onStartScan, onOpenPalette }: HeaderBarProps) {
         {onStartScan && (
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn btn-primary btn-sm"
             onClick={onStartScan}
           >
             Start Scan
