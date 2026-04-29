@@ -1,0 +1,30 @@
+[package]
+name = "nyx-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# The lib only compiles with default features. build.rs short-circuits
+# when `src/server/assets/dist/index.html` already exists, so callers
+# (including the fuzz CI job) stub that file out instead of running a
+# real frontend build.
+nyx-scanner = { path = ".." }
+
+[[bin]]
+name = "scan_bytes"
+path = "fuzz_targets/scan_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extract_summaries"
+path = "fuzz_targets/extract_summaries.rs"
+test = false
+doc = false
+bench = false

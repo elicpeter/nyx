@@ -65,20 +65,27 @@ fn main() -> NyxResult<()> {
         .expect("set rayon stack size");
 
     let is_serve = cli.command.is_serve();
+    let is_info = cli.command.is_informational();
     let quiet = config.output.quiet || cli.command.is_structured_output(&config);
 
-    // Print config note before scanning (human-readable mode only).
-    if let Some(note) = config_note.filter(|_| !quiet) {
+    // Print config note before scanning (human-readable mode only).  Pure
+    // informational commands suppress it too — their output is usually
+    // piped or grepped and the preamble is noise.
+    if let Some(note) = config_note.filter(|_| !quiet && !is_info) {
         eprint!("{note}");
     }
 
     commands::handle_command(cli.command, database_dir, config_dir, &mut config)?;
 
-    if !quiet && !is_serve {
+    // "Finished in" is useful for long scans but pure noise on fast paths
+    // (small repos, `index status`, `clean` etc.).  Suppress it under a
+    // second; users who care about precise timings can use `time`/`hyperfine`.
+    let elapsed = now.elapsed();
+    if !quiet && !is_serve && !is_info && elapsed.as_secs_f32() >= 1.0 {
         eprintln!(
             "{} in {:.3}s.",
             style("Finished").green().bold(),
-            now.elapsed().as_secs_f32()
+            elapsed.as_secs_f32()
         );
     }
     Ok(())

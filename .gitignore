@@ -1,10 +1,13 @@
 /target
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
 /.idea
 /frontend/node_modules
 /src/server/assets/dist
 /.nyx
-/docs/plans/
 /logs
 /book
 .DS_Store
 .z3-trace
+.node_modules-target

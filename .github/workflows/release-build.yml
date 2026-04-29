@@ -141,15 +141,20 @@ jobs:
           retention-days: 1
 
   reproducibility:
-    # Supply-chain smoke test: build the release binary twice with pinned
-    # SOURCE_DATE_EPOCH and path remapping, then diff the SHA256 hashes.
-    # Gates `publish` so non-reproducible builds cannot ship. Scoped to
-    # x86_64-linux — the most tractable target for byte-for-byte
-    # determinism; failures on other targets would be investigated
-    # separately.
+    # Informational supply-chain smoke test: build the release binary
+    # twice with pinned SOURCE_DATE_EPOCH and path remapping, then diff
+    # the SHA256 hashes. Scoped to x86_64-linux — the most tractable
+    # target for byte-for-byte determinism.
+    #
+    # Non-gating: `continue-on-error: true` + not in `publish.needs`.
+    # Stable Rust point releases can change codegen and snap a build
+    # that was reproducible the day before; we don't want that to
+    # block shipping. Failures show up as a yellow warning and get
+    # investigated outside the release hot path.
     name: reproducibility-check
     needs: frontend
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
@@ -205,14 +210,11 @@ jobs:
     # checksum file that covers every published artifact.
     name: publish-release
     runs-on: ubuntu-latest
-    needs: [build, reproducibility]
+    needs: [build]
     permissions:
       contents: write
       id-token: write
       attestations: write
-    env:
-      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
@@ -245,31 +247,35 @@ jobs:
           sha256sum *.zip > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Import GPG signing key
-        if: env.GPG_PRIVATE_KEY != ''
+      # Sigstore keyless signing — single source of artifact attestation.
+      # Cert is OIDC-bound to this workflow run, recorded in Rekor, no
+      # secrets at rest. Verifiers can check with:
+      #   cosign verify-blob --certificate <file>.pem \
+      #     --signature <file>.sig \
+      #     --certificate-identity-regexp 'https://github.com/elicpeter/nyx/.*' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #     <file>
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Cosign keyless sign release artifacts
+        shell: bash
         run: |
           set -euo pipefail
-          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
-          gpg --list-secret-keys --keyid-format=long
-
-      - name: Sign SHA256SUMS
-        if: env.GPG_PRIVATE_KEY != ''
-        run: |
-          set -euo pipefail
-          cd release-artifacts
-          if [ -n "${GPG_PASSPHRASE:-}" ]; then
-            printf '%s' "$GPG_PASSPHRASE" \
-              | gpg --batch --yes --pinentry-mode loopback \
-                    --passphrase-fd 0 --armor --detach-sign SHA256SUMS
-          else
-            gpg --batch --yes --armor --detach-sign SHA256SUMS
-          fi
-          ls -l SHA256SUMS.asc
-
-      - name: Warn if GPG signing was skipped
-        if: env.GPG_PRIVATE_KEY == ''
-        run: |
-          echo "::warning::GPG_PRIVATE_KEY secret not configured; SHA256SUMS will ship unsigned. Add GPG_PRIVATE_KEY (ASCII-armored) and optional GPG_PASSPHRASE to repository secrets to enable signed checksums."
+          SBOM="nyx-${{ github.event.release.tag_name }}.cdx.json"
+          (
+            cd release-artifacts
+            for f in *.zip SHA256SUMS; do
+              cosign sign-blob --yes \
+                --output-signature "$f.sig" \
+                --output-certificate "$f.pem" \
+                "$f"
+            done
+          )
+          cosign sign-blob --yes \
+            --output-signature "$SBOM.sig" \
+            --output-certificate "$SBOM.pem" \
+            "$SBOM"
 
       # SLSA v1 build provenance: signed attestation that these exact
       # bytes were produced by this workflow run from this commit.
@@ -288,8 +294,13 @@ jobs:
         with:
           files: |
             release-artifacts/*.zip
+            release-artifacts/*.zip.sig
+            release-artifacts/*.zip.pem
             release-artifacts/SHA256SUMS
-            release-artifacts/SHA256SUMS.asc
+            release-artifacts/SHA256SUMS.sig
+            release-artifacts/SHA256SUMS.pem
             nyx-${{ github.event.release.tag_name }}.cdx.json
+            nyx-${{ github.event.release.tag_name }}.cdx.json.sig
+            nyx-${{ github.event.release.tag_name }}.cdx.json.pem
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

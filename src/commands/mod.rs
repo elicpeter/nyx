@@ -94,11 +94,31 @@ pub fn handle_command(
             }
 
             // ── Resolve deprecated aliases ──────────────────────────────
+            // Each alias still works but emits a one-line stderr nudge so
+            // users learn the new flag.  Suppressed under --quiet and
+            // structured output formats so machine pipelines stay clean.
+            use crate::cli::OutputFormat;
+            let effective_format = format.unwrap_or(config.output.default_format);
+            let structured =
+                matches!(effective_format, OutputFormat::Json | OutputFormat::Sarif);
+            let suppress_warnings = quiet || config.output.quiet || structured;
+            let warn_dep = |old: &str, new: &str| {
+                if !suppress_warnings {
+                    eprintln!(
+                        "{}: {} is deprecated; use {} instead.",
+                        console::style("warn").yellow().bold(),
+                        console::style(old).bold(),
+                        console::style(new).bold()
+                    );
+                }
+            };
 
             // Index mode: explicit --index wins, then deprecated flags
             let effective_index = if no_index {
+                warn_dep("--no-index", "--index off");
                 IndexMode::Off
             } else if rebuild_index {
+                warn_dep("--rebuild-index", "--index rebuild");
                 IndexMode::Rebuild
             } else {
                 index
@@ -106,10 +126,13 @@ pub fn handle_command(
 
             // Analysis mode: explicit --mode wins, then deprecated flags
             let effective_mode = if ast_only {
+                warn_dep("--ast-only", "--mode ast");
                 ScanMode::Ast
             } else if cfg_only {
+                warn_dep("--cfg-only", "--mode cfg");
                 ScanMode::Cfg
             } else if all_targets {
+                warn_dep("--all-targets", "--mode full");
                 ScanMode::Full
             } else {
                 mode
@@ -121,6 +144,7 @@ pub fn handle_command(
                     crate::errors::NyxError::Msg(format!("invalid --severity expression: {e}"))
                 })?)
             } else if high_only {
+                warn_dep("--high-only", "--severity HIGH");
                 Some(SeverityFilter::parse("HIGH").unwrap())
             } else {
                 None
@@ -352,8 +376,18 @@ pub fn handle_command(
 /// `nyx scan --explain-engine`.  Writes to stdout so it composes with
 /// standard shell redirection and process substitution.
 fn print_engine_explanation(config: &Config, engine_profile: Option<EngineProfile>) {
-    fn onoff(b: bool) -> &'static str {
-        if b { "on" } else { "off" }
+    use console::style;
+
+    // Plain-text on/off, padded to 3 chars so the trailing column aligns
+    // regardless of which value is rendered.  Colour is layered on top —
+    // the visible width stays 3 characters because `console::style` emits
+    // zero-width ANSI codes (and nothing at all when NO_COLOR is set).
+    fn onoff(b: bool) -> String {
+        if b {
+            style("on ").green().to_string()
+        } else {
+            style("off").red().dim().to_string()
+        }
     }
 
     let engine = config.analysis.engine;
@@ -362,86 +396,118 @@ fn print_engine_explanation(config: &Config, engine_profile: Option<EngineProfil
         .map(|p| p.to_string())
         .unwrap_or_else(|| "(none — using config defaults)".to_string());
     let smt_compiled = cfg!(feature = "smt");
+    let pipeline_on = matches!(
+        config.scanner.mode,
+        AnalysisMode::Full | AnalysisMode::Cfg | AnalysisMode::Taint
+    );
 
-    println!("Effective engine configuration:");
-    println!("  Engine profile:          {profile_label}");
-    println!("  AST patterns:            on");
+    // Layout: 2sp + label (left-aligned, 24w) + space + value + 3sp + flag info.
+    // Label width 24 fits the longest entry ("Abstract interpretation:") with
+    // a single trailing space before the value column.  Numeric rows reuse
+    // the same alignment so the value column is consistent across sections.
+    let row_flag = |label: &str, on: bool, flags: &str| {
+        println!(
+            "    {:<24} {}   {}",
+            format!("{label}:"),
+            onoff(on),
+            style(flags).dim()
+        );
+    };
+    let row_plain = |label: &str, value: &str| {
+        println!("    {:<24} {}", format!("{label}:"), value);
+    };
+    let row_num = |label: &str, value: String, flags: &str| {
+        println!(
+            "    {:<24} {:<10} {}",
+            format!("{label}:"),
+            value,
+            style(flags).dim()
+        );
+    };
+    let section = |title: &str| {
+        println!();
+        println!("  {}", style(title).cyan().bold());
+    };
+
     println!(
-        "  CFG construction:        {}",
-        onoff(matches!(
-            config.scanner.mode,
-            AnalysisMode::Full | AnalysisMode::Cfg | AnalysisMode::Taint
-        ))
+        "{}",
+        style("Effective engine configuration").white().bold()
     );
     println!(
-        "  CFG analysis:            {}",
-        onoff(matches!(
-            config.scanner.mode,
-            AnalysisMode::Full | AnalysisMode::Cfg | AnalysisMode::Taint
-        ))
+        "    {:<24} {}",
+        "Engine profile:",
+        style(&profile_label).bold()
     );
-    println!(
-        "  Taint (SSA):             {}",
-        onoff(matches!(
-            config.scanner.mode,
-            AnalysisMode::Full | AnalysisMode::Cfg | AnalysisMode::Taint
-        ))
+
+    section("Pipeline");
+    row_plain("AST patterns", &onoff(true));
+    row_plain("CFG construction", &onoff(pipeline_on));
+    row_plain("CFG analysis", &onoff(pipeline_on));
+    row_plain("Taint (SSA)", &onoff(pipeline_on));
+    row_plain("State analysis", &onoff(scanner.enable_state_analysis));
+    row_plain("Auth analysis", &onoff(scanner.enable_auth_analysis));
+
+    section("Engine toggles");
+    row_flag(
+        "Abstract interpretation",
+        engine.abstract_interpretation,
+        "--abstract-interp / NYX_ABSTRACT_INTERP",
     );
-    println!(
-        "  Abstract interpretation: {}   (--abstract-interp / NYX_ABSTRACT_INTERP)",
-        onoff(engine.abstract_interpretation)
+    row_flag(
+        "Context sensitivity",
+        engine.context_sensitive,
+        "--context-sensitive / NYX_CONTEXT_SENSITIVE (k=1)",
     );
-    println!(
-        "  Context sensitivity:     {}   (--context-sensitive / NYX_CONTEXT_SENSITIVE, k=1)",
-        onoff(engine.context_sensitive)
+    row_flag(
+        "Constraint solving",
+        engine.constraint_solving,
+        "--constraint-solving / NYX_CONSTRAINT",
     );
-    println!(
-        "  Constraint solving:      {}   (--constraint-solving / NYX_CONSTRAINT)",
-        onoff(engine.constraint_solving)
+    // Backwards-taint label and value column kept exact-width-compatible
+    // with the legacy format so external scripts grepping for
+    // "Backwards taint:         on" continue to match.  The label slot is
+    // 24 chars + 1 space → column 25, which lines up with that legacy
+    // 9-space gap after "Backwards taint:" (16 chars).
+    row_flag(
+        "Backwards taint",
+        engine.backwards_analysis,
+        "--backwards-analysis / NYX_BACKWARDS",
     );
-    println!(
-        "  Symbolic execution:      {}   (--symex / NYX_SYMEX)",
-        onoff(engine.symex.enabled)
+
+    section("Symbolic execution");
+    row_flag("Symex", engine.symex.enabled, "--symex / NYX_SYMEX");
+    row_flag(
+        "Cross-file symex",
+        engine.symex.cross_file,
+        "--cross-file-symex / NYX_CROSS_FILE_SYMEX",
     );
-    println!(
-        "  Cross-file symex:        {}   (--cross-file-symex / NYX_CROSS_FILE_SYMEX)",
-        onoff(engine.symex.cross_file)
+    row_flag(
+        "Interproc symex",
+        engine.symex.interprocedural,
+        "--symex-interproc / NYX_SYMEX_INTERPROC",
     );
-    println!(
-        "  Interproc symex:         {}   (--symex-interproc / NYX_SYMEX_INTERPROC)",
-        onoff(engine.symex.interprocedural)
+    let smt_note = if smt_compiled {
+        "--smt"
+    } else {
+        "--smt (this binary built without `smt` feature)"
+    };
+    row_flag("SMT (Z3)", engine.symex.smt && smt_compiled, smt_note);
+
+    section("Limits");
+    row_num(
+        "Parse timeout",
+        format!("{} ms", engine.parse_timeout_ms),
+        "--parse-timeout-ms / NYX_PARSE_TIMEOUT_MS (0 disables)",
     );
-    println!(
-        "  Backwards taint:         {}   (--backwards-analysis / NYX_BACKWARDS)",
-        onoff(engine.backwards_analysis)
+    row_num(
+        "Max taint origins",
+        engine.max_origins.to_string(),
+        "--max-origins / NYX_MAX_ORIGINS (per-lattice-value cap)",
     );
-    println!(
-        "  SMT (Z3):                {}   (--smt{}; requires --features smt)",
-        onoff(engine.symex.smt && smt_compiled),
-        if smt_compiled {
-            ""
-        } else {
-            ", binary built WITHOUT smt feature"
-        }
+    row_num(
+        "Max points-to set",
+        engine.max_pointsto.to_string(),
+        "--max-pointsto / NYX_MAX_POINTSTO (per-variable heap cap)",
     );
-    println!(
-        "  State analysis:          {}   (scanner.enable_state_analysis)",
-        onoff(scanner.enable_state_analysis)
-    );
-    println!(
-        "  Auth analysis:           {}   (scanner.enable_auth_analysis)",
-        onoff(scanner.enable_auth_analysis)
-    );
-    println!(
-        "  Parse timeout:           {} ms  (--parse-timeout-ms / NYX_PARSE_TIMEOUT_MS; 0 disables)",
-        engine.parse_timeout_ms
-    );
-    println!(
-        "  Max taint origins:       {}      (--max-origins / NYX_MAX_ORIGINS; per-lattice-value cap)",
-        engine.max_origins
-    );
-    println!(
-        "  Max points-to set:       {}      (--max-pointsto / NYX_MAX_POINTSTO; per-variable heap-object cap)",
-        engine.max_pointsto
-    );
+    println!();
 }

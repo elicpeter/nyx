@@ -55,32 +55,35 @@ pub fn handle(
             let status_path = std::path::Path::new(&path).canonicalize()?;
             let (project_name, db_path) = get_project_info(&status_path, database_dir)?;
 
-            println!("{}", style("Project status").blue().bold().underlined());
+            println!("{}", style("Index status").bold());
             println!(
-                "  {:14} {}",
-                style("Project"),
+                "  {:10} {}",
+                style("Project").dim(),
                 style(&project_name).white().bold()
             );
             println!(
-                "  {:14} {}",
-                style("Index path"),
+                "  {:10} {}",
+                style("Path").dim(),
                 style(db_path.display()).underlined()
-            );
-            println!(
-                "  {:14} {}",
-                style("Exists"),
-                style(db_path.exists()).bold()
             );
 
             if db_path.exists() {
                 let meta = fs::metadata(&db_path)?;
                 let size = ByteSize::b(meta.len());
                 let mtime: DateTime<Local> = meta.modified()?.into();
-                println!("  {:14} {}", style("Size"), size);
                 println!(
-                    "  {:14} {}",
-                    style("Modified"),
-                    mtime.format("%Y-%m-%d %H:%M:%S")
+                    "  {:10} {} {}",
+                    style("Indexed").dim(),
+                    style("✔").green().bold(),
+                    style(mtime.format("%Y-%m-%d %H:%M:%S")).dim()
+                );
+                println!("  {:10} {}", style("Size").dim(), size);
+            } else {
+                println!(
+                    "  {:10} {} {}",
+                    style("Indexed").dim(),
+                    style("✖").red().bold(),
+                    style("(run `nyx index build` to create)").dim()
                 );
             }
 

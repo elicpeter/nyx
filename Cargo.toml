@@ -32,6 +32,19 @@ exclude = [
 
 autoexamples = false
 
+# `cargo binstall nyx-scanner` resolves binaries from the GitHub
+# release archives produced by `.github/workflows/release-build.yml`.
+# Naming must match `BIN-{target}.zip` and the binary path inside the
+# zip (`target/{target}/release/{bin}{binary-ext}`). Bump
+# `release-build.yml` together with this block if either changes.
+[package.metadata.binstall]
+# Crate is `nyx-scanner` but the release archives are produced as
+# `nyx-{target}.zip` (BIN_NAME in release-build.yml). Hardcode the
+# stem rather than using `{ name }`.
+pkg-url = "{ repo }/releases/download/v{ version }/nyx-{ target }{ archive-suffix }"
+pkg-fmt = "zip"
+bin-dir = "target/{ target }/release/{ bin }{ binary-ext }"
+
 [features]
 default = ["serve"]
 serve = ["dep:axum", "dep:tokio", "dep:tokio-stream", "dep:tower-http"]

@@ -49,7 +49,6 @@
  *   docs/serve-rules.png
  *   docs/serve-config.png
  */
-import { chromium } from 'playwright';
 import { execFileSync } from 'node:child_process';
 import {
   copyFileSync,
@@ -66,14 +65,16 @@ const URL_BASE  = process.env.NYX_URL  || 'http://127.0.0.1:9876';
 const SCAN_ROOT = process.env.SCAN_ROOT || '/tmp/nyx-demo-app';
 const OUT_DIR   = process.env.OUT_DIR  || '/Users/elipeter/nyx/assets/screenshots';
 const FRAMER    = process.env.FRAMER   || '/Users/elipeter/nyx/scripts/frame-screenshots.py';
+const NYX_BIN   = process.env.NYX_BIN  || '/Users/elipeter/nyx/target/release/nyx';
 const VIEW = { width: 1440, height: 900 };
 const COLOR_SCHEME = 'light';
 
 const args = new Set(process.argv.slice(2));
 const wantStills = args.has('--stills') || args.has('--all');
 const wantGif    = args.has('--gif')    || args.has('--all');
-if (!wantStills && !wantGif) {
-  console.error('usage: capture-screenshots.mjs [--stills|--gif|--all]');
+const wantCli    = args.has('--cli')    || args.has('--all');
+if (!wantStills && !wantGif && !wantCli) {
+  console.error('usage: capture-screenshots.mjs [--stills|--gif|--cli|--all]');
   process.exit(2);
 }
 
@@ -189,7 +190,7 @@ async function waitForServer() {
 async function startScanViaApi(token) {
   const res = await fetch(URL_BASE + '/api/scans', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+    headers: { 'Content-Type': 'application/json', 'x-nyx-csrf': token },
     body: '{}',
   });
   if (!res.ok && res.status !== 409) {
@@ -260,16 +261,19 @@ async function captureStillsAfterScan2(page) {
   console.error('[stills/p2] explorer');
   await page.goto(URL_BASE + '/explorer');
   await page.waitForLoadState('domcontentloaded').catch(() => {});
-  await sleep(2000);
-  // Open the file with findings if visible — makes the screenshot
-  // representative of the explorer's value (highlighted source +
-  // sink marker).  Best-effort: skip silently if selector misses.
-  const fileNode = page
-    .locator('.file-tree, [class*="file-tree"]')
-    .locator('text=server.js')
-    .first();
-  if (await fileNode.count()) {
-    await fileNode.click().catch(() => {});
+  await page.waitForSelector('.tree-node', { timeout: 10_000 }).catch(() => {});
+  await sleep(1000);
+  // Expand the src/ folder, then click server.js so the screenshot
+  // includes the highlighted source view rather than a "Select a
+  // file" prompt.  Best-effort: skip silently if selectors miss.
+  const srcDir = page.locator('.tree-node:has-text("src")').first();
+  if (await srcDir.count()) {
+    await srcDir.click().catch(() => {});
+    await sleep(700);
+  }
+  const serverFile = page.locator('.tree-node:has-text("server.js")').first();
+  if (await serverFile.count()) {
+    await serverFile.click().catch(() => {});
     await sleep(1500);
   }
   await page.screenshot({ path: join(OUT_DIR, 'docs/serve-explorer.png') });
@@ -344,36 +348,43 @@ async function captureGifFrames(page) {
   await taintRow.click();
   await page.waitForURL(/\/findings\/\d+/, { timeout: 10_000 });
   await sleep(2500);
-  await page.evaluate(() => window.scrollBy({ top: 240, behavior: 'smooth' }));
-  await sleep(1500);
+  // Scroll well into the page so the viewer can see the taint flow
+  // animate before the section toggles fire.
+  await page.evaluate(() => window.scrollBy({ top: 480, behavior: 'smooth' }));
+  await sleep(1600);
+  await page.evaluate(() => window.scrollBy({ top: 360, behavior: 'smooth' }));
+  await sleep(1600);
 
   console.error('[gif] scene 7: open the collapsed sections');
   for (const title of ['Evidence', 'Analysis Notes', 'Confidence Reasoning']) {
     const toggle = page.locator(`.section-toggle:has-text("${title}")`).first();
     if (await toggle.count()) {
       await toggle.scrollIntoViewIfNeeded();
-      await sleep(400);
+      await sleep(500);
       await toggle.click();
-      await sleep(900);
+      await sleep(1100);
     }
   }
   await sleep(800);
 
-  console.error('[gif] scene 8: triage status dropdown');
+  console.error('[gif] scene 8: mark Investigating');
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
   await sleep(900);
   const statusBtn = page.locator('.status-trigger').first();
   if (await statusBtn.count()) {
     await statusBtn.click().catch(() => {});
-    await sleep(1500);
-    await page.keyboard.press('Escape').catch(() => {});
-    await sleep(500);
+    await sleep(1100);
+    const investigating = page.locator('text=Investigating').first();
+    if (await investigating.count()) {
+      await investigating.click().catch(() => {});
+      await sleep(1200);
+    }
   }
 
-  console.error('[gif] scene 9: debug call graph (final visual)');
-  await page.goto(URL_BASE + '/debug/call-graph');
-  await page.waitForSelector('text=Project scope', { timeout: 15_000 }).catch(() => {});
-  await sleep(3500);
+  console.error('[gif] scene 9: triage page (closing visual)');
+  await page.goto(URL_BASE + '/triage');
+  await page.waitForLoadState('domcontentloaded').catch(() => {});
+  await sleep(1500);
 }
 
 async function convertWebmToGif(webm, gifOut) {
@@ -392,9 +403,66 @@ async function convertWebmToGif(webm, gifOut) {
   ], { stdio: 'inherit' });
 }
 
+// CLI capture phase ----------------------------------------------------------
+//
+// `render-cli.py` orchestrates: force ANSI via `CLICOLOR_FORCE=1`,
+// merge consecutive SGR escapes (freeze otherwise honors only the
+// last one and drops fg/bg/dim), invoke freeze with the brand-
+// consistent window chrome, then crop or pad to exactly 1600x992 so
+// the framer never resamples the captured text.
+
+const CLI_RENDERER = '/Users/elipeter/nyx/scripts/render-cli.py';
+
+function renderCli(shellCommand, outFile) {
+  execFileSync(
+    'python3',
+    [CLI_RENDERER, outFile, shellCommand],
+    { stdio: ['ignore', 'inherit', 'inherit'] },
+  );
+}
+
+function captureCli() {
+  // Re-stage v1 so cli-scan output shows the richer set of findings
+  // (the previous --stills phase patched the demo to v2).
+  console.error('[cli/setup] writing v1 demo');
+  writeDemo('v1');
+
+  const out = (name) => join(OUT_DIR, 'docs', name);
+
+  // README and quickstart both link to the same `nyx scan` capture —
+  // emit it once at the top level, no docs/cli-scan-quickstart copy.
+  console.error('[cli] cli-scan');
+  renderCli(`${NYX_BIN} scan ${SCAN_ROOT}`, join(OUT_DIR, 'cli-scan.png'));
+
+  console.error('[cli] cli-failon');
+  // `; true` keeps the pipeline's exit code at 0 even when --fail-on
+  // trips. render-cli.py wraps the whole compound in `{ ...; }
+  // 2>/dev/null` so progress bars are suppressed for both halves.
+  renderCli(
+    `${NYX_BIN} scan ${SCAN_ROOT} --fail-on HIGH; true`,
+    out('cli-failon.png'),
+  );
+
+  console.error('[cli] cli-explain-engine');
+  renderCli(
+    `${NYX_BIN} scan ${SCAN_ROOT} --engine-profile deep --explain-engine`,
+    out('cli-explain-engine.png'),
+  );
+
+  console.error('[cli] cli-idxstatus');
+  renderCli(`${NYX_BIN} index status ${SCAN_ROOT}`, out('cli-idxstatus.png'));
+
+  console.error('[cli] cli-configshow');
+  renderCli(`${NYX_BIN} config show`, out('cli-configshow.png'));
+
+  // cli-rollup-tail.png is intentionally not regenerated. Its alt text
+  // describes a 57-issue rollup that the synthetic demo cannot produce
+  // without a much larger fixture; the existing image is left alone.
+}
+
 // Frame phase ----------------------------------------------------------------
 
-const FRAMED_PNGS = [
+const STILLS_PNGS = [
   'docs/serve-overview.png',
   'docs/serve-findings-list.png',
   'docs/serve-finding-detail.png',
@@ -406,18 +474,32 @@ const FRAMED_PNGS = [
   'docs/serve-config.png',
 ];
 
-function applyFrames() {
-  const paths = FRAMED_PNGS.map((p) => join(OUT_DIR, p)).filter((p) => existsSync(p));
+const CLI_PNGS = [
+  'cli-scan.png',
+  'docs/cli-failon.png',
+  'docs/cli-explain-engine.png',
+  'docs/cli-idxstatus.png',
+  'docs/cli-configshow.png',
+];
+
+function applyFrames(captured, { natural = false } = {}) {
+  // Frame only paths captured this run. Re-framing a previously-
+  // framed PNG would treat the framed result as the next inner
+  // content and produce a frame inside a frame.
+  const paths = captured.filter((p) => existsSync(p));
   if (paths.length === 0) return;
-  console.error(`[frame] applying purple gradient frame to ${paths.length} pngs`);
-  execFileSync('python3', [FRAMER, ...paths], { stdio: 'inherit' });
+  const label = natural ? 'natural-size' : 'fixed';
+  console.error(`[frame] applying purple gradient frame (${label}) to ${paths.length} files`);
+  const args = natural ? ['--natural', ...paths] : paths;
+  execFileSync('python3', [FRAMER, ...args], { stdio: 'inherit' });
   // Mirror the framed serve-overview.png to the top-level path the
-  // README links.  All other top-level pngs are unused per a grep
-  // across docs/* and README.md, so we don't generate them.
-  const src = join(OUT_DIR, 'docs/serve-overview.png');
-  const dst = join(OUT_DIR, 'overview.png');
-  if (existsSync(src)) {
-    copyFileSync(src, dst);
+  // README links.  Only do this when serve-overview was just
+  // captured this run; otherwise the existing top-level overview is
+  // already correct.
+  const ovSrc = join(OUT_DIR, 'docs/serve-overview.png');
+  const ovDst = join(OUT_DIR, 'overview.png');
+  if (paths.includes(ovSrc) && existsSync(ovSrc)) {
+    copyFileSync(ovSrc, ovDst);
     console.error(`[frame] mirrored serve-overview.png → overview.png`);
   }
 }
@@ -425,12 +507,19 @@ function applyFrames() {
 // Main -----------------------------------------------------------------------
 
 async function main() {
-  await waitForServer();
+  // Only the serve flows actually need nyx serve; --cli alone runs
+  // without it.
+  if (wantStills || wantGif) await waitForServer();
 
   console.error('[setup] writing v1 demo to', SCAN_ROOT);
   writeDemo('v1');
 
-  const browser = await chromium.launch({ headless: true });
+  const needsBrowser = wantStills || wantGif;
+  let browser = null;
+  if (needsBrowser) {
+    const { chromium } = await import('playwright');
+    browser = await chromium.launch({ headless: true });
+  }
 
   try {
     if (wantGif) {
@@ -488,14 +577,29 @@ async function main() {
       await captureStillsAfterScan2(page);
 
       await ctx.close();
+    }
 
-      // Frame phase — composite the brand purple gradient around
-      // every captured PNG, then mirror serve-overview.png to the
-      // top-level path the README references.
-      applyFrames();
+    if (wantCli) {
+      captureCli();
+    }
+
+    if (wantStills || wantCli || wantGif) {
+      // Frame phase — only frame what was captured this run so that
+      // already-framed PNGs from prior runs aren't framed again.
+      // Stills and the GIF use the fixed 1600x992 inner; CLI captures
+      // use --natural so each command keeps its own height.
+      const fixed = [];
+      if (wantStills) fixed.push(...STILLS_PNGS.map((p) => join(OUT_DIR, p)));
+      if (wantGif)    fixed.push(join(OUT_DIR, 'demo.gif'));
+      if (fixed.length) applyFrames(fixed, { natural: false });
+
+      if (wantCli) {
+        const cli = CLI_PNGS.map((p) => join(OUT_DIR, p));
+        applyFrames(cli, { natural: true });
+      }
     }
   } finally {
-    await browser.close();
+    if (browser) await browser.close();
   }
 
   console.error('done');
