@@ -1,4 +1,4 @@
-#[allow(dead_code)] // IR types — fields used by Display impl, tests, and downstream analyses
+#[allow(dead_code)] // IR types, fields used by Display impl, tests, and downstream analyses
 pub mod alias;
 pub mod const_prop;
 pub mod copy_prop;

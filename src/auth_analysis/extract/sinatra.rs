@@ -116,7 +116,7 @@ fn maybe_collect_route(
     for call in before_filters {
         if let Some(mut check) = auth_check_from_call_site(call, line, rules) {
             // Sinatra `before` filters run before the route handler
-            // body and authorize the request as a whole — same shape
+            // body and authorize the request as a whole, same shape
             // as Rails `before_action`.  Route-level so coverage
             // applies to the handler's row fetches and downstream
             // sinks.

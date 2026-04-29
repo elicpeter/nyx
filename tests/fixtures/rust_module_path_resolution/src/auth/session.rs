@@ -1,5 +1,5 @@
 // Session-module validate: accidentally shells out with its param.
-// Same name + arity as auth::token::validate — ambiguous without a use map.
+// Same name + arity as auth::token::validate, ambiguous without a use map.
 // If cross-file resolution incorrectly targets this function from main.rs,
 // the param taint from env::var will flow into Command::arg → taint finding.
 pub fn validate(input: &str) -> String {

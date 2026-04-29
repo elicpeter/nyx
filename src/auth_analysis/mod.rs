@@ -28,7 +28,7 @@ fn byte_offset_to_point(tree: &Tree, byte: usize) -> tree_sitter::Point {
 /// source-level variable name.  Built at `run_auth_analysis` call sites
 /// by merging type facts across all bodies in the file; a variable name
 /// with conflicting types in different bodies is dropped (absence is
-/// safe — the sink gate just falls back to name-based classification).
+/// safe, the sink gate just falls back to name-based classification).
 pub type VarTypes = HashMap<String, TypeKind>;
 
 #[allow(clippy::too_many_arguments)]
@@ -89,7 +89,7 @@ pub fn run_auth_analysis(
 /// Used by pass 1 to persist per-file auth summaries for cross-file
 /// helper lifting.  Only returns summaries for units whose body
 /// already proves at least one positional parameter under ownership /
-/// membership / admin / authorization check — i.e. the exact
+/// membership / admin / authorization check, i.e. the exact
 /// single-file lift set, so the cross-file variant does not widen what
 /// counts as a helper.
 pub fn extract_auth_summaries_by_key(
@@ -200,7 +200,7 @@ fn build_unit_summary(unit: &model::AnalysisUnit) -> Option<model::AuthCheckSumm
 
 /// Walk every `SensitiveOperation` in the model and, when the call's
 /// receiver root variable has a known SSA type, override `sink_class`
-/// to the type-implied class.  Strictly additive — only overrides
+/// to the type-implied class.  Strictly additive, only overrides
 /// when the type map produces a definite class, otherwise leaves the
 /// name/prefix-derived classification intact.
 fn apply_var_types_to_model(
@@ -235,7 +235,7 @@ fn apply_var_types_to_model(
 /// of its `Int`/`Bool` fields as `typed_bounded_dto_fields[<param>]`
 /// so member-access subjects like `dto.age` are recognised as
 /// payload-incompatible.  Only fires when the base param itself was
-/// recognised as a typed extractor by a typed-extractor matcher — bare
+/// recognised as a typed extractor by a typed-extractor matcher, bare
 /// parameters with no framework gate never lift their fields.
 fn apply_typed_bounded_params(model: &mut model::AuthorizationModel, var_types: &VarTypes) {
     for unit in &mut model.units {
@@ -312,7 +312,7 @@ fn sink_class_for_type(
 ///
 /// When `global_summaries` is `Some`, cross-file helpers are looked up
 /// via [`GlobalSummaries::get_auth`] after the same-file summary
-/// gather — this recovers the handler-in-file-A calling
+/// gather, this recovers the handler-in-file-A calling
 /// `require_owner`-in-file-B case that single-file lifting cannot see.
 fn apply_helper_lifting(
     model: &mut model::AuthorizationModel,
@@ -410,7 +410,7 @@ fn build_helper_summaries(
         let mut summary = AuthCheckSummary::default();
         for check in &unit.auth_checks {
             // We only lift checks that actively prove ownership /
-            // membership / admin-rights / authorize-helper — login
+            // membership / admin-rights / authorize-helper, login
             // and token-validity checks don't justify foreign-id
             // mutations and we want to keep parity with
             // `has_prior_subject_auth`'s filter.
@@ -437,7 +437,7 @@ fn build_helper_summaries(
             }
         }
         if !summary.param_auth_kinds.is_empty() {
-            // Deduplicate by last segment of the function name — the
+            // Deduplicate by last segment of the function name, the
             // lifting site matches the call's last segment too.
             let last = name.rsplit('.').next().unwrap_or(name).to_string();
             summaries
@@ -494,7 +494,7 @@ fn stronger_check_kind(a: model::AuthCheckKind, b: model::AuthCheckKind) -> mode
 /// For one unit, synthesise an `AuthCheck` at every call site that
 /// targets a helper with a non-trivial summary.  Subjects are taken
 /// from `call_site.args_value_refs[K]` for each auth-checked param
-/// position K — these are the caller's concrete subjects passed at
+/// position K, these are the caller's concrete subjects passed at
 /// that arg slot, exactly what `auth_check_covers_subject` needs.
 fn synthesise_checks_for_unit(
     unit: &model::AnalysisUnit,
@@ -503,7 +503,7 @@ fn synthesise_checks_for_unit(
     let line_of = |span: (usize, usize)| -> usize {
         // Span is byte offsets; we don't have direct access to a Tree
         // here. Caller assigns line via `line` field on call_site
-        // through CallSite metadata absence — fall back to the unit's
+        // through CallSite metadata absence, fall back to the unit's
         // line since covers_subject uses `check.line <= op.line` and
         // helper calls are typically near the unit start.
         let _ = span;
@@ -566,7 +566,7 @@ fn call_site_line(unit: &model::AnalysisUnit, call: &model::CallSite) -> Option<
     None
 }
 
-/// Cross-file variant of [`synthesise_checks_for_unit`] — for each
+/// Cross-file variant of [`synthesise_checks_for_unit`], for each
 /// call site in `unit`, resolve the callee against `GlobalSummaries`
 /// and look up an `AuthCheckSummary` that was persisted by some other
 /// file's pass-1 extraction.  Skips call sites already handled by the
@@ -592,7 +592,7 @@ fn synthesise_cross_file_checks_for_unit(
         if unit.name.as_deref() == Some(last) {
             continue;
         }
-        // Skip if the single-file map already handled this callee —
+        // Skip if the single-file map already handled this callee ,
         // that path has richer same-file context (existing
         // summaries from sibling units in this model) and its
         // synthesised check is strictly more precise.
@@ -771,7 +771,7 @@ mod tests {
             Some(SinkClass::DbCrossTenantRead)
         );
         // DatabaseConnection: unrecognized verb (`execute`) → DbMutation
-        // (conservative default — treat as write-shaped).
+        // (conservative default, treat as write-shaped).
         assert_eq!(
             sink_class_for_type(&TypeKind::DatabaseConnection, "conn.execute", &rules),
             Some(SinkClass::DbMutation)
@@ -823,7 +823,7 @@ mod tests {
         )));
         let var_types: VarTypes = HashMap::new();
         apply_var_types_to_model(&mut model, &rules, &var_types);
-        // Unchanged — no entry in var_types for `db`.
+        // Unchanged, no entry in var_types for `db`.
         assert_eq!(
             model.units[0].operations[0].sink_class,
             Some(SinkClass::DbMutation)

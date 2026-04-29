@@ -306,8 +306,8 @@ async fn get_type_facts(
 }
 
 /// GET /api/debug/auth?file=<path>
-/// Return the file-scoped authorization model — routes, units,
-/// sensitive operations, and auth checks — for the debug UI.
+/// Return the file-scoped authorization model, routes, units,
+/// sensitive operations, and auth checks, for the debug UI.
 async fn get_auth(
     State(state): State<AppState>,
     Query(q): Query<FileQuery>,

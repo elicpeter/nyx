@@ -66,7 +66,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: false,
     },
-    // fmt.Printf/Sprintf write to stdout or build strings in memory — not
+    // fmt.Printf/Sprintf write to stdout or build strings in memory, not
     // security sinks.  fmt.Fprintf writes to an io.Writer (often http.ResponseWriter)
     // so it IS a security sink for XSS.
     LabelRule {
@@ -110,7 +110,7 @@ pub static RULES: &[LabelRule] = &[
             // Idiomatic Go SSRF sinks (Owncast CVE-2023-3188) use the
             // `http.DefaultClient.Get(url)` form rather than the bare
             // `http.Get(url)` helper, so the suffix-matched callee text needs
-            // an explicit entry here — bare `Get/Post/Do/Head` would
+            // an explicit entry here, bare `Get/Post/Do/Head` would
             // over-match unrelated method names.
             "http.DefaultClient.Get",
             "http.DefaultClient.Post",

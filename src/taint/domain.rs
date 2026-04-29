@@ -13,7 +13,7 @@ pub struct VarTaint {
     pub uses_summary: bool,
 }
 
-/// A single taint origin — the node and classification of where taint came from.
+/// A single taint origin, the node and classification of where taint came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TaintOrigin {
     pub node: NodeIndex,
@@ -30,7 +30,7 @@ pub struct TaintOrigin {
 /// # Capacity limit
 ///
 /// `SmallBitSet` is a fixed-size 64-slot bitset backed by a single `u64`.
-/// Inserting a `SymbolId` with ordinal ≥ 64 is a no-op — the bit is silently
+/// Inserting a `SymbolId` with ordinal ≥ 64 is a no-op, the bit is silently
 /// dropped. This is a deliberate precision-over-completeness trade: the
 /// bitset underpins predicate / validation tracking in the SSA taint engine,
 /// and functions with more than 64 distinct predicate-relevant variables are

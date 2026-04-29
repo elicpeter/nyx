@@ -649,7 +649,7 @@ fn hashmap_local_noise_is_clean() {
 #[test]
 fn row_ownership_equality_is_clean() {
     // `if owner_id != user.id { return ... }` is a row-level
-    // ownership check — both the row-fetching call and any downstream
+    // ownership check, both the row-fetching call and any downstream
     // uses of the row's fields should be considered authorized.
     assert_absent(
         "row_ownership_equality.rs",
@@ -670,7 +670,7 @@ fn row_ownership_no_early_exit_flags() {
 #[test]
 fn helper_scoped_params_is_clean() {
     // A library helper whose internal work is `result.insert(..)`
-    // on a locally-constructed HashSet is not a sink — the call is
+    // on a locally-constructed HashSet is not a sink, the call is
     // classified as non-sink because the receiver is the locally-bound
     // collection.
     assert_absent("helper_scoped_params.rs", "rs.auth.missing_ownership_check");
@@ -688,7 +688,7 @@ fn self_scoped_user_is_clean() {
 fn true_positive_missing_check_flags() {
     // Positive control: an authenticated handler that deletes a doc
     // and publishes against a group without any ownership/membership
-    // check — must still flag.
+    // check, must still flag.
     assert_has(
         "true_positive_missing_check.rs",
         "rs.auth.missing_ownership_check",
@@ -763,7 +763,7 @@ fn db_connection_type_inferred_is_clean() {
     // inferred as a `DatabaseConnection` via SSA `constructor_type`
     // (through `peel_identity_suffix`).  The handler logs the caller's
     // own id; no foreign scoped id reaches the sink, so the ownership
-    // gate has nothing to flag — the type-facts refinement must not
+    // gate has nothing to flag, the type-facts refinement must not
     // introduce a false positive here.
     assert_absent(
         "db_connection_type_inferred.rs",

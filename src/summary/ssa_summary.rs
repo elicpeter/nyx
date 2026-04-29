@@ -45,7 +45,7 @@ pub struct ReturnPathTransform {
 
 impl ReturnPathTransform {
     /// Dedup key. `abstract_contribution` is intentionally excluded
-    /// — colliding entries join their abstract facts.
+    ///, colliding entries join their abstract facts.
     pub fn dedup_key(&self) -> (u64, &TaintTransform, u8, u8) {
         (
             self.path_predicate_hash,
@@ -208,7 +208,7 @@ pub struct SsaFuncSummary {
     /// abstract value.  At cross-file call sites the caller applies each
     /// transfer to the corresponding argument's abstract state and joins
     /// the results (then `meet`s with [`Self::return_abstract`]) to
-    /// synthesise the return abstract value — recovering interval bounds
+    /// synthesise the return abstract value, recovering interval bounds
     /// and string prefixes that would otherwise be lost to the summary's
     /// Top-seeded baseline.
     ///
@@ -228,8 +228,8 @@ pub struct SsaFuncSummary {
     /// consistent with the caller's validated set, joining the applicable
     /// set into the effective call-site transform.
     ///
-    /// Empty when the callee has a single return path — the aggregate
-    /// [`param_to_return`] is already precise — or when extraction
+    /// Empty when the callee has a single return path, the aggregate
+    /// [`param_to_return`] is already precise, or when extraction
     /// could not derive per-return state (e.g. early-exit probes).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_return_paths: Vec<(usize, SmallVec<[ReturnPathTransform; 2]>)>,
@@ -269,7 +269,7 @@ pub struct SsaFuncSummary {
     /// Empty for callees whose return blocks produce no non-Top fact,
     /// or whose single return path makes the aggregate already precise.
     /// Cross-file callers that cannot pick a specific path fall back to
-    /// joining the entries — equivalent to the pre-decomposition
+    /// joining the entries, equivalent to the pre-decomposition
     /// behaviour.
     #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
     pub return_path_facts: SmallVec<[PathFactReturnEntry; 2]>,
@@ -281,7 +281,7 @@ pub struct SsaFuncSummary {
     /// non-empty [`crate::ssa::type_facts::TypeKind::container_name`].
     ///
     /// Consumed by [`crate::callgraph::build_call_graph`] to feed
-    /// `CalleeQuery.receiver_type` for the matching ordinal — letting
+    /// `CalleeQuery.receiver_type` for the matching ordinal, letting
     /// the call graph narrow indirect method-call edges to only those
     /// targets whose defining container matches the inferred type.
     /// Strictly additive: an empty map means today's name-only

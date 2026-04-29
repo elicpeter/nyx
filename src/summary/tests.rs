@@ -580,7 +580,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
     gs.insert_ssa(key.clone(), v1.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v1));
 
-    // Replace with a different summary — exact replacement, not union
+    // Replace with a different summary, exact replacement, not union
     let v2 = SsaFuncSummary {
         param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
         param_to_sink: vec![(0, cap_sites(Cap::SQL_QUERY))],
@@ -1492,7 +1492,7 @@ fn free_function_and_method_with_same_name_resolve_separately() {
     assert_eq!(method, CalleeResolution::Resolved(km));
 
     // Without any qualifier, receiver, or receiver_type, a bare
-    // `process()` call is syntactically a free-function invocation — a
+    // `process()` call is syntactically a free-function invocation, a
     // method cannot be invoked that way from outside its class.  The
     // resolver's bare-call preference (step 5.5) picks the sole
     // empty-container candidate deterministically.
@@ -1709,7 +1709,7 @@ fn legacy_callees_string_array_deserializes() {
 #[test]
 fn mixed_callee_form_deserializes() {
     // Interop / partial-migration rows may mix legacy strings with
-    // structured entries in the same array — deserializer accepts both.
+    // structured entries in the same array, deserializer accepts both.
     let json = r#"{
         "name": "mixed",
         "file_path": "m.rs",
@@ -1936,7 +1936,7 @@ fn rust_wildcard_import_resolves_uniquely() {
 
 #[test]
 fn rust_use_map_fallback_when_absent() {
-    // No use_map entry — falls through to generic same-language resolution,
+    // No use_map entry, falls through to generic same-language resolution,
     // which for an unqualified caller in the same namespace still works.
     let helper = rust_summary_with_mod("helper", "/proj/src/lib.rs", 0, Some(""), &[], &[], vec![]);
     let caller = rust_summary_with_mod(
@@ -1960,7 +1960,7 @@ fn rust_use_map_fallback_when_absent() {
 
 #[test]
 fn rust_use_map_ambiguous_stays_ambiguous_without_hint() {
-    // Two modules define `validate`; no use-map on the caller — resolution
+    // Two modules define `validate`; no use-map on the caller, resolution
     // should remain Ambiguous rather than silently picking one.
     let token = rust_summary_with_mod(
         "validate",
@@ -2135,7 +2135,7 @@ fn query_prefers_receiver_type_over_leaf_collision() {
     // Old behaviour-parity regression: `resolve_callee_key_with_container`
     // (now a thin wrapper) used to treat `MessageQueue` as an authoritative
     // qualifier that *only* picked on exact match.  The new resolver must
-    // still do that — swap to `MessageQueue` and we get its method back.
+    // still do that, swap to `MessageQueue` and we get its method back.
     let resolved_queue = gs.resolve_callee(&CalleeQuery {
         name: "send",
         caller_lang: Lang::Java,
@@ -2164,7 +2164,7 @@ fn query_prefers_receiver_type_over_leaf_collision() {
 fn query_authoritative_receiver_miss_does_not_fall_through_to_leaf() {
     // When `receiver_type = HttpClient` is supplied but no
     // `HttpClient::send` exists, the resolver MUST NOT silently pick a
-    // same-leaf collision in another container — that would be the
+    // same-leaf collision in another container, that would be the
     // classic "resolved by leaf name" bug the refactor aims to prevent.
     let mut gs = GlobalSummaries::new();
     let (k_queue, s_queue) = method_summary("src/queue.java", "MessageQueue", "send", 1, 0x02);
@@ -2326,7 +2326,7 @@ fn query_caller_container_resolves_self_call() {
 fn query_leaf_same_namespace_still_resolves_intra_file_calls() {
     // Two definitions share a leaf name but live in different files.
     // A same-namespace call (intra-file) must resolve to the local one
-    // without requiring any structured hint — this is the common case
+    // without requiring any structured hint, this is the common case
     // for bare top-level function calls.
     let mut gs = GlobalSummaries::new();
     let (k_a, s_a) = free_summary("src/a.js", "helper", 1, 0x01);
@@ -2369,7 +2369,7 @@ fn query_leaf_same_namespace_still_resolves_intra_file_calls() {
 
 #[test]
 fn query_arity_filter_is_hard() {
-    // Same container and leaf, different arities — resolution must
+    // Same container and leaf, different arities, resolution must
     // honour the arity filter before any qualifier-based tie-break.
     let mut gs = GlobalSummaries::new();
     let (k_1arg, s_1arg) = method_summary("src/svc.py", "Svc", "render", 1, 0x01);
@@ -2402,7 +2402,7 @@ fn query_arity_filter_is_hard() {
     assert_eq!(two, CalleeResolution::Resolved(k_2arg));
 
     // With a non-existent arity, arity filter prunes everything and we
-    // get NotFound — not a "closest match" guess.
+    // get NotFound, not a "closest match" guess.
     let mismatched = gs.resolve_callee(&CalleeQuery {
         name: "render",
         caller_lang: Lang::Java,
@@ -2427,7 +2427,7 @@ fn query_receiver_var_is_soft_tiebreak_not_primary() {
     // happens to also be called "obj".  The old resolver used the
     // variable name as container_hint #1, which could mis-pick when
     // the qualified index had a coincidental hit.  The new resolver
-    // treats `receiver_var` as a *soft* tie-break — it only fires
+    // treats `receiver_var` as a *soft* tie-break, it only fires
     // after same-namespace unique-leaf resolution fails.
     let mut gs = GlobalSummaries::new();
     let (k_same_ns, s_same_ns) = free_summary("src/app.js", "method", 1, 0xAA);
@@ -2514,7 +2514,7 @@ fn legacy_wrapper_preserves_test_contract() {
     gs.insert(k_a.clone(), s_a);
 
     // container_hint doesn't match any container, but the leaf name has
-    // exactly one candidate — the wrapper should still resolve.
+    // exactly one candidate, the wrapper should still resolve.
     let resolved = gs.resolve_callee_key_with_container(
         "only",
         Lang::Java,
@@ -2530,7 +2530,7 @@ fn legacy_wrapper_preserves_test_contract() {
 // These tests target the most error-prone identity cases: two or more
 // definitions that share `(lang, namespace, name, arity)` but differ in
 // `container`.  The resolver must either resolve to the exact container
-// target or refuse to guess — silently falling back to a same-leaf
+// target or refuse to guess, silently falling back to a same-leaf
 // collision in a different container is a correctness bug, and mis-
 // ordering the resolution steps can cause either false positives (wrong
 // summary picked) or false negatives (missed flow because Ambiguous
@@ -2542,7 +2542,7 @@ fn same_file_two_classes_same_method_typed_receiver_picks_exact() {
     // incompatible security behaviour: `Safe::run` is a sanitizer-ish
     // passthrough (no sink bits) while `Unsafe::run` is a shell sink.
     // When the caller has a typed receiver (via type inference), the
-    // resolver must pick the exact class — the wrong pick would either
+    // resolver must pick the exact class, the wrong pick would either
     // miss the Unsafe sink or wrongly flag the Safe path.
     let mut gs = GlobalSummaries::new();
     let (k_safe, s_safe) = method_summary("src/app.java", "Safe", "run", 1, 0x00);
@@ -2595,7 +2595,7 @@ fn same_file_two_classes_same_method_typed_receiver_picks_exact() {
 #[test]
 fn same_file_two_classes_same_method_untyped_receiver_is_ambiguous_not_wrong() {
     // Same setup as above, but the caller only has a variable-name
-    // receiver (no type facts).  `receiver_var` is a SOFT hint — and in
+    // receiver (no type facts).  `receiver_var` is a SOFT hint, and in
     // the common case `s`/`u` don't match any container.  The resolver
     // MUST refuse to pick one arbitrarily; returning `Safe::run` when
     // the call was `u.run(...)` would be a silent false negative of the
@@ -2635,8 +2635,8 @@ fn same_file_two_classes_same_method_untyped_receiver_is_ambiguous_not_wrong() {
 #[test]
 fn same_file_free_function_and_method_bare_call_prefers_free_function() {
     // Classic "I wrote a top-level helper AND a method with the same
-    // name in the same file" trap.  A bare `process()` call — no
-    // receiver, no qualifier, caller outside any container — is
+    // name in the same file" trap.  A bare `process()` call, no
+    // receiver, no qualifier, caller outside any container, is
     // syntactically a FREE function call; the method cannot be invoked
     // this way.  The resolver MUST resolve to the free function, not
     // return Ambiguous.
@@ -2682,7 +2682,7 @@ fn same_file_method_calling_sibling_free_function_resolves_to_free() {
     // Variant of the previous test with the caller LIVING INSIDE a
     // class whose own container does NOT define `process`.  Bare
     // `process()` inside `Runner::kick()` must still resolve to the
-    // file-local free function — not get lost in Ambiguous because the
+    // file-local free function, not get lost in Ambiguous because the
     // caller_container hint (`Runner`) misses both candidates.
     let mut gs = GlobalSummaries::new();
     let (k_free, s_free) = free_summary("src/app.java", "process", 1, 0x0F);
@@ -2727,7 +2727,7 @@ fn same_file_method_calling_own_container_sibling_prefers_self_class() {
     // Inverse of the previous: caller is INSIDE `Worker::other()` and
     // calls bare `process()`.  Both a free `process` AND `Worker::process`
     // exist in the file.  The caller's own container resolution (step 3)
-    // must prefer `Worker::process` — otherwise intra-class self calls
+    // must prefer `Worker::process`, otherwise intra-class self calls
     // would get misresolved to a free function with possibly different
     // security behaviour.
     let mut gs = GlobalSummaries::new();
@@ -2804,7 +2804,7 @@ fn same_file_nested_container_same_method_disambiguates_by_container() {
         "`Outer` receiver_type must pick only Outer::foo — not Outer::Inner::foo via prefix match"
     );
 
-    // Exact cap pinning — guards against merge_summaries accidentally
+    // Exact cap pinning, guards against merge_summaries accidentally
     // unioning caps across the two nested keys.
     assert_eq!(gs.get(&k_inner).unwrap().sink_caps, 0x02);
 }
@@ -2814,7 +2814,7 @@ fn same_file_same_name_different_security_behaviour_no_cap_leak() {
     // Three `validate/1` entries in the same file: a sanitizer
     // passthrough (free function), an HTML-escape sanitizer in one
     // class, and a shell-exec sink in another class.  These must end
-    // up as three distinct keys with their caps preserved exactly —
+    // up as three distinct keys with their caps preserved exactly ,
     // no merge of sink caps into the sanitizer entry, no cross-leak
     // via `by_lang_name` fallback.
     let mut gs = GlobalSummaries::new();
@@ -2873,7 +2873,7 @@ fn same_file_same_name_different_security_behaviour_no_cap_leak() {
 // (typically `disambig: None` from legacy/interop/DB-loaded summaries) where
 // the old code silently collapsed structurally distinct functions.
 
-/// Build a minimal `FuncSummary` with `disambig: None` — mirrors the shape
+/// Build a minimal `FuncSummary` with `disambig: None`, mirrors the shape
 /// produced by legacy JSON rows / interop configs that don't know byte
 /// offsets.  `file_path` is left blank so namespace normalisation doesn't
 /// separate the two otherwise-identical keys.
@@ -2956,7 +2956,7 @@ fn insert_mismatched_module_path_does_not_silently_merge() {
         .find(|(_, s)| s.module_path.as_deref() == Some("billing::invoice"))
         .expect("billing::invoice summary preserved");
     // Cross-contamination guard: the two crates must not have their
-    // caps unioned — that's the observable failure mode of a silent
+    // caps unioned, that's the observable failure mode of a silent
     // merge.
     assert_eq!(auth.1.sink_caps, Cap::SHELL_ESCAPE.bits());
     assert_eq!(billing.1.sink_caps, Cap::SQL_QUERY.bits());
@@ -2967,7 +2967,7 @@ fn insert_mismatched_module_path_does_not_silently_merge() {
 #[test]
 fn insert_mismatched_kind_does_not_silently_merge() {
     // A free function and a method with the same name, arity, namespace,
-    // and container ("" vs "") can't actually occur — but kind alone
+    // and container ("" vs "") can't actually occur, but kind alone
     // mismatching does happen in interop configs where a getter is
     // described as a function.  Make sure the two end up distinct.
     let mut gs = GlobalSummaries::new();
@@ -2996,7 +2996,7 @@ fn insert_mismatched_kind_does_not_silently_merge() {
     let hits = gs.lookup_same_lang(Lang::Java, "size");
     assert_eq!(hits.len(), 2);
     // The getter's sink caps must not have been unioned into the
-    // function — that would be a security-relevant leak.
+    // function, that would be a security-relevant leak.
     let func_hit = hits
         .iter()
         .find(|(k, _)| k.kind == FuncKind::Function)
@@ -3010,7 +3010,7 @@ fn insert_mismatched_kind_does_not_silently_merge() {
 #[test]
 fn insert_mismatched_param_names_does_not_silently_merge() {
     // Two overloads in Java/C++ with the same arity but different
-    // parameter types/names — a classic case where arity-only identity
+    // parameter types/names, a classic case where arity-only identity
     // collapses distinct functions.  Neither summary ships a disambig
     // because it was loaded from legacy JSON.
     let mut gs = GlobalSummaries::new();
@@ -3052,7 +3052,7 @@ fn insert_mismatched_param_names_does_not_silently_merge() {
 #[test]
 fn insert_synthetic_disambig_bit_set_only_for_collisions() {
     // A single legacy-style insert with `disambig: None` must NOT gain a
-    // synthetic disambig — we only rekey to resolve collisions, never
+    // synthetic disambig, we only rekey to resolve collisions, never
     // speculatively.  This prevents downstream lookups keyed with
     // `disambig: None` from spuriously missing legitimately-single
     // summaries.
@@ -3075,7 +3075,7 @@ fn insert_synthetic_disambig_bit_set_only_for_collisions() {
 #[test]
 fn insert_compatible_refinement_still_unions() {
     // Two summaries describing the same function (structurally identical
-    // head, differing only on behaviour fields) must still union — the
+    // head, differing only on behaviour fields) must still union, the
     // tightened check doesn't regress the classic parallel-fold merge.
     let mut gs = GlobalSummaries::new();
     let a = FuncSummary {
@@ -3109,7 +3109,7 @@ fn insert_compatible_refinement_still_unions() {
     let merged = gs.get(&k).expect("compatible summaries still merge");
     assert_eq!(merged.source_caps, Cap::ENV_VAR.bits());
     assert_eq!(merged.sink_caps, Cap::SHELL_ESCAPE.bits());
-    // Single entry — no accidental split for the compatible case.
+    // Single entry, no accidental split for the compatible case.
     let hits = gs.lookup_same_lang(Lang::Rust, "f");
     assert_eq!(hits.len(), 1);
 }
@@ -3129,7 +3129,7 @@ fn insert_body_param_count_mismatch_rekeys() {
         ..Default::default()
     };
     gs.insert_body(key.clone(), make_callee_body(2, 2));
-    // Incoming body with a different param_count — must not overwrite.
+    // Incoming body with a different param_count, must not overwrite.
     gs.insert_body(key.clone(), make_callee_body(5, 4));
 
     // Invariant 1: the original body stays at the original key (not
@@ -3164,7 +3164,7 @@ fn insert_body_param_count_mismatch_rekeys() {
 #[test]
 fn insert_ssa_arity_overflow_rekeys() {
     // Key claims arity 1, but the incoming SSA summary references
-    // param index 3 — structurally impossible for the same function.
+    // param index 3, structurally impossible for the same function.
     // The fix must split so the key arity invariant is preserved.
     let mut gs = GlobalSummaries::new();
     let key = FuncKey {
@@ -3185,7 +3185,7 @@ fn insert_ssa_arity_overflow_rekeys() {
         vec![(0, TaintTransform::Identity)]
     );
 
-    // Bad-arity incoming summary — must not overwrite the legitimate one.
+    // Bad-arity incoming summary, must not overwrite the legitimate one.
     let overflowing = SsaFuncSummary {
         param_to_return: vec![(3, TaintTransform::Identity)],
         param_to_sink: vec![(2, cap_sites(Cap::SQL_QUERY))],
@@ -3207,7 +3207,7 @@ fn insert_ssa_arity_overflow_rekeys() {
 ///
 /// This is the case `lower_to_ssa` produces for Java instance/static
 /// methods that reference free identifiers (e.g. `f.close()` where
-/// `close` is treated as an external capture — the synthetic Param 0
+/// `close` is treated as an external capture, the synthetic Param 0
 /// then leaks into `param_to_return`/`param_to_sink`).  Without the
 /// audit-gap fix, `reconcile_ssa_summary_key` would synthesise a
 /// disambig and the analysis's `summaries.get_ssa(caller_key)` lookup
@@ -3229,7 +3229,7 @@ fn insert_ssa_arity_overflow_keeps_original_key_when_no_collision() {
     };
     let summary = SsaFuncSummary {
         // Synthetic Param-0 for the external `close` identifier inside
-        // the static `read()` body — `param_count == 0` per the source-
+        // the static `read()` body, `param_count == 0` per the source-
         // level signature.
         param_to_return: vec![(0, TaintTransform::Identity)],
         typed_call_receivers: vec![(1, "FileHandle".to_string())],
@@ -3241,7 +3241,7 @@ fn insert_ssa_arity_overflow_keeps_original_key_when_no_collision() {
         .get_ssa(&key)
         .expect("Reader::read SSA must be reachable at the FuncSummary-aligned key");
     assert_eq!(kept.typed_call_receivers, summary.typed_call_receivers);
-    // The synthetic Param-0 reference is preserved verbatim — pass-2
+    // The synthetic Param-0 reference is preserved verbatim, pass-2
     // analysis still aligns it with the caller's implicit-uses
     // argument group at the same index.
     assert_eq!(kept.param_to_return, summary.param_to_return);
@@ -3288,7 +3288,7 @@ fn insert_ssa_arity_overflow_iterative_rescan_stays_at_original_key() {
     assert_eq!(kept.param_to_return, round2.param_to_return);
 }
 
-// ── Primary sink-location attribution — SinkSite round-trips ────────────
+// ── Primary sink-location attribution, SinkSite round-trips ────────────
 
 #[test]
 fn sink_site_serde_round_trip_solo() {
@@ -3549,7 +3549,7 @@ fn cf4_merge_return_paths_caps_at_max() {
         "overflow collapses to a single Top-predicate entry"
     );
     // Joined entry has no predicate gate (hash=0) and conservatively takes
-    // the intersection of all strip bits — which here is HTML_ESCAPE.
+    // the intersection of all strip bits, which here is HTML_ESCAPE.
     let joined = &existing[0];
     assert_eq!(joined.path_predicate_hash, 0);
     assert!(matches!(
@@ -3626,11 +3626,11 @@ fn cf4_union_param_return_paths_by_index() {
 #[test]
 fn cf4_ssa_summary_fits_arity_keeps_out_of_range_path_idx_at_original_key() {
     // A path whose param index exceeds the key's arity is treated as a
-    // synthetic external-capture artefact (audit gap A.2.1.G1 — see
+    // synthetic external-capture artefact (audit gap A.2.1.G1, see
     // `project_typed_callgraph_audit_gap_ssa_disambig.md`).  When no
     // existing entry sits at the key, `insert_ssa` keeps the (untrimmed)
     // summary at the original key so the SSA FuncKey stays aligned with
-    // the matching FuncSummary FuncKey — the analysis's
+    // the matching FuncSummary FuncKey, the analysis's
     // `summaries.get_ssa(caller_key)` lookup (consuming
     // `typed_call_receivers`) depends on this alignment.
     let bad = SsaFuncSummary {
@@ -3641,7 +3641,7 @@ fn cf4_ssa_summary_fits_arity_keeps_out_of_range_path_idx_at_original_key() {
         lang: Lang::Rust,
         namespace: "test.rs".into(),
         name: "helper".into(),
-        arity: Some(2), // too small for idx 5 — synthetic-Param marker
+        arity: Some(2), // too small for idx 5, synthetic-Param marker
         ..Default::default()
     };
     let mut gs = GlobalSummaries::new();
@@ -3732,7 +3732,7 @@ fn cf6_ssa_summary_fits_arity_keeps_out_of_range_points_to_idx_at_original_key()
 
 /// two `findById`
 /// definitions on different containers must remain structurally
-/// disjoint after [`merge_summaries`] — no cap union may leak
+/// disjoint after [`merge_summaries`], no cap union may leak
 /// across them.  The FuncKey identity model already keys on
 /// `(lang, namespace, container, name, arity, ...)` so this is
 /// supposed to be true today; the test pins it down so a future
@@ -3741,7 +3741,7 @@ fn cf6_ssa_summary_fits_arity_keeps_out_of_range_points_to_idx_at_original_key()
 /// Concretely: `Repository::findById` is parameterised (no
 /// `SQL_QUERY` sink cap), `UnsafeCache::findById` runs a string-
 /// concatenated query (carries `Cap::SQL_QUERY`).  After merge,
-/// each FuncKey must own only its own caps — Repository must NOT
+/// each FuncKey must own only its own caps, Repository must NOT
 /// inherit Cache's `SQL_QUERY` bit.
 #[test]
 fn cross_file_devirt_does_not_union_unrelated_findbyids() {
@@ -3777,7 +3777,7 @@ fn cross_file_devirt_does_not_union_unrelated_findbyids() {
 
     let gs = merge_summaries(vec![safe_repo, unsafe_cache], None);
 
-    // Two distinct keys must coexist — no merge collision.
+    // Two distinct keys must coexist, no merge collision.
     let repo_key = FuncKey {
         lang: Lang::Rust,
         namespace: "src/repo.rs".into(),
@@ -3798,7 +3798,7 @@ fn cross_file_devirt_does_not_union_unrelated_findbyids() {
     let repo_sum = gs.get(&repo_key).expect("Repository::findById missing");
     let cache_sum = gs.get(&cache_key).expect("UnsafeCache::findById missing");
 
-    // Sink caps stay on their own owner — the whole point of
+    // Sink caps stay on their own owner, the whole point of
     // devirtualisation.  Repository must not have inherited the
     // SQL_QUERY bit from UnsafeCache.
     assert_eq!(
@@ -3812,7 +3812,7 @@ fn cross_file_devirt_does_not_union_unrelated_findbyids() {
         Cap::SQL_QUERY.bits(),
         "UnsafeCache::findById lost its own sink cap during merge"
     );
-    // Same invariant on tainted_sink_params — must not bleed across.
+    // Same invariant on tainted_sink_params, must not bleed across.
     assert!(
         repo_sum.tainted_sink_params.is_empty(),
         "Repository::findById inherited tainted_sink_params from UnsafeCache: {:?}",
@@ -3855,7 +3855,7 @@ mod hierarchy_widened_tests {
         (key, summary)
     }
 
-    /// A1 — no hierarchy installed.  Widening collapses to today's
+    /// A1, no hierarchy installed.  Widening collapses to today's
     /// single-result behaviour: one key in / one key out.
     #[test]
     fn widened_without_hierarchy_returns_single_resolved() {
@@ -3877,7 +3877,7 @@ mod hierarchy_widened_tests {
         assert_eq!(widened, vec![k]);
     }
 
-    /// A2 — hierarchy installed but the receiver type has no recorded
+    /// A2, hierarchy installed but the receiver type has no recorded
     /// sub-types.  Falls through to today's single-result behaviour.
     #[test]
     fn widened_no_subtypes_returns_single() {
@@ -3899,7 +3899,7 @@ mod hierarchy_widened_tests {
         assert_eq!(widened, vec![k]);
     }
 
-    /// A3 — hierarchy with one sub-type implementer.  Widening returns
+    /// A3, hierarchy with one sub-type implementer.  Widening returns
     /// both the direct receiver match and the sub-type's match.
     #[test]
     fn widened_one_subtype_returns_two_keys() {
@@ -3938,14 +3938,14 @@ mod hierarchy_widened_tests {
         assert!(widened.contains(&k_impl));
     }
 
-    /// A4 — hierarchy with multiple sub-types: every implementer's
+    /// A4, hierarchy with multiple sub-types: every implementer's
     /// matching method is in the result, deduplicated.
     #[test]
     fn widened_multiple_subtypes_returns_all() {
         let mut gs = GlobalSummaries::new();
         // Three impls + one interface.  The interface itself has no
         // body so we omit a method on it (that is the more common
-        // shape — a pure interface plus concrete classes).
+        // shape, a pure interface plus concrete classes).
         let edges = vec![
             ("FileLogger".to_string(), "ILogger".to_string()),
             ("NetLogger".to_string(), "ILogger".to_string()),
@@ -3984,7 +3984,7 @@ mod hierarchy_widened_tests {
         assert!(widened.contains(&k_std));
     }
 
-    /// A5 — the arity filter must apply across the whole fan-out, not
+    /// A5, the arity filter must apply across the whole fan-out, not
     /// just the direct-receiver leg.  An implementer with a different
     /// arity must not leak into the result.
     #[test]
@@ -4013,10 +4013,10 @@ mod hierarchy_widened_tests {
         assert_eq!(widened, vec![k_one], "arity-2 impl must be filtered out");
     }
 
-    /// A6 — fan-out is bounded at `MAX_HIERARCHY_FANOUT`.  Build a
+    /// A6, fan-out is bounded at `MAX_HIERARCHY_FANOUT`.  Build a
     /// hierarchy with more impls than the cap allows and assert the
     /// result is exactly capped (and that early impls are preserved
-    /// — the cap drops the *tail*, not the head).
+    ///, the cap drops the *tail*, not the head).
     #[test]
     fn widened_caps_at_max_hierarchy_fanout() {
         let cap = GlobalSummaries::MAX_HIERARCHY_FANOUT;
@@ -4030,7 +4030,7 @@ mod hierarchy_widened_tests {
             .map(|i| (format!("Impl{i:02}"), "IBase".to_string()))
             .collect();
 
-        // Carrier — first impl carries every edge so the index is
+        // Carrier, first impl carries every edge so the index is
         // populated in one shot.
         let (k0, s0) = java_method("src/impl00.java", "Impl00", "run", 0, 0x01, edges);
         gs.insert(k0.clone(), s0);
@@ -4065,18 +4065,18 @@ mod hierarchy_widened_tests {
         );
     }
 
-    /// A7 — when hierarchy widening produces no candidates AND the
+    /// A7, when hierarchy widening produces no candidates AND the
     /// receiver_type lookup is authoritative (Step 1), the secondary
     /// fall-through goes through `resolve_callee` which returns
     /// Ambiguous/NotFound rather than silently picking an unrelated
-    /// leaf — exactly the "subset of today's targets, never a
+    /// leaf, exactly the "subset of today's targets, never a
     /// superset" rule.  Test asserts the empty result is preserved.
     #[test]
     fn widened_empty_does_not_silently_pick_unrelated_leaf() {
         let mut gs = GlobalSummaries::new();
         // Edge: IUnused has a sub Used, but neither declares
         // `something`.  An unrelated free function `something` exists
-        // in the same namespace — under today's authoritative
+        // in the same namespace, under today's authoritative
         // receiver_type rules, that function MUST NOT be picked when
         // the call is annotated with receiver_type "IUnused".
         let edges = vec![("Used".to_string(), "IUnused".to_string())];
@@ -4104,7 +4104,7 @@ mod hierarchy_widened_tests {
         );
     }
 
-    /// A7b — when hierarchy widening produces nothing AND today's
+    /// A7b, when hierarchy widening produces nothing AND today's
     /// `resolve_callee` *does* resolve (no receiver_type, just bare
     /// leaf or qualifier hint), the fallback returns the single key.
     /// This pins the secondary-fallback contract on the path where it
@@ -4131,7 +4131,7 @@ mod hierarchy_widened_tests {
         assert_eq!(widened, vec![k_free]);
     }
 
-    /// A8 — receiver_type is None → no widening; behaves identically
+    /// A8, receiver_type is None → no widening; behaves identically
     /// to `resolve_callee` (single-result wrap).
     #[test]
     fn widened_no_receiver_type_collapses_to_resolve_callee() {
@@ -4153,7 +4153,7 @@ mod hierarchy_widened_tests {
         assert_eq!(widened, vec![k_free]);
     }
 
-    /// A9 — `merge()` must invalidate the cached hierarchy index so a
+    /// A9, `merge()` must invalidate the cached hierarchy index so a
     /// post-merge call to `resolve_callee_widened` doesn't look up a
     /// stale view.  Since `install_hierarchy` is required after merges,
     /// the test asserts: post-merge, before reinstall, fan-out must
@@ -4180,7 +4180,7 @@ mod hierarchy_widened_tests {
         });
         assert_eq!(pre_merge.len(), 2);
 
-        // Merge in an empty `gs_b` — should invalidate the cached
+        // Merge in an empty `gs_b`, should invalidate the cached
         // hierarchy.
         gs_a.merge(GlobalSummaries::new());
         assert!(

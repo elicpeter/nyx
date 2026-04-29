@@ -115,7 +115,7 @@ pub(crate) fn union_param_sink_sites(
 /// Real disambigs come from `tree_sitter::Node::start_byte` (see
 /// `cfg.rs:fn_disambig`), which is a byte offset into the source file.
 /// Source files in practice are far below 2 GiB, so bit 31 of a real
-/// disambig is always zero — setting it marks a value as synthetic and
+/// disambig is always zero, setting it marks a value as synthetic and
 /// keeps it in a disjoint namespace from byte-offset disambigs.
 const SYNTHETIC_DISAMBIG_BIT: u32 = 0x8000_0000;
 
@@ -127,17 +127,17 @@ const SYNTHETIC_DISAMBIG_BIT: u32 = 0x8000_0000;
 /// to disambiguate same-name overloads and method calls at resolution time
 /// without having to re-parse the raw callee string.
 ///
-/// * `name` — the raw callee text as it appeared in source
+/// * `name`, the raw callee text as it appeared in source
 ///   (`"obj.method"`, `"env::var"`, `"helper"`). Preserved for diagnostics.
-/// * `arity` — number of positional arguments at the call site.  `None`
+/// * `arity`, number of positional arguments at the call site.  `None`
 ///   when splats / keyword-args / rest-params make the count unreliable.
-/// * `receiver` — structured receiver identifier for method calls
+/// * `receiver`, structured receiver identifier for method calls
 ///   (e.g. `"obj"` in `obj.method()`).  Carries the root receiver for
 ///   chained calls; `None` for non-method or complex receivers.
-/// * `qualifier` — the segment immediately before the leaf for non-method
+/// * `qualifier`, the segment immediately before the leaf for non-method
 ///   qualified calls (e.g. `"env"` in `env::var`).  Extracted once at CFG
 ///   time rather than re-parsed downstream.
-/// * `ordinal` — the per-function call ordinal matching
+/// * `ordinal`, the per-function call ordinal matching
 ///   `CallMeta.call_ordinal`, allowing cross-file consumers to address a
 ///   specific call site rather than just a callee name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -260,15 +260,15 @@ pub struct FuncSummary {
 
     // ── Taint behaviour ──────────────────────────────────────────────────
     // Stored as raw `u16` so serde doesn't need to know about `bitflags`.
-    /// Caps this function **introduces** — i.e. the return value carries
+    /// Caps this function **introduces**, i.e. the return value carries
     /// freshly‑tainted data even if no argument was tainted.
     pub source_caps: u16,
 
-    /// Caps this function **cleans** — passing tainted data through this
+    /// Caps this function **cleans**, passing tainted data through this
     /// function strips the corresponding bits.
     pub sanitizer_caps: u16,
 
-    /// Caps this function **consumes unsafely** — calling it with tainted
+    /// Caps this function **consumes unsafely**, calling it with tainted
     /// arguments that still carry these bits is a finding.
     pub sink_caps: u16,
 
@@ -276,7 +276,7 @@ pub struct FuncSummary {
     #[serde(default)]
     pub propagating_params: Vec<usize>,
 
-    /// Legacy field — kept only for deserialising old JSON from SQLite.
+    /// Legacy field, kept only for deserialising old JSON from SQLite.
     /// New code should use `propagating_params` instead.
     #[serde(default, skip_serializing)]
     pub propagates_taint: bool,
@@ -284,7 +284,7 @@ pub struct FuncSummary {
     /// Indices of parameters that flow to internal sinks (0‑based).
     pub tainted_sink_params: Vec<usize>,
 
-    /// Per-parameter [`SinkSite`] records — mirrors
+    /// Per-parameter [`SinkSite`] records, mirrors
     /// [`SsaFuncSummary::param_to_sink`] so the coarse legacy summary also
     /// carries primary sink-location attribution through the two-pass
     /// architecture.  Empty when the extractor lacked tree access.
@@ -361,7 +361,7 @@ pub struct FuncSummary {
     ///
     /// Empty for files with no declared inheritance / impl
     /// relationships and for Go (which uses implicit interface
-    /// satisfaction — not computed).
+    /// satisfaction, not computed).
     ///
     /// **Per-file duplication.**  Every `FuncSummary` produced from a
     /// given file carries the **same** `hierarchy_edges` vector so the
@@ -424,7 +424,7 @@ pub enum CalleeResolution {
     Resolved(FuncKey),
     /// No candidates found at all.
     NotFound,
-    /// Multiple candidates — ambiguous, cannot pick one.
+    /// Multiple candidates, ambiguous, cannot pick one.
     Ambiguous(Vec<FuncKey>),
 }
 
@@ -437,19 +437,19 @@ pub enum CalleeResolution {
 ///
 /// Hint categories, ordered from strongest to weakest:
 ///
-/// * `receiver_type` — authoritative class/impl/module name (e.g. from
+/// * `receiver_type`, authoritative class/impl/module name (e.g. from
 ///   type inference or a `use ...` resolution). When set, the resolver
 ///   *requires* the callee's container to equal this name and refuses to
 ///   fall back to a leaf-name collision if the qualified lookup misses.
-/// * `namespace_qualifier` — syntactic qualifier parsed from the callee
+/// * `namespace_qualifier`, syntactic qualifier parsed from the callee
 ///   (e.g. `"env"` in `env::var`, `"http"` in `http.Get`). Treated as a
 ///   container hint but not authoritative: a miss falls through.
-/// * `receiver_var` — syntactic receiver variable name (e.g. `"obj"` in
+/// * `receiver_var`, syntactic receiver variable name (e.g. `"obj"` in
 ///   `obj.method()`). Soft hint, used only to tie-break ambiguity.
-/// * `caller_container` — caller's own enclosing container, used to
+/// * `caller_container`, caller's own enclosing container, used to
 ///   resolve bare self-calls inside a class/impl body.
 ///
-/// `arity` is a hard filter — when `Some`, every candidate whose arity
+/// `arity` is a hard filter, when `Some`, every candidate whose arity
 /// differs is excluded from consideration.
 #[derive(Debug, Clone)]
 pub struct CalleeQuery<'a> {
@@ -469,7 +469,7 @@ pub struct CalleeQuery<'a> {
     /// `std::env::var` in Rust the caller passes `"env"`; for `http.Get`
     /// in Go, `"http"`.  Left `None` for purely bare calls.
     pub namespace_qualifier: Option<&'a str>,
-    /// Syntactic receiver variable name.  Used only as a tie-breaker — a
+    /// Syntactic receiver variable name.  Used only as a tie-breaker, a
     /// variable name is a weak proxy for a class name.
     pub receiver_var: Option<&'a str>,
     /// Positional-argument count at the call site.  Hard filter when set.
@@ -494,14 +494,14 @@ impl<'a> CalleeQuery<'a> {
 ///
 /// Functions are partitioned by language + namespace + name + arity.  Two
 /// functions with the same bare name but different languages or namespaces
-/// are stored separately — no implicit cross-language merging occurs.
+/// are stored separately, no implicit cross-language merging occurs.
 ///
 /// A secondary index `(Lang, name)` supports fast lookup by language + name
 /// for same-language resolution in the taint engine.
 #[derive(Default)]
 pub struct GlobalSummaries {
     by_key: HashMap<FuncKey, FuncSummary>,
-    /// Bare leaf-name index — kept for compatibility with callers that only
+    /// Bare leaf-name index, kept for compatibility with callers that only
     /// see an unqualified call string.  A single name may map to many keys
     /// across containers / files / arities.
     by_lang_name: HashMap<(Lang, String), Vec<FuncKey>>,
@@ -515,7 +515,7 @@ pub struct GlobalSummaries {
     /// `module_path` set. Used by use-map driven resolution to look up
     /// candidates by their crate-relative module rather than their
     /// filesystem path. Same name / module / arity overloads land on the
-    /// same vector — arity narrowing happens at resolution time.
+    /// same vector, arity narrowing happens at resolution time.
     by_rust_module: HashMap<(String, String), Vec<FuncKey>>,
     /// Precise SSA-derived per-parameter summaries, keyed by `FuncKey`.
     /// These take precedence over `FuncSummary` during callee resolution.
@@ -536,7 +536,7 @@ pub struct GlobalSummaries {
     /// [`Self::resolve_callee_widened`] during pass 2 so the taint
     /// engine sees every concrete implementer of a method when the
     /// receiver is statically typed as a super-class / trait /
-    /// interface — recovering the dispatch precision that today's
+    /// interface, recovering the dispatch precision that today's
     /// single-result [`Self::resolve_callee`] discards.
     ///
     /// `None` until installed: every consumer treats `None` as
@@ -557,7 +557,7 @@ impl GlobalSummaries {
     /// Identity collisions are extraordinarily rare in practice (they
     /// require two structurally distinct functions to land on the same
     /// non-synthetic key, e.g. both with `disambig: None`).  The loop
-    /// bound is defensive — if synthetic probing still collides after
+    /// bound is defensive, if synthetic probing still collides after
     /// 1024 attempts we fall through and let the caller merge, which
     /// degrades gracefully to the old behaviour rather than looping
     /// forever.
@@ -586,12 +586,12 @@ impl GlobalSummaries {
     /// SSA-summary variant of [`Self::reconcile_func_summary_key`].
     ///
     /// Distinctness signals for SSA summaries are weaker than for
-    /// coarse `FuncSummary`s — the summary itself carries no explicit
+    /// coarse `FuncSummary`s, the summary itself carries no explicit
     /// `param_count`, only references to parameter indices.  We combine:
     ///
-    /// * **Key arity fit** — any parameter index referenced by the new
+    /// * **Key arity fit**, any parameter index referenced by the new
     ///   summary that exceeds `key.arity` is a structural mismatch.
-    /// * **Existing-entry compare** — if an entry already lives at
+    /// * **Existing-entry compare**, if an entry already lives at
     ///   this key and it disagrees on the set of referenced parameter
     ///   indices, the two cannot both describe the same function.
     fn reconcile_ssa_summary_key(&self, mut key: FuncKey, summary: &SsaFuncSummary) -> FuncKey {
@@ -823,7 +823,7 @@ impl GlobalSummaries {
     pub fn merge(&mut self, other: GlobalSummaries) {
         // `insert` rebuilds every secondary index (by_lang_name, by_lang_qualified,
         // by_rust_module) from the summary itself, so we do not need to copy
-        // `other.by_rust_module` explicitly — draining `other.by_key` is enough.
+        // `other.by_rust_module` explicitly, draining `other.by_key` is enough.
         for (key, summary) in other.by_key {
             self.insert(key, summary);
         }
@@ -841,7 +841,7 @@ impl GlobalSummaries {
         }
         // Hierarchy index: invalidate after a merge so the next consumer
         // sees a freshly-built view that includes `other`'s edges.  The
-        // alternative — point-merging two indexes — is racy when the
+        // alternative, point-merging two indexes, is racy when the
         // same `(lang, super)` key carries different sub-orderings in
         // each input; rebuild is O(n) over `by_key.iter()` and is the
         // single source of truth.
@@ -856,9 +856,9 @@ impl GlobalSummaries {
     /// caller genuinely wants the new one to replace the old.
     ///
     /// When the existing entry is **incompatible** with the incoming
-    /// one — the key's `arity` disagrees with the new summary's referenced
+    /// one, the key's `arity` disagrees with the new summary's referenced
     /// parameter indices, or the two summaries would describe different
-    /// functions — we synthesize a disambig so both are kept.  Silent
+    /// functions, we synthesize a disambig so both are kept.  Silent
     /// replacement in that case would drop one function's cross-file
     /// taint signal entirely, which the caller cannot recover.
     ///
@@ -873,13 +873,13 @@ impl GlobalSummaries {
     /// `ssa_summary_fits_arity` would reject the summary and
     /// `reconcile_ssa_summary_key` would synthesise a disambig that
     /// uncouples the SSA FuncKey from the matching FuncSummary FuncKey
-    /// (audit gap A.2.1.G1 —
+    /// (audit gap A.2.1.G1 ,
     /// `project_typed_callgraph_audit_gap_ssa_disambig.md`).
     pub fn insert_ssa(&mut self, key: FuncKey, summary: SsaFuncSummary) {
         // The summary may reference a parameter index ≥ `key.arity` when
         // scoped SSA lowering synthesised `Param` ops for **external
         // captures** (free identifiers like `this`, module imports,
-        // unresolved method names) — see audit gap A.2.1.G1
+        // unresolved method names), see audit gap A.2.1.G1
         // (`project_typed_callgraph_audit_gap_ssa_disambig.md`).  These
         // synthetic refs are useful inside the file they were extracted
         // in (caller implicit-uses align with the synthetic Param) and
@@ -887,7 +887,7 @@ impl GlobalSummaries {
         // [`ssa_summary_fits_arity`] inside
         // [`reconcile_ssa_summary_key`], forcing a synthetic disambig
         // that uncouples the SSA FuncKey from the FuncSummary FuncKey
-        // — `summaries.get_ssa(caller_key)` (consuming
+        //, `summaries.get_ssa(caller_key)` (consuming
         // `typed_call_receivers` at the FuncSummary-aligned key) would
         // miss.
         //
@@ -895,7 +895,7 @@ impl GlobalSummaries {
         // arity):
         //
         // * **No existing entry, or existing entry also has out-of-range
-        //   refs** — keep the untrimmed summary at the original key,
+        //   refs**, keep the untrimmed summary at the original key,
         //   bypassing disambig synthesis. Resolution finds the entry
         //   under the FuncSummary's own disambig with its full
         //   per-param signal (closures, lambdas, captured-var sinks).  The "existing also
@@ -903,14 +903,14 @@ impl GlobalSummaries {
         //   case where round 2's incoming summary lands on top of round
         //   1's already-installed copy of the same function.
         //
-        // * **Existing entry fits arity (legit) but new doesn't** — fall
+        // * **Existing entry fits arity (legit) but new doesn't**, fall
         //   back to the disambig synthesis.  This preserves the
         //   `insert_ssa_arity_overflow_rekeys` invariant: a structurally
         //   incompatible incoming summary (different function sharing
         //   name + container + arity, with param refs at indices that
         //   don't even exist in the legitimate function) cannot
         //   dethrone the existing entry by silent overwrite.  Both
-        //   summaries survive — the existing one at the original key,
+        //   summaries survive, the existing one at the original key,
         //   the new one at the synthesised disambig.
         let key = if key.arity.is_some() && !ssa_summary_fits_arity(&summary, key.arity) {
             let existing_also_overflows = self
@@ -1008,7 +1008,7 @@ impl GlobalSummaries {
     }
 
     /// Count of cross-file bodies currently loaded.  Exposed for
-    /// `tracing::debug!` observability — lets callers distinguish "no
+    /// `tracing::debug!` observability, lets callers distinguish "no
     /// bodies available" from "bodies available but inline didn't fire".
     pub fn bodies_len(&self) -> usize {
         self.bodies_by_key.len()
@@ -1045,7 +1045,7 @@ impl GlobalSummaries {
     ///
     /// Returns `(source_caps, sanitizer_caps, sink_caps, propagating_params)`
     /// per key.  Used by the SCC fixed-point loop to detect when an iteration
-    /// has not changed any summary — i.e. convergence.
+    /// has not changed any summary, i.e. convergence.
     pub fn snapshot_caps(&self) -> HashMap<FuncKey, (u16, u16, u16, Vec<usize>)> {
         self.by_key
             .iter()
@@ -1091,7 +1091,7 @@ impl GlobalSummaries {
     ///    `(wildcard_prefix, name)` in the module index.  If across all
     ///    wildcards exactly one arity-filtered candidate appears → resolved.
     /// 3. Otherwise fall through to [`resolve_callee_key_with_container`]
-    ///    with no `container_hint` — meaning only the existing namespace /
+    ///    with no `container_hint`, meaning only the existing namespace /
     ///    arity disambiguation applies.
     ///
     /// A `None` use_map (non-Rust file or no `use` declarations) makes this
@@ -1193,7 +1193,7 @@ impl GlobalSummaries {
 
     /// Resolve a callee name with an optional container hint.
     ///
-    /// Legacy entry point — kept so tests and older callers compile
+    /// Legacy entry point, kept so tests and older callers compile
     /// unchanged.  `container_hint` is interpreted as a syntactic
     /// container qualifier (not an authoritative receiver type), so a
     /// miss is allowed to fall through to leaf-name lookup.  New
@@ -1225,35 +1225,35 @@ impl GlobalSummaries {
     /// **New resolution order** (qualified identity primary, leaf name
     /// fallback):
     ///
-    /// 1. **Receiver-type qualified** — if `receiver_type` is set,
+    /// 1. **Receiver-type qualified**, if `receiver_type` is set,
     ///    consult `by_lang_qualified[{receiver_type}::{name}]` with the
     ///    arity filter.  Exactly-one → resolved; same-namespace
     ///    tie-breaker if multiple.  *Receiver types are authoritative*:
     ///    a miss does not fall back to bare leaf lookup (that would be
     ///    a silent reinterpretation).
-    /// 2. **Namespace-qualifier qualified** — if `namespace_qualifier`
+    /// 2. **Namespace-qualifier qualified**, if `namespace_qualifier`
     ///    is set, try the qualified index with that container.
     ///    Non-authoritative: a miss falls through.
-    /// 3. **Caller-self-container** — when the caller lives inside a
+    /// 3. **Caller-self-container**, when the caller lives inside a
     ///    container (method body), try the qualified index against the
     ///    caller's own container.  Resolves bare `foo()` self-calls
     ///    inside a class without collapsing into an unrelated same-leaf
     ///    definition in another file.
-    /// 4. **Same-namespace unique leaf** — intra-file bare-leaf call:
+    /// 4. **Same-namespace unique leaf**, intra-file bare-leaf call:
     ///    if the caller's namespace contains exactly one arity-matched
     ///    candidate with this leaf, resolve to it.
-    /// 5. **Receiver-variable tie-break** — if the same-namespace
+    /// 5. **Receiver-variable tie-break**, if the same-namespace
     ///    lookup misses but the raw call came with a receiver variable,
     ///    try `{receiver_var}::{name}` as a last qualified attempt.
     ///
-    /// 5.5. **Bare-call free-function preference** — for a truly bare
+    /// 5.5. **Bare-call free-function preference**, for a truly bare
     ///      call (no receiver type, no namespace qualifier, no receiver
     ///      variable), if exactly one same-namespace arity-matched
     ///      candidate has an empty container, resolve to it.  A class
     ///      method cannot be invoked with bare-call syntax from outside
     ///      its class, so this disambiguation is safe even when same-name
     ///      methods exist elsewhere in the file.
-    /// 6. **Leaf-name fallback** — arity-filtered same-language lookup.
+    /// 6. **Leaf-name fallback**, arity-filtered same-language lookup.
     ///    Unique → resolved.  Multiple + we had any qualified hint →
     ///    Ambiguous (refuse to guess when a qualifier exists but
     ///    missed).  Multiple + no qualified hint → narrow by namespace,
@@ -1375,7 +1375,7 @@ impl GlobalSummaries {
         // outside its own class (intra-class self-calls were already
         // resolved by step 3).  When the same-namespace candidate set
         // contains exactly one empty-container entry, it is the
-        // unambiguous target — returning Ambiguous here would be a
+        // unambiguous target, returning Ambiguous here would be a
         // silent false negative whenever a top-level helper happens to
         // share a name with some method elsewhere in the file.
         let syntactic_bare = q.receiver_type.is_none()
@@ -1398,7 +1398,7 @@ impl GlobalSummaries {
         }
 
         // Multiple arity-matched candidates remain.  When a qualified
-        // hint was supplied but missed, refuse to guess — a silent
+        // hint was supplied but missed, refuse to guess, a silent
         // leaf-name pick would defeat the point of qualified-first
         // resolution.  (`receiver_type` is handled in Step 1 and never
         // reaches here; `namespace_qualifier` / `caller_container`
@@ -1407,7 +1407,7 @@ impl GlobalSummaries {
             return CalleeResolution::Ambiguous(arity_filtered.into_iter().cloned().collect());
         }
 
-        // No qualified hints whatsoever — tolerate namespace narrowing.
+        // No qualified hints whatsoever, tolerate namespace narrowing.
         match same_ns.len() {
             1 => CalleeResolution::Resolved(same_ns[0].clone()),
             0 => CalleeResolution::Ambiguous(arity_filtered.into_iter().cloned().collect()),
@@ -1416,11 +1416,11 @@ impl GlobalSummaries {
     }
 
     /// Install / refresh the type-hierarchy index from the currently
-    /// loaded summaries.  Idempotent — calling twice rebuilds.
+    /// loaded summaries.  Idempotent, calling twice rebuilds.
     ///
     /// Call this once after pass-1 merge (and again whenever
     /// summary state changes in a way that could affect virtual
-    /// dispatch — typically: after the call-graph is rebuilt mid-fixed-point).
+    /// dispatch, typically: after the call-graph is rebuilt mid-fixed-point).
     /// `merge()` automatically invalidates so a forgotten reinstall
     /// degrades to today's behaviour rather than a stale lookup.
     pub fn install_hierarchy(&mut self) {
@@ -1433,7 +1433,7 @@ impl GlobalSummaries {
         self.hierarchy.as_ref()
     }
 
-    /// Hard cap on hierarchy fan-out from a single call site — see
+    /// Hard cap on hierarchy fan-out from a single call site, see
     /// [`Self::resolve_callee_widened`] for rationale.  Public for tests
     /// that need to assert cap behaviour without hard-coding the value.
     pub const MAX_HIERARCHY_FANOUT: usize = 8;
@@ -1458,14 +1458,14 @@ impl GlobalSummaries {
     ///
     /// Hard cap: at most [`Self::MAX_HIERARCHY_FANOUT`] keys are
     /// returned.  When the cap fires, the cap-hit is logged at `debug`
-    /// and the tail impls are silently dropped — over-fanning is a
+    /// and the tail impls are silently dropped, over-fanning is a
     /// precision-tax knob, not a soundness one.
     ///
     /// Empty result + non-empty `subs` triggers a
     /// secondary fall-through to [`Self::resolve_callee`] so a
     /// type-fact misclassification (receiver typed as a super-class
     /// that has no method by this name on any sub) does not silently
-    /// regress to "no resolution at all" — the leaf-name path can still
+    /// regress to "no resolution at all", the leaf-name path can still
     /// pick up a match.  This preserves the
     /// "subset of today's targets, never a superset" rule under
     /// hierarchy-aware resolution failure.
@@ -1548,7 +1548,7 @@ impl GlobalSummaries {
             // Hierarchy widening produced nothing (e.g., none of the
             // recorded sub-types declare this method).  Fall back to
             // today's qualified-first resolver so the misclassified-
-            // type case still finds a leaf match — the same
+            // type case still finds a leaf match, the same
             // "preserve today's behaviour on miss" rule the call-graph
             // builder applies.
             return single_fallback();
@@ -1579,15 +1579,15 @@ impl std::fmt::Debug for GlobalSummaries {
 ///
 /// Comparison rules
 /// ────────────────
-/// * **`param_count` / `kind` / `container`** — unconditional agreement.
+/// * **`param_count` / `kind` / `container`**, unconditional agreement.
 ///   Any mismatch is a hard collision between distinct functions.
-/// * **`file_path`** — agree when both sides are populated.  A blank path
+/// * **`file_path`**, agree when both sides are populated.  A blank path
 ///   can come from synthetic summaries constructed in tests / interop
 ///   configs and should not force a split.
-/// * **`param_names`** — agree when both sides are populated.  Legacy
+/// * **`param_names`**, agree when both sides are populated.  Legacy
 ///   summaries may persist with empty names; treating empty as "unknown"
 ///   avoids gratuitous splits while still catching real divergence.
-/// * **`module_path`** — Rust-only.  Agreed when both sides are `Some`.
+/// * **`module_path`**, Rust-only.  Agreed when both sides are `Some`.
 ///   A missing module path on one side is legacy-compatible; two *distinct*
 ///   `Some` values mean the two summaries belong to different crates'
 ///   module trees.
@@ -1617,7 +1617,7 @@ pub(crate) fn summaries_compatible(a: &FuncSummary, b: &FuncSummary) -> bool {
 /// Derive a deterministic synthetic disambiguator from the
 /// identity-relevant fields of a `FuncSummary`.
 ///
-/// The top bit is **not** set here — the caller composes the final value
+/// The top bit is **not** set here, the caller composes the final value
 /// via `SYNTHETIC_DISAMBIG_BIT | (hash & !SYNTHETIC_DISAMBIG_BIT)` so that
 /// (a) the caller can safely bump the low bits to probe for a free slot,
 /// and (b) the synthetic namespace stays disjoint from byte-offset
@@ -1642,7 +1642,7 @@ pub(crate) fn synthesize_disambig(summary: &FuncSummary) -> u32 {
 /// `SsaFuncSummary` carries no explicit `param_count`; we approximate
 /// it via the maximum parameter index referenced by either summary.
 /// Two summaries are compatible when neither references a parameter
-/// index the other cannot — an upward compatibility check, so a refined
+/// index the other cannot, an upward compatibility check, so a refined
 /// summary that merely adds flows for previously-silent parameters is
 /// still considered compatible.
 fn ssa_summaries_compatible(

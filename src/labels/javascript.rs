@@ -36,7 +36,7 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     // `encodeURIComponent` percent-encodes every character outside the
-    // ASCII identifier alphabet, including `<`, `>`, `&`, `"`, `'` — so
+    // ASCII identifier alphabet, including `<`, `>`, `&`, `"`, `'`, so
     // the result is safe to embed in HTML text content and HTML
     // attribute values, not just URL components.  Treating it as
     // covering both URL_ENCODE and HTML_ESCAPE caps avoids FPs when a
@@ -92,7 +92,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::SHELL_ESCAPE),
         case_sensitive: false,
     },
-    // he library — HTML entity encoding
+    // he library, HTML entity encoding
     LabelRule {
         matchers: &["he.encode", "he.escape"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
@@ -148,16 +148,16 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: true,
     },
-    // ── Outbound HTTP clients — modeled as destination-aware gated sinks ──
+    // ── Outbound HTTP clients, modeled as destination-aware gated sinks ──
     // Flat-Sink modeling of fetch/axios/got/undici/http.request was producing
     // a dominant FP class where any tainted body/payload arg appeared as SSRF
     // (e.g. `fetch("/api/telemetry", { body: navigator.userAgent })`). SSRF
     // semantics require attacker control over the *destination*, not the
-    // payload. The gated entries in `GATED_SINKS` below narrow activation to
-    // URL / host / path / origin arguments or object fields. Taint flowing
-    // only to body / data / json / headers is no longer flagged as SSRF —
-    // cross-boundary data-exfiltration detection is a separate future
-    // capability (`Cap::DATA_EXFIL`, not yet introduced).
+    // payload.  The gated entries in `GATED_SINKS` below narrow SSRF
+    // activation to URL / host / path / origin arguments or object fields.
+    // Taint flowing only to body / data / json / headers is captured by a
+    // *separate* gate class (`Cap::DATA_EXFIL`) so the two can coexist on
+    // the same callee without one over-flagging the other.
     // Express response sinks
     LabelRule {
         matchers: &["res.send", "res.json"],
@@ -220,6 +220,21 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["net.createConnection"],
         label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+    },
+    // ── Cross-boundary data exfiltration (DATA_EXFIL) ─────────────────────
+    //
+    // `XMLHttpRequest.prototype.send(body)`, when the receiver type is
+    // tracked back to `new XMLHttpRequest()`, the SSA engine's type-qualified
+    // resolver converts `xhr.send` to `HttpClient.send`; matching that form
+    // fires DATA_EXFIL on tainted body flow.  The explicit
+    // `XMLHttpRequest.prototype.send.apply(...)` form is also covered.  The
+    // `fetch` body / headers / json case is covered by the gated entry in
+    // `GATED_SINKS` (so SSRF on the URL and DATA_EXFIL on the payload can
+    // coexist on a single call site).
+    LabelRule {
+        matchers: &["HttpClient.send", "XMLHttpRequest.prototype.send"],
+        label: DataLabel::Sink(Cap::DATA_EXFIL),
         case_sensitive: false,
     },
     // ─────────── SQL injection sinks ─────────────
@@ -314,7 +329,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
     // only to body / data / json / headers / payload is silenced. See the
     // commentary at the top of RULES for the rationale.
     //
-    // `fetch(input, init)` — arg 0 can be a URL string OR a Request/config
+    // `fetch(input, init)`, arg 0 can be a URL string OR a Request/config
     // object with `url`. Per WHATWG Fetch, when `input` is a dictionary, the
     // URL field is canonically `url`. Init-object body/headers at arg 1 are
     // *not* destination-bearing.
@@ -332,7 +347,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
             object_destination_fields: &["url"],
         },
     },
-    // `axios(config)` / `axios.request(config)` — config object exposes
+    // `axios(config)` / `axios.request(config)`, config object exposes
     // `url` and `baseURL`. Body-ish fields (`data`, `params`, `headers`)
     // are excluded.
     SinkGate {
@@ -363,7 +378,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
             object_destination_fields: &["url", "baseURL"],
         },
     },
-    // `axios.get(url[, config])` — arg 0 is URL; arg 1 is config.
+    // `axios.get(url[, config])`, arg 0 is URL; arg 1 is config.
     SinkGate {
         callee_matcher: "axios.get",
         arg_index: 0,
@@ -378,7 +393,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
             object_destination_fields: &[],
         },
     },
-    // `axios.post(url, data[, config])` — arg 0 is URL; `data` at arg 1 is
+    // `axios.post(url, data[, config])`, arg 0 is URL; `data` at arg 1 is
     // the request body and must NOT activate SSRF.
     SinkGate {
         callee_matcher: "axios.post",
@@ -394,7 +409,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
             object_destination_fields: &[],
         },
     },
-    // `axios.put / axios.patch / axios.delete` follow the same shape —
+    // `axios.put / axios.patch / axios.delete` follow the same shape ,
     // (url, data?, config?). Keep the model consistent across verbs.
     SinkGate {
         callee_matcher: "axios.put",
@@ -438,7 +453,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
             object_destination_fields: &[],
         },
     },
-    // `got(url[, options])` / `got(options)` — options exposes `url` and
+    // `got(url[, options])` / `got(options)`, options exposes `url` and
     // `prefixUrl`. Body-ish fields (`body`, `json`, `form`, `searchParams`,
     // `headers`) are excluded.
     SinkGate {
@@ -455,7 +470,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
             object_destination_fields: &["url", "prefixUrl"],
         },
     },
-    // `undici.request(url | opts[, opts])` — opts exposes `origin` and
+    // `undici.request(url | opts[, opts])`, opts exposes `origin` and
     // `path`. Body-ish fields (`body`, `headers`) are excluded.
     SinkGate {
         callee_matcher: "undici.request",
@@ -471,11 +486,11 @@ pub static GATED_SINKS: &[SinkGate] = &[
             object_destination_fields: &["origin", "path"],
         },
     },
-    // Node `http.request(options[, cb])` / `https.request(options[, cb])` —
+    // Node `http.request(options[, cb])` / `https.request(options[, cb])` ,
     // options exposes `host`, `hostname`, `path`, `protocol`, `port`,
     // `origin`. Body is sent via `.write()`/`.end()` on the returned
     // ClientRequest, so it never appears as a positional arg here.
-    // Arg 0 may also be a URL string — the "whole arg is destination"
+    // Arg 0 may also be a URL string, the "whole arg is destination"
     // fallback (triggered when arg 0 is not an object literal) covers that.
     SinkGate {
         callee_matcher: "http.request",
@@ -505,7 +520,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
             object_destination_fields: &["host", "hostname", "path", "protocol", "port", "origin"],
         },
     },
-    // Node `http.get(options[, cb])` / `https.get(options[, cb])` —
+    // Node `http.get(options[, cb])` / `https.get(options[, cb])` ,
     // convenience wrappers around `.request()` that auto-call `.end()`.
     // Same destination semantics as `.request`. Motivated by
     // CVE-2025-64430 (Parse Server SSRF via http.get(uri)).
@@ -535,6 +550,31 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_kwargs: &[],
         activation: GateActivation::Destination {
             object_destination_fields: &["host", "hostname", "path", "protocol", "port", "origin"],
+        },
+    },
+    // ── Cross-boundary data exfiltration ──────────────────────────────────
+    //
+    // Sensitive data flowing into the *payload* of an outbound request is a
+    // distinct vulnerability class from SSRF: the destination is fixed but
+    // attacker-influenced bytes leave the process via the request body /
+    // headers / json field.  These gates fire on the body-bearing positions
+    // and emit `Cap::DATA_EXFIL`, which is intentionally separate from
+    // `Cap::SSRF` so a `fetch(taintedUrl, {body: tainted})` site reports
+    // both classes independently.
+    //
+    // `fetch(input, init)`, `init` at arg 1 carries body / headers / json.
+    SinkGate {
+        callee_matcher: "fetch",
+        arg_index: 1,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::DATA_EXFIL),
+        case_sensitive: false,
+        payload_args: &[1],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["body", "headers", "json"],
         },
     },
 ];

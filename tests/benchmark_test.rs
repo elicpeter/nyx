@@ -191,7 +191,7 @@ struct BenchmarkResults {
 // ── Scanning ─────────────────────────────────────────────────────────
 
 fn scan_corpus_file(corpus_root: &Path, relative_path: &str) -> Vec<Diag> {
-    // `cve_corpus/*` cases live in a sibling of `corpus/` — see
+    // `cve_corpus/*` cases live in a sibling of `corpus/`, see
     // `tests/benchmark/cve_corpus/`.
     let source = if relative_path.starts_with("cve_corpus/") {
         corpus_root
@@ -679,7 +679,7 @@ fn benchmark_evaluation() {
     // on this corpus, so 5pp is generous enough to absorb honest
     // FP↔TN trades while still catching a real regression in a
     // vulnerability class.  When you land a durable, measurable
-    // improvement, tighten these floors — do not relax them to paper
+    // improvement, tighten these floors, do not relax them to paper
     // over a regression.
     let rule = &results.aggregate_rule_level;
     assert!(
@@ -790,7 +790,7 @@ fn score_rule_level_with_diags(
 
 fn sha256_hex(data: &[u8]) -> String {
     use std::io::Write;
-    // Simple SHA-256 via command — avoids adding a crypto dependency.
+    // Simple SHA-256 via command, avoids adding a crypto dependency.
     let mut child = std::process::Command::new("shasum")
         .args(["-a", "256"])
         .stdin(std::process::Stdio::piped())

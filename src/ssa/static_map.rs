@@ -12,7 +12,7 @@
 //! where every insert's *value* slot is a syntactic string literal and the
 //! final lookup is dereffed via a literal fallback (`.unwrap_or(LIT)`).  The
 //! result `cmd` is then provably bounded to the finite set
-//! `{V1, V2, …, "safe"}`, regardless of what `k` carries — taint-flavour or
+//! `{V1, V2, …, "safe"}`, regardless of what `k` carries, taint-flavour or
 //! otherwise.  Downstream sink suppression consumes this finite set to
 //! clear SHELL/FILE/SQL injection findings whose payload is proved to be
 //! metacharacter-free.
@@ -24,7 +24,7 @@
 //! (e.g. `"table.get(key).copied().unwrap_or"` for `table.get(key).copied()
 //! .unwrap_or("safe")`) and whose `receiver` is the root identifier's SSA
 //! value.  We therefore do not need to walk SSA `.copied()` / `.unwrap_or`
-//! instructions as separate hops — pattern-matching on the callee text is
+//! instructions as separate hops, pattern-matching on the callee text is
 //! the source of truth.  String-literal arguments that the callee text
 //! elides (e.g. the fallback `"safe"`) are read from the CFG node's
 //! `arg_string_literals`, populated during CFG construction.
@@ -33,7 +33,7 @@
 //! literal-valued inserts, no escape beyond recognised mutate/read methods.
 //! Any deviation (dynamic insert, callee not in the allow-list, map used as
 //! a plain argument, map returned, map joined across a phi) invalidates the
-//! candidate.  Missed detection is safe — it just falls through to existing
+//! candidate.  Missed detection is safe, it just falls through to existing
 //! behaviour.
 
 use std::collections::{HashMap, HashSet};
@@ -73,15 +73,15 @@ fn is_rust_map_constructor(callee: &str) -> bool {
 /// Classification of a Call whose receiver is a candidate map.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum MapUse {
-    /// `{var}.insert(K, V)` — value contributes to the finite domain.
+    /// `{var}.insert(K, V)`, value contributes to the finite domain.
     Insert,
     /// `{var}.get(K)[.copied()|.cloned()|.as_deref()|.as_ref()]*.unwrap_or`
-    /// — lookup result is bounded by the inserted values plus the fallback
+    ///, lookup result is bounded by the inserted values plus the fallback
     /// literal on the CFG node.
     StaticLookup,
     /// Whitelisted read-only method (no reference leak).
     ReadOnly,
-    /// Anything else — invalidates the map candidate.
+    /// Anything else, invalidates the map candidate.
     Escape,
 }
 
@@ -138,7 +138,7 @@ fn scan_past_balanced_parens(s: &str) -> Option<&str> {
 /// Return `true` when `s` is a sequence of zero or more identity chain
 /// methods (`.copied()`, `.cloned()`, `.as_deref()`, `.as_ref()`) followed
 /// by `.unwrap_or` (and nothing else).  The trailing arg list of
-/// `.unwrap_or` is elided in the callee text — it appears in the CFG node's
+/// `.unwrap_or` is elided in the callee text, it appears in the CFG node's
 /// `arg_string_literals` instead.
 fn is_identity_chain_ending_in_unwrap_or(mut s: &str) -> bool {
     const IDENTS: &[&str] = &[".copied()", ".cloned()", ".as_deref()", ".as_ref()"];
@@ -171,7 +171,7 @@ fn resolve_alias(v: SsaValue, aliases: &HashMap<SsaValue, SsaValue>) -> SsaValue
     cur
 }
 
-/// Run the analysis.  Bails out immediately for non-Rust bodies — the current
+/// Run the analysis.  Bails out immediately for non-Rust bodies, the current
 /// pattern set only models Rust `std::collections::HashMap`.
 pub fn analyze(
     body: &SsaBody,
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn classify_static_lookup_without_identity_chain() {
-        // `.unwrap_or` directly after `.get(...)` also qualifies — Rust
+        // `.unwrap_or` directly after `.get(...)` also qualifies, Rust
         // `HashMap::get` returns `Option<&V>`, so `.unwrap_or(&"safe")` is
         // syntactically valid and equally bounded.
         assert_eq!(
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn classify_rejects_unknown_terminator() {
-        // `.unwrap_or_else(|| …)` is not modelled — closure can return anything.
+        // `.unwrap_or_else(|| …)` is not modelled, closure can return anything.
         assert_eq!(
             classify_map_use("t.get(k).copied().unwrap_or_else", "t"),
             MapUse::Escape
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn classify_rejects_other_receiver() {
-        // `other.insert` does not belong to `table` — receiver mismatch.
+        // `other.insert` does not belong to `table`, receiver mismatch.
         assert_eq!(classify_map_use("other.insert", "table"), MapUse::Escape);
     }
 

@@ -45,7 +45,7 @@ pub fn is_enabled() -> bool {
 
 /// Per-SSA-value abstract element: product of all subdomains.
 ///
-/// Each subdomain is independent — join, meet, widen, and leq are applied
+/// Each subdomain is independent, join, meet, widen, and leq are applied
 /// component-wise. Adding a new subdomain requires adding a field here
 /// and updating the component-wise implementations.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,15 +182,15 @@ pub const MAX_LITERAL_PREFIX_LEN: usize = 64;
 /// restricted so the summary size stays constant regardless of callee body
 /// complexity:
 ///
-/// * [`IntervalTransfer::Top`] — no interval knowledge crosses (default).
-/// * [`IntervalTransfer::Identity`] — return = param (pass-through).
-/// * [`IntervalTransfer::Affine`] — return = param * `mul` + `add` with
+/// * [`IntervalTransfer::Top`], no interval knowledge crosses (default).
+/// * [`IntervalTransfer::Identity`], return = param (pass-through).
+/// * [`IntervalTransfer::Affine`], return = param * `mul` + `add` with
 ///   `i64` constants; overflow defaults to Top at apply time.
-/// * [`IntervalTransfer::Clamped`] — return is always in `[lo, hi]` regardless
+/// * [`IntervalTransfer::Clamped`], return is always in `[lo, hi]` regardless
 ///   of input.  Captures callee-intrinsic bounds (e.g. `saturating` ops).
 ///
 /// No unbounded expression trees, no nesting.  A callee whose behaviour does
-/// not fit one of these forms falls back to `Top` — we never try to encode
+/// not fit one of these forms falls back to `Top`, we never try to encode
 /// richer algebra in the summary.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum IntervalTransfer {
@@ -247,9 +247,9 @@ impl IntervalTransfer {
 /// Mirrors [`IntervalTransfer`] for the string subdomain.  Bounded by
 /// [`MAX_LITERAL_PREFIX_LEN`] to keep summary size constant.
 ///
-/// * [`StringTransfer::Unknown`] — default.
-/// * [`StringTransfer::Identity`] — return = param.
-/// * [`StringTransfer::LiteralPrefix`] — return has this literal prefix
+/// * [`StringTransfer::Unknown`], default.
+/// * [`StringTransfer::Identity`], return = param.
+/// * [`StringTransfer::LiteralPrefix`], return has this literal prefix
 ///   regardless of input (callee-intrinsic).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum StringTransfer {
@@ -325,7 +325,7 @@ impl StringTransfer {
 /// caller's knowledge of each argument, without having to re-run the callee.
 ///
 /// Composition rule: `apply(input) = (interval.apply, string.apply,
-/// bits=top)`.  The bit domain is always Top — we do not track cross-file
+/// bits=top)`.  The bit domain is always Top, we do not track cross-file
 /// bit transfers.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct AbstractTransfer {
@@ -351,7 +351,7 @@ impl AbstractTransfer {
         Self::default()
     }
 
-    /// True when neither subdomain carries any information — equivalent to
+    /// True when neither subdomain carries any information, equivalent to
     /// "omit this entry entirely".
     pub fn is_top(&self) -> bool {
         is_interval_top(&self.interval) && is_string_unknown(&self.string)
@@ -410,7 +410,7 @@ impl AbstractState {
     /// Set abstract value for an SSA value. Drops Top values to save space.
     pub fn set(&mut self, v: SsaValue, val: AbstractValue) {
         if val.is_top() {
-            // Don't store Top — it's the default
+            // Don't store Top, it's the default
             if let Ok(idx) = self.values.binary_search_by_key(&v, |(id, _)| *id) {
                 self.values.remove(idx);
             }
@@ -422,7 +422,7 @@ impl AbstractState {
                 if self.values.len() < MAX_ABSTRACT_VALUES {
                     self.values.insert(idx, (v, val));
                 }
-                // Over budget: silently drop (conservative — defaults to Top)
+                // Over budget: silently drop (conservative, defaults to Top)
             }
         }
     }

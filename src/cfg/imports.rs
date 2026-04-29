@@ -12,7 +12,7 @@ use tree_sitter::{Node, Tree};
 /// - ES6: `import { A as B } from 'mod'` → B → ImportBinding { original: A, module: mod }
 /// - CommonJS: `const { A: B } = require('mod')` → B → ImportBinding { original: A, module: mod }
 ///
-/// Only aliased (renamed) bindings are recorded — same-name imports (e.g.
+/// Only aliased (renamed) bindings are recorded, same-name imports (e.g.
 /// `import { exec }`) are already resolvable by their original name.
 pub(super) fn extract_import_bindings(tree: &Tree, code: &[u8]) -> ImportBindings {
     let mut bindings = ImportBindings::new();
@@ -149,7 +149,7 @@ pub(super) fn extract_import_bindings(tree: &Tree, code: &[u8]) -> ImportBinding
                         continue;
                     }
                     // The alias is accessed via the "alias" field (a `name` node).
-                    // The qualified name has no field — find it by kind.
+                    // The qualified name has no field, find it by kind.
                     let alias_node = clause.child_by_field_name("alias");
                     let mut c2 = clause.walk();
                     let qname_node = clause

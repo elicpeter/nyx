@@ -14,7 +14,7 @@ use smallvec::SmallVec;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ContainerOp {
     /// Taint flows from the listed argument positions into the receiver
-    /// container (e.g. `arr.push(val)` — val taint merges into arr).
+    /// container (e.g. `arr.push(val)`, val taint merges into arr).
     ///
     /// `index_arg`: when `Some(pos)`, the argument at that logical position
     /// is the container index/key.  If constant-propagation proves it a
@@ -27,11 +27,11 @@ pub enum ContainerOp {
     /// Taint flows from the receiver container to the call's return value
     /// (e.g. `arr.pop()`, `items.join('')`).
     ///
-    /// `index_arg`: same semantics as `Store::index_arg` — when present and
+    /// `index_arg`: same semantics as `Store::index_arg`, when present and
     /// provably constant, loads from `HeapSlot::Index(n)`.
     Load { index_arg: Option<usize> },
     /// Taint flows from the receiver container into the argument at
-    /// `dest_arg` — i.e. the "writeback" pattern where a method writes its
+    /// `dest_arg`, i.e. the "writeback" pattern where a method writes its
     /// decoded/loaded value into a caller-supplied destination rather than
     /// returning it. Used for the Go `*.Decode(&dest)` family
     /// (`json.Decoder.Decode`, `xml.Decoder.Decode`, `gob.Decoder.Decode`),
@@ -121,13 +121,13 @@ fn classify_js(method: &str) -> Option<ContainerOp> {
     match method {
         // Array store
         "push" | "unshift" => store(0),
-        // Map/Set store: map.set(key, value) — key at 0, value at 1
+        // Map/Set store: map.set(key, value), key at 0, value at 1
         "set" => store_indexed(1, 0),
         "add" => store(0), // set.add(value)
         // Array/Map load
         "pop" | "shift" => load(),
         "join" | "flat" | "concat" | "slice" | "toString" => load(),
-        // map.get(key) — key at 0
+        // map.get(key), key at 0
         "get" => load_indexed(0),
         "values" | "keys" | "entries" => load(),
         //synthetic callees emitted by CFG
@@ -142,7 +142,7 @@ fn classify_python(method: &str) -> Option<ContainerOp> {
     match method {
         // List store
         "append" | "extend" => store(0),
-        "insert" => store_indexed(1, 0), // list.insert(index, value) — index at 0, value at 1
+        "insert" => store_indexed(1, 0), // list.insert(index, value), index at 0, value at 1
         // Set store
         "add" => store(0),
         // Dict store
@@ -150,7 +150,7 @@ fn classify_python(method: &str) -> Option<ContainerOp> {
         "setdefault" => store2(0, 1), // dict.setdefault(key, default)
         // List/Dict load
         "pop" => load(),
-        "get" => load_indexed(0), // dict.get(key) / list index — key/index at 0
+        "get" => load_indexed(0), // dict.get(key) / list index, key/index at 0
         "items" | "values" | "keys" => load(),
         "join" => load(),
         //synthetic callees emitted by CFG
@@ -165,11 +165,11 @@ fn classify_java(method: &str) -> Option<ContainerOp> {
     match method {
         // Collection store
         "add" | "addAll" | "putAll" | "offer" | "push" => store(0),
-        // ArrayList.set(index, value) — index at 0, value at 1
+        // ArrayList.set(index, value), index at 0, value at 1
         "set" => store_indexed(1, 0),
-        // Map.put(key, value) — key at 0, value at 1
+        // Map.put(key, value), key at 0, value at 1
         "put" => store_indexed(1, 0),
-        // Collection load: ArrayList.get(index) — index at 0
+        // Collection load: ArrayList.get(index), index at 0
         "get" => load_indexed(0),
         "poll" | "peek" | "remove" | "pop" => load(),
         "stream" | "toArray" | "iterator" => load(),
@@ -222,7 +222,7 @@ fn classify_ruby(method: &str) -> Option<ContainerOp> {
 
 fn classify_php(method: &str) -> Option<ContainerOp> {
     match method {
-        "array_push" => store(1), // array_push(&$arr, $val) — arr is arg 0, val is arg 1
+        "array_push" => store(1), // array_push(&$arr, $val), arr is arg 0, val is arg 1
         "array_pop" | "array_shift" | "current" | "next" | "reset" => load(),
         _ => None,
     }
@@ -232,11 +232,11 @@ fn classify_cpp(method: &str) -> Option<ContainerOp> {
     match method {
         // Mutating container operations.
         // `assign` overwrites the container's contents with the argument
-        // sequence — modeled as Store so the receiver inherits the argument
+        // sequence, modeled as Store so the receiver inherits the argument
         // taint, matching the runtime "the values now live inside this
         // container" semantics shared with `push_back`/`emplace_back`.
         "push_back" | "emplace_back" | "insert" | "emplace" | "push" | "assign" => store(0),
-        // Map/unordered_map insertion: `m.insert_or_assign(k, v)` — value at 1.
+        // Map/unordered_map insertion: `m.insert_or_assign(k, v)`, value at 1.
         "insert_or_assign" => store_indexed(1, 0),
         // Read-only container observers.  `find`/`count` return iterators or
         // counts that carry the container's value taint when queried with a
@@ -255,7 +255,7 @@ fn classify_rust(method: &str) -> Option<ContainerOp> {
     match method {
         "push" | "insert" | "extend" => store(0),
         "pop" | "first" | "last" | "iter" | "remove" => load(),
-        // vec.get(index) — index at 0
+        // vec.get(index), index at 0
         "get" => load_indexed(0),
         _ => None,
     }
@@ -304,7 +304,7 @@ mod tests {
     }
 
     // CVE Hunt Session 2 (Owncast CVE-2023-3188 / CVE-2024-31450 family):
-    // Go `*.Decode(&dest)` is the canonical streaming-decoder writeback —
+    // Go `*.Decode(&dest)` is the canonical streaming-decoder writeback ,
     // `json.NewDecoder(r.Body).Decode(&dest)`, `xml.NewDecoder(r).Decode(&out)`,
     // `gob.NewDecoder(buf).Decode(&v)`. The decoder receiver carries the
     // source taint and the destination is arg 0; the writeback rule is the
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn cpp_assign_is_store() {
-        // vector::assign(args) overwrites the container's contents — the
+        // vector::assign(args) overwrites the container's contents, the
         // receiver inherits argument taint just like push_back.
         let op = classify_container_op("v.assign", Lang::Cpp);
         assert!(matches!(op, Some(ContainerOp::Store { .. })));
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn cpp_insert_or_assign_indexes_value() {
-        // map::insert_or_assign(key, value) — value is at arg 1, key at arg 0.
+        // map::insert_or_assign(key, value), value is at arg 1, key at arg 0.
         match classify_container_op("m.insert_or_assign", Lang::Cpp) {
             Some(ContainerOp::Store {
                 value_args,
@@ -456,7 +456,7 @@ mod tests {
     }
 
     /// W5: synthetic `__index_get__` is recognised as an indexed load
-    /// in JS/TS, Python, and Go — driving the index_arg=0 path so a
+    /// in JS/TS, Python, and Go, driving the index_arg=0 path so a
     /// constant-key subscript read flows through `HeapSlot::Index(n)`.
     #[test]
     fn synth_index_get_classified_as_indexed_load_js_py_go() {
@@ -471,7 +471,7 @@ mod tests {
     }
 
     /// W5: synthetic `__index_set__` is recognised as an indexed store
-    /// in JS/TS, Python, and Go — value at arg 1, index at arg 0.
+    /// in JS/TS, Python, and Go, value at arg 1, index at arg 0.
     #[test]
     fn synth_index_set_classified_as_indexed_store_js_py_go() {
         for lang in [Lang::JavaScript, Lang::TypeScript, Lang::Python, Lang::Go] {

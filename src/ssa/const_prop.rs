@@ -17,7 +17,7 @@ pub enum ConstLattice {
     Bool(bool),
     /// Null / nil / None.
     Null,
-    /// Multiple possible values — not constant.
+    /// Multiple possible values, not constant.
     Varying,
 }
 
@@ -70,7 +70,7 @@ impl ConstLattice {
             return ConstLattice::Str(inner.to_string());
         }
 
-        // Bare string (no quotes) — treat as string constant
+        // Bare string (no quotes), treat as string constant
         ConstLattice::Str(trimmed.to_string())
     }
 
@@ -283,7 +283,7 @@ fn eval_inst(inst: &SsaInst, values: &HashMap<SsaValue, ConstLattice>) -> ConstL
         | SsaOp::SelfParam
         | SsaOp::CatchParam => ConstLattice::Varying,
         // FieldProj: projecting a field is dynamic with respect to the
-        // const-propagation lattice — there is no general way to fold
+        // const-propagation lattice, there is no general way to fold
         // `obj.field` to a known scalar at this phase.  Returning Varying
         // matches Call: callers needing field-level constness will go
         // through the points-to / heap analysis.
@@ -452,7 +452,7 @@ fn mark_edge_executable(
         if executable_blocks.insert(to) {
             cfg_worklist.push_back(to);
         } else {
-            // Block already executable but new edge — re-evaluate phis
+            // Block already executable but new edge, re-evaluate phis
             cfg_worklist.push_back(to);
         }
     }
@@ -863,7 +863,7 @@ mod tests {
 
     /// Const parsing must round-trip integer signs. i64::MIN/MAX must
     /// parse without overflow; arbitrary text falls back to a bare-string
-    /// const (current contract — tested here so a future change is
+    /// const (current contract, tested here so a future change is
     /// caught explicitly).
     #[test]
     fn const_parse_extremes_and_fallback() {

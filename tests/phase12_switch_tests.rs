@@ -1,11 +1,11 @@
 //! Switch-lowering fixture coverage.
 //!
-//! * `large_switch_go` — Go switch with 6+ mutually exclusive cases
+//! * `large_switch_go`, Go switch with 6+ mutually exclusive cases
 //!   dispatching to distinct sinks. Exercises multi-case taint flow;
 //!   succeeds regardless of whether SSA lowering emits
 //!   `Terminator::Switch` or the legacy cascade of `Branch` headers.
 //!
-//! * `switch_fall_through_c` — C switch with explicit fall-through,
+//! * `switch_fall_through_c`, C switch with explicit fall-through,
 //!   regression-guarding the cascade-preserving lowering for languages
 //!   whose switch semantics allow cases to be non-exclusive.
 

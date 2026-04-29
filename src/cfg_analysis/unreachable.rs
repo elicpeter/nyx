@@ -26,7 +26,7 @@ fn event_handler_callbacks(ctx: &AnalysisContext) -> HashSet<String> {
                 .iter()
                 .any(|h| callee_lower.ends_with(&h.to_ascii_lowercase()));
             if is_handler {
-                // The callback function is typically used within the call — any function
+                // The callback function is typically used within the call, any function
                 // that appears as `uses` of this call node is a potential callback.
                 for u in &info.taint.uses {
                     callbacks.insert(u.clone());
@@ -113,7 +113,7 @@ impl CfgAnalysis for UnreachableCode {
                         Severity::Medium,
                     )
                 } else {
-                    // Plain unreachable code — low severity
+                    // Plain unreachable code, low severity
                     continue;
                 }
             };

@@ -3,7 +3,7 @@
 // `request`, `ctx`, `body`, `path`).  Before the
 // `collect_param_names` Rust-parameter arm, the recursive default arm
 // pulled `std`, `path`, `Path` out of `dst: &std::path::Path` and
-// pushed them into `unit.params` — `path` then matched the
+// pushed them into `unit.params`, `path` then matched the
 // framework-name list and gated `unit_has_user_input_evidence` open,
 // firing `missing_ownership_check` at every id-shaped operation in
 // the body.

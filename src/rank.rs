@@ -97,14 +97,14 @@ pub fn compute_attack_rank(diag: &Diag) -> AttackRank {
     // direction of precision loss is classified by
     // `EngineNote::direction()` and drives a bounded penalty:
     //
-    //   * `Bail`        — analysis aborted on this body → -8.0
-    //   * `OverReport`  — widening may have produced a false positive → -8.0
-    //   * `UnderReport` — fixpoint was cut short but this finding is
+    //   * `Bail`       , analysis aborted on this body → -8.0
+    //   * `OverReport` , widening may have produced a false positive → -8.0
+    //   * `UnderReport`, fixpoint was cut short but this finding is
     //                     still a real flow → -3.0
-    //   * `Informational` — no penalty (cache reuse etc.)
+    //   * `Informational`, no penalty (cache reuse etc.)
     //
-    // The penalty is the *worst* direction across all attached notes —
-    // not additive — so a body with ten `OriginsTruncated` notes is not
+    // The penalty is the *worst* direction across all attached notes ,
+    // not additive, so a body with ten `OriginsTruncated` notes is not
     // ranked below a body with one `ParseTimeout`.  Magnitudes are
     // chosen so that `High + capped` (60 − 8 = 52) still exceeds
     // `Medium + taint + UserInput` (30 + 10 + 6 = 46), preserving the
@@ -125,7 +125,7 @@ pub fn compute_attack_rank(diag: &Diag) -> AttackRank {
 ///
 /// `None` when the finding has no evidence struct, no engine notes, or
 /// only informational notes.  Uses `worst_direction` so the penalty is
-/// the single most credibility-damaging direction present — adding more
+/// the single most credibility-damaging direction present, adding more
 /// notes of the same direction does not compound the penalty.
 struct CompletenessPenalty {
     value: f64,
@@ -289,16 +289,16 @@ fn source_kind_priority(source_value: &str) -> f64 {
         // Strong user-input signals
         6.0
     } else if lower.contains("env") || lower.contains("var(") || lower.contains("getenv") {
-        // Environment / config — still attacker-controllable in many deployments
+        // Environment / config, still attacker-controllable in many deployments
         5.0
     } else if lower.contains("read") || lower.contains("file") || lower.contains("open") {
-        // File system — needs indirect vector
+        // File system, needs indirect vector
         3.0
     } else if lower.contains("query") || lower.contains("fetch") || lower.contains("select") {
-        // Database — needs prior injection
+        // Database, needs prior injection
         2.0
     } else {
-        // Unknown / unrecognised — treat as moderately exploitable
+        // Unknown / unrecognised, treat as moderately exploitable
         4.0
     }
 }
@@ -931,7 +931,7 @@ mod tests {
 
     #[test]
     fn completeness_penalty_is_not_additive_across_notes() {
-        // Ten OriginsTruncated notes must produce the same penalty as one —
+        // Ten OriginsTruncated notes must produce the same penalty as one ,
         // the penalty reflects the worst direction, not a count.
         let mut d_many = clean_diag_with_evidence();
         let many = (0..10)

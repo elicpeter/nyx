@@ -4,7 +4,7 @@
 //! body's exit state (filtered to top-level keys) back into the shared
 //! seed and re-runs non-toplevel bodies with the enlarged seed.  The
 //! hardcoded cap of `3` that used to live in `analyse_file` silently
-//! truncated any file whose convergence required 4+ rounds — this
+//! truncated any file whose convergence required 4+ rounds, this
 //! phase lifts the cap to [`JS_TS_PASS2_SAFETY_CAP`] (64), adds an
 //! observability counter, and tags cap-hit findings with
 //! [`EngineNote::InFileFixpointCapped`].
@@ -30,7 +30,7 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
 
 /// Serialize any test that mutates the pass-2 cap override or reads
 /// `last_js_ts_pass2_iterations()`. The override is a process-wide
-/// `AtomicUsize` and `cargo test` runs tests in parallel by default —
+/// `AtomicUsize` and `cargo test` runs tests in parallel by default ,
 /// without this guard, one test's override leaks into another's scan.
 static PASS2_TEST_GUARD: Mutex<()> = Mutex::new(());
 
@@ -73,7 +73,7 @@ fn js_ts_pass2_deep_chain_emits_transitive_finding() {
 /// Override plumbing: verify that `set_js_ts_pass2_cap_override` binds
 /// the effective cap and that restoring the default clears cleanly.
 ///
-/// We use a cap of 1 (meaning `rounds == 0` — the pass-2 loop does not
+/// We use a cap of 1 (meaning `rounds == 0`, the pass-2 loop does not
 /// enter).  This is the sharpest possible override and exercises the
 /// "cap bound to minimum" code path.  The counter must then fall back
 /// to the pass-1-only value of `1`.
@@ -82,7 +82,7 @@ fn js_ts_pass2_cap_override_binds_effective_cap() {
     let _guard = PASS2_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     let dir = fixture_path("js_ts_pass2_deep_chain");
 
-    // First scan with the cap forced to 1 — the pass-2 loop does not
+    // First scan with the cap forced to 1, the pass-2 loop does not
     // enter at all (`max_iterations.saturating_sub(1) == 0`).  The
     // counter must report exactly `1` (the sentinel for "pass-1
     // containment ran, no pass-2 iterations").
@@ -120,7 +120,7 @@ fn js_ts_pass2_cap_override_binds_effective_cap() {
 /// identify potentially-imprecise results.  The deep-chain fixture's
 /// pass-2 seed actually grows between rounds (`seed_handler` publishes
 /// `globalG1` to other bodies), so forcing the cap to `2` binds the
-/// loop at a single round — the seed grew, no convergence was
+/// loop at a single round, the seed grew, no convergence was
 /// detected, and the note path fires.
 #[test]
 fn js_ts_pass2_cap_hit_emits_engine_note() {
@@ -130,7 +130,7 @@ fn js_ts_pass2_cap_hit_emits_engine_note() {
 
     // cap=2 → max_iterations=2, rounds=1.  Round 0 combines
     // `seed_handler`'s exit (which includes `globalG1`) into the
-    // seed — the seed grows from empty to 1 entry, so the
+    // seed, the seed grows from empty to 1 entry, so the
     // convergence-equality branch does not fire.  Loop exits with
     // `converged_early = false`, note emission triggers.
     set_js_ts_pass2_cap_override(2);

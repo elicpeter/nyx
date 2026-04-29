@@ -132,7 +132,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::CODE_EXEC),
         case_sensitive: false,
     },
-    // Jinja2 / string.Template — tainted template string enables SSTI
+    // Jinja2 / string.Template, tainted template string enables SSTI
     LabelRule {
         matchers: &["Template"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
@@ -154,7 +154,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
-    // Flask Markup — bypasses auto-escaping
+    // Flask Markup, bypasses auto-escaping
     LabelRule {
         matchers: &["Markup"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
@@ -229,7 +229,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
-    // aiohttp HTTP client — SSRF sinks
+    // aiohttp HTTP client, SSRF sinks
     LabelRule {
         matchers: &[
             "aiohttp.get",
@@ -293,7 +293,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_kwargs: &[],
         activation: GateActivation::ValueMatch,
     },
-    // subprocess.run(cmd, shell=True) — multi-kwarg gate using the new
+    // subprocess.run(cmd, shell=True), multi-kwarg gate using the new
     // presence-aware mechanism.  Payload is arg 1 (after receiver offset
     // applied by the CFG layer when the call is modelled method-style).
     SinkGate {
@@ -398,7 +398,7 @@ pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
     let mut rules = Vec::new();
 
     if ctx.has(DetectedFramework::Django) {
-        // QuerySet.extra() — raw SQL injection risk.
+        // QuerySet.extra(), raw SQL injection risk.
         // Framework-conditional because `extra` is too generic as a static matcher.
         rules.push(RuntimeLabelRule {
             matchers: vec!["extra".into()],

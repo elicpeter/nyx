@@ -4,18 +4,18 @@
 //! Three fixtures cover distinct structural shapes of the per-return-path
 //! transform:
 //!
-//! * `cross_file_phi_validated_branch` (Python) — a callee whose two
+//! * `cross_file_phi_validated_branch` (Python), a callee whose two
 //!   return branches are both `Identity` on the value, differing only in
 //!   the predicate gate.  The required SQLi finding confirms the
 //!   summary-application path does not regress on the common "union is
 //!   precise enough" case.
-//! * `cross_file_phi_partial_sanitiser` (JS) — the callee has two
+//! * `cross_file_phi_partial_sanitiser` (JS), the callee has two
 //!   returns with *different* transforms (Identity vs
 //!   StripBits(HTML_ESCAPE)).  The caller invokes the unsanitised branch,
-//!   so the XSS sink must still fire — a regression guard against a
+//!   so the XSS sink must still fire, a regression guard against a
 //!   per-path application that over-eagerly attributes sanitation across
 //!   all branches.
-//! * `cross_file_phi_both_branches_safe` (Go) — both return paths run
+//! * `cross_file_phi_both_branches_safe` (Go), both return paths run
 //!   the same sanitising validator.  The SQL sink is on the forbidden
 //!   list: if the per-path decomposition regresses to "either branch
 //!   could be raw" the caller would pick up a false positive.

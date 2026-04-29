@@ -136,7 +136,7 @@ pub fn spawn_file_walker(root: &Path, cfg: &Config) -> (Receiver<Paths>, JoinHan
                         };
                         let is_file = metadata.file_type().is_file();
                         let under_limit = max_bytes == 0 || metadata.len() <= max_bytes;
-                        // Always canonicalize and verify containment — a symlink
+                        // Always canonicalize and verify containment, a symlink
                         // in the tree can escape the root even when follow=false
                         // if the walker resolves it at metadata time.
                         let path_allowed = canonical_root.as_ref().is_none_or(|root| {
@@ -306,7 +306,7 @@ fn walker_follow_symlinks_does_not_escape_root() {
 #[test]
 fn walker_no_follow_symlinks_still_rejects_outside_paths() {
     // Pre-existing symlink to an out-of-root file must be excluded even when
-    // follow_symlinks=false — the walker may surface the resolved path on
+    // follow_symlinks=false, the walker may surface the resolved path on
     // some platforms.
     use std::os::unix::fs::symlink;
 

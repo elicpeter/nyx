@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo test --test perf_breakdown --release -- --nocapture stage_breakdown
 //!
-//! Not a regression test — prints µs/file for each pipeline stage so we can
+//! Not a regression test, prints µs/file for each pipeline stage so we can
 //! locate hot stages without a sampling profiler.
 
 use nyx_scanner::ast;
@@ -25,7 +25,7 @@ fn pct(samples: &mut [u128], p: f64) -> u128 {
 
 /// Mirrors the production `scan_filesystem` pass-1 + pass-2 shape: both
 /// passes call `analyse_file_fused` (pass 1 with `global=None`, pass 2 with
-/// `global=Some`).  This is the path the perf fix targets — the bench
+/// `global=Some`).  This is the path the perf fix targets, the bench
 /// `full_scan` benchmark instead uses `extract_summaries_from_file` +
 /// `run_rules_on_file`, which doesn't exercise the
 /// `lower_all_functions_from_bodies` redundancy fixed below.
@@ -136,7 +136,7 @@ fn fused_walltime() {
 
 /// Production-equivalent fused stage breakdown: mirrors the post-round-1
 /// `analyse_file_fused` pipeline (shared lowering, no double-lower).
-/// Use this — `stage_breakdown` over-counts because its helper double-lowers.
+/// Use this, `stage_breakdown` over-counts because its helper double-lowers.
 #[test]
 fn fused_stage_breakdown() {
     use nyx_scanner::ast::{analyse_file_fused, perf_stage_breakdown_fused};

@@ -29,7 +29,7 @@ pub fn routes() -> Router<AppState> {
         .route("/overview/baseline/{scan_id}", post(set_baseline_path))
 }
 
-/// GET /api/overview — aggregated dashboard data.
+/// GET /api/overview, aggregated dashboard data.
 async fn overview(State(state): State<AppState>) -> Json<OverviewResponse> {
     // 1. Load latest findings (in-memory → DB fallback)
     let findings = crate::server::routes::findings::load_latest_findings(&state);
@@ -121,7 +121,7 @@ async fn overview(State(state): State<AppState>) -> Json<OverviewResponse> {
             new_since_last,
             fixed_since_last,
             reintroduced: reintroduced_count,
-            // Files-scanned proxy for repo size — used for size-aware
+            // Files-scanned proxy for repo size, used for size-aware
             // severity dampening in `health::compute`.  See
             // `docs/health-score-audit.md` for calibration data.
             repo_files: scanner_quality
@@ -129,10 +129,10 @@ async fn overview(State(state): State<AppState>) -> Json<OverviewResponse> {
                 .map(|q| q.files_scanned)
                 .filter(|&f| f > 0),
             backlog: backlog.as_ref(),
-            // Trend is meaningless without ≥2 completed scans —
+            // Trend is meaningless without ≥2 completed scans ,
             // matches the first-scan check `compare_to_current` uses.
             has_history: history.scans.len() >= 2,
-            // Suppression-hygiene modifier — populated when the
+            // Suppression-hygiene modifier, populated when the
             // suppression panel was computable for this scan.
             blanket_suppression_rate: suppression_hygiene.as_ref().map(|s| s.blanket_rate),
         },
@@ -173,7 +173,7 @@ async fn overview(State(state): State<AppState>) -> Json<OverviewResponse> {
     })
 }
 
-/// GET /api/overview/trends — scan-over-scan finding counts.
+/// GET /api/overview/trends, scan-over-scan finding counts.
 async fn overview_trends(State(state): State<AppState>) -> Json<Vec<TrendPoint>> {
     let mut points = Vec::new();
 
@@ -218,7 +218,7 @@ struct BaselineBody {
     scan_id: String,
 }
 
-/// POST /api/overview/baseline { scan_id } — pin a scan as the baseline for drift comparison.
+/// POST /api/overview/baseline { scan_id }, pin a scan as the baseline for drift comparison.
 async fn set_baseline(
     State(state): State<AppState>,
     Json(body): Json<BaselineBody>,
@@ -226,7 +226,7 @@ async fn set_baseline(
     set_baseline_inner(&state, &body.scan_id)
 }
 
-/// POST /api/overview/baseline/:scan_id — convenience path-form for clients without a JSON body.
+/// POST /api/overview/baseline/:scan_id, convenience path-form for clients without a JSON body.
 async fn set_baseline_path(
     State(state): State<AppState>,
     AxPath(scan_id): AxPath<String>,
@@ -248,7 +248,7 @@ fn set_baseline_inner(state: &AppState, scan_id: &str) -> Result<StatusCode, Sta
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// DELETE /api/overview/baseline — clear the pinned baseline.
+/// DELETE /api/overview/baseline, clear the pinned baseline.
 async fn clear_baseline(State(state): State<AppState>) -> Result<StatusCode, StatusCode> {
     let pool = state
         .db_pool
@@ -381,7 +381,7 @@ impl ScanHistory {
         (new_count, fixed_count, reintroduced)
     }
 
-    /// Trend slope across the last N totals — 1.0 means strictly improving,
+    /// Trend slope across the last N totals, 1.0 means strictly improving,
     /// -1.0 strictly regressing, 0.0 unchanged. Returns None with <3 points.
     fn trend_slope(&self) -> Option<f64> {
         if self.scans.len() < 3 {
@@ -712,7 +712,7 @@ fn compute_cross_file_ratio(findings: &[Diag]) -> f64 {
     cross as f64 / findings.len() as f64
 }
 
-/// Hot sinks are *only* meaningful for taint findings — counting AST rule IDs
+/// Hot sinks are *only* meaningful for taint findings, counting AST rule IDs
 /// (e.g. `rs.quality.unwrap`) here just duplicates the Top Rules table. So we
 /// deliberately require a real Sink-step callee (or a parsable sink snippet)
 /// and skip everything else. Empty result → frontend hides the card.
@@ -751,7 +751,7 @@ fn compute_hot_sinks(findings: &[Diag], limit: usize) -> Vec<HotSink> {
     rows
 }
 
-/// Pull the leading identifier from a sink snippet — a best-effort heuristic
+/// Pull the leading identifier from a sink snippet, a best-effort heuristic
 /// for the dashboard's "hot sinks" list.
 fn extract_callee_from_snippet(s: &str) -> String {
     let trimmed = s.trim();
@@ -932,7 +932,7 @@ fn compute_suppression_hygiene(state: &AppState, findings: &[Diag]) -> Suppressi
 }
 
 fn compute_backlog(state: &AppState, findings: &[Diag], history: &ScanHistory) -> BacklogStats {
-    // No useful aging data on the first scan — every fingerprint was first-seen
+    // No useful aging data on the first scan, every fingerprint was first-seen
     // today by definition. Avoid the misleading "0d / 0d / 0" display.
     if history.scans.len() <= 1 {
         return BacklogStats {
@@ -1046,7 +1046,7 @@ fn build_posture(
     current_total: usize,
 ) -> PostureSummary {
     // First-scan case: no prior data to diff against. Saying "stable / no change"
-    // is misleading — we genuinely don't know yet.
+    // is misleading, we genuinely don't know yet.
     if history.scans.len() <= 1 {
         return PostureSummary {
             trend: "unknown".into(),

@@ -72,7 +72,7 @@ pub struct AppState {
     pub findings_cache: Arc<RwLock<Option<CachedFindings>>>,
 }
 
-/// 50 MiB cap on request bodies — generous for config uploads, tight
+/// 50 MiB cap on request bodies, generous for config uploads, tight
 /// enough to prevent OOM from a rogue client.
 const MAX_BODY_BYTES: usize = 50 * 1024 * 1024;
 
@@ -286,7 +286,7 @@ mod tests {
     }
 
     /// Panic inside a thread that holds a write guard on the shared config lock.
-    /// With `parking_lot::RwLock`, the lock must remain usable afterwards —
+    /// With `parking_lot::RwLock`, the lock must remain usable afterwards ,
     /// this is the poison-recovery contract we rely on in every route handler.
     #[tokio::test]
     async fn config_lock_survives_panic_in_write_guard() {

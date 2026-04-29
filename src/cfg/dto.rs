@@ -5,7 +5,7 @@
 //! field types resolve to a recognised [`TypeKind`].
 //!
 //! Strictly additive: classes whose fields cannot be classified produce
-//! a `DtoFields` with an empty `fields` map — the caller must decide
+//! a `DtoFields` with an empty `fields` map, the caller must decide
 //! whether to use that as a "Dto with no inferred fields" or fall back
 //! to the pre-Phase-6 Object/Unknown classification.
 
@@ -22,7 +22,7 @@ use crate::ssa::type_facts::{DtoFields, TypeKind};
 /// Collect all DTO-shaped class definitions in a parsed file.
 ///
 /// Dispatches per-language; returns an empty map for languages without
-/// a collector (Go, Ruby, PHP, C/C++ — DTOs in those ecosystems
+/// a collector (Go, Ruby, PHP, C/C++, DTOs in those ecosystems
 /// either don't follow framework conventions Nyx tracks today, or are
 /// already covered by other type-inference paths).
 pub(super) fn collect_dto_classes(
@@ -48,7 +48,7 @@ pub(super) fn collect_dto_classes(
 /// [`TypeKind::LocalCollection`].
 ///
 /// Empty for non-JS/TS languages.  Cross-file aliases are not
-/// resolved here — that requires the multi-file type-resolution
+/// resolved here, that requires the multi-file type-resolution
 /// pipeline that doesn't yet exist for TS.  Excalidraw's
 /// `type ElementsMap = Map<...>` is in
 /// `packages/element/src/types.ts`; users that import the alias
@@ -214,7 +214,7 @@ fn extract_ts_property<'a>(node: Node<'a>, code: &'a [u8]) -> Option<(String, Ty
     let name_node = node.child_by_field_name("name")?;
     let field_name = text_of(name_node, code)?;
     let type_anno = node.child_by_field_name("type")?;
-    // type_annotation node text is `: T` — walk to the inner type.
+    // type_annotation node text is `: T`, walk to the inner type.
     let type_text = type_anno
         .named_child(0)
         .and_then(|t| text_of(t, code))
@@ -244,7 +244,7 @@ fn collect_rust(root: Node<'_>, code: &[u8], out: &mut HashMap<String, DtoFields
             return;
         };
         if body.kind() != "field_declaration_list" {
-            // Tuple struct or unit struct — no named fields.
+            // Tuple struct or unit struct, no named fields.
             return;
         }
         let mut fields = DtoFields::new(class_name.clone());
@@ -342,7 +342,7 @@ fn collect_python(root: Node<'_>, code: &[u8], out: &mut HashMap<String, DtoFiel
 /// Conservative supertype scan: returns true when the class definition
 /// has a superclass list whose text mentions `BaseModel` (covers both
 /// `BaseModel` and `pydantic.BaseModel`).  No false positives on
-/// non-Pydantic classes named `BaseModel`-something — match is on the
+/// non-Pydantic classes named `BaseModel`-something, match is on the
 /// full token, not a substring.
 fn python_inherits_basemodel<'a>(class_node: Node<'a>, code: &'a [u8]) -> bool {
     let Some(supers) = class_node.child_by_field_name("superclasses") else {
@@ -469,7 +469,7 @@ mod tests {
         "#;
         let dtos = collect("rust", src);
         // Tuple structs have no named fields and must NOT produce a
-        // DtoFields entry — This collector only handles named-field DTOs.
+        // DtoFields entry, This collector only handles named-field DTOs.
         assert!(!dtos.contains_key("Wrap"));
     }
 

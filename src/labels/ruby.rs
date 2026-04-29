@@ -14,7 +14,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
         case_sensitive: false,
     },
-    // Rails request object — user-controlled HTTP request data.
+    // Rails request object, user-controlled HTTP request data.
     // Dotted matchers work via push_node receiver.method text construction
     // (confirmed by existing Net::HTTP.get matcher in ssrf_net_http fixture).
     LabelRule {
@@ -75,7 +75,7 @@ pub static RULES: &[LabelRule] = &[
     },
     // Bare `Kernel#open(path)` interprets a path beginning with `|` as a
     // shell command (`open("|cmd")` runs `cmd`).  `=open` exact-matcher
-    // syntax limits this rule to the bare call — `File.open`, `IO.open`,
+    // syntax limits this rule to the bare call, `File.open`, `IO.open`,
     // `URI.open` etc. each have their own non-pipe semantics and are
     // covered by their own labels (or intentionally not labeled as CMDI).
     // CVE-2020-8130 (rake `Rake::FileList#egrep`) was the canonical
@@ -99,7 +99,7 @@ pub static RULES: &[LabelRule] = &[
     // File I/O sinks: user-controlled paths flowing into File.open/File.new
     // are a path-traversal / arbitrary-read vector.  File.open also participates
     // in the resource-lifecycle acquire/release pair (cfg_analysis::RUBY_RESOURCES),
-    // so this entry is additive — it does not disturb resource-leak detection.
+    // so this entry is additive, it does not disturb resource-leak detection.
     LabelRule {
         matchers: &["File.open", "File.new", "File.read", "IO.read"],
         label: DataLabel::Sink(Cap::FILE_IO),
@@ -115,7 +115,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
-    // URI.open is the network-capable Kernel#open wrapper — more specific than
+    // URI.open is the network-capable Kernel#open wrapper, more specific than
     // plain `open` (excluded to avoid file I/O false positives).
     LabelRule {
         matchers: &[
@@ -140,7 +140,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::DESERIALIZE),
         case_sensitive: false,
     },
-    // Reflection / dynamic class resolution — arbitrary class instantiation from
+    // Reflection / dynamic class resolution, arbitrary class instantiation from
     // user-controlled names enables gadget chains (similar risk profile to
     // deserialization). Rails adds `constantize`/`safe_constantize` to String.
     LabelRule {
@@ -157,7 +157,7 @@ pub static RULES: &[LabelRule] = &[
     // SQL injection: ActiveRecord query methods that accept raw SQL strings.
     // `where` and `order` are the most common Rails SQLi vectors when called
     // with string interpolation (e.g., User.where("name = '#{params[:name]}'")).
-    // Broad matchers — verified against fixture fallout.
+    // Broad matchers, verified against fixture fallout.
     LabelRule {
         matchers: &["where", "order", "group", "having", "joins", "pluck"],
         label: DataLabel::Sink(Cap::SQL_QUERY),
@@ -240,7 +240,7 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
 
 /// ActiveRecord query methods that the static [`RULES`] table classifies as
 /// `Sink(Cap::SQL_QUERY)`.  These are SQL injection vectors only when arg 0
-/// is a string with interpolation (`#{x}`) or a non-literal identifier — the
+/// is a string with interpolation (`#{x}`) or a non-literal identifier, the
 /// hash form (`where(id: x)`) and the parameterised form (`where("a = ?", x)`)
 /// are intrinsically safe because Rails escapes the values.
 const AR_QUERY_METHOD_NAMES: &[&str] = &["where", "order", "group", "having", "joins", "pluck"];
@@ -249,7 +249,7 @@ const AR_QUERY_METHOD_NAMES: &[&str] = &["where", "order", "group", "having", "j
 /// shape-safe.  Hash literals (`pair`, `hash`), symbol literals
 /// (`simple_symbol`, `hash_key_symbol`), array literals (`array`), and pure
 /// string literals without `#{...}` interpolation are all safe.  Strings WITH
-/// interpolation and identifiers / method calls are *not* in this list —
+/// interpolation and identifiers / method calls are *not* in this list ,
 /// callers must check `has_interpolation` and the kind separately.
 const AR_QUERY_SAFE_ARG0_KINDS: &[&str] = &[
     "pair",
@@ -270,15 +270,15 @@ const AR_QUERY_SAFE_ARG0_KINDS: &[&str] = &[
 /// `cfg-unguarded-sink` (sanitiser dominates the sink reflexively).
 ///
 /// Real-world FP shapes this closes (redmine, mastodon, diaspora):
-/// * `Issue.where(:id => params[:id])` — hash form
-/// * `Model.where(id: x, name: y)` — keyword-shorthand pairs
-/// * `Project.order(:created_at)` — symbol literal
-/// * `Issue.pluck(:id, :name)` — symbol literals
-/// * `Model.where("active = ?", x)` — parameterised string
+/// * `Issue.where(:id => params[:id])`, hash form
+/// * `Model.where(id: x, name: y)`, keyword-shorthand pairs
+/// * `Project.order(:created_at)`, symbol literal
+/// * `Issue.pluck(:id, :name)`, symbol literals
+/// * `Model.where("active = ?", x)`, parameterised string
 ///
 /// Real-world TPs preserved:
-/// * `User.where("name = '#{name}'")` — string with interpolation
-/// * `Model.where(some_string_var)` — dynamic identifier (conservative)
+/// * `User.where("name = '#{name}'")`, string with interpolation
+/// * `Model.where(some_string_var)`, dynamic identifier (conservative)
 pub fn ar_query_safe_shape(callee_text: &str, arg0_kind: &str, has_interpolation: bool) -> bool {
     // Match the callee's last segment ("Model.where" → "where", "where" → "where").
     let leaf = callee_text.rsplit(['.', ':']).next().unwrap_or(callee_text);
@@ -297,7 +297,7 @@ pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
     let mut rules = Vec::new();
 
     if ctx.has(DetectedFramework::Rails) {
-        // Strong parameters — permit/require sanitize user input
+        // Strong parameters, permit/require sanitize user input
         rules.push(RuntimeLabelRule {
             matchers: vec!["permit".into(), "require".into()],
             label: DataLabel::Sanitizer(Cap::all()),
@@ -306,7 +306,7 @@ pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
     }
 
     if ctx.has(DetectedFramework::Sinatra) {
-        // Sinatra template rendering — user content flows to rendered output
+        // Sinatra template rendering, user content flows to rendered output
         rules.push(RuntimeLabelRule {
             matchers: vec!["erb".into(), "haml".into()],
             label: DataLabel::Sink(Cap::HTML_ESCAPE),
@@ -323,7 +323,7 @@ mod ar_query_tests {
 
     #[test]
     fn hash_form_is_safe() {
-        // Model.where(:id => x)  — pair node directly in argument_list
+        // Model.where(:id => x) , pair node directly in argument_list
         assert!(ar_query_safe_shape("Model.where", "pair", false));
         // Model.where(id: x)
         assert!(ar_query_safe_shape("where", "pair", false));
@@ -338,32 +338,32 @@ mod ar_query_tests {
 
     #[test]
     fn parameterised_string_is_safe() {
-        // Model.where("a = ?", x)  — first arg is a string literal w/o interpolation
+        // Model.where("a = ?", x) , first arg is a string literal w/o interpolation
         assert!(ar_query_safe_shape("where", "string", false));
         assert!(ar_query_safe_shape("where", "string_literal", false));
     }
 
     #[test]
     fn interpolated_string_is_dangerous() {
-        // Model.where("a = #{x}")  — string node WITH interpolation child
+        // Model.where("a = #{x}") , string node WITH interpolation child
         assert!(!ar_query_safe_shape("where", "string", true));
     }
 
     #[test]
     fn dynamic_identifier_is_dangerous() {
-        // Model.where(some_var) — kind is identifier, not in safe list
+        // Model.where(some_var), kind is identifier, not in safe list
         assert!(!ar_query_safe_shape("where", "identifier", false));
     }
 
     #[test]
     fn array_form_is_safe() {
-        // Model.pluck([:id, :name]) — uncommon but valid
+        // Model.pluck([:id, :name]), uncommon but valid
         assert!(ar_query_safe_shape("pluck", "array", false));
     }
 
     #[test]
     fn non_ar_method_is_never_suppressed() {
-        // find_by_sql is a real raw-SQL sink — never suppress.
+        // find_by_sql is a real raw-SQL sink, never suppress.
         assert!(!ar_query_safe_shape("find_by_sql", "string", false));
         assert!(!ar_query_safe_shape("connection.execute", "pair", false));
     }

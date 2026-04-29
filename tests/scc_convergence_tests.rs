@@ -1,13 +1,13 @@
 //! Regression tests for SCC fixed-point convergence in pass 2.
 //!
-//! Pass 2 uses Jacobi iteration — each file in a mutually-recursive SCC
+//! Pass 2 uses Jacobi iteration, each file in a mutually-recursive SCC
 //! is re-analysed against the *pre-iteration* `GlobalSummaries` snapshot,
 //! and updates are only visible on the next iteration.  In a cross-file
 //! SCC with `k` functions arranged in a chain, facts introduced at one
 //! end of the chain need up to `k` iterations to propagate back to the
 //! other end.
 //!
-//! Before this test was written, the hard cap was 3 — so any SCC with
+//! Before this test was written, the hard cap was 3, so any SCC with
 //! 4+ cross-file functions silently lost precision.  These fixtures
 //! exercise a 4-cycle and assert both that the transitive finding is
 //! reported and that the engine actually needed more than 3 iterations
@@ -35,7 +35,7 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
 
 /// Serialize any test that mutates the global SCC fix-point cap override
 /// or reads `last_scc_max_iterations()`. The override is a process-wide
-/// `AtomicUsize` and `cargo test` runs tests in parallel by default —
+/// `AtomicUsize` and `cargo test` runs tests in parallel by default ,
 /// without this guard, one test's override leaks into another's scan and
 /// both the iteration count and the findings tag shift non-deterministically.
 static SCC_TEST_GUARD: Mutex<()> = Mutex::new(());
@@ -44,7 +44,7 @@ static SCC_TEST_GUARD: Mutex<()> = Mutex::new(());
 /// across four separate files, with the only sink in `step_d`.  The
 /// `param_to_sink` fact has to travel back through three cross-file
 /// summary-update iterations before `step_a`'s summary reflects the
-/// transitive flow — without that, the caller in `server.py` never
+/// transitive flow, without that, the caller in `server.py` never
 /// sees the XSS/CMDI.
 ///
 /// With the old `MAX_SCC_FIXPOINT_ITERS = 3` this test's required
@@ -61,7 +61,7 @@ fn scc_deep_cycle_requires_multi_iter_convergence() {
     validate_expectations(&diags, &dir);
 
     // Observability assertion: prove the SCC actually exercised more
-    // than three iterations — otherwise this fixture would pass even
+    // than three iterations, otherwise this fixture would pass even
     // under the old bound and give false confidence.
     //
     // The exact bound is tight: a 4-cycle needs at least 4 iterations
@@ -80,7 +80,7 @@ fn scc_deep_cycle_requires_multi_iter_convergence() {
     );
 }
 
-/// Existing 3-file Python SCC — lighter smoke test, verifies the
+/// Existing 3-file Python SCC, lighter smoke test, verifies the
 /// iteration count stays in a sensible range.  If this starts requiring
 /// many iterations something regressed in summary extraction.
 #[test]
@@ -96,7 +96,7 @@ fn scc_small_cycle_converges_quickly() {
     // recursion edges here, summary refinement should still converge in
     // a small multiple of the chain depth. Current behaviour is iters=0
     // because the call graph topo-order resolves these files without
-    // needing an SCC fix-point loop at all — allow that too so this
+    // needing an SCC fix-point loop at all, allow that too so this
     // test does not become load-bearing on SCC detection.
     assert!(
         iters <= 4,
@@ -124,7 +124,7 @@ fn scc_cap_hit_still_emits_tagged_low_confidence_findings() {
     // Force the SCC fix-point loop to bail after 3 iterations. The
     // 4-cycle fixture needs >=4 iterations to fully propagate taint, so
     // the 3rd iteration's diags do contain the transitive taint finding
-    // but convergence has not been detected — this is the exact cap-hit
+    // but convergence has not been detected, this is the exact cap-hit
     // scenario users would see in production on a larger SCC.
     set_scc_fixpoint_cap_override(3);
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
@@ -143,7 +143,7 @@ fn scc_cap_hit_still_emits_tagged_low_confidence_findings() {
         "expected cap-override (3) to bind the fix-point loop; got {iters} iterations"
     );
 
-    // (a) Taint findings must still be emitted — truncation is not
+    // (a) Taint findings must still be emitted, truncation is not
     // silent drop.
     let taint: Vec<_> = diags
         .iter()
@@ -161,7 +161,7 @@ fn scc_cap_hit_still_emits_tagged_low_confidence_findings() {
 
     // (b) At least one finding from the unconverged SCC batch carries
     // the tag. Tagging is scoped to diags produced by the SCC fix-point
-    // loop itself — findings from non-recursive batches or orphan files
+    // loop itself, findings from non-recursive batches or orphan files
     // that happen to flow through SCC-internal summaries are
     // intentionally not re-tagged (they came from a batch that did
     // converge, modulo the referenced summary).
@@ -210,8 +210,8 @@ fn scc_cap_hit_still_emits_tagged_low_confidence_findings() {
 
 /// Phase-E3 / Phase-B: verify that the worklist reduces per-iteration
 /// work without changing the final output.  We do this by running the
-/// 16-cycle fixture twice — once through the normal pass-2 path,
-/// which uses the worklist — and asserting (a) findings match and
+/// 16-cycle fixture twice, once through the normal pass-2 path,
+/// which uses the worklist, and asserting (a) findings match and
 /// (b) iteration count stays within the same bound as the 8-cycle.
 ///
 /// This test is load-bearing for Phase-B correctness: if the worklist
@@ -354,7 +354,7 @@ fn scc_cap_hit_records_classified_reason() {
             .collect::<Vec<_>>()
     );
 
-    // The reason must be *something* other than Unknown — that's the
+    // The reason must be *something* other than Unknown, that's the
     // whole point of Phase-D classification.  Any structured variant
     // proves the trajectory pipeline fired end-to-end.
     for (d, reason) in &tagged {

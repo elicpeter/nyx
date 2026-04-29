@@ -179,7 +179,7 @@ pub fn validate_expectations(diags: &[Diag], fixture_dir: &Path) {
         }
     }
 
-    // Noise budget (optional — omitted on tight safe-code fixtures)
+    // Noise budget (optional, omitted on tight safe-code fixtures)
     if let Some(budget) = &exp.noise_budget {
         assert_max_findings(diags, budget.max_total_findings, budget.max_high_findings);
     }

@@ -6,7 +6,7 @@
 //! fails fast if the change silently re-grades the boundary cases.
 //!
 //! Bands are deliberately wide (±5 points around the calibration
-//! number) so honest curve-shape adjustments don't trip the test —
+//! number) so honest curve-shape adjustments don't trip the test ,
 //! it's a "did weights silently change everyone's grade?" guard, not
 //! an exact-output snapshot.
 //!

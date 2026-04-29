@@ -5,7 +5,7 @@ use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 ///
 /// Taint rules cover `eval`/`exec`, `os.system`/`os.popen`/`subprocess.*`,
 /// and `cursor.execute`. AST patterns here add coverage for **deserialization**,
-/// **subprocess shell=True** (Tier B — taint doesn't check keyword args), and
+/// **subprocess shell=True** (Tier B, taint doesn't check keyword args), and
 /// **code execution** sinks that taint cannot structurally verify.
 pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Code execution ─────────────────────────────────────────
@@ -144,7 +144,7 @@ pub const PATTERNS: &[Pattern] = &[
         category: PatternCategory::SqlInjection,
         confidence: Confidence::Medium,
     },
-    // SQLAlchemy `text(<concat-or-fstring>)` — same Tier B heuristic
+    // SQLAlchemy `text(<concat-or-fstring>)`, same Tier B heuristic
     // applied to the SQLAlchemy raw-SQL constructor.  Catches the
     // CVE-2025-69662 (geopandas) shape:
     //   connection.execute(text(f"SELECT … '{geom_name}' …"))

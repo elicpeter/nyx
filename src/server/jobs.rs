@@ -65,7 +65,7 @@ pub struct JobManager {
     job_order: Mutex<Vec<String>>,
     active_job_id: Mutex<Option<String>>,
     max_jobs: usize,
-    /// Dedicated rayon pool for scans — keeps the global pool (and tokio
+    /// Dedicated rayon pool for scans, keeps the global pool (and tokio
     /// worker threads) free so the web UI stays responsive during a scan.
     scan_pool: rayon::ThreadPool,
 }

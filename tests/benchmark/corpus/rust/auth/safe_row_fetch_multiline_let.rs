@@ -4,7 +4,7 @@
 // (the call body wraps onto the next line for readability).  Before
 // the line-counting fix, `row_population_data` recorded the
 // `let_declaration`'s start row while `op.line` saw the inner call's
-// start row — they differed by one and the row-fetch exemption
+// start row, they differed by one and the row-fetch exemption
 // missed.  Recording the **call**'s start line aligns the two and
 // the exemption fires for the multi-line shape too.
 
@@ -52,7 +52,7 @@ pub async fn lock_comment(
     let comment_id = req.comment_id;
     let local_instance_id = local_user_view.person.instance_id;
 
-    // Multi-line let — the let_declaration starts on this line, but
+    // Multi-line let, the let_declaration starts on this line, but
     // the inner `CommentView::read(..)` call starts on the next line.
     // `op.line` for the read sink is the call's line, not the let's.
     let orig_comment =

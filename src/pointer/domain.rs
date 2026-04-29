@@ -2,7 +2,7 @@
 //!
 //! Locations are interned to compact `LocId(u32)` handles so the
 //! union-find resolver can operate on dense integer keys.  Field
-//! locations are keyed structurally by `(parent_loc_id, field_id)` —
+//! locations are keyed structurally by `(parent_loc_id, field_id)` ,
 //! interning a `Field(parent, f)` always returns the same `LocId` no
 //! matter how many times the same `(parent, f)` pair is requested.
 
@@ -29,14 +29,14 @@ pub const MAX_POINTSTO_MEMBERS: usize = 16;
 /// Compact handle for an interned [`AbsLoc`].
 ///
 /// All abstract locations referenced by a single body share one
-/// [`LocInterner`] — `LocId`s are only meaningful relative to that
+/// [`LocInterner`], `LocId`s are only meaningful relative to that
 /// interner.  IDs are assigned densely from 0 and are stable for the
 /// lifetime of the interner so the union-find can index parent / rank
 /// arrays directly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LocId(pub u32);
 
-/// Sentinel "anywhere" location.  Always `LocId(0)` — the interner
+/// Sentinel "anywhere" location.  Always `LocId(0)`, the interner
 /// reserves the first slot at construction so callers can compare
 /// against it cheaply.
 pub const LOC_TOP: LocId = LocId(0);
@@ -48,7 +48,7 @@ pub const LOC_TOP: LocId = LocId(0);
 /// is exceeded the chain folds to [`AbsLoc::Top`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AbsLoc {
-    /// "Anywhere" — the over-approximation used when precision is
+    /// "Anywhere", the over-approximation used when precision is
     /// unrecoverable (e.g. a value sourced from outside the analysed
     /// body, or a points-to set that exceeded the cap).
     Top,
@@ -60,7 +60,7 @@ pub enum AbsLoc {
     /// file.  The interned `u32` is the `SsaValue.0` of the call /
     /// constructor instruction.
     Alloc(BodyId, u32),
-    /// Function parameter — the abstract identity of the value
+    /// Function parameter, the abstract identity of the value
     /// supplied by the caller for parameter `index`.  The receiver
     /// (`self` / `this`) uses [`AbsLoc::SelfParam`] instead.
     Param(BodyId, usize),
@@ -69,7 +69,7 @@ pub enum AbsLoc {
     /// receiver" sentinel index.
     SelfParam(BodyId),
     /// Heap field of a parent location: `parent.f`.  `parent` is
-    /// itself a [`LocId`] — chains of field accesses produce nested
+    /// itself a [`LocId`], chains of field accesses produce nested
     /// `Field` locations.  Depth is bounded by [`MAX_FIELD_DEPTH`].
     Field { parent: LocId, field: FieldId },
 }
@@ -130,7 +130,7 @@ impl LocInterner {
     }
 
     /// Resolve a [`LocId`] back to its [`AbsLoc`].  Panics on out-of-
-    /// range ids — only ids the interner produced are valid.
+    /// range ids, only ids the interner produced are valid.
     #[inline]
     pub fn resolve(&self, id: LocId) -> &AbsLoc {
         &self.locs[id.0 as usize]
@@ -213,7 +213,7 @@ impl LocInterner {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PtrProxyHint {
     /// Every member of the points-to set is an [`AbsLoc::Field`].  The
-    /// value is a sub-object alias — e.g. `m` in `m := c.mu`.
+    /// value is a sub-object alias, e.g. `m` in `m := c.mu`.
     FieldOnly,
     /// Anything else: the set is empty, contains a root location
     /// ([`AbsLoc::SelfParam`] / [`AbsLoc::Param`] / [`AbsLoc::Alloc`]),
@@ -242,7 +242,7 @@ impl Default for PointsToSet {
 }
 
 impl PointsToSet {
-    /// Empty set — the value points to nothing tracked by the
+    /// Empty set, the value points to nothing tracked by the
     /// analysis (e.g. a scalar constant).
     pub fn empty() -> Self {
         Self {
@@ -257,7 +257,7 @@ impl PointsToSet {
         Self { ids }
     }
 
-    /// `{Top}` — the universal over-approximation.
+    /// `{Top}`, the universal over-approximation.
     pub fn top() -> Self {
         Self::singleton(LOC_TOP)
     }
@@ -313,7 +313,7 @@ impl PointsToSet {
         }
     }
 
-    /// Set-union, in place.  Returns `true` when `self` changed —
+    /// Set-union, in place.  Returns `true` when `self` changed ,
     /// the constraint solver uses the bit to decide whether the
     /// containing equivalence class needs another pass.
     pub fn union_in_place(&mut self, other: &PointsToSet) -> bool {

@@ -4,7 +4,7 @@ use std::fmt;
 /// Supported source-code languages.
 ///
 /// `Default` is provided only so that [`FuncKey`] can derive `Default` for
-/// test ergonomics — production code always constructs a `Lang` explicitly
+/// test ergonomics, production code always constructs a `Lang` explicitly
 /// (via `from_slug` / `from_extension`).  `Rust` was chosen as the default
 /// purely because it is the host language of the scanner; tests that rely
 /// on lang-specific behaviour should set `lang` explicitly, not rely on the
@@ -147,18 +147,18 @@ impl FuncKind {
 /// plus a structural `kind` tag.  Every field is deliberately narrow so
 /// legitimately-distinct definitions never collide:
 ///
-/// * `lang` — prevents cross-language aliasing.
-/// * `namespace` — project-relative source file path.
-/// * `container` — enclosing class / impl / module / namespace / outer function
+/// * `lang`, prevents cross-language aliasing.
+/// * `namespace`, project-relative source file path.
+/// * `container`, enclosing class / impl / module / namespace / outer function
 ///   (qualified with `::` for nested containers).  Empty string for free
 ///   top-level functions.
-/// * `name` — leaf identifier as written in source.
-/// * `arity` — parameter count (including `self`/`this`) for languages that
+/// * `name`, leaf identifier as written in source.
+/// * `arity`, parameter count (including `self`/`this`) for languages that
 ///   discriminate by arity.  `None` for unknown.
-/// * `disambig` — numeric discriminator for same-name definitions in the same
+/// * `disambig`, numeric discriminator for same-name definitions in the same
 ///   container (closure byte offset, nested-function occurrence index).
 ///   `None` for the common case of a single definition.
-/// * `kind` — structural role (see [`FuncKind`]).  Separates e.g. a getter
+/// * `kind`, structural role (see [`FuncKind`]).  Separates e.g. a getter
 ///   named `size` from a method `size()`.
 ///
 /// Backward-compat: `container`, `disambig`, and `kind` all have serde
@@ -180,7 +180,7 @@ pub struct FuncKey {
     /// Typically the function node's start byte offset.
     #[serde(default)]
     pub disambig: Option<u32>,
-    /// Structural role — Function, Method, Constructor, Closure, etc.
+    /// Structural role, Function, Method, Constructor, Closure, etc.
     #[serde(default)]
     pub kind: FuncKind,
 }

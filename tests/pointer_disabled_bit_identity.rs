@@ -8,7 +8,7 @@
 //! superset that DROPS no genuine findings.
 //!
 //! Both modes are exercised in the same test process via a serial
-//! mutex around env-var manipulation — cargo runs tests in parallel
+//! mutex around env-var manipulation, cargo runs tests in parallel
 //! and an unprotected env-var write would leak between threads.
 //!
 //! A4 baseline snapshot: when the env variable
@@ -43,12 +43,12 @@ fn fixture_path(name: &str) -> PathBuf {
 /// Fixture mix curated for the strict-additive guard.  Picks shapes
 /// the pointer module actively touches:
 ///
-/// * `container_taint_js` — JS container ops (push/shift/pop) flow
+/// * `container_taint_js`, JS container ops (push/shift/pop) flow
 ///   through the W2 / W4 ELEM cells when pointer is on.
-/// * `container_taint_py` — Python container shapes mirror the JS path
+/// * `container_taint_py`, Python container shapes mirror the JS path
 ///   for non-method `__getitem__` / `__setitem__` (W5; deferred but
 ///   the existing method-shape ops are still exercised).
-/// * `cross_file_py_object_field` — field-flow shapes that exercise
+/// * `cross_file_py_object_field`, field-flow shapes that exercise
 ///   the W1 / W3 cross-call resolver with field-name keys.
 ///
 /// Picked deliberately small: every additional fixture multiplies the
@@ -114,7 +114,7 @@ where
 /// it must not change the structural identity of any existing
 /// finding.  The current curated fixtures exercise shapes the
 /// pointer module touches but where existing engine analyses already
-/// produce all the findings — so the equality check is the right
+/// produce all the findings, so the equality check is the right
 /// shape today.  When pointer-on starts adding NEW findings to these
 /// fixtures, the test should be updated to assert
 /// `enabled.is_superset(disabled)`.
@@ -178,7 +178,7 @@ fn pointer_disabled_finding_set_matches_baseline() {
     let snapshot_text = match std::fs::read_to_string(&snapshot_path) {
         Ok(s) => s,
         Err(_) => {
-            // First run / missing snapshot — write it and skip the
+            // First run / missing snapshot, write it and skip the
             // diff check.  Subsequent runs will assert against this
             // captured value.
             if let Some(parent) = snapshot_path.parent() {

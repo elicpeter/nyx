@@ -55,7 +55,7 @@ struct TreeEntry {
 struct SymbolEntry {
     name: String,
     /// Legacy display kind (`"function"` / `"method"`) used by existing CSS
-    /// classes in the frontend.  Kept for backward-compat — new consumers
+    /// classes in the frontend.  Kept for backward-compat, new consumers
     /// should prefer `func_kind`.
     kind: String,
     /// Structural [`crate::symbol::FuncKind`] slug (`"fn"`, `"method"`,
@@ -291,7 +291,7 @@ async fn get_symbols(
     let entries: Vec<SymbolEntry> = symbols
         .into_iter()
         .map(|(name, arity, _lang, namespace, container, func_kind)| {
-            // Legacy `kind` field — still used by existing CSS classes
+            // Legacy `kind` field, still used by existing CSS classes
             // (`symbol-kind-method`, `symbol-kind-function`).  Map any
             // method-like FuncKind onto `"method"` and everything else
             // onto `"function"` so the rendered icon stays sensible.

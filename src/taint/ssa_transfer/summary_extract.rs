@@ -1,11 +1,11 @@
 //! SSA function-summary and container-flow extraction.
 //!
 //! Extracted from the monolithic `ssa_transfer.rs`.  Contains:
-//! * [`extract_ssa_func_summary`] — runs per-parameter taint probes and
+//! * [`extract_ssa_func_summary`], runs per-parameter taint probes and
 //!   synthesises an [`crate::summary::ssa_summary::SsaFuncSummary`] with
 //!   source caps, return transforms, per-path transforms, and sink site
 //!   attribution.
-//! * [`extract_container_flow_summary`] — structural scan for
+//! * [`extract_container_flow_summary`], structural scan for
 //!   `param_container_to_return` + `param_to_container_store` pairs.
 //! * Private helpers for predicate-hash summarisation, abstract-transfer
 //!   derivation, callback source detection, and return-type inference.
@@ -123,15 +123,15 @@ pub fn extract_ssa_func_summary_full(
         .collect();
 
     // Collect all param SSA values to exclude from return cap collection.
-    // Param values persist with their seeded taint throughout the function —
+    // Param values persist with their seeded taint throughout the function ,
     // we only want caps on derived values (call results, assigns) at return.
     let all_param_values: std::collections::HashSet<SsaValue> =
         param_info.iter().map(|(_, _, v)| *v).collect();
 
     // Per-return-block observation captured alongside the aggregate return
-    // caps.  Each entry records one return block's exit state — caps
+    // caps.  Each entry records one return block's exit state, caps
     // contributed on that path, path-predicate hash, known_true/false bits,
-    // and the return SSA value's abstract fact — so the per-param loop can
+    // and the return SSA value's abstract fact, so the per-param loop can
     // emit one [`ReturnPathTransform`] per distinct predicate gate.
     struct ReturnBlockObs {
         /// Caps at the return SSA value (or joined live values for
@@ -141,7 +141,7 @@ pub fn extract_ssa_func_summary_full(
         /// (passthrough fallback).
         param_caps: Cap,
         /// Deterministic hash of the predicate gate at this return.
-        /// `0` means "no predicate gate" — an unguarded return.
+        /// `0` means "no predicate gate", an unguarded return.
         predicate_hash: u64,
         /// `PredicateSummary::known_true` bits intersected across all
         /// tracked variables at this return.  Encoded via
@@ -268,7 +268,7 @@ pub fn extract_ssa_func_summary_full(
                         }
                     }
                 } else {
-                    // Return(None): implicit return — fall back to all live values.
+                    // Return(None): implicit return, fall back to all live values.
                     for (val, taint) in &exit.values {
                         if all_param_values.contains(val) {
                             block_param_caps |= taint.caps;
@@ -348,7 +348,7 @@ pub fn extract_ssa_func_summary_full(
 
     // Per-return-path PathFact decomposition derived from the baseline
     // probe (no seeded taint).  Abstract facts on the return rv are
-    // independent of taint seeding — they describe the function's
+    // independent of taint seeding, they describe the function's
     // intrinsic narrowing, so the baseline run captures them without
     // per-param noise.
     //
@@ -388,7 +388,7 @@ pub fn extract_ssa_func_summary_full(
     let mut param_to_sink: Vec<(usize, SmallVec<[SinkSite; 1]>)> = Vec::new();
     let mut param_to_sink_param = Vec::new();
     // Per-param return-path decomposition.  Populated only when the param
-    // has ≥2 distinct return-block predicate hashes — a single-return-path
+    // has ≥2 distinct return-block predicate hashes, a single-return-path
     // callee is already precise via `param_to_return`.
     let mut param_return_paths: Vec<(
         usize,
@@ -417,7 +417,7 @@ pub fn extract_ssa_func_summary_full(
         // expressions (e.g. `file._source.uri`) as their own
         // [`SsaOp::Param`] ops with composite `var_name`s like
         // `"file._source.uri"`.  These phantom Params are the values
-        // actually used as call arguments — not the formal-param SSA
+        // actually used as call arguments, not the formal-param SSA
         // value the seed targets.  Without this, the per-param probe
         // misses cross-call sinks because the call's arg SSA value is
         // a phantom Param with no seed entry, so `transfer_inst::Param`
@@ -447,7 +447,7 @@ pub fn extract_ssa_func_summary_full(
 
         let (return_caps, events, _, per_return_obs) = run_probe(seed);
 
-        // Subtract baseline source_caps — we only want param-contributed caps
+        // Subtract baseline source_caps, we only want param-contributed caps
         let param_return_caps = return_caps & !source_caps;
 
         if !param_return_caps.is_empty() {
@@ -464,7 +464,7 @@ pub fn extract_ssa_func_summary_full(
         // observed return block, derive a `ReturnPathTransform` mirroring
         // the aggregate logic (prefer derived caps, fall back to param
         // caps, strip baseline source caps).  Only emit when ≥2 distinct
-        // predicate hashes are present — a single-hash summary adds no
+        // predicate hashes are present, a single-hash summary adds no
         // signal over the aggregate `param_to_return`.
         if per_return_obs.len() >= 2 {
             let mut per_path: SmallVec<[crate::summary::ssa_summary::ReturnPathTransform; 2]> =
@@ -477,7 +477,7 @@ pub fn extract_ssa_func_summary_full(
                 };
                 let block_contributed = block_return_caps & !source_caps;
                 let transform_kind = if block_contributed.is_empty() {
-                    // No caps on this path — param does not reach return
+                    // No caps on this path, param does not reach return
                     // under this predicate.  A `StripBits(all)` records
                     // "all bits cleared" so downstream join preserves the
                     // disparity with other paths.
@@ -529,7 +529,7 @@ pub fn extract_ssa_func_summary_full(
         //
         // Strict-additive: `all_validated` is set only when every
         // tainted operand at the sink has its `var_name` in
-        // `state.validated_may` — single-path single-validator helpers
+        // `state.validated_may`, single-path single-validator helpers
         // cleanly skip; mixed-tainted-with-some-unvalidated events
         // still propagate.  Closes the helper-summary precision gap
         // surfaced by Novu CVE GHSA-4x48-cgf9-q33f.
@@ -623,14 +623,14 @@ pub fn extract_ssa_func_summary_full(
 
     // Per-parameter abstract-domain transfers.
     //
-    // Derived structurally from the SSA body — no additional taint probes.
+    // Derived structurally from the SSA body, no additional taint probes.
     // Three-step inference per parameter:
     //   1. Identity: return SSA value at every return block traces back to
     //      this parameter (possibly through assigns / phi merges all feeding
     //      from the same param).
     //   2. Callee-intrinsic bound: baseline `return_abstract` carries a
     //      concrete fact (bounded interval or known prefix) that holds
-    //      regardless of caller input — record it once per parameter as
+    //      regardless of caller input, record it once per parameter as
     //      `Clamped` / `LiteralPrefix` so the caller sees the bound even
     //      when it has no abstract info on its own argument.
     //   3. Top: default; the entry is omitted (empty transfer is meaningless).
@@ -652,14 +652,14 @@ pub fn extract_ssa_func_summary_full(
         param_return_paths,
         return_path_facts,
         points_to,
-        // extension — empty until the field-granularity
+        // extension, empty until the field-granularity
         // extractor is wired (`NYX_POINTER_ANALYSIS=1` only).  Default
         // path stays bit-identical to today.
         field_points_to: crate::summary::points_to::FieldPointsToSummary::empty(),
         // Populated post-extraction in
         // `taint::lower_all_functions_from_bodies` once SSA optimisation
         // has computed `opt.type_facts`.  Empty here means the
-        // extractor itself doesn't carry receiver-type info — the
+        // extractor itself doesn't carry receiver-type info, the
         // caller patches it in.
         typed_call_receivers: Vec::new(),
     }
@@ -721,14 +721,14 @@ pub(super) fn summarise_return_predicates(state: &SsaTaintState) -> (u64, u8, u8
 ///
 /// `return_abstract` is the callee's intrinsic baseline (from the no-seed
 /// probe).  When present, it describes a fact that holds for the return
-/// regardless of parameter input — so it can be attached as a
+/// regardless of parameter input, so it can be attached as a
 /// `Clamped` / `LiteralPrefix` transform to every parameter that flows to
 /// the return.
 ///
 /// Identity detection is structural: walk the return values back through
 /// [`SsaOp::Assign`] / [`SsaOp::Phi`] chains (bounded) and check whether
 /// every leaf resolves to the same [`SsaOp::Param`].  The trace is cheap
-/// and can only produce `Identity` for passthrough callees — anything
+/// and can only produce `Identity` for passthrough callees, anything
 /// more complex degrades to the baseline fact or `Top`.
 fn derive_abstract_transfer(
     ssa: &SsaBody,
@@ -802,7 +802,7 @@ fn derive_abstract_transfer(
     }
 
     // Derive a baseline-invariant transform from `return_abstract`.  This is
-    // the "callee intrinsic" fact that always holds — each parameter that
+    // the "callee intrinsic" fact that always holds, each parameter that
     // flows to the return gets it attached as the conservative transfer.
     let baseline_invariant: Option<AbstractTransfer> = return_abstract.map(|av| {
         let interval = match (av.interval.lo, av.interval.hi) {
@@ -827,7 +827,7 @@ fn derive_abstract_transfer(
         } else if let Some(base) = baseline_invariant.as_ref() {
             // Baseline intrinsic bound applies to every parameter that could
             // reach the return.  We conservatively attach it to all params
-            // — at apply time the caller meets it with the real return
+            //, at apply time the caller meets it with the real return
             // abstract (also from this same summary), so double-counting
             // would collapse to the tighter of the two.
             transfer = base.clone();
@@ -901,7 +901,7 @@ fn infer_summary_return_type(
     lang: Lang,
 ) -> Option<crate::ssa::type_facts::TypeKind> {
     // Find blocks with Return terminators, then look at the last defined value
-    // in those blocks — if it's a Call with a known constructor, that's our type.
+    // in those blocks, if it's a Call with a known constructor, that's our type.
     for block in &ssa.blocks {
         if !matches!(block.terminator, Terminator::Return(_)) {
             continue;
@@ -987,7 +987,7 @@ pub(crate) fn extract_container_flow_summary(
     // `trace_to_param` will happily return any `SsaOp::Param { index }`, but
     // scoped lowering synthesises `Param` ops for external captures (module
     // imports, free identifiers) at indices beyond the formal parameter count.
-    // Those must not enter the summary — the key's arity only covers formal
+    // Those must not enter the summary, the key's arity only covers formal
     // params, and an out-of-range index trips `ssa_summary_fits_arity`, forcing
     // the reconciliation probe to generate a synthetic disambiguator that no
     // caller will ever look up.
@@ -1057,7 +1057,7 @@ pub(crate) fn extract_container_flow_summary(
                 };
 
                 // Trace container to positional param (SelfParam → None, so
-                // when the container is the receiver we skip — the caller
+                // when the container is the receiver we skip, the caller
                 // tracks that via `receiver_to_container_store` if needed).
                 // Same arity filter as above: reject synthetic Param ops that
                 // were injected for free captures.

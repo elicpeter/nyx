@@ -85,7 +85,7 @@ fn js_ts_pass2_cap() -> usize {
 //
 // Active only when the slot is `Some`.  Production code path leaves it
 // `None`, making instrumentation cost a single thread-local borrow + a
-// `match Option::None` per measured chunk — sub-nanosecond.
+// `match Option::None` per measured chunk, sub-nanosecond.
 thread_local! {
     static PERF_LOWER_TIMINGS: std::cell::Cell<Option<[u128; 7]>> =
         const { std::cell::Cell::new(None) };
@@ -113,10 +113,10 @@ fn perf_lower_record(slot: usize, micros: u128) {
 
 /// Test-only override for the Gauss-Seidel toggle.  Values:
 ///
-/// * `0` — respect `NYX_JS_GAUSS_SEIDEL` env var (default production
+/// * `0`, respect `NYX_JS_GAUSS_SEIDEL` env var (default production
 ///   behaviour).
-/// * `1` — force Jacobi (env ignored).
-/// * `2` — force Gauss-Seidel (env ignored).
+/// * `1`, force Jacobi (env ignored).
+/// * `2`, force Gauss-Seidel (env ignored).
 ///
 /// Used exclusively by integration tests that need to assert both
 /// variants produce equal findings without per-test process isolation.
@@ -210,7 +210,7 @@ pub struct Finding {
     /// The kind of source that originated the taint.
     pub source_kind: SourceKind,
     /// Whether all tainted sink variables are guarded by a validation
-    /// predicate on this path (metadata only — does not change severity).
+    /// predicate on this path (metadata only, does not change severity).
     pub path_validated: bool,
     /// The kind of validation guard protecting this path, if any.
     pub guard_kind: Option<PredicateKind>,
@@ -234,7 +234,7 @@ pub struct Finding {
     /// sink was resolved via a function summary carrying a
     /// [`crate::summary::SinkSite`] with concrete coordinates for primary
     /// sink-location attribution.  `None` for:
-    /// * intra-procedural / label-based sinks — the caller's `cfg[sink]`
+    /// * intra-procedural / label-based sinks, the caller's `cfg[sink]`
     ///   span already names the dangerous instruction;
     /// * summary-resolved sinks whose `SinkSite` was cap-only (no tree or
     ///   bytes context at extraction time).
@@ -246,7 +246,7 @@ pub struct Finding {
     /// the scan root is the file itself (every namespace normalizes to
     /// `""`); consumers resolve empty `file_rel` against the file under
     /// analysis.  Enforced at `ssa_events_to_findings` by a
-    /// `debug_assert!` — upstream filters drop cap-only sites before
+    /// `debug_assert!`, upstream filters drop cap-only sites before
     /// they reach this field.
     ///
     /// Deliberately independent of `uses_summary`: that flag tracks whether
@@ -256,13 +256,13 @@ pub struct Finding {
     /// `primary_location`.
     pub primary_location: Option<SinkLocation>,
     /// Engine provenance notes recorded during the analysis that produced
-    /// this finding.  Populated when an internal budget/cap was hit — see
+    /// this finding.  Populated when an internal budget/cap was hit, see
     /// [`crate::engine_notes::EngineNote`].  Empty for the typical
     /// under-budget finding.
     pub engine_notes: SmallVec<[EngineNote; 2]>,
     /// Stable hash of the intermediate-variable sequence between `source`
     /// and `sink`.  Used to keep distinct paths through different
-    /// variables as separate findings during deduplication — two
+    /// variables as separate findings during deduplication, two
     /// `(body_id, sink, source)` siblings with different `path_hash`
     /// values represent flows along different data paths and are
     /// preserved as alternatives rather than collapsed.
@@ -290,6 +290,13 @@ pub struct Finding {
     /// formatters can present them as "this flow … and N alternative
     /// path(s)" rather than silently dropping one.
     pub alternative_finding_ids: SmallVec<[String; 2]>,
+    /// Sink-cap mask that this specific finding fired against.  Carries the
+    /// per-event `sink_caps` from the multi-gate dispatch (e.g.
+    /// `Cap::SSRF` for a URL-flow finding on `fetch`, `Cap::DATA_EXFIL`
+    /// for a body-flow finding on the same call).  Used by `ast.rs` to
+    /// route the finding to a cap-specific rule id rather than the
+    /// generic `taint-unsanitised-flow` bucket.
+    pub effective_sink_caps: crate::labels::Cap,
 }
 
 impl Finding {
@@ -426,7 +433,7 @@ pub(crate) fn analyse_file_with_lowered(
 
     // 3. Unified multi-body analysis with lexical containment propagation.
     //
-    // `max_iterations` is the safety cap, not an expected depth — the
+    // `max_iterations` is the safety cap, not an expected depth, the
     // pass-2 loop breaks on seed equality (monotone lattice, finite
     // height) and only rides the cap when convergence legitimately
     // needs more rounds than the cap allows.  See
@@ -482,7 +489,7 @@ pub(crate) fn analyse_file_with_lowered(
     //        dedup_by_key(|f| (body_id, sink, source));
     //
     //    which silently collapsed an *unguarded* flow reaching the same
-    //    `(sink, source)` as a guarded flow — the `!path_validated` sort
+    //    `(sink, source)` as a guarded flow, the `!path_validated` sort
     //    ordered `path_validated == true` first, so the exploitable
     //    branch was the one that got dropped.
     //
@@ -542,7 +549,7 @@ fn make_finding_id(f: &Finding) -> String {
 /// Cross-link findings that share `(body_id, sink, source)` but differ
 /// on `path_validated` or `path_hash`.  After this call each such
 /// finding's `alternative_finding_ids` lists every sibling's
-/// [`Finding::finding_id`] — so a guarded flow links to the unguarded
+/// [`Finding::finding_id`], so a guarded flow links to the unguarded
 /// sibling and vice versa.  Isolated findings (no sibling) get an
 /// empty list.
 fn link_alternative_paths(findings: &mut [Finding]) {
@@ -577,7 +584,7 @@ fn link_alternative_paths(findings: &mut [Finding]) {
 /// Compute containment-topological order: parent bodies before children.
 ///
 /// Uses BFS from roots (bodies with no parent), ensuring a body is always
-/// processed after its parent — required for lexical seed propagation.
+/// processed after its parent, required for lexical seed propagation.
 /// Returns indices into `file_cfg.bodies` in processing order.
 fn containment_order(bodies: &[BodyCfg]) -> Vec<usize> {
     let mut children: HashMap<BodyId, Vec<usize>> = HashMap::new();
@@ -638,7 +645,7 @@ fn analyse_body_with_seed(
     // Per-body graphs contain only the body's own nodes.
     // For non-toplevel bodies, use lower_to_ssa_with_params with scope to
     // create SsaOp::Param ops for external/captured variables and formal
-    // parameters — required for global_seed to inject taint from the parent.
+    // parameters, required for global_seed to inject taint from the parent.
     // Top-level bodies use lower_to_ssa with scope_all=true (no Param ops).
     let is_toplevel = body.meta.parent_body_id.is_none();
     // JS/TS function bodies always use scoped lowering to create Param ops
@@ -834,7 +841,7 @@ fn analyse_body_with_seed(
         Err(e) => {
             // SSA lowering produced no analyzable body.  We still surface
             // the event so downstream tooling can tell "we tried and gave
-            // up" from "we ran clean" — a TRACE-level log records the
+            // up" from "we ran clean", a TRACE-level log records the
             // reason (no synthetic Finding is manufactured because a
             // diag pointing at no source location would be misleading).
             tracing::trace!(
@@ -946,7 +953,7 @@ fn analyse_multi_body(
         let top_cfg = &top.graph;
 
         // Collect top-level binding keys for seed filtering.  Always
-        // keyed under `BodyId(0)` — `filter_seed_to_toplevel` matches
+        // keyed under `BodyId(0)`, `filter_seed_to_toplevel` matches
         // by name and re-keys every surviving entry to `BodyId(0)`
         // anyway, so the body_id on the probe keys is informational.
         let toplevel_keys: HashSet<ssa_transfer::BindingKey> = {
@@ -967,7 +974,7 @@ fn analyse_multi_body(
         // re-analysis when a name it reads via Param or via the
         // global_seed ancestor-lookup path has actually changed in
         // the combined seed.  `reads` is a superset of the body's
-        // top-level dependencies — we err on the side of over-running
+        // top-level dependencies, we err on the side of over-running
         // (false dirty) rather than missing a dependency.
         let body_reads: HashMap<BodyId, HashSet<String>> = {
             let mut m: HashMap<BodyId, HashSet<String>> = HashMap::new();
@@ -1058,7 +1065,7 @@ fn analyse_multi_body(
 
             // Re-run non-toplevel bodies with updated seed.
             body_exit_states.insert(BodyId(0), current_seed.clone());
-            // Phase-C: Gauss-Seidel variant — as each body is
+            // Phase-C: Gauss-Seidel variant, as each body is
             // re-analysed, merge its new exit into `current_seed`
             // immediately so subsequent bodies in the same round see
             // the fresh value.  Order matters here; we pin to
@@ -1135,7 +1142,7 @@ fn analyse_multi_body(
 
     // Record observability counter.  `iters_used == 0` covers the
     // non-JS/TS path (`max_iterations == 1`) and the JS/TS case where
-    // the convergence loop did not enter — report `1` so the counter
+    // the convergence loop did not enter, report `1` so the counter
     // always reflects "at least the lexical-containment pass ran".
     let reported_iters = if iters_used == 0 { 1 } else { iters_used };
     LAST_JS_TS_PASS2_ITERATIONS.store(reported_iters, Ordering::Relaxed);
@@ -1285,7 +1292,7 @@ fn lookup_formal_params(local_summaries: &FuncSummaries, func_name: &str) -> Vec
 /// When exactly one `(name, arity)`-matching entry exists we use its full
 /// identity (container / disambig / kind preserved).  When zero or multiple
 /// match we fall back to a free-function key so the caller still has a
-/// well-formed key — this can only happen in legacy discovery paths that
+/// well-formed key, this can only happen in legacy discovery paths that
 /// cannot see through same-name siblings, and those paths were already
 /// collision-prone before this refactor.  New intra-file analysis code
 /// should prefer [`BodyMeta::func_key`].
@@ -1298,7 +1305,7 @@ fn lookup_canonical_func_key(
 ) -> FuncKey {
     // `local_summaries` is file-local, so every entry's namespace agrees with
     // whatever `build_cfg` wrote (raw file path). We match by lang + name +
-    // arity and fall back to name-only — the caller's `namespace` argument is
+    // arity and fall back to name-only, the caller's `namespace` argument is
     // only used when we have to synthesise a key as a last resort.
     let mut matches = local_summaries
         .keys()
@@ -1370,7 +1377,7 @@ pub(crate) fn extract_intra_file_ssa_summaries(
                 .count()
         };
 
-        // Zero-param helpers are normally elided — a fixture with no
+        // Zero-param helpers are normally elided, a fixture with no
         // parameters cannot carry per-parameter taint transforms.  But
         // zero-arg factories (`function makeBag() { return []; }`) do
         // have one observable cross-file effect: the return is a fresh
@@ -1407,7 +1414,7 @@ pub(crate) fn extract_intra_file_ssa_summaries(
         // must survive this filter so summary application at cross-file
         // call sites can replay the alias edges.  Zero-param factories
         // are kept via the `returns_fresh_alloc` leg of
-        // `points_to.is_empty()` — `is_empty()` returns false when the
+        // `points_to.is_empty()`, `is_empty()` returns false when the
         // fresh-alloc flag is set.
         if !summary.param_to_return.is_empty()
             || !summary.param_to_sink.is_empty()
@@ -1434,7 +1441,7 @@ pub(crate) fn extract_intra_file_ssa_summaries(
 }
 
 /// Lower all function bodies from `FileCfg` to produce SSA summaries + cached
-/// bodies.  Each body's own graph is used directly — no scope filtering needed.
+/// bodies.  Each body's own graph is used directly, no scope filtering needed.
 ///
 /// Both returned maps are keyed by each body's canonical [`FuncKey`] (carried
 /// on [`crate::cfg::BodyMeta::func_key`]).  This is the most collision-
@@ -1501,7 +1508,7 @@ pub(crate) fn lower_all_functions_from_bodies(
         // `build_cfg` wrote. The caller passes `namespace` already normalized
         // against `scan_root`, which is what FuncSummary keys use on the
         // cross-file side (`FuncSummary::func_key`). Overriding the namespace
-        // here keeps both sides of `GlobalSummaries` agreement — otherwise
+        // here keeps both sides of `GlobalSummaries` agreement, otherwise
         // `resolve_callee` resolves to the normalized FuncSummary key and
         // misses the raw-path SSA entry.
         let mut key = body.meta.func_key.clone().unwrap_or_else(|| {
@@ -1540,7 +1547,7 @@ pub(crate) fn lower_all_functions_from_bodies(
 
             // Always insert the summary, even when all fields are empty/default.
             // An empty summary tells resolve_callee "this function exists and has
-            // no taint effects" — preventing fallthrough to the less precise old
+            // no taint effects", preventing fallthrough to the less precise old
             // FuncSummary which may report false source_caps from internal sources.
             // For zero-param functions we only insert when the summary carries
             // the fresh-container signal (the only observable effect worth
@@ -1608,7 +1615,7 @@ pub(crate) fn lower_all_functions_from_bodies(
     // Lift child-body sinks into the parent's `param_to_sink` for
     // every parent body with lexically contained children. This
     // handles the direct-wrapper case
-    // `f(x) { return new Promise((res, rej) => sink(x)) }` — the
+    // `f(x) { return new Promise((res, rej) => sink(x)) }`, the
     // executor's gated http.get sink becomes visible to callers of
     // `f` via `f.summary.param_to_sink`.
     //
@@ -1622,8 +1629,8 @@ pub(crate) fn lower_all_functions_from_bodies(
     // propagation at summary-extraction time so cross-call
     // resolution sees the sink at every caller of `f`.
     //
-    // Strict-additive: only ADDs `param_to_sink` entries — never
-    // removes or modifies existing data — so it cannot regress
+    // Strict-additive: only ADDs `param_to_sink` entries, never
+    // removes or modifies existing data, so it cannot regress
     // detection. Bounded: each parent-param probe runs each child
     // body's analysis exactly once.
     let _t_aug = std::time::Instant::now();
@@ -1652,7 +1659,7 @@ pub(crate) fn lower_all_functions_from_bodies(
     // OR-merge: only adds `param_to_sink` / `param_to_sink_param`
     // entries to existing summaries. Existing entries (return
     // transforms, source caps, augment-populated sinks, etc.) are
-    // preserved. Strict-additive — cannot regress detection.
+    // preserved. Strict-additive, cannot regress detection.
     let _t_rerun = std::time::Instant::now();
     rerun_extraction_with_augmented_summaries(
         file_cfg,
@@ -1906,7 +1913,7 @@ fn augment_summaries_with_child_sinks(
         let parent_interner = crate::state::symbol::SymbolInterner::from_cfg(parent_cfg);
 
         // Collect (formal_param_idx, var_name, ssa_value) for the parent's
-        // formal params — mirrors `extract_ssa_func_summary`'s param scan.
+        // formal params, mirrors `extract_ssa_func_summary`'s param scan.
         let mut parent_param_info: Vec<(usize, String)> = Vec::new();
         for block in &parent_ssa.blocks {
             for inst in block.phis.iter().chain(block.body.iter()) {
@@ -2042,7 +2049,7 @@ fn augment_summaries_with_child_sinks(
                 }
 
                 // Aggregate sink caps across all child events into one
-                // entry per parent param (cap-only SinkSite — the
+                // entry per parent param (cap-only SinkSite, the
                 // exact location lives in the child body's CFG and is
                 // not directly addressable from the parent's summary).
                 let mut union_caps = Cap::empty();
@@ -2075,7 +2082,7 @@ fn augment_summaries_with_child_sinks(
                 // engine's primary sink-site picker uses
                 // `param_to_sink_param` for arg-position filtering)
                 // sees this captured-flow sink. Position 0 is a
-                // best-effort placeholder — the actual filtering at
+                // best-effort placeholder, the actual filtering at
                 // the caller is by SSRF cap, not arg position, when
                 // the wrapper is itself non-gated.
                 if !entry
@@ -2096,7 +2103,7 @@ fn augment_summaries_with_child_sinks(
 /// non-empty [`crate::ssa::type_facts::TypeKind::container_name`].
 ///
 /// Free-function calls (`receiver: None`) and unknown receiver types
-/// are skipped — the cross-file call-graph builder will fall back to
+/// are skipped, the cross-file call-graph builder will fall back to
 /// today's name-only resolution for those, preserving the
 /// "subset of today's targets, never a superset" invariant from
 /// `docs/typed-call-graph-prompt.md`.
@@ -2122,13 +2129,13 @@ fn collect_typed_call_receivers(
                 continue;
             };
             let Some(receiver_val) = receiver else {
-                continue; // free-function call — no devirtualisation possible
+                continue; // free-function call, no devirtualisation possible
             };
             let Some(kind) = type_facts.get_type(*receiver_val) else {
-                continue; // type unknown — fall back to name-only resolution
+                continue; // type unknown, fall back to name-only resolution
             };
             let Some(container) = kind.container_name() else {
-                continue; // scalar/unknown type — no useful container
+                continue; // scalar/unknown type, no useful container
             };
             let Some(node_info) = cfg.node_weight(inst.cfg_node) else {
                 continue;
@@ -2137,7 +2144,7 @@ fn collect_typed_call_receivers(
             // A single SSA call instruction maps 1:1 with a CFG call
             // node, so each ordinal should appear at most once.  The
             // dedup guard exists in case lowering ever introduces a
-            // second SSA Call sharing a cfg_node — first wins.
+            // second SSA Call sharing a cfg_node, first wins.
             if !seen.insert(ordinal) {
                 continue;
             }
@@ -2198,7 +2205,7 @@ pub(crate) fn build_eligible_bodies(
                 continue;
             }
             // Populate node metadata against the per-body graph whose NodeIndex
-            // space the SSA was produced on — otherwise cross-file replay can't
+            // space the SSA was produced on, otherwise cross-file replay can't
             // find the original CFG nodes.
             //
             // `key.namespace` was already normalised against `scan_root` in

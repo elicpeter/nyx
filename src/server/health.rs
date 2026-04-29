@@ -1,4 +1,4 @@
-//! Health-score scoring engine — v3.5.
+//! Health-score scoring engine, v3.5.
 //!
 //! Pure-function scoring over a `HealthInputs` struct.  Documented in
 //! `docs/health-score-audit.md` (calibration, rationale) and
@@ -15,7 +15,7 @@
 //!
 //! 2. **HIGH-count guardrails.** The *qualitative* axis: HIGH counts
 //!    cap the maximum grade and floor "no HIGH" to at least C.  These
-//!    are non-negotiable promises — even a perfect-everywhere-else
+//!    are non-negotiable promises, even a perfect-everywhere-else
 //!    repo with 6 confirmed HIGHs grades F.
 //!
 //! Modifiers (triage, trend, stale, regression, suppression hygiene)
@@ -27,17 +27,17 @@
 //! * Verdict-weighted credibility (`Confirmed > NotAttempted >
 //!   Inconclusive > Infeasible`).  This is the structural protection
 //!   against false-positive-driven F grades while the scanner is
-//!   still maturing — it auto-tightens as symex coverage grows.
+//!   still maturing, it auto-tightens as symex coverage grows.
 //! * Cross-file vs intra-file vs AST-only weighting via
 //!   `context_factor`.
-//! * Test-path downweight (0.3×) — a HIGH in a test fixture is
+//! * Test-path downweight (0.3×), a HIGH in a test fixture is
 //!   genuinely less concerning than one in a request handler.
-//! * Effective HIGH count for ceilings — the HIGH-count caps key on
+//! * Effective HIGH count for ceilings, the HIGH-count caps key on
 //!   credibility-adjusted HIGHs, not raw HIGHs.  A repo with 5
 //!   low-confidence HIGHs that got `NotAttempted` from symex doesn't
 //!   pay the same ceiling cost as a repo with 5 `Confirmed` HIGHs.
 //! * Tighter modifier ranges so they can't flip a band.
-//! * No `parse_success_rate` (it's actually a cache-miss metric —
+//! * No `parse_success_rate` (it's actually a cache-miss metric ,
 //!   see `project_parse_success_rate_misnomer.md`).
 
 use crate::commands::scan::Diag;
@@ -48,11 +48,11 @@ use crate::server::models::{BacklogStats, FindingSummary, HealthComponent, Healt
 // ── Tunables ─────────────────────────────────────────────────────────────────
 //
 // Calibrated for v0.5.0 scanner FP rate.  As Nyx symex coverage and
-// rule precision improve, the HIGH ceilings should tighten — see
+// rule precision improve, the HIGH ceilings should tighten, see
 // `docs/health-score-audit.md` "Calibration trajectory" for the
 // roadmap.
 
-/// Below this file count, we floor the size divisor at 1.0 — tiny
+/// Below this file count, we floor the size divisor at 1.0, tiny
 /// repos can't claim infinite per-LOC dilution from one finding.
 const FILES_FLOOR: f64 = 100.0;
 
@@ -66,7 +66,7 @@ const QUALITY_DRAG_PER_FINDING: f64 = 0.05;
 const QUALITY_DRAG_CAP: f64 = 15.0;
 
 /// Below this finding count, the Triage component contributes
-/// weight 0 — we don't punish fresh users for not having triaged
+/// weight 0, we don't punish fresh users for not having triaged
 /// what didn't need triaging.
 const TRIAGE_FLOOR: usize = 20;
 
@@ -77,7 +77,7 @@ const STALE_PENALTY_CAP: f64 = 10.0;
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /// Pure inputs to the health-score calculation.  No app state, no DB
-/// handles — those upstream concerns are flattened into primitives the
+/// handles, those upstream concerns are flattened into primitives the
 /// scorer actually consumes.
 #[derive(Debug, Clone, Copy)]
 pub struct HealthInputs<'a> {
@@ -120,7 +120,7 @@ pub fn compute(inp: &HealthInputs<'_>) -> HealthScore {
     let quality_drag = quality_drag(weighted.quality_count);
     let base_after_drag = (base_score - quality_drag).clamp(0.0, 100.0);
 
-    // Step 5: HIGH-count guardrails — keyed on *effective* HIGH count
+    // Step 5: HIGH-count guardrails, keyed on *effective* HIGH count
     // (credibility-weighted), not raw count.  This is what protects
     // users from FP-driven F grades while the scanner is maturing.
     let ceiling = high_total_ceiling(weighted.effective_high);
@@ -161,9 +161,9 @@ struct WeightedAggregate {
     /// context_factor` across security findings.  Quality lints are
     /// handled separately via `quality_drag`.
     raw_weight: f64,
-    /// Number of `*.quality.*` findings — drives `quality_drag`.
+    /// Number of `*.quality.*` findings, drives `quality_drag`.
     quality_count: usize,
-    /// Credibility-adjusted HIGH count (rounded) — drives the HIGH
+    /// Credibility-adjusted HIGH count (rounded), drives the HIGH
     /// ceiling and floor.  A low-confidence + Inconclusive HIGH might
     /// contribute 0.2; five of them would round to 1.
     effective_high: usize,
@@ -171,10 +171,10 @@ struct WeightedAggregate {
     raw_high: usize,
     raw_medium: usize,
     raw_low_security: usize,
-    /// Confidence rate (high+medium*0.5)/total — drives the
+    /// Confidence rate (high+medium*0.5)/total, drives the
     /// confidence component.  100 if no findings.
     confidence_rate: f64,
-    /// Symex coverage — % of taint findings with any non-NotAttempted
+    /// Symex coverage, % of taint findings with any non-NotAttempted
     /// verdict.  Surfaced in component detail; not currently in score.
     symex_coverage: f64,
 }
@@ -218,7 +218,7 @@ fn aggregate_findings(findings: &[Diag]) -> WeightedAggregate {
             _ => 0.0,
         };
 
-        // Symex coverage tracking — only meaningful for findings with
+        // Symex coverage tracking, only meaningful for findings with
         // taint-flow evidence (the ones symex even attempts).
         if let Some(ev) = f.evidence.as_ref()
             && ev.symbolic.is_some()
@@ -294,7 +294,7 @@ fn context_factor(f: &Diag) -> f64 {
         return 0.3;
     }
     let Some(ev) = f.evidence.as_ref() else {
-        return 0.75; // No evidence at all — pattern match
+        return 0.75; // No evidence at all, pattern match
     };
     if ev.flow_steps.is_empty() {
         return 0.75;
@@ -351,7 +351,7 @@ fn quality_drag(quality_count: usize) -> f64 {
     (quality_count as f64 * QUALITY_DRAG_PER_FINDING).min(QUALITY_DRAG_CAP)
 }
 
-// ── HIGH guardrails — calibrated for v0.5.0 FP rate ──────────────────────────
+// ── HIGH guardrails, calibrated for v0.5.0 FP rate ──────────────────────────
 
 /// Final-score ceiling keyed on *effective* HIGH count (credibility-
 /// weighted, not raw).  See module docstring for the rationale.
@@ -398,7 +398,7 @@ fn build_components(
     let sev_score = base_after_drag.round().clamp(0.0, 100.0) as u8;
     let sev_detail = severity_detail(weighted, size_divisor, inp.repo_files, inp.backlog);
 
-    // Confidence component — high-conf rate scaled into 0..=100.
+    // Confidence component, high-conf rate scaled into 0..=100.
     let conf_score = weighted.confidence_rate.round().clamp(0.0, 100.0) as u8;
     let conf_detail = format!(
         "High-confidence rate {:.0}% across {} security finding{}",
@@ -407,7 +407,7 @@ fn build_components(
         plural_s(total - weighted.quality_count)
     );
 
-    // Trend component — only contributes weight when has_history.
+    // Trend component, only contributes weight when has_history.
     let net = inp.fixed_since_last as i64 - inp.new_since_last as i64;
     let trend_score = (50 + net * 5).clamp(0, 100) as u8;
     let trend_weight = if inp.has_history { 0.20 } else { 0.0 };
@@ -420,7 +420,7 @@ fn build_components(
         "Not applicable: no prior scan to compare against (re-scan to populate)".into()
     };
 
-    // Triage — drops out when total < TRIAGE_FLOOR.
+    // Triage, drops out when total < TRIAGE_FLOOR.
     let triage_active = total >= TRIAGE_FLOOR;
     let triage_score = (inp.triage_coverage * 100.0).round().clamp(0.0, 100.0) as u8;
     let triage_weight = if triage_active { 0.20 } else { 0.0 };
@@ -470,7 +470,7 @@ fn build_components(
         HealthComponent {
             label: "Severity pressure".into(),
             score: sev_score,
-            weight: 1.0, // Severity is the *base*, not a modifier — full weight in the blend.
+            weight: 1.0, // Severity is the *base*, not a modifier, full weight in the blend.
             detail: sev_detail,
         },
         HealthComponent {
@@ -770,7 +770,7 @@ mod tests {
             .collect();
         let s = summary_of(&findings);
         let h = compute(&first_scan(&s, &findings, 0.0, 100));
-        // The score reflects credibility — should NOT crater to F.
+        // The score reflects credibility, should NOT crater to F.
         assert!(
             h.score >= 60,
             "low-credibility HIGHs shouldn't crater to F, got {}",

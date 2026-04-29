@@ -4,7 +4,7 @@
 // `let community = Community::read(pool, req.community_id)` records
 // `community → [req.community_id]` in `row_population_data`.  An auth
 // check `check_community_user_action(&user, &community, ..)` then
-// authorises the row — and any **downstream** operation that re-uses
+// authorises the row, and any **downstream** operation that re-uses
 // `req.community_id` (a later mutation by the same id, or a related
 // view fetched by the same id) is materially covered by that check.
 //
@@ -71,7 +71,7 @@ pub async fn transfer_community(
     pool: &mut Pool,
     local_user_view: LocalUserView,
 ) -> Result<(), ()> {
-    // Row fetch — `community` is populated from `req.community_id`.
+    // Row fetch, `community` is populated from `req.community_id`.
     let community = Community::read(pool, req.community_id)?;
 
     // Authorisation check on the fetched row.  Subject = `community`
@@ -84,7 +84,7 @@ pub async fn transfer_community(
     // the row that was fetched with this id).
     CommunityActions::delete_mods_for_community(pool, req.community_id)?;
 
-    // Local alias of the same request field — `var_alias_chain`
+    // Local alias of the same request field, `var_alias_chain`
     // records `community_id → "req.community_id"` so the reverse-walk
     // also covers downstream sinks that pass the bare alias.  Before
     // the alias-chain fix, the next read fired

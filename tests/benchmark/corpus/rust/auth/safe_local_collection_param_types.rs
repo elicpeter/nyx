@@ -23,7 +23,7 @@ impl RoaringBitmap {
     fn contains(&self, _x: u32) -> bool { true }
 }
 
-// 1. Bare-typed RoaringBitmap parameter — function has id-like param
+// 1. Bare-typed RoaringBitmap parameter, function has id-like param
 //    `docid` so user-input-evidence fires; the receiver type proves
 //    the operation is in-memory bookkeeping.
 fn balance_shards(mut unsharded: RoaringBitmap, docid: u32) {
@@ -31,7 +31,7 @@ fn balance_shards(mut unsharded: RoaringBitmap, docid: u32) {
     unsharded.remove(docid);
 }
 
-// 2. `&mut RoaringBitmap` reference — ref-stripping must reach the
+// 2. `&mut RoaringBitmap` reference, ref-stripping must reach the
 //    underlying type head.
 fn process_docids(docids: &mut RoaringBitmap, docid: u32) {
     docids.insert(docid);
@@ -55,7 +55,7 @@ fn add_user_id(ids: &mut HashSet<u64>, user_id: u64) {
     ids.remove(&user_id);
 }
 
-// 5. Local var bound from constructor — already covered, but pinned
+// 5. Local var bound from constructor, already covered, but pinned
 //    here as a regression guard for the `RoaringBitmap::new()`
 //    constructor entry.
 fn build_local_set(task_id: u32) -> RoaringBitmap {

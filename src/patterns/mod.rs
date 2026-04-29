@@ -30,7 +30,7 @@ pub enum Severity {
 impl Severity {
     /// Bracketed, colored, fixed-width tag for aligned console output.
     ///
-    /// Returns e.g. `"[HIGH]  "` or `"[MEDIUM]"` — always 8 visible characters
+    /// Returns e.g. `"[HIGH]  "` or `"[MEDIUM]"`, always 8 visible characters
     /// so the column after the tag lines up regardless of severity.
     #[allow(dead_code)] // public API for lib consumers
     pub fn colored_tag(self) -> String {
@@ -85,9 +85,9 @@ impl FromStr for Severity {
 /// A parsed severity filter expression.
 ///
 /// Supports three forms:
-///   - Single level: `"HIGH"` — matches only that level
-///   - Comma list: `"HIGH,MEDIUM"` — matches any listed level
-///   - Threshold: `">=MEDIUM"` — matches that level and above
+///   - Single level: `"HIGH"`, matches only that level
+///   - Comma list: `"HIGH,MEDIUM"`, matches any listed level
+///   - Threshold: `">=MEDIUM"`, matches that level and above
 ///
 /// Parsing is case-insensitive and tolerates whitespace around tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,7 +204,7 @@ impl PatternCategory {
 /// One AST pattern with a tree-sitter query and meta-data.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Pattern {
-    /// Unique identifier — `<lang>.<category>.<specific>` preferred.
+    /// Unique identifier, `<lang>.<category>.<specific>` preferred.
     pub id: &'static str,
     /// Human-readable explanation.
     pub description: &'static str,

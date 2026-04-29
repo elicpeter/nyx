@@ -18,7 +18,7 @@ use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Mutex;
 
-/// Env-var writes are process-global — integration tests run multiple
+/// Env-var writes are process-global, integration tests run multiple
 /// `#[test]` functions in one binary, and rayon dispatches the analyser on
 /// background threads that read the env table concurrently.  Serialize the
 /// set/clear dance so a test that expects "no injection" never races a test
@@ -73,7 +73,7 @@ where
 }
 
 /// With injection armed and a file whose path contains the marker, the scan
-/// MUST fail in a way the caller can observe — either a propagated panic or
+/// MUST fail in a way the caller can observe, either a propagated panic or
 /// a returned error.  Silently succeeding would mean findings from poisoned
 /// analysis were emitted as legitimate output.  We also verify the clean
 /// file on disk is a plausible target (the injection only fires for the
@@ -83,7 +83,7 @@ fn scan_surfaces_injected_panic_from_worker() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
 
-    // Clean file — if the injection hook incorrectly fired on every path we
+    // Clean file, if the injection hook incorrectly fired on every path we
     // would see this one panic too.
     std::fs::write(
         root.join("normal.js"),
@@ -92,7 +92,7 @@ fn scan_surfaces_injected_panic_from_worker() {
     )
     .unwrap();
 
-    // File whose path contains the marker — must trigger the injected panic.
+    // File whose path contains the marker, must trigger the injected panic.
     let poisoned = format!("{PANIC_MARKER}.js");
     std::fs::write(
         root.join(&poisoned),
@@ -111,16 +111,16 @@ fn scan_surfaces_injected_panic_from_worker() {
 
     // Current behaviour (pre-`enable_panic_recovery`): the scan panics
     // out of rayon.  If a future change adds panic containment, the scan
-    // would instead return Ok with a warning — that counts as surfacing
+    // would instead return Ok with a warning, that counts as surfacing
     // the failure and is also acceptable here.  The thing we refuse to
     // accept silently is a successful scan that claims the poisoned file
     // was analysed without incident.
     match outcome {
         Err(_panic) => {
-            // Panic propagated — expected today.
+            // Panic propagated, expected today.
         }
         Ok(Err(_nyx_err)) => {
-            // Graceful error — acceptable if recovery ever lands.
+            // Graceful error, acceptable if recovery ever lands.
         }
         Ok(Ok(_diags)) => {
             // If the scan completes successfully, the poisoned file was
@@ -151,7 +151,7 @@ fn clean_scan_without_injection_does_not_panic() {
     std::fs::write(root.join(format!("{PANIC_MARKER}.js")), b"var safe = 1;\n").unwrap();
 
     // Ensure the marker is not armed for this test even if a prior test
-    // leaked state (belt-and-suspenders — `with_panic_injection` already
+    // leaked state (belt-and-suspenders, `with_panic_injection` already
     // cleans up, but concurrent test binaries share a process env).
     let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
@@ -161,7 +161,7 @@ fn clean_scan_without_injection_does_not_panic() {
         .expect("clean scan with injection disarmed must succeed");
     drop(guard);
 
-    // The JS file has cp.exec(cmd) on a tainted arg — at minimum one
+    // The JS file has cp.exec(cmd) on a tainted arg, at minimum one
     // finding should surface, proving the scan actually analysed files
     // rather than silently short-circuiting.
     assert!(
@@ -203,7 +203,7 @@ fn recovery_mode_skips_poisoned_file_and_continues() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
 
-    // Clean file with a tainted cp.exec — we expect at least one finding.
+    // Clean file with a tainted cp.exec, we expect at least one finding.
     std::fs::write(
         root.join("normal.js"),
         b"const cp = require('child_process');\n\
@@ -238,7 +238,7 @@ fn recovery_mode_skips_poisoned_file_and_continues() {
         ),
     };
 
-    // The clean file must still surface its finding — proof the rayon
+    // The clean file must still surface its finding, proof the rayon
     // pipeline kept running after the poisoned worker panicked.
     assert!(
         diags

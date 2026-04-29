@@ -6,7 +6,7 @@
 //! Three fixtures cover distinct structural shapes of the summary
 //! channel:
 //!
-//! * `cross_file_alias_mutating_helper` (Java) — a void-returning
+//! * `cross_file_alias_mutating_helper` (Java), a void-returning
 //!   helper that stores its second argument into a field of its first
 //!   argument.  Without the points-to channel the cross-file summary
 //!   loses every taint edge (void return, no container-op in
@@ -14,20 +14,20 @@
 //!   edge and the caller observes the field write through the argument
 //!   alias, producing a Runtime.exec finding.
 //!
-//! * `cross_file_alias_returned_alias` (JS) — a passthrough helper
+//! * `cross_file_alias_returned_alias` (JS), a passthrough helper
 //!   whose return aliases its first parameter.  `param_to_return` with
 //!   `Identity` already covered the taint cap; the points-to channel
 //!   adds the heap-identity alias `Param(0) → Return` so the caller
 //!   threads the points-to set through the call.  The existing
-//!   shell-exec sink must still fire — a regression guard on the
+//!   shell-exec sink must still fire, a regression guard on the
 //!   return-alias channel.
 //!
-//! * `cross_file_alias_bounded_graph` (Python) — a helper with a 20-
+//! * `cross_file_alias_bounded_graph` (Python), a helper with a 20-
 //!   edge alias graph that intentionally overflows `MAX_ALIAS_EDGES`.
 //!   The assertion is that the scan *terminates* under the bounded
 //!   analysis and falls back to the conservative
 //!   `PointsToSummary::overflow` behaviour, not a specific finding
-//!   count — overflow is an operational guarantee, not a precision one.
+//!   count, overflow is an operational guarantee, not a precision one.
 
 mod common;
 
@@ -76,7 +76,7 @@ fn cross_file_container_factory() {
 }
 
 /// Receiver-chain regression: tainted receiver flows through
-/// `tainted.trim().toLowerCase()` — both zero-arg — and into
+/// `tainted.trim().toLowerCase()`, both zero-arg, and into
 /// `Runtime.exec`.  Pins the existing receiver-fallback behaviour so
 /// heap-aliasing changes do not regress it.
 #[test]

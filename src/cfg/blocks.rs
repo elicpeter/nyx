@@ -10,7 +10,7 @@ use tree_sitter::Node;
 /// at the *case-level* shape `build_switch` sees here. Rust `match`, Go
 /// `switch`, and Java arrow-switches qualify; classic Java/C/C++/JS switches
 /// with fall-through do not. The check is per-language because Java mixes
-/// arrow and classic shapes — that's handled by inspecting the case kind in
+/// arrow and classic shapes, that's handled by inspecting the case kind in
 /// [`extract_case_literal_text`].
 fn lang_has_exclusive_cases(lang: &str) -> bool {
     matches!(lang, "rust" | "go")
@@ -19,7 +19,7 @@ fn lang_has_exclusive_cases(lang: &str) -> bool {
 /// Extract the scrutinee subtree from a switch-like AST node.
 ///
 /// Returns the AST node referenced by the language's scrutinee field. Only
-/// fires for Rust `match`, Go `switch`, and Java `switch` statements — other
+/// fires for Rust `match`, Go `switch`, and Java `switch` statements, other
 /// languages return `None` so [`build_switch`] keeps its legacy behavior.
 fn extract_scrutinee_node<'a>(ast: Node<'a>, lang: &str) -> Option<Node<'a>> {
     let field = match lang {
@@ -39,7 +39,7 @@ fn extract_case_literal_text<'a>(case: Node<'a>, lang: &str, code: &'a [u8]) -> 
     let kind = case.kind();
     match (lang, kind) {
         ("rust", "match_arm") => {
-            // Reject guarded arms — `match x { y if cond => ... }`.
+            // Reject guarded arms, `match x { y if cond => ... }`.
             if case.child_by_field_name("guard").is_some() {
                 return None;
             }
@@ -71,7 +71,7 @@ fn extract_case_literal_text<'a>(case: Node<'a>, lang: &str, code: &'a [u8]) -> 
             text_of(inner, code)
         }
         ("go", "expression_case") => {
-            // Go case `case v1, v2: ...` — only handle exactly one expression.
+            // Go case `case v1, v2: ...`, only handle exactly one expression.
             let value = case.child_by_field_name("value")?;
             let mut named_children: Vec<Node> = Vec::new();
             let mut cursor = value.walk();
@@ -195,7 +195,7 @@ pub(super) fn extract_catch_param_name<'a>(
 // -------------------------------------------------------------------------
 
 /// Builds CFG for Ruby's `begin`/`rescue`/`ensure` blocks (and `body_statement`
-/// with inline rescue).  Ruby's `begin` has no `body` field — the try-body
+/// with inline rescue).  Ruby's `begin` has no `body` field, the try-body
 /// statements are direct children before `rescue`/`else`/`ensure` nodes.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_begin_rescue<'a>(
@@ -305,7 +305,7 @@ pub(super) fn build_begin_rescue<'a>(
 
             vec![synth]
         } else {
-            // No param name — will wire exception edges to first rescue body node
+            // No param name, will wire exception edges to first rescue body node
             Vec::new()
         };
 
@@ -333,7 +333,7 @@ pub(super) fn build_begin_rescue<'a>(
                 current_body_id,
             )
         } else {
-            // No body field — build rescue node itself as a block.
+            // No body field, build rescue node itself as a block.
             // Filter out meta-children (exceptions, exception_variable) by
             // iterating and building only statement children.
             let mut rescue_cursor = rescue_node.walk();
@@ -407,7 +407,7 @@ pub(super) fn build_begin_rescue<'a>(
         try_exits
     };
 
-    // 6. Build ensure clause (Ruby's finally — always runs)
+    // 6. Build ensure clause (Ruby's finally, always runs)
     if let Some(ensure_node) = ensure_clause {
         let mut ensure_preds: Vec<NodeIndex> = Vec::new();
         ensure_preds.extend(&normal_exits);
@@ -443,7 +443,7 @@ pub(super) fn build_begin_rescue<'a>(
 }
 
 // -------------------------------------------------------------------------
-//    switch handler — multi-way dispatch with fallthrough
+//    switch handler, multi-way dispatch with fallthrough
 // -------------------------------------------------------------------------
 
 /// True for AST kinds that wrap a single switch case body.
@@ -490,7 +490,7 @@ pub(super) fn case_has_default_label(case: Node<'_>) -> bool {
 /// Build CFG for a switch statement.
 ///
 /// The dispatch is decomposed into a chain of binary `StmtKind::If` headers
-/// — one per non-default case — because the SSA terminator only models 0/1/2
+///, one per non-default case, because the SSA terminator only models 0/1/2
 /// successors. A monolithic N-way header would otherwise be collapsed to
 /// `Goto(first)` and silently drop every other case. Each header's True edge
 /// reaches its case body; the False edge falls through to the next header (or
@@ -544,7 +544,7 @@ pub(super) fn build_switch<'a>(
         }
     }
 
-    // Grammar didn't expose recognisable case nodes — fall back to a single
+    // Grammar didn't expose recognisable case nodes, fall back to a single
     // header + Block-style walk so nodes still get linked.
     if cases.is_empty() {
         let header = push_node(
@@ -603,7 +603,7 @@ pub(super) fn build_switch<'a>(
     // arrow-switch), pre-extract the scrutinee text + idents so the synthetic
     // dispatch headers can carry a `<scrutinee> == <case_literal>` condition.
     // Falls back to `None` when the scrutinee is structurally complex (calls,
-    // member chains, parenthesized expressions in Go) — the existing first-
+    // member chains, parenthesized expressions in Go), the existing first-
     // reachable behavior remains correct in that case.
     let supports_exclusive_cases = lang_has_exclusive_cases(lang) || lang == "java";
     let (scrutinee_text, scrutinee_idents) = if supports_exclusive_cases {
@@ -647,7 +647,7 @@ pub(super) fn build_switch<'a>(
     for (idx, (case, is_default)) in cases.iter().copied().enumerate() {
         let is_last = idx + 1 == cases.len();
 
-        // Default at the chain tail doesn't get its own dispatch If — the
+        // Default at the chain tail doesn't get its own dispatch If, the
         // previous header's False edge already targets it directly.
         let case_first_preds: Vec<NodeIndex> = if is_default && is_last {
             // First node of the default body becomes the False target of the
@@ -675,12 +675,13 @@ pub(super) fn build_switch<'a>(
             );
             // The dispatch header is purely structural (it stands in for the
             // discriminant comparison). It must not inherit Sink/Source labels
-            // from the case body's text — push_node uses `text_of(ast)` for
+            // from the case body's text, push_node uses `text_of(ast)` for
             // non-call kinds, which would let the body text drive classification.
             g[header].taint.labels.clear();
             g[header].call.callee = None;
             g[header].call.sink_payload_args = None;
             g[header].call.destination_uses = None;
+            g[header].call.gate_filters.clear();
             // For mutually-exclusive switch shapes with a single-ident
             // scrutinee, synthesize a `<scrutinee> == <case_literal>`
             // structured condition on the dispatch header so SSA lowering
@@ -958,7 +959,7 @@ pub(super) fn build_try<'a>(
 
                 vec![synth]
             } else {
-                // No param name — wire exception edges directly to first catch body node
+                // No param name, wire exception edges directly to first catch body node
                 Vec::new()
             };
 

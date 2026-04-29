@@ -5,6 +5,7 @@
 /.idea
 /frontend/node_modules
 /src/server/assets/dist
+/marketing
 /.nyx
 /logs
 /book

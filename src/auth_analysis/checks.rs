@@ -220,7 +220,7 @@ fn check_token_override_without_validation(
     let mut findings = Vec::new();
 
     for unit in &model.units {
-        // The rule reasons about "Token acceptance flow" — by
+        // The rule reasons about "Token acceptance flow", by
         // construction, that is a user-facing handler that receives a
         // token from the client and writes through token-bound state.
         // Internal helpers, Celery / cron tasks, Django migrations,
@@ -350,7 +350,7 @@ fn has_prior_subject_auth(
 /// Coverage is intentionally narrow: only the row-fetch operation is
 /// exempted.  Any sink that runs *between* the fetch and the check
 /// (e.g. `delete(community)` before `check_*`) still flags, because
-/// its subject is `community` itself — not a fetch arg — and we
+/// its subject is `community` itself, not a fetch arg, and we
 /// require the operation to be a row-fetch site to apply the
 /// exemption.
 fn has_row_fetch_exemption(unit: &AnalysisUnit, op: &SensitiveOperation) -> bool {
@@ -371,8 +371,8 @@ fn has_row_fetch_exemption(unit: &AnalysisUnit, op: &SensitiveOperation) -> bool
 
     // Look for any non-login auth check whose subjects mention the row.
     // Match against the *root* of the subject's chain (`a.b.c` → `a`)
-    // so an auth check on a row's nested field — e.g.
-    // `is_mod_or_admin(pool, &user, comment_view.community.id)` —
+    // so an auth check on a row's nested field, e.g.
+    // `is_mod_or_admin(pool, &user, comment_view.community.id)` ,
     // still names the row var.
     unit.auth_checks.iter().any(|check| {
         if matches!(
@@ -430,8 +430,8 @@ fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef, unit: &Analy
     // `@permission_required`, Spring `@PreAuthorize`, Rails
     // `before_action :authorize`, axum `RequireAuthorizationLayer`)
     // gates the entire handler.  The decorator / dependency call is
-    // opaque to the engine — the inner `requires_access_dag` carries
-    // no per-arg `ValueRef` pointing back into the handler body — so
+    // opaque to the engine, the inner `requires_access_dag` carries
+    // no per-arg `ValueRef` pointing back into the handler body, so
     // the per-name subject coverage walk below cannot match it.  The
     // structural shape, however, is unambiguous: every value the
     // handler receives, every row it fetches, and every sink it
@@ -442,7 +442,7 @@ fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef, unit: &Analy
     // `LoginGuard` / `TokenExpiry` / `TokenRecipient` kinds before
     // calling this helper (login alone proves identity, not
     // authorization), so by the time we land here the kind is
-    // `Other` / `Membership` / `Ownership` / `AdminGuard` — i.e. an
+    // `Other` / `Membership` / `Ownership` / `AdminGuard`, i.e. an
     // authorization-bearing decorator-level check.  Returning `true`
     // unconditionally for those is the correct semantics.
     if check.is_route_level {
@@ -470,7 +470,7 @@ fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef, unit: &Analy
     // check authorizes the resulting row (e.g. `check_community_user_action(
     // &user, &community, ..)` after `let community = Community::read(
     // pool, data.community_id)`), the check materially covers
-    // `data.community_id` too — it gated access to the row that was
+    // `data.community_id` too, it gated access to the row that was
     // fetched using that id, so any subsequent operation re-using the
     // same id (read of a related view, mutation on the row itself) is
     // within the scope of that authorization.
@@ -550,7 +550,7 @@ fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef, unit: &Analy
 /// to recover every ancestor row binding name.  Cycle-safe via a
 /// visited set; depth-bounded at 16 hops to keep the worst case
 /// trivial.  Returns a vec containing `start` followed by each
-/// ancestor — empty when `start` is empty.
+/// ancestor, empty when `start` is empty.
 fn row_binding_chain(unit: &AnalysisUnit, start: &str) -> Vec<String> {
     let mut chain: Vec<String> = Vec::new();
     if start.is_empty() {
@@ -606,7 +606,7 @@ fn is_relevant_target_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
 /// it to a literal constant (`id := "id"`, `let userId = 1`, etc.).
 /// Such bindings cannot be user-controlled and so must not be
 /// classified as scoped-identifier subjects.  Only matches plain
-/// `Identifier`-kind subjects (no base/field) — member chains like
+/// `Identifier`-kind subjects (no base/field), member chains like
 /// `req.params.id` still pass through to the regular checks.
 fn is_const_bound_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
     if subject.base.is_some() || subject.field.is_some() {
@@ -617,7 +617,7 @@ fn is_const_bound_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
 
 /// True iff `subject` is a plain identifier that resolves to a
 /// function parameter whose static type is a payload-incompatible
-/// scalar (numeric or boolean — see [`super::apply_typed_bounded_params`]).
+/// scalar (numeric or boolean, see [`super::apply_typed_bounded_params`]).
 /// Spring `@PathVariable Long userId`, Axum `Path<i64>`, NestJS
 /// `@Param('id') id: number`, and FastAPI `user_id: int` all qualify.
 ///
@@ -632,7 +632,7 @@ fn is_typed_bounded_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
     // typed-extractor parameter and whose field is declared as an
     // Int/Bool in the same-file DTO definition.  Per Hard Rule 3,
     // only fires when the base param itself was recognised by a
-    // typed-extractor matcher — bare `dto.age` without a framework gate
+    // typed-extractor matcher, bare `dto.age` without a framework gate
     // never lifts.
     let Some(base) = subject.base.as_deref() else {
         return false;
@@ -668,7 +668,7 @@ fn is_actor_context_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
     // A3: `V.id`-shape subjects where `V` is bound from a login-guard /
     // auth-check call (or from a typed self-actor extractor parameter)
     // are the caller's own id. `V.group_id` / `V.workspace_id` stay
-    // relevant — only self-identifier fields trip this branch, so
+    // relevant, only self-identifier fields trip this branch, so
     // foreign scoped ids on the same actor binding still flag.
     if let Some(base) = subject.base.as_deref() {
         let root = base.split('.').next().unwrap_or(base);
@@ -680,7 +680,7 @@ fn is_actor_context_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
     }
 
     // Transitive copy of `V.id`: `let uid = user.id; query(.., &[uid])`
-    // — the subject `uid` is a plain identifier with no base/field, but
+    //, the subject `uid` is a plain identifier with no base/field, but
     // was recorded as a self-actor id copy at extract time.  Treat it
     // as actor context.
     if unit.self_actor_id_vars.contains(&subject.name) {
@@ -833,15 +833,15 @@ fn is_id_like_name(name: &str) -> bool {
 }
 
 /// True when the analysis unit shows positive evidence of receiving
-/// user-controlled input — the precondition for any auth rule that
+/// user-controlled input, the precondition for any auth rule that
 /// reasons about "scoped identifier" or "token-acceptance flow"
 /// shapes.
 ///
 /// A unit qualifies if any of the following hold:
-/// * It is a recognised framework route handler (`RouteHandler` —
+/// * It is a recognised framework route handler (`RouteHandler` ,
 ///   the strongest signal: registered with a router).
 /// * It accesses a request-shaped value (`request.body`, `req.params`,
-///   `c.Query(..)`, etc.) — populated as `context_inputs`.
+///   `c.Query(..)`, etc.), populated as `context_inputs`.
 /// * It declares at least one parameter whose name signals an
 ///   externally-supplied value (id-like, token-like, request-like).
 ///   Internal helpers that take only typed objects
@@ -849,7 +849,7 @@ fn is_id_like_name(name: &str) -> bool {
 ///   `items`) are excluded.
 ///
 /// Migrations, Celery tasks, pytest fixtures, conftest hooks, and
-/// pure utility helpers fail all three conditions and are skipped —
+/// pure utility helpers fail all three conditions and are skipped ,
 /// they cannot, by construction, be the entry point of an
 /// authentication-bearing flow.
 fn unit_has_user_input_evidence(unit: &AnalysisUnit) -> bool {
@@ -866,7 +866,7 @@ fn unit_has_user_input_evidence(unit: &AnalysisUnit) -> bool {
 /// as part of its calling contract?  Captures three classes of name:
 ///   * id-like (`*_id`, `*Id`, `id`, `*Ids`),
 ///   * token-like (`token`, `*_token`, `accessToken`),
-///   * framework-request objects (`request`, `req`, `ctx` — the
+///   * framework-request objects (`request`, `req`, `ctx`, the
 ///     standard names used by Express/Django/Flask/Gin/Axum/NestJS
 ///     handlers as the parameter that carries the HTTP request).
 ///
@@ -878,7 +878,7 @@ fn is_external_input_param_name(name: &str) -> bool {
     // `@mock.patch(...)` decorators are universally named
     // `mock_<thing>` (`mock_project_id`, `mock_session`,
     // `mock_user_id`).  Their values are MagicMock instances created
-    // by the test framework, not user-supplied input — even when the
+    // by the test framework, not user-supplied input, even when the
     // suffix carries an id-shaped tail.  Refusing the entire `mock_`
     // prefix is structural (mirrors pytest's documented convention)
     // and closes the airflow `tests/unit/google/cloud/hooks/`
@@ -893,7 +893,7 @@ fn is_external_input_param_name(name: &str) -> bool {
     }
     let lower = name.to_ascii_lowercase();
     // Token-shaped: bare `token` or any `*_token` / `*Token` /
-    // `accessToken` / `refreshToken`-style suffix.  Conservative —
+    // `accessToken` / `refreshToken`-style suffix.  Conservative ,
     // only fires on explicit token-naming, not on incidental
     // substrings.
     if lower == "token" || lower.ends_with("_token") || lower.ends_with("token") {
@@ -988,7 +988,7 @@ mod tests {
         assert!(is_actor_context_subject(&member("user", "uid"), &unit));
 
         // Pitfall guard: `user.group_id` / `user.workspace_id` stay
-        // relevant — only self-identifier fields trip the widening.
+        // relevant, only self-identifier fields trip the widening.
         assert!(!is_actor_context_subject(
             &member("user", "group_id"),
             &unit
@@ -999,7 +999,7 @@ mod tests {
         ));
 
         // Variables not in self_actor_vars fall back to the existing
-        // identity-key match — `target.id` still flags.
+        // identity-key match, `target.id` still flags.
         assert!(!is_actor_context_subject(&member("target", "id"), &unit));
     }
 
@@ -1073,7 +1073,7 @@ mod tests {
         assert!(!is_relevant_target_subject(&plain("id"), &unit));
 
         // Plain `id` NOT in the const-bound set still flags as
-        // relevant — regression guard for the user-controlled case.
+        // relevant, regression guard for the user-controlled case.
         let unit2 = empty_unit();
         assert!(is_relevant_target_subject(&plain("id"), &unit2));
 
@@ -1088,7 +1088,7 @@ mod tests {
     /// Axum `Path<i64>`, FastAPI `user_id: int`) has its name added to
     /// `unit.typed_bounded_vars` by `apply_typed_bounded_params`.  The
     /// subject `userId` then must not be classified as a scoped
-    /// identifier — the framework guarantees the value is numeric and
+    /// identifier, the framework guarantees the value is numeric and
     /// cannot drive ownership-bypass.
     #[test]
     fn typed_bounded_plain_subjects_are_not_relevant() {
@@ -1103,7 +1103,7 @@ mod tests {
         assert!(is_relevant_target_subject(&plain("user_id"), &unit2));
 
         // Member access `req.user_id` is unaffected (only plain
-        // identifiers are exempted — fields/base remain regular
+        // identifiers are exempted, fields/base remain regular
         // subjects so DTO-shape leaks still flag).
         unit.typed_bounded_vars.insert("req".into());
         assert!(is_relevant_target_subject(&member("req", "user_id"), &unit));
@@ -1117,17 +1117,17 @@ mod tests {
     #[test]
     fn unit_user_input_evidence_recognises_external_inputs() {
         // Function with no params and no context_inputs (Celery task
-        // shape) — must NOT count as user-input-bearing.
+        // shape), must NOT count as user-input-bearing.
         let mut unit = empty_unit();
         assert!(!unit_has_user_input_evidence(&unit));
 
-        // Adding internal-typed params (apps, schema_editor — Django
+        // Adding internal-typed params (apps, schema_editor, Django
         // migration RunPython callback shape) keeps the gate closed.
         unit.params.push("apps".into());
         unit.params.push("schema_editor".into());
         assert!(!unit_has_user_input_evidence(&unit));
 
-        // pytest hook shape: (config, items) — gate stays closed.
+        // pytest hook shape: (config, items), gate stays closed.
         let mut unit = empty_unit();
         unit.params.push("config".into());
         unit.params.push("items".into());
@@ -1213,7 +1213,7 @@ mod tests {
     /// Row var declared at line 10; auth check naming the row appears
     /// at line 20.  An operation at line 10 (the fetch) is exempted
     /// because the auth check authorises the resulting row.  Coverage
-    /// is intentionally narrow — operations between fetch (10) and
+    /// is intentionally narrow, operations between fetch (10) and
     /// check (20) that are NOT row-fetch sites must still flag.
     #[test]
     fn row_fetch_exemption_covers_fetch_when_check_names_row() {
@@ -1252,7 +1252,7 @@ mod tests {
         assert!(has_row_fetch_exemption(&unit, &fetch_op));
 
         // Operation at a different line (between fetch and check) is
-        // NOT a row-fetch site — exemption does not apply.
+        // NOT a row-fetch site, exemption does not apply.
         let mid_op = SensitiveOperation {
             kind: OperationKind::Mutation,
             sink_class: None,
@@ -1275,7 +1275,7 @@ mod tests {
             "community".to_string(),
             (10, vec![member("data", "community_id")]),
         );
-        // No auth check pushed — exemption must NOT apply.
+        // No auth check pushed, exemption must NOT apply.
 
         let fetch_op = SensitiveOperation {
             kind: OperationKind::Read,
@@ -1302,7 +1302,7 @@ mod tests {
             (10, vec![member("data", "community_id")]),
         );
         // Login-only check on the row should NOT exempt the row-fetch
-        // — login proves identity, not authorization.
+        //, login proves identity, not authorization.
         unit.auth_checks.push(AuthCheck {
             kind: AuthCheckKind::LoginGuard,
             callee: "require_login".into(),
@@ -1356,7 +1356,7 @@ mod tests {
         };
 
         // Direct member subject `data.community_id` (the original
-        // request field) — covered via reverse-walk.
+        // request field), covered via reverse-walk.
         assert!(auth_check_covers_subject(
             &check,
             &member("data", "community_id"),
@@ -1382,7 +1382,7 @@ mod tests {
     /// Subject as plain identifier copied from the request
     /// (`let community_id = data.community_id; let community =
     /// Community::read(pool, community_id);`) must also benefit from
-    /// the reverse-walk — `row_population_data["community"]` then
+    /// the reverse-walk, `row_population_data["community"]` then
     /// records `[community_id]` (a plain identifier, not the
     /// member-access shape).
     #[test]
@@ -1444,7 +1444,7 @@ mod tests {
             is_route_level: false,
         };
 
-        // Sink subject is the bare alias — covered via the chain.
+        // Sink subject is the bare alias, covered via the chain.
         assert!(auth_check_covers_subject(
             &check,
             &plain("community_id"),
@@ -1491,7 +1491,7 @@ mod tests {
             is_route_level: true,
         };
 
-        // Any subject is covered when the check is route-level —
+        // Any subject is covered when the check is route-level ,
         // path param, request body field, row-fetch receiver, all of
         // them.  The per-name walk would have rejected each.
         assert!(auth_check_covers_subject(

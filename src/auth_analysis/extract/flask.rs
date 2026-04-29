@@ -264,11 +264,11 @@ fn extract_fastapi_dependencies(decorator_expr: Node<'_>, bytes: &[u8]) -> Vec<C
 /// Unwrap one `Depends(...)` list element from a FastAPI `dependencies`
 /// list and return the inner callable as a `CallSite`.  Three shapes
 /// are accepted:
-///   * `Depends(callee(arg1, arg2))` — most common, the inner call is
+///   * `Depends(callee(arg1, arg2))`, most common, the inner call is
 ///     the callable factory invocation; record `callee` as the auth
 ///     check.
-///   * `Depends(callee)` — bare reference; record `callee` itself.
-///   * `Depends()` / non-`Depends` items — skipped.
+///   * `Depends(callee)`, bare reference; record `callee` itself.
+///   * `Depends()` / non-`Depends` items, skipped.
 fn unwrap_depends_call(node: Node<'_>, bytes: &[u8]) -> Option<CallSite> {
     if node.kind() != "call" {
         return None;
@@ -314,7 +314,7 @@ fn inject_middleware_auth(
             // boundary (Flask `@requires_role(...)` decorator, FastAPI
             // `dependencies=[Depends(...)]`, or any custom-router
             // equivalent) and semantically authorizes every value the
-            // handler receives — path param, body, query, downstream
+            // handler receives, path param, body, query, downstream
             // row fetches, the lot.  `auth_check_covers_subject` reads
             // `is_route_level` and short-circuits `true` for any
             // non-login-guard match, which is the correct shape for a
@@ -323,7 +323,7 @@ fn inject_middleware_auth(
             // LoginGuard / TokenExpiry / TokenRecipient kinds are
             // already excluded by `has_prior_subject_auth`'s filter
             // before they reach `auth_check_covers_subject`, so the
-            // flag is safe to set unconditionally here — it has no
+            // flag is safe to set unconditionally here, it has no
             // effect on those kinds.
             check.is_route_level = true;
             unit.auth_checks.push(check);
@@ -336,7 +336,7 @@ mod fastapi_dependencies_tests {
     use super::is_depends_callee;
 
     /// `is_depends_callee` only matches the FastAPI `Depends` marker.
-    /// Any other wrapper call inside `dependencies=[...]` is ignored —
+    /// Any other wrapper call inside `dependencies=[...]` is ignored ,
     /// extracting an inner callee from the wrong wrapper would
     /// misclassify logging hooks or filter callables as auth checks.
     #[test]

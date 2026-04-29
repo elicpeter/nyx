@@ -9,13 +9,13 @@
 //!
 //! The assertions below lock down:
 //!
-//! * Cross-file SCCs converge — the required finding surfaces at the
+//! * Cross-file SCCs converge, the required finding surfaces at the
 //!   caller.
 //! * Iteration counts stay in a modest, pinned range (proves the cycle
 //!   actually exercised the SCC fix-point loop rather than resolving
 //!   via topological order).
 //! * Sanitised cross-file cycles do not produce a finding at the caller
-//!   — the joint convergence carries the sanitizer fact back across the
+//!  , the joint convergence carries the sanitizer fact back across the
 //!   cycle.
 
 mod common;
@@ -52,7 +52,7 @@ fn two_file_mutual_recursion_reaches_transitive_sink() {
     validate_expectations(&diags, &dir);
 
     // The 2-cycle should converge in very few iterations.  Allow 0
-    // (no SCC loop needed — topo order already handled it) through 5
+    // (no SCC loop needed, topo order already handled it) through 5
     // (some monotone refinement churn).  A higher number indicates the
     // fix-point loop is churning near the cap.
     let iters = last_scc_max_iterations();
@@ -65,7 +65,7 @@ fn two_file_mutual_recursion_reaches_transitive_sink() {
 /// Three-way cross-file cycle: `node_a::forward_a → node_b::forward_b →
 /// node_c::forward_c → node_a::forward_a`.  All three files sit in the
 /// same SCC.  With `SCC_FIXPOINT_SAFETY_CAP = 64` the cycle converges
-/// easily, but the iteration count must stay bounded — this test pins
+/// easily, but the iteration count must stay bounded, this test pins
 /// the convergence envelope.
 #[test]
 fn three_file_cross_file_cycle_converges_within_bound() {
@@ -101,7 +101,7 @@ fn recursive_with_sanitiser_suppresses_finding_at_caller() {
     let dir = fixture_path("cross_file_scc_recursive_with_sanitiser");
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
 
-    // `expectations.json` forbids py.cmdi in driver.py — joint
+    // `expectations.json` forbids py.cmdi in driver.py, joint
     // convergence must carry the sanitizer across the cycle.
     validate_expectations(&diags, &dir);
 

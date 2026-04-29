@@ -23,7 +23,7 @@ static CACHE: LazyLock<RwLock<HashMap<&'static str, QuerySet>>> =
 /// patterns for the language are cached normally. A language with an
 /// all-malformed pattern slice yields an empty cache entry.
 ///
-/// Lock poisoning on the shared cache is recovered transparently — a
+/// Lock poisoning on the shared cache is recovered transparently, a
 /// panic in another thread must not brick pattern loading process-wide.
 pub fn for_lang(lang: &'static str, ts_lang: Language) -> std::sync::Arc<Vec<CompiledQuery>> {
     // fast path
@@ -31,7 +31,7 @@ pub fn for_lang(lang: &'static str, ts_lang: Language) -> std::sync::Arc<Vec<Com
         return v.clone();
     }
 
-    // slow path — compile
+    // slow path, compile
     let patterns = patterns::load(lang);
     let compiled: Vec<_> = patterns
         .into_iter()

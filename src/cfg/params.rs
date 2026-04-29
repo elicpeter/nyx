@@ -21,7 +21,7 @@ fn lookup_dto_class(class_name: &str) -> Option<TypeKind> {
 /// Extract parameter names + per-position [`TypeKind`] from a function
 /// AST node.  Each entry's second slot is `Some(TypeKind)` when the
 /// parameter's decorator, attribute, or static type annotation maps to
-/// a known kind, and `None` otherwise.  Strictly additive — when no
+/// a known kind, and `None` otherwise.  Strictly additive, when no
 /// type info is recoverable, behaviour is identical to the names-only
 /// path.
 pub(super) fn extract_param_meta<'a>(
@@ -109,7 +109,7 @@ pub(super) fn extract_param_meta<'a>(
             // Python `typed_parameter`, `default_parameter`,
             // `typed_default_parameter`): the wrapper node has no `name`
             // field but contains the identifier as a child.  Pick the
-            // *first* identifier — that is the parameter name; subsequent
+            // *first* identifier, that is the parameter name; subsequent
             // identifiers are part of the type annotation or default
             // expression.
             if !found {
@@ -123,7 +123,7 @@ pub(super) fn extract_param_meta<'a>(
             continue;
         }
 
-        // Bare identifier children — e.g. Rust untyped closure params `|cmd|`
+        // Bare identifier children, e.g. Rust untyped closure params `|cmd|`
         // where the child is an `identifier` node, not a `parameter` wrapper.
         if child.kind() == "identifier" {
             if let Some(txt) = text_of(child, code) {
@@ -137,8 +137,8 @@ pub(super) fn extract_param_meta<'a>(
 /// Walk up from a function definition node and build a container path.
 ///
 /// Records the names of enclosing classes / impls / modules / namespaces /
-/// structs — and, for anonymous / nested functions, the name of an enclosing
-/// named function — joined with `::`.  Also returns a `FuncKind` guess
+/// structs, and, for anonymous / nested functions, the name of an enclosing
+/// named function, joined with `::`.  Also returns a `FuncKind` guess
 /// reflecting the structural role.
 ///
 /// Returns `(container, kind)`.
@@ -185,7 +185,7 @@ pub(super) fn compute_container_and_kind(
             | "enum_item"
             | "struct_specifier"
             | "struct_item" => Some("name"),
-            // Rust impl blocks — pick the type name, not the trait name.
+            // Rust impl blocks, pick the type name, not the trait name.
             "impl_item" => Some("type"),
             // Go / C++ / PHP namespaces and modules.
             "namespace_definition" | "namespace_declaration" | "module_declaration" | "module" => {
@@ -223,7 +223,7 @@ pub(super) fn compute_container_and_kind(
             || pk == "lambda_expression"
             || pk == "function_expression"
         {
-            // Nested definition — record the outer function's name and
+            // Nested definition, record the outer function's name and
             // classify self as Closure even if we got a real name.
             if let Some(name_node) = parent.child_by_field_name("name") {
                 if let Some(text) = text_of(name_node, code) {
@@ -429,14 +429,14 @@ pub(super) fn inject_framework_param_sources(
 /// behaves exactly as before.
 ///
 /// Recognised patterns:
-/// * Java (Spring) — `@PathVariable`/`@RequestParam Long X` →
+/// * Java (Spring), `@PathVariable`/`@RequestParam Long X` →
 ///   [`TypeKind::Int`]; `@RequestBody T` → object (no kind today).
-/// * TypeScript (NestJS) — `@Param('id') id: number` →
+/// * TypeScript (NestJS), `@Param('id') id: number` →
 ///   [`TypeKind::Int`]; `@Body() dto: T` / `@Query('q') q: string`.
-/// * Rust (Axum / Rocket / Actix) — `Path<i64>` / `Path<u32>` /
+/// * Rust (Axum / Rocket / Actix), `Path<i64>` / `Path<u32>` /
 ///   `web::Path<i64>` → [`TypeKind::Int`]; `Path<String>` →
 ///   [`TypeKind::String`].
-/// * Python (FastAPI) — `def h(x: int)` → [`TypeKind::Int`];
+/// * Python (FastAPI), `def h(x: int)` → [`TypeKind::Int`];
 ///   `Annotated[int, Path()]` → [`TypeKind::Int`].
 pub(super) fn classify_param_type<'a>(
     param: Node<'a>,
@@ -453,9 +453,9 @@ pub(super) fn classify_param_type<'a>(
     }
 }
 
-/// Java (Spring) — recognise typed-extractor parameters via the
+/// Java (Spring), recognise typed-extractor parameters via the
 /// surrounding annotation.  Per Hard Rule 3, plain `Long X` without a
-/// known framework annotation is **not** treated as a typed extractor —
+/// known framework annotation is **not** treated as a typed extractor ,
 /// the parameter could be a regular function argument that the
 /// framework never validates.  Recognised annotations:
 /// `@PathVariable`, `@RequestParam`, `@RequestBody`, `@RequestHeader`,
@@ -557,10 +557,10 @@ pub(super) fn ts_type_to_kind(t: &str) -> Option<TypeKind> {
     }
 }
 
-/// TypeScript (NestJS) — recognise typed-extractor parameters via a
+/// TypeScript (NestJS), recognise typed-extractor parameters via a
 /// known NestJS decorator (`@Param`, `@Body`, `@Query`, `@Headers`,
 /// `@Req`, `@Res`).  Per Hard Rule 3, a bare `function h(id: number)`
-/// is not a framework extractor — without a NestJS decorator no
+/// is not a framework extractor, without a NestJS decorator no
 /// runtime gate is implied.  Pipe coercions (`ParseIntPipe` /
 /// `ParseBoolPipe`) override the static type.
 ///
@@ -569,7 +569,7 @@ pub(super) fn ts_type_to_kind(t: &str) -> Option<TypeKind> {
 /// `Array<...>` / `T[]` / `ReadonlyArray<...>`) resolve to
 /// [`TypeKind::LocalCollection`] regardless of decorator presence.
 /// `LocalCollection` is a *receiver-shape* claim, not a
-/// framework-validated-input claim — it tells the auth analyser that
+/// framework-validated-input claim, it tells the auth analyser that
 /// `param.get(k)` / `param.set(k, v)` / `param.find(p)` is a
 /// container operation rather than a data-layer read/mutation.  This
 /// closes the Excalidraw FP cluster (`elementsMap: ElementsMap`,
@@ -613,7 +613,7 @@ fn classify_param_type_ts<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeKin
     if let Some(k) = ts_type_to_kind(stripped) {
         return Some(k);
     }
-    // NestJS `@Body() dto: CreateUser` — when the static
+    // NestJS `@Body() dto: CreateUser`, when the static
     // type is a class / interface name declared in the same file,
     // resolve via the DTO map.  Generic args dropped for the leading
     // type so `Foo<Bar>` matches on `Foo`.
@@ -625,10 +625,10 @@ fn classify_param_type_ts<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeKin
 /// [`TypeKind::LocalCollection`] when the head is a JS built-in
 /// container type.  Recognises:
 ///
-/// * `Map<K, V>`, `Set<T>`, `WeakMap<K, V>`, `WeakSet<T>` — the four
+/// * `Map<K, V>`, `Set<T>`, `WeakMap<K, V>`, `WeakSet<T>`, the four
 ///   built-in keyed/unkeyed collection types.
-/// * `Array<T>`, `ReadonlyArray<T>` — the named array generics.
-/// * `T[]`, `readonly T[]` — the array shorthand syntax.
+/// * `Array<T>`, `ReadonlyArray<T>`, the named array generics.
+/// * `T[]`, `readonly T[]`, the array shorthand syntax.
 /// * Same-file `type X = Map<...>` aliases (resolved via the
 ///   per-file `TYPE_ALIAS_LC` map populated at the top of
 ///   [`build_cfg`]).
@@ -655,7 +655,7 @@ pub(super) fn ts_type_to_local_collection(t: &str) -> Option<TypeKind> {
 }
 
 fn inner_ts_type_text<'a>(type_anno: Node<'a>, code: &'a [u8]) -> Option<String> {
-    // type_annotation node text is `: T` — unwrap to T.
+    // type_annotation node text is `: T`, unwrap to T.
     if let Some(child) = type_anno.named_child(0) {
         return text_of(child, code);
     }
@@ -696,10 +696,10 @@ fn has_ts_decorator_argument(param: Node<'_>, code: &[u8], wanted: &[&str]) -> b
     false
 }
 
-/// Rust (Axum / Rocket / Actix) — read the parameter's type text and
+/// Rust (Axum / Rocket / Actix), read the parameter's type text and
 /// look for `Path<i64>` / `Json<T>` / `Form<T>` / `Query<T>` shapes.
 /// Per Hard Rule 3, bare primitives (`fn h(id: i64)` without an
-/// extractor wrapper) are **not** treated as typed extractors — only
+/// extractor wrapper) are **not** treated as typed extractors, only
 /// framework-wrapped types qualify.
 fn classify_param_type_rust<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeKind> {
     if param.kind() != "parameter" {
@@ -709,7 +709,7 @@ fn classify_param_type_rust<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeK
     let type_text = text_of(type_node, code)?;
 
     // LocalCollection is a *receiver-shape* claim, not a
-    // framework-validated-input claim — Hard Rule 3's "bare primitives
+    // framework-validated-input claim, Hard Rule 3's "bare primitives
     // don't count" gate doesn't apply (mirrors `classify_param_type_ts`
     // for the same reason).  Captures `unsharded: RoaringBitmap`,
     // `docids: &mut RoaringBitmap`, `params: HashMap<String, String>`,
@@ -773,8 +773,8 @@ fn strip_rust_ref_markers(t: &str) -> &str {
 ///   * Array / slice shorthand: `[T; N]`, `[T]` (covered by the
 ///     leading-`[` check after ref-stripping).
 ///
-/// Returns `None` for `Database<...>` (heed/sled — persistent KV
-/// store, NOT a local collection — keeping this `None` preserves
+/// Returns `None` for `Database<...>` (heed/sled, persistent KV
+/// store, NOT a local collection, keeping this `None` preserves
 /// real IDOR detection on persistent-store calls), `Mutex<...>` /
 /// `RwLock<...>` (synchronisation wrappers, not sink-shape claims),
 /// and bare primitives.
@@ -831,7 +831,7 @@ fn rust_type_to_kind(t: &str) -> Option<TypeKind> {
         .trim_start_matches('&')
         .trim_start_matches("mut ")
         .trim();
-    // Only framework wrapper extractors qualify — bare primitives like
+    // Only framework wrapper extractors qualify, bare primitives like
     // `i64` could be regular function parameters with no framework
     // validation gate.
     for wrap in [
@@ -849,7 +849,7 @@ fn rust_type_to_kind(t: &str) -> Option<TypeKind> {
         if let Some(rest) = stripped.strip_prefix(&prefix) {
             if let Some(inner) = rest.strip_suffix('>') {
                 let inner = inner.trim();
-                // Tuple extractor `Path<(i64, String)>` — first element wins.
+                // Tuple extractor `Path<(i64, String)>`, first element wins.
                 if inner.starts_with('(') {
                     let inside = inner.trim_start_matches('(').trim_end_matches(')');
                     let first = inside.split(',').next().unwrap_or("").trim();
@@ -862,14 +862,14 @@ fn rust_type_to_kind(t: &str) -> Option<TypeKind> {
                     return Some(k);
                 }
                 // `Json<T>` / `Form<T>` / `Query<T>` /
-                // `Path<T>` with a same-file struct type — resolve via
+                // `Path<T>` with a same-file struct type, resolve via
                 // the DTO map.  Strip nested generics so `Json<Foo<i64>>`
                 // matches on `Foo`.
                 let head = inner.split('<').next().unwrap_or(inner).trim();
                 if let Some(k) = lookup_dto_class(head) {
                     return Some(k);
                 }
-                // Custom struct outside the same file — leave None
+                // Custom struct outside the same file, leave None
                 // (cross-file resolution is a follow-up).
                 return None;
             }
@@ -893,10 +893,10 @@ pub(super) fn rust_primitive_to_kind(t: &str) -> Option<TypeKind> {
     }
 }
 
-/// Python (FastAPI) — recognise typed-extractor parameters via the
+/// Python (FastAPI), recognise typed-extractor parameters via the
 /// `Annotated[X, Path()/Query()/Body()/Header()/Cookie()]` shape.  Per
 /// Hard Rule 3, a bare `def h(id: int)` is **not** a framework
-/// extractor — the function may be a plain Python function and the
+/// extractor, the function may be a plain Python function and the
 /// type annotation provides no runtime gate.
 fn classify_param_type_python<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeKind> {
     let type_node = param.child_by_field_name("type")?;
@@ -906,7 +906,7 @@ fn classify_param_type_python<'a>(param: Node<'a>, code: &'a [u8]) -> Option<Typ
 
 fn python_type_to_kind(t: &str) -> Option<TypeKind> {
     let stripped = t.trim();
-    // `Annotated[int, Path()]` — only matches when one of the generic
+    // `Annotated[int, Path()]`, only matches when one of the generic
     // args names a recognised FastAPI binding marker.  Otherwise no
     // framework gate is implied.
     if let Some(inner) = stripped
@@ -922,7 +922,7 @@ fn python_type_to_kind(t: &str) -> Option<TypeKind> {
             return Some(k);
         }
         // `Annotated[CreateUser, Body()]` with a same-file
-        // Pydantic model — resolve via the DTO map.  Generic args are
+        // Pydantic model, resolve via the DTO map.  Generic args are
         // dropped via the same head-split as `python_primitive_to_kind`.
         let head = first.split('[').next().unwrap_or(first).trim();
         return lookup_dto_class(head);
@@ -1066,7 +1066,7 @@ mod typed_extractor_tests {
 
     #[test]
     fn java_request_body_dto_returns_none_until_phase_six() {
-        // @RequestBody CreateUserDto dto — no kind today; future passes will
+        // @RequestBody CreateUserDto dto, no kind today; future passes will
         // return DtoObject(name) once cross-file class resolution lands.
         assert_eq!(java_type_to_kind("CreateUserDto"), None);
         assert_eq!(java_type_to_kind("List<String>"), None);
@@ -1085,7 +1085,7 @@ mod typed_extractor_tests {
 
     #[test]
     fn rust_path_tuple_first_element_wins() {
-        // Path<(i64, String)> — first slot is the int extractor that
+        // Path<(i64, String)>, first slot is the int extractor that
         // matters for sink suppression.
         assert_eq!(
             rust_type_to_kind("Path<(i64, String)>"),
@@ -1101,7 +1101,7 @@ mod typed_extractor_tests {
 
     #[test]
     fn rust_json_dto_returns_none_until_phase_six() {
-        // Json<T> / Form<T> / Query<T> with a custom struct type — no
+        // Json<T> / Form<T> / Query<T> with a custom struct type, no
         // primitive resolution available; future passes will lift to DTO.
         assert_eq!(rust_type_to_kind("Json<CreateUserDto>"), None);
         assert_eq!(rust_type_to_kind("Form<CreateUserDto>"), None);
@@ -1109,7 +1109,7 @@ mod typed_extractor_tests {
     }
 
     /// Per Hard Rule 3, bare primitives (`fn h(id: i64)`) are NOT
-    /// framework extractors — only wrapper types (`Path<i64>` etc.)
+    /// framework extractors, only wrapper types (`Path<i64>` etc.)
     /// imply a framework runtime gate.  Bare i64 must return None.
     #[test]
     fn rust_bare_primitives_are_not_framework_extractors() {
@@ -1128,7 +1128,7 @@ mod typed_extractor_tests {
     #[test]
     fn python_bare_primitives_are_not_framework_extractors() {
         // Per Hard Rule 3: bare `def h(id: int)` is NOT a typed
-        // extractor — without an `Annotated[..., Path()/Query()/Body()]`
+        // extractor, without an `Annotated[..., Path()/Query()/Body()]`
         // wrapper, no FastAPI gate is implied.
         assert_eq!(python_type_to_kind("int"), None);
         assert_eq!(python_type_to_kind("float"), None);
@@ -1161,7 +1161,7 @@ mod typed_extractor_tests {
     #[test]
     fn python_annotated_without_marker_returns_none() {
         // Annotated without a FastAPI binding marker is a generic
-        // type-system tag — not a framework extractor.
+        // type-system tag, not a framework extractor.
         assert_eq!(python_type_to_kind("Annotated[int, str]"), None);
         assert_eq!(python_type_to_kind("Annotated[int, MyMeta]"), None);
     }
@@ -1243,7 +1243,7 @@ mod typed_extractor_tests {
     #[test]
     fn rust_reference_and_lifetime_markers_stripped() {
         // `&T`, `&mut T`, `&'a T`, `&'a mut T`, `&'static T`,
-        // repeated `&` prefixes — all reach the underlying type head.
+        // repeated `&` prefixes, all reach the underlying type head.
         for ty in [
             "&RoaringBitmap",
             "&mut RoaringBitmap",
@@ -1285,7 +1285,7 @@ mod typed_extractor_tests {
     #[test]
     fn rust_persistent_db_and_sync_wrappers_return_none() {
         // heed / sled / rocksdb persistent-store handles are NOT local
-        // collections — preserves IDOR detection on real DB calls.
+        // collections, preserves IDOR detection on real DB calls.
         assert_eq!(
             rust_type_to_local_collection("Database<BEU32, SerdeJson<Task>>"),
             None

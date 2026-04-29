@@ -12,7 +12,7 @@ pub const PATTERNS: &[Pattern] = &[
     Pattern {
         id: "java.deser.readobject",
         description: "ObjectInputStream.readObject() performs unsafe deserialization",
-        // Match any .readObject() call — the method name is specific enough.
+        // Match any .readObject() call, the method name is specific enough.
         query: r#"(method_invocation
                      name: (identifier) @id (#eq? @id "readObject"))
                    @vuln"#,
@@ -44,7 +44,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     // ── Tier A: Apache Commons Text Text4Shell (CVE-2022-42889) ────────
     // `StringSubstitutor.createInterpolator()` enables `script:`,
-    // `dns:`, and `url:` lookups by default — `${script:js:…}`
+    // `dns:`, and `url:` lookups by default, `${script:js:…}`
     // evaluates JavaScript via the JSR-223 ScriptEngineManager. The
     // factory call is itself the structural bug; the recommended app-
     // side mitigation builds a `StringSubstitutor` directly with a

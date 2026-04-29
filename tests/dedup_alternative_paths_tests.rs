@@ -2,7 +2,7 @@
 //! [`nyx_scanner::taint::analyse_file`] must preserve distinct flows
 //! that share a source but differ on validation status or intermediate
 //! variables.  Historically the dedup collapsed all `(body_id, sink,
-//! source)` siblings, preferring the validated one — so an unguarded
+//! source)` siblings, preferring the validated one, so an unguarded
 //! exploit on a sibling branch was silently dropped in favour of a
 //! neighbouring guarded flow.
 //!
@@ -35,7 +35,7 @@ fn dedup_preserves_validated_and_unvalidated_flows() {
     validate_expectations(&diags, &dir);
 
     // Load-bearing assertion: the two flows live on distinct sink
-    // lines (6 and 8 in the source — actual lines depend on the
+    // lines (6 and 8 in the source, actual lines depend on the
     // fixture file format, so we only assert distinct sinks).
     let taint: Vec<&nyx_scanner::commands::scan::Diag> = diags
         .iter()
@@ -58,7 +58,7 @@ fn dedup_preserves_validated_and_unvalidated_flows() {
             .collect::<Vec<_>>(),
     );
 
-    // The two findings must live on different source lines — if the
+    // The two findings must live on different source lines, if the
     // engine collapses them into one, the test will fail here even
     // when the count assertion above coincidentally passes (e.g. if
     // a future change started emitting one validated and one
@@ -73,7 +73,7 @@ fn dedup_preserves_validated_and_unvalidated_flows() {
 
     // Every taint finding must carry a stable `finding_id` that
     // downstream formatters can reference.  This is the plumbing that
-    // feeds alternative-path cross-linking — verify it is non-empty
+    // feeds alternative-path cross-linking, verify it is non-empty
     // for every taint finding so regressions in `analyse_file`'s
     // post-dedup `make_finding_id` pass surface here.
     for d in &taint {
@@ -87,7 +87,7 @@ fn dedup_preserves_validated_and_unvalidated_flows() {
         );
     }
 
-    // At least one validated/unvalidated split must be present — the
+    // At least one validated/unvalidated split must be present, the
     // whole point of the fixture is that a guarded branch and an
     // unguarded branch reach `exec(input)` and both must report.
     // We do not require an exact split since future sanitization
@@ -103,7 +103,7 @@ fn dedup_preserves_validated_and_unvalidated_flows() {
          is not behind any allowlist. Found only validated findings.",
     );
     // `validated` may legitimately be empty if the engine does not yet
-    // recognise `isWhitelisted` as a predicate — the fixture is still
+    // recognise `isWhitelisted` as a predicate, the fixture is still
     // load-bearing because the `min_count: 2` in expectations.json
     // asserts both findings surface regardless of which is classified
     // as validated.  Drop the assertion to avoid gating the regression

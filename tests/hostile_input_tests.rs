@@ -4,7 +4,7 @@
 //! potentially adversarial: arbitrarily large, pathologically nested,
 //! binary-ish, or deliberately crafted to wedge tree-sitter or the CFG
 //! builder.  These tests exercise the user-facing size cap
-//! (`scanner.max_file_size_mb`, default 16 MiB — enforced at the walker),
+//! (`scanner.max_file_size_mb`, default 16 MiB, enforced at the walker),
 //! the per-file parse timeout (`analysis.engine.parse_timeout_ms`, default
 //! 10 s), and
 //! verify that the scanner survives several representative stress inputs
@@ -81,7 +81,7 @@ where
 /// The walker's `max_file_size_mb` filter must drop oversize files before
 /// the pipeline ever opens them.  This is the sole file-size gate: once a
 /// file is past the walker, the analysis pipeline does not re-check its
-/// size — `max_file_size_mb = null` means truly unlimited parsing.  The
+/// size, `max_file_size_mb = null` means truly unlimited parsing.  The
 /// pattern here (explicit `Some(1)`) is the interface every downstream
 /// caller can use to tighten the default further.
 #[test]
@@ -96,7 +96,7 @@ fn walker_max_file_size_drops_oversize_files_before_scan() {
     std::fs::write(root.join("big.js"), big).unwrap();
 
     let mut cfg = hostile_cfg();
-    cfg.scanner.max_file_size_mb = Some(1); // 1 MiB — drops big.js, keeps small.js
+    cfg.scanner.max_file_size_mb = Some(1); // 1 MiB, drops big.js, keeps small.js
 
     let diags =
         scan_no_index(root, &cfg).expect("scan should succeed even with oversize files present");
@@ -109,7 +109,7 @@ fn walker_max_file_size_drops_oversize_files_before_scan() {
 /// Release-hardening regression: the default `ScannerConfig` must carry a
 /// finite ceiling so a fresh install never tries to parse a multi-gigabyte
 /// file from an untrusted repo.  This test does not hard-code the exact
-/// value — the property is that the default is *not* unlimited.
+/// value, the property is that the default is *not* unlimited.
 #[test]
 fn default_config_has_finite_max_file_size() {
     let cfg = Config::default();
@@ -161,7 +161,7 @@ fn default_config_drops_file_above_cap() {
 }
 
 /// Operators who explicitly set `max_file_size_mb = null` must actually get
-/// unlimited scanning — no silent hard cap overrides their decision.  This
+/// unlimited scanning, no silent hard cap overrides their decision.  This
 /// locks in the contract: "unlimited means unlimited, trust the operator."
 /// The test uses a deliberately unsafe-looking JS source and asserts that
 /// the finding surfaces only in the unlimited run.
@@ -182,7 +182,7 @@ fn explicit_unlimited_lifts_size_cap() {
 
     let mut cfg = hostile_cfg();
 
-    // 1 MiB cap — must drop big.js entirely.
+    // 1 MiB cap, must drop big.js entirely.
     cfg.scanner.max_file_size_mb = Some(1);
     let tight = scan_no_index(root, &cfg).expect("tight-cap scan must succeed");
     assert!(
@@ -190,7 +190,7 @@ fn explicit_unlimited_lifts_size_cap() {
         "sanity: tight cap must have dropped big.js: {tight:?}",
     );
 
-    // Explicit unlimited — the same file must now be visible to the
+    // Explicit unlimited, the same file must now be visible to the
     // scanner.  Any pipeline exception would surface as a non-success.
     cfg.scanner.max_file_size_mb = None;
     let unlimited = with_time_budget(Duration::from_secs(20), "unlimited scan", || {
@@ -257,7 +257,7 @@ fn empty_file_is_noop() {
 /// without blowing up.  Minified bundles routinely hit this shape.  We
 /// model it as ~10 000 independent short statements on one line (roughly
 /// what you see after bundler output) rather than one 500k-deep
-/// right-associative expression — the latter is a separate stress case
+/// right-associative expression, the latter is a separate stress case
 /// dominated by recursive descent and not representative of real input.
 ///
 /// Generous debug-build budget (20 s) because the full analysis pipeline
@@ -315,7 +315,7 @@ fn deeply_nested_parens_do_not_stack_overflow() {
 /// builder.  Each `if` frame in `build_sub` is ~10 KiB on debug builds, so
 /// 100 levels fits comfortably inside the production 8 MiB stack with room
 /// for the rest of the analysis pipeline above it.  The goal is not to
-/// probe the absolute limit — it is to lock in that a realistic generated-
+/// probe the absolute limit, it is to lock in that a realistic generated-
 /// code depth does not crash the scanner.
 #[test]
 fn deeply_nested_if_statements_do_not_stack_overflow() {
@@ -435,7 +435,7 @@ fn scan_of_mixed_hostile_directory_is_bounded() {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-//  Symlink loops — infinite-loop resistance
+//  Symlink loops, infinite-loop resistance
 // ───────────────────────────────────────────────────────────────────────────
 
 /// A self-referencing symlink (`a/self -> ../a`) is a classic hostile-input
@@ -473,7 +473,7 @@ fn symlink_loop_does_not_hang_with_follow() {
 }
 
 /// Same fixture with `follow_symlinks = false` must also terminate in
-/// bounded time — the symlink is not followed, so the loop never expands,
+/// bounded time, the symlink is not followed, so the loop never expands,
 /// but we pin the contract so flipping the default cannot introduce a hang
 /// regression.
 #[cfg(unix)]

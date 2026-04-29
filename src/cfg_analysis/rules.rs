@@ -141,7 +141,7 @@ static JAVA_AUTH: &[AuthRule] = &[AuthRule {
         "hasPermission",
         "requireRole",
         // Spring Security / JAX-RS annotation names (used by decorator
-        // detection — see `extract_auth_decorators` in src/cfg.rs).
+        // detection, see `extract_auth_decorators` in src/cfg.rs).
         "PreAuthorize",
         "PostAuthorize",
         "Secured",
@@ -174,7 +174,7 @@ static JS_AUTH: &[AuthRule] = &[AuthRule {
         "jwt.verify",
         // NestJS-style decorators and guard class names (seeded by decorator
         // arg extraction in `extract_auth_decorators`). `UseGuards` alone is
-        // too generic — we still match on guard *argument* identifiers here.
+        // too generic, we still match on guard *argument* identifiers here.
         "Authenticated",
         "AuthGuard",
         "JwtAuthGuard",
@@ -268,7 +268,7 @@ static CPP_AUTH: &[AuthRule] = &[AuthRule {
         "check_auth",
         "verify_token",
         "validate_token",
-        // Custom C++ attributes — framework-defined, bare-name match.
+        // Custom C++ attributes, framework-defined, bare-name match.
         "authenticated",
         "require_auth",
         "admin_only",
@@ -287,7 +287,7 @@ static RUST_AUTH: &[AuthRule] = &[AuthRule {
         "check_auth",
         "verify_token",
         "validate_token",
-        // Custom proc-macro attributes — framework-defined, bare-name match.
+        // Custom proc-macro attributes, framework-defined, bare-name match.
         "authenticated",
         "require_auth",
         "admin_only",

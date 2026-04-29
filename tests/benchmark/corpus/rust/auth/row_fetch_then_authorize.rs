@@ -2,7 +2,7 @@
 // the row by id first to obtain the resource it needs to authorize, then
 // calls a named authorization function on the fetched row.  This is the
 // canonical pattern in Lemmy's Actix handlers (and most row-level Rails /
-// Django authz code) — the authorization check appears textually after the
+// Django authz code), the authorization check appears textually after the
 // fetch but is the first thing the function does on the row.
 
 use std::result::Result;

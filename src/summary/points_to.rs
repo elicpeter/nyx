@@ -17,15 +17,15 @@
 //!
 //! Edges are directed `AliasEdge { source, target, kind }`:
 //!
-//! * `Source(Param(i)) → Target(Param(j))` — the callee stores data
+//! * `Source(Param(i)) → Target(Param(j))`, the callee stores data
 //!   derived from parameter `i` into a field/element of parameter `j`.
 //!   Mutation is observable to the caller through its argument for `j`.
-//! * `Source(Param(i)) → Target(Return)` — the return value aliases
+//! * `Source(Param(i)) → Target(Return)`, the return value aliases
 //!   parameter `i`'s heap identity.  Adds heap-level precision on top of
 //!   the coarser [`TaintTransform::Identity`] view already carried in
 //!   [`crate::summary::ssa_summary::SsaFuncSummary::param_to_return`].
 //!
-//! `MustAlias` is intentionally omitted — the ROI on
+//! `MustAlias` is intentionally omitted, the ROI on
 //! must-alias inference for cross-file summaries is low, and the soundness
 //! story for `MayAlias`-only application is straightforward ("take the
 //! union").
@@ -35,7 +35,7 @@
 //! Edge count is capped at [`MAX_ALIAS_EDGES`].  When a callee's alias
 //! graph exceeds the cap the summary records `overflow = true` and
 //! callers treat the function as "any tainted parameter may spread to
-//! every other parameter and to the return" — the conservative
+//! every other parameter and to the return", the conservative
 //! greatest-lower-bound over the alias lattice.
 
 use serde::{Deserialize, Serialize};
@@ -46,7 +46,7 @@ use smallvec::SmallVec;
 /// Parameters are identified by their 0-based positional index as reported
 /// by [`crate::ssa::ir::SsaOp::Param`]; the implicit receiver (`self`/`this`)
 /// is handled outside this table and is deliberately not representable here.
-/// `Return` denotes the function's return SSA value — one per function, so
+/// `Return` denotes the function's return SSA value, one per function, so
 /// no further qualifier is needed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum AliasPosition {
@@ -57,7 +57,7 @@ pub enum AliasPosition {
 }
 
 /// Strength of an alias edge.  Only [`AliasKind::MayAlias`] is emitted
-/// — the analysis over-approximates identity-level aliasing rather than
+///, the analysis over-approximates identity-level aliasing rather than
 /// proving must-alias.  The variant is kept as an enum so a future
 /// extension that distinguishes the two can slot in without migrating
 /// on-disk data.
@@ -94,7 +94,7 @@ pub const MAX_ALIAS_EDGES: usize = 8;
 /// Parameter-granularity alias summary persisted in
 /// [`crate::summary::ssa_summary::SsaFuncSummary`].
 ///
-/// The summary is empty by default — functions without any parameter /
+/// The summary is empty by default, functions without any parameter /
 /// return aliasing (pure transformers, sinks that consume but don't
 /// mutate their arguments) carry no edges and cost nothing on disk.
 ///
@@ -109,13 +109,13 @@ pub struct PointsToSummary {
     /// tracking deserialise cleanly (no edges).
     #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
     pub edges: SmallVec<[AliasEdge; 4]>,
-    /// Conservative fallback flag — set when extraction hit
+    /// Conservative fallback flag, set when extraction hit
     /// [`MAX_ALIAS_EDGES`] and refused to drop any edge silently.  When
     /// `true`, callers treat the callee as "every parameter may alias
     /// every other parameter and the return value".
     #[serde(default, skip_serializing_if = "core::ops::Not::not")]
     pub overflow: bool,
-    /// At least one return path produces a *fresh* container allocation —
+    /// At least one return path produces a *fresh* container allocation ,
     /// a container literal (`[]`, `{}`) or a known container constructor
     /// call (`new Map()`, `list()`, …) that does not trace back to any
     /// parameter.  When this is `true` the caller synthesises a fresh
@@ -124,8 +124,8 @@ pub struct PointsToSummary {
     /// the call result (e.g. `bag[0]`, `fillBag(bag, …)`) can find a heap
     /// cell to read from or store into.
     ///
-    /// Closes the factory-pattern cross-file gap — `const bag = makeBag()`
-    /// followed by `fillBag(bag, env)` and `exec(bag[0])` — by giving the
+    /// Closes the factory-pattern cross-file gap, `const bag = makeBag()`
+    /// followed by `fillBag(bag, env)` and `exec(bag[0])`, by giving the
     /// caller's heap analysis a stable identity to attach stores to.
     /// Combines freely with `Param(i) → Return` edges: a mixed-return
     /// function (one branch returns a param, another returns a fresh
@@ -136,7 +136,7 @@ pub struct PointsToSummary {
 }
 
 impl PointsToSummary {
-    /// Empty summary — no aliasing, no overflow.  Equivalent to
+    /// Empty summary, no aliasing, no overflow.  Equivalent to
     /// [`Self::default`] but explicit at call sites.
     pub fn empty() -> Self {
         Self::default()
@@ -153,7 +153,7 @@ impl PointsToSummary {
     ///
     /// Returns `true` when the edge was added, `false` when it was a
     /// duplicate or when the cap triggered an overflow.  The caller can
-    /// ignore the return — the summary always remains in a valid state.
+    /// ignore the return, the summary always remains in a valid state.
     pub fn insert(&mut self, source: AliasPosition, target: AliasPosition, kind: AliasKind) {
         if self.overflow {
             return;
@@ -168,7 +168,7 @@ impl PointsToSummary {
         }
         if self.edges.len() >= MAX_ALIAS_EDGES {
             self.overflow = true;
-            // Keep the existing edge list — a consumer that still reads
+            // Keep the existing edge list, a consumer that still reads
             // the vector gets a strict *subset* of the sound over-
             // approximation conveyed by `overflow`.  Correctness is
             // owned by the overflow flag; the residual edges are purely
@@ -350,7 +350,7 @@ pub const MAX_FIELDS_PER_PARAM: usize = 8;
 /// Records, for each positional parameter index, the set of field
 /// **names** read from and written to inside the callee body.  Names
 /// (not [`crate::ssa::ir::FieldId`]) are persisted because field IDs
-/// are body-local — the per-body [`crate::ssa::ir::FieldInterner`]
+/// are body-local, the per-body [`crate::ssa::ir::FieldInterner`]
 /// reassigns IDs across files.  Callers re-intern through their own
 /// body's interner before consulting `field_taint` cells.
 ///
@@ -359,23 +359,23 @@ pub const MAX_FIELDS_PER_PARAM: usize = 8;
 /// same indexing convention as `SsaFuncSummary::receiver_to_*`
 /// (separate channel).
 ///
-/// Empty by default — functions that don't read or write any field on
+/// Empty by default, functions that don't read or write any field on
 /// their parameters carry no entries and cost nothing on disk.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldPointsToSummary {
-    /// `(param_index, field_names_read)` — the callee projected each
+    /// `(param_index, field_names_read)`, the callee projected each
     /// listed field on a value derived from `param_index` somewhere
     /// in its body.  Sorted, deduped per-entry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_field_reads: Vec<(u32, SmallVec<[String; 2]>)>,
-    /// `(param_index, field_names_written)` — the callee assigned to
+    /// `(param_index, field_names_written)`, the callee assigned to
     /// each listed field on a value derived from `param_index`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_field_writes: Vec<(u32, SmallVec<[String; 2]>)>,
     /// Set when the read/write graph hit
     /// [`MAX_FIELDS_PER_PARAM`] for any parameter.  Callers seeing
     /// `overflow=true` treat each parameter as reading/writing every
-    /// field on every other parameter — the conservative greatest
+    /// field on every other parameter, the conservative greatest
     /// lower bound that preserves soundness.
     #[serde(default, skip_serializing_if = "core::ops::Not::not")]
     pub overflow: bool,
@@ -441,7 +441,7 @@ impl FieldPointsToSummary {
     }
 
     /// Union with `other`.  Overflow propagates per
-    /// [`PointsToSummary::merge`]'s semantics — once a callee is
+    /// [`PointsToSummary::merge`]'s semantics, once a callee is
     /// "any field on any parameter", merging cannot recover precision.
     pub fn merge(&mut self, other: &Self) {
         if other.overflow {

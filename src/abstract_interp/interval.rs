@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 
 /// Numeric interval: `[lo, hi]` inclusive bounds.
 ///
-/// - `top()` = `[None, None]` — any integer
-/// - `bottom()` = `[1, 0]` — empty / unsatisfiable (lo > hi)
-/// - `exact(n)` = `[n, n]` — singleton
+/// - `top()` = `[None, None]`, any integer
+/// - `bottom()` = `[1, 0]`, empty / unsatisfiable (lo > hi)
+/// - `exact(n)` = `[n, n]`, singleton
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntervalFact {
     pub lo: Option<i64>,
@@ -278,7 +278,7 @@ impl IntervalFact {
     /// - One non-negative singleton mask `m`: `[0, m]` regardless of other
     ///   operand's sign (two's complement AND with a non-negative mask always
     ///   produces a non-negative result bounded by the mask).
-    /// - Both non-negative: `[0, min(a.hi, b.hi)]` — AND can only clear bits.
+    /// - Both non-negative: `[0, min(a.hi, b.hi)]`, AND can only clear bits.
     pub fn bit_and(&self, other: &Self) -> Self {
         if self.is_bottom() || other.is_bottom() {
             return Self::bottom();
@@ -330,7 +330,7 @@ impl IntervalFact {
     /// - Singletons: exact computation.
     /// - `x | 0` → `x`, `0 | x` → `x`.
     /// - Both non-negative with known upper bounds: `[max(a.lo, b.lo),
-    ///   next_pow2_minus1(max(a.hi, b.hi))]` — OR can set any bit below
+    ///   next_pow2_minus1(max(a.hi, b.hi))]`, OR can set any bit below
     ///   the highest set bit of either operand.
     pub fn bit_or(&self, other: &Self) -> Self {
         if self.is_bottom() || other.is_bottom() {
@@ -1054,7 +1054,7 @@ mod tests {
         let a = IntervalFact::exact(i64::MIN);
         let b = IntervalFact::exact(-1);
         let r = a.div(&b);
-        // Either bound becomes None (graceful) — exact representation
+        // Either bound becomes None (graceful), exact representation
         // depends on the impl, but we mainly assert no panic occurred
         // and the result is a valid interval.
         assert!(
@@ -1078,7 +1078,7 @@ mod tests {
         assert_eq!(r.hi, Some(2));
     }
 
-    /// Modulo by an interval that *contains* zero must escape to Top —
+    /// Modulo by an interval that *contains* zero must escape to Top ,
     /// modulo-by-zero is undefined and we cannot precise-narrow it.
     #[test]
     fn modulo_divisor_spans_zero_is_top() {
@@ -1096,7 +1096,7 @@ mod tests {
 
     /// `[i64::MIN, i64::MAX]` is the maximal interval. Any join with
     /// any other interval must remain `[i64::MIN, i64::MAX]` (or Top
-    /// equivalent) — this guards against accidental narrowing on join.
+    /// equivalent), this guards against accidental narrowing on join.
     #[test]
     fn full_range_is_join_absorbing() {
         let full = IntervalFact {
@@ -1347,7 +1347,7 @@ mod tests {
         );
     }
 
-    /// Modulo with exact-zero divisor — must escape to Top.
+    /// Modulo with exact-zero divisor, must escape to Top.
     #[test]
     fn modulo_by_exact_zero_is_top() {
         let a = IntervalFact {

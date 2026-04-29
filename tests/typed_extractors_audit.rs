@@ -2,19 +2,19 @@
 //!
 //! These tests directly drive the `cfg::params` matchers via the
 //! tree-sitter parser without spinning up the full scan pipeline.  The
-//! goal is to pin the matcher invariants — what qualifies as a typed
-//! extractor, what does not — independent of which framework rules are
+//! goal is to pin the matcher invariants, what qualifies as a typed
+//! extractor, what does not, independent of which framework rules are
 //! loaded at scan time.
 //!
 //! Three audit dimensions are covered:
-//!   * **A1** — end-to-end wiring: classifier returns the expected
+//!   * **A1**, end-to-end wiring: classifier returns the expected
 //!     `TypeKind` for each framework's canonical typed-extractor shape
 //!     (Spring `@PathVariable`, NestJS `@Param`, Axum `Path<i64>`,
 //!     FastAPI `Annotated[..., Path()]`).
-//!   * **A2** — Hard-Rule-3 negatives: bare primitives and
+//!   * **A2**, Hard-Rule-3 negatives: bare primitives and
 //!     non-framework annotations / decorators / wrappers must NOT
 //!     classify.
-//!   * **A5** — parser-driven matcher tests: every assertion is
+//!   * **A5**, parser-driven matcher tests: every assertion is
 //!     produced from a real parsed AST so a future tree-sitter grammar
 //!     bump can't silently break the matcher without flipping a test.
 
@@ -36,7 +36,7 @@ fn parse(lang: &str, src: &str) -> tree_sitter::Tree {
 }
 
 /// Find the first function-like node in the tree whose `kind()` matches
-/// `func_kind`.  Returns `None` when none exists — parser fragility
+/// `func_kind`.  Returns `None` when none exists, parser fragility
 /// guard so failures surface as a panic in the test instead of a
 /// silent skip.
 fn first_node_of_kind<'a>(
@@ -69,7 +69,7 @@ fn extract(lang: &str, src: &str, func_kinds: &[&str]) -> Vec<(String, Option<Ty
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// A1: positive — typed-extractor shapes return Some(TypeKind)
+// A1: positive, typed-extractor shapes return Some(TypeKind)
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -166,7 +166,7 @@ fn python_annotated_str_with_query_marker_classifies_as_string() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// A2: Hard-Rule-3 negatives — must NOT classify
+// A2: Hard-Rule-3 negatives, must NOT classify
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -205,7 +205,7 @@ fn ts_bare_number_without_decorator_does_not_classify() {
 
 #[test]
 fn ts_custom_decorator_does_not_classify() {
-    // `@Custom('id')` is not in the NestJS allowlist — Hard Rule 3
+    // `@Custom('id')` is not in the NestJS allowlist, Hard Rule 3
     // prevents lifting unknown decorators into typed-extractor space.
     let src = r#"
         export class C {
@@ -247,7 +247,7 @@ fn python_annotated_without_fastapi_marker_does_not_classify() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Phase 6 — DTO classification end-to-end
+// Phase 6, DTO classification end-to-end
 // ─────────────────────────────────────────────────────────────────────
 
 /// Phase 6 wiring proof for Rust: `Json<UpdateDoc>` whose `UpdateDoc`
@@ -290,7 +290,7 @@ fn rust_json_dto_returns_none_when_struct_missing_from_file() {
     assert_eq!(params[0].1, None);
 }
 
-/// Phase 6 — DtoFields exposes a stable accessor surface for the
+/// Phase 6, DtoFields exposes a stable accessor surface for the
 /// downstream auth analysis and type-fact engine.  Pin the contract so
 /// future changes don't break that consumer.
 #[test]
@@ -301,7 +301,7 @@ fn dto_fields_struct_api_is_stable() {
     assert_eq!(dto.class_name, "CreateUser");
     assert_eq!(dto.get("age"), Some(&TypeKind::Int));
     assert_eq!(dto.get("missing"), None);
-    // BTreeMap iteration order is sorted by key — stable
+    // BTreeMap iteration order is sorted by key, stable
     // serialisation invariant.
     let keys: Vec<_> = dto.fields.keys().cloned().collect();
     assert_eq!(keys, vec!["age".to_string(), "email".to_string()]);
@@ -314,7 +314,7 @@ fn dto_fields_struct_api_is_stable() {
 /// Audit A4: when two functions in the same file have parameters with
 /// the same name but different types (Spring `@PathVariable Long id`
 /// in one method, `@RequestParam String id` in another), the
-/// per-body matcher must classify each correctly — the merger
+/// per-body matcher must classify each correctly, the merger
 /// (`collect_file_var_types`) drops the entry when they conflict but
 /// the per-body classification stays right.  This pins the matcher's
 /// per-body grain.
@@ -379,7 +379,7 @@ fn java_path_variable_does_not_lift_annotation_into_param_names() {
         }
     "#;
     let params = extract("java", src, &["method_declaration"]);
-    // The collected param name is exactly "userId" — `PathVariable`
+    // The collected param name is exactly "userId", `PathVariable`
     // (the annotation token) must not become a param entry, otherwise
     // `apply_typed_bounded_params` would try to look it up.
     assert!(params.iter().all(|(name, _)| name != "PathVariable"));

@@ -41,7 +41,7 @@ pub async fn handle_delete_doc(req: Req, ctx: Ctx, doc_id: i64) -> Result<String
         return json_err("cannot delete another user's doc", 403);
     }
 
-    // By construction, the row belongs to `user` — so any id read from it is authorized.
+    // By construction, the row belongs to `user`, so any id read from it is authorized.
     let group_id = existing.get_i64("group_id");
     realtime::publish_to_group(group_id, "doc_deleted");
     Ok("ok".into())

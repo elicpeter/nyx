@@ -1,7 +1,7 @@
 // Phase 6 D05: an Axum `Json<UpdateDoc>` extractor whose `doc_id`
 // field is declared as `i64`.  The DTO field-level taint analysis
 // proves the value reaching `db.exec` is numeric and exempts
-// `dto.doc_id` from the auth subject classifier — the rule must NOT
+// `dto.doc_id` from the auth subject classifier, the rule must NOT
 // fire because numeric DTO fields cannot bypass ownership.
 use axum::extract::Json;
 

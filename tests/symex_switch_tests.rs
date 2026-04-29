@@ -52,7 +52,7 @@ fn count_relevant(diags: &[Diag]) -> usize {
 /// hard regression. The exact finding count is left loose because
 /// per-case suppression precision depends on whether the constraint
 /// solver can refine the scrutinee (integer literals do, enum paths
-/// do not — see `match_suppresses_safe_arm.rs`).
+/// do not, see `match_suppresses_safe_arm.rs`).
 fn assert_at_least_one_finding(diags: &[Diag], label: &str) {
     let n = count_relevant(diags);
     assert!(
@@ -74,7 +74,7 @@ fn symex_match_suppresses_safe_arm() {
     // tests/fixtures/real_world/rust/cfg/match_arms.rs which also only
     // emits quality findings, not taint). The acceptance for this
     // fixture is therefore: (1) the scan runs to completion without a
-    // panic — covered by the call to `scan_isolated` returning — and
+    // panic, covered by the call to `scan_isolated` returning, and
     // (2) at least one finding lands on the Raw arm body (lines
     // 22-29). The Safe arm at lines 31-36 must not regress beyond the
     // existing baseline.

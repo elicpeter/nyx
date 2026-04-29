@@ -3,8 +3,8 @@
 //! Production defaults run the scanner with `worker_threads > 1`, and callers
 //! embedding `nyx_scanner` (the forthcoming `serve` UI, CI wrappers, scripted
 //! harnesses) may invoke `scan_no_index` from multiple threads in the same
-//! process.  Shared engine state — label tables, framework-detection caches,
-//! tree-sitter thread-local parsers, rayon globals, `once_cell` statics —
+//! process.  Shared engine state, label tables, framework-detection caches,
+//! tree-sitter thread-local parsers, rayon globals, `once_cell` statics ,
 //! must tolerate two simultaneous walks without races, panics, or diverging
 //! outputs.
 //!
@@ -86,7 +86,7 @@ fn build_tree(root: &Path) {
 }
 
 /// Canonicalize a diag list for equality comparison.  Finding output ordering
-/// depends on rayon scheduling — the individual fields must be identical but
+/// depends on rayon scheduling, the individual fields must be identical but
 /// the sequence is not.  We sort by a stable composite key and stringify
 /// (Diag itself doesn't derive Ord).
 fn canonical_fingerprint(diags: &[Diag]) -> Vec<String> {
@@ -104,7 +104,7 @@ fn two_concurrent_scans_produce_identical_findings() {
     let root = tmp.path().to_path_buf();
     build_tree(&root);
 
-    // Capture an initial single-threaded run so we have a reference point —
+    // Capture an initial single-threaded run so we have a reference point ,
     // if the concurrent run produced a subset we want to know whether that
     // matches a known-good baseline or diverges from it.
     let baseline = scan_no_index(&root, &test_cfg()).expect("baseline scan must succeed");
@@ -138,7 +138,7 @@ fn two_concurrent_scans_produce_identical_findings() {
     );
 }
 
-/// Four concurrent scans over the same tree — larger blast radius for
+/// Four concurrent scans over the same tree, larger blast radius for
 /// serialization bugs in shared caches.  Runs on a small tree to keep
 /// CI time reasonable.
 #[test]

@@ -221,7 +221,7 @@ mod cross_file_tests {
 mod inline_cache_epoch_tests {
     //! Hooks for cross-file SCC joint fixed-point iteration.
     //!
-    //! These do not exercise the full inline pipeline — they lock down the
+    //! These do not exercise the full inline pipeline, they lock down the
     //! semantic contract of [`inline_cache_clear_epoch`] and
     //! [`inline_cache_fingerprint`] so the SCC orchestrator can rely on:
     //!
@@ -229,7 +229,7 @@ mod inline_cache_epoch_tests {
     //! * `fingerprint` is deterministic across equivalent caches (same
     //!   keys → same bytes).  Two caches with identical entries produce
     //!   identical fingerprints regardless of insertion order.
-    //! * `fingerprint` changes when return caps change — the signal the
+    //! * `fingerprint` changes when return caps change, the signal the
     //!   orchestrator will use to detect inline-cache convergence.
 
     use super::super::*;
@@ -675,7 +675,7 @@ mod worklist_tests {
 
     #[test]
     fn dense_successors_no_duplicates() {
-        // Many successors, some repeated — old O(n) contains() would be slow here
+        // Many successors, some repeated, old O(n) contains() would be slow here
         let mut wl = VecDeque::new();
         let mut in_wl = HashSet::new();
 
@@ -735,8 +735,8 @@ mod primary_sink_location_tests {
     //! [`SsaTaintEvent::primary_sink_site`] →
     //! [`crate::taint::Finding::primary_location`].
     //!
-    //! The test is deliberately low-level — it wires up synthetic SSA and
-    //! drives the three emission stages directly — so any future refactor
+    //! The test is deliberately low-level, it wires up synthetic SSA and
+    //! drives the three emission stages directly, so any future refactor
     //! that drops the site on the floor between stages fails here rather
     //! than only at the corpus/benchmark layer.
     use super::super::*;
@@ -841,7 +841,7 @@ mod primary_sink_location_tests {
     /// If this fails, something on the summary→event→finding path
     /// (`pick_primary_sink_sites`, `emit_ssa_taint_events`, or
     /// `ssa_events_to_findings`) has silently stopped forwarding
-    /// coordinates.  Fixing that path — not this test — is the right
+    /// coordinates.  Fixing that path, not this test, is the right
     /// response.
     #[test]
     fn ssa_summary_sinksite_surfaces_as_finding_primary_location() {
@@ -863,7 +863,7 @@ mod primary_sink_location_tests {
         };
 
         // Drive the three emission stages with the summary's own
-        // `param_to_sink` — that is what summary resolution feeds in the
+        // `param_to_sink`, that is what summary resolution feeds in the
         // real pipeline.
         let tainted: Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)> = vec![(
             SsaValue(0),
@@ -944,7 +944,7 @@ mod goto_succ_propagation_tests {
 
     #[test]
     fn goto_propagates_to_every_succ_on_three_way_collapse() {
-        // Build a block with Terminator::Goto(1) but succs = [1, 2, 3] — the
+        // Build a block with Terminator::Goto(1) but succs = [1, 2, 3], the
         // shape lowering emits for a 3-way fanout.
         let block = SsaBlock {
             id: BlockId(0),
@@ -1001,7 +1001,7 @@ mod goto_succ_propagation_tests {
             pointer_facts: None,
         };
 
-        // A non-bottom exit state — the test only cares that *every* succ
+        // A non-bottom exit state, the test only cares that *every* succ
         // receives a clone of it, so any distinguishable state works.
         let mut exit_state = SsaTaintState::initial();
         exit_state.values.push((
@@ -1259,7 +1259,7 @@ mod goto_succ_propagation_tests {
     fn is_path_safe_for_sink_unknown_axis_returns_false() {
         use crate::abstract_interp::PathFact;
 
-        // Only dotdot is cleared — absolute stays Maybe → not path-safe.
+        // Only dotdot is cleared, absolute stays Maybe → not path-safe.
         let half_fact = PathFact::default().with_dotdot_cleared();
         assert!(!half_fact.is_path_safe());
     }
@@ -1553,7 +1553,7 @@ mod fanout_merge_tests {
         }
     }
 
-    /// B1 — caps that grow taint signal (source/sink/receiver_to_sink)
+    /// B1, caps that grow taint signal (source/sink/receiver_to_sink)
     /// are unioned.  sanitizer_caps are intersected so only bits
     /// stripped by EVERY implementer count as cleared at the call site.
     #[test]
@@ -1581,7 +1581,7 @@ mod fanout_merge_tests {
         );
     }
 
-    /// B2 — propagates_taint is OR'd; propagating_params is the union
+    /// B2, propagates_taint is OR'd; propagating_params is the union
     /// (any implementer's propagator counts).
     #[test]
     fn merge_propagation_unions() {
@@ -1600,7 +1600,7 @@ mod fanout_merge_tests {
         assert_eq!(params, vec![0, 1, 2]);
     }
 
-    /// B3 — param_to_sink merges per-parameter caps (OR).  An impl
+    /// B3, param_to_sink merges per-parameter caps (OR).  An impl
     /// that adds a sink at param N composes with another impl that
     /// adds a different cap at the same N.
     #[test]
@@ -1630,7 +1630,7 @@ mod fanout_merge_tests {
         );
     }
 
-    /// B4 — param_to_sink_sites merges per-parameter site lists with
+    /// B4, param_to_sink_sites merges per-parameter site lists with
     /// PartialEq dedup.  The same site appearing in both impls (e.g.
     /// inherited definition) must not be reported twice.
     #[test]
@@ -1675,7 +1675,7 @@ mod fanout_merge_tests {
         assert!(sites.iter().any(|s| s == &unique_b));
     }
 
-    /// B5 — SSA-precision fields are dropped on disagreement.  Two
+    /// B5, SSA-precision fields are dropped on disagreement.  Two
     /// summaries with different `return_type` collapse to None;
     /// agreement is preserved.
     #[test]
@@ -1704,7 +1704,7 @@ mod fanout_merge_tests {
         );
     }
 
-    /// B6 — abstract_transfer + param_return_paths drop on
+    /// B6, abstract_transfer + param_return_paths drop on
     /// disagreement (precise predicate-path data is not safely
     /// composable across distinct function bodies).
     #[test]
@@ -1737,7 +1737,7 @@ mod fanout_merge_tests {
         );
     }
 
-    /// B7 — empty + empty = empty (no panic on degenerate inputs).
+    /// B7, empty + empty = empty (no panic on degenerate inputs).
     #[test]
     fn merge_empties_is_identity() {
         let m = merge_resolved_summaries_fanout(empty(), empty());
@@ -1918,8 +1918,8 @@ mod field_write_tests {
         crate::pointer::analyse_body(body, crate::cfg::BodyId(7))
     }
 
-    /// Reuse `make_cfg`'s nodes — the body's instructions all reference
-    /// them — so `transfer_inst` can index `cfg[cfg_node]`.
+    /// Reuse `make_cfg`'s nodes, the body's instructions all reference
+    /// them, so `transfer_inst` can index `cfg[cfg_node]`.
     fn drive(body: &SsaBody, pf: &PointsToFacts) -> SsaTaintState {
         // We need a CFG that contains the bodies' cfg_nodes.
         let (cfg, _, _, _, _) = make_cfg();
@@ -1998,7 +1998,7 @@ mod field_write_tests {
 
     /// Pointer-disabled run (`pointer_facts: None`): no field cell is
     /// recorded, no taint flows through the `obj.cache` projection.  The
-    /// strict-additive contract — pointer-disabled behaviour is the
+    /// strict-additive contract, pointer-disabled behaviour is the
     /// pre-W1 baseline.
     #[test]
     fn pointer_disabled_run_produces_no_field_taint() {
@@ -2047,8 +2047,8 @@ mod field_write_tests {
             state.field_taint.is_empty(),
             "pointer-disabled run must not populate field_taint",
         );
-        // FieldProj reads still produce the receiver's existing taint —
-        // none — so no entry for SsaValue(3) either.
+        // FieldProj reads still produce the receiver's existing taint ,
+        // none, so no entry for SsaValue(3) either.
         assert!(state.get(SsaValue(3)).is_none());
         let _ = cache_id;
     }
@@ -2059,7 +2059,7 @@ mod field_write_tests {
     /// projected value's symbol-level `validated_must` from the cell.
     ///
     /// This is the key invariant: validation flows *through* abstract
-    /// field identity — the read recovers what the write recorded.
+    /// field identity, the read recovers what the write recorded.
     #[test]
     fn write_then_read_preserves_validated_must() {
         let (body, cache_id) = make_body();
@@ -2208,7 +2208,7 @@ mod field_write_tests {
             },
         };
         let pf = crate::pointer::analyse_body(&body, crate::cfg::BodyId(0));
-        // v0 is Const → empty pt — the hook should not insert anything.
+        // v0 is Const → empty pt, the hook should not insert anything.
         assert!(
             pf.pt(SsaValue(0)).is_empty(),
             "Const value should have empty pt set",
@@ -2351,7 +2351,7 @@ mod container_elem_tests {
         state
     }
 
-    /// `arr.push(source()); arr.shift()` — the read picks the source's
+    /// `arr.push(source()); arr.shift()`, the read picks the source's
     /// caps up via the ELEM cell.
     #[test]
     fn container_write_then_read_round_trips_taint() {
@@ -2456,7 +2456,7 @@ mod container_elem_tests {
         );
 
         // Drive the transfer.  `e := arr.shift()` goes through the
-        // existing Call arm — the W2 path is the *write* on `push`.
+        // existing Call arm, the W2 path is the *write* on `push`.
         // The element-read side already exists on `analyse_body`; the
         // taint engine doesn't yet read field cells through call-result
         // paths (Call args are walked by Call's own argument-taint
@@ -2482,7 +2482,7 @@ mod container_elem_tests {
         }
     }
 
-    /// W4: `arr.push(validate(src)); arr.shift()` — the push records
+    /// W4: `arr.push(validate(src)); arr.shift()`, the push records
     /// `validated_must = true` on the ELEM cell because the pushed
     /// value's symbol carried `validated_must`.  The shift call result
     /// reads through the cell and seeds the result symbol's
@@ -2783,7 +2783,7 @@ mod cross_call_field_tests {
     use smallvec::smallvec;
     use std::collections::HashMap;
 
-    /// W3 / W4: shared empty interner — these unit tests don't seed
+    /// W3 / W4: shared empty interner, these unit tests don't seed
     /// validation bits, so a fresh interner is sufficient for the
     /// `interner` parameter on `apply_field_points_to_writes`.
     fn empty_interner() -> SymbolInterner {
@@ -2861,23 +2861,23 @@ mod cross_call_field_tests {
         state
     }
 
-    /// Callee summary with `param_field_writes[(0, ["cache"])]` —
+    /// Callee summary with `param_field_writes[(0, ["cache"])]` ,
     /// "callee writes cache field on parameter 0 (obj)".
-    /// Caller passes `(obj, source)` to this callee — `arg 0 = obj`,
+    /// Caller passes `(obj, source)` to this callee, `arg 0 = obj`,
     /// but the W3 hook resolves the *value at arg position 0* as the
     /// receiver of the field write, populating its pt's cells.
     ///
     /// We model the caller as `callee(obj, source)` with arg 0 = obj
     /// (the receiver) and arg 1 = source (the value being written).
     /// The callee's signature is `fn store(obj, value) { obj.cache = value; }`
-    /// — so the field write on param 0 is keyed by `pt(obj)` and the
+    ///, so the field write on param 0 is keyed by `pt(obj)` and the
     /// taint comes from arg 1's caps.  Our helper conservatively unions
-    /// every arg's taint into the cell — which over-tints (for this
+    /// every arg's taint into the cell, which over-tints (for this
     /// shape, arg 0's pt member becomes the loc, with arg 0's own taint
     /// applied), but is sound.
     ///
     /// To make the test precise, we model the simpler shape `fn store(obj)
-    /// { obj.cache = source(); }` — callee writes a literal source into
+    /// { obj.cache = source(); }`, callee writes a literal source into
     /// `obj.cache`, with no value parameter.  Then the caller-side hook
     /// only sees param 0's taint (zero), so the cell is empty and the
     /// test fails.
@@ -2886,7 +2886,7 @@ mod cross_call_field_tests {
     /// at the call site arg 0 carries source taint.  The hook then
     /// records (pt(arg0_value), cache) ← arg0_value's taint.  In a
     /// real callee this corresponds to "callee writes its parameter
-    /// value into a self.cache field internally" — but the spread we
+    /// value into a self.cache field internally", but the spread we
     /// validate is just substitute-and-mirror.
     #[test]
     fn cross_call_writes_into_param_field_cell() {
@@ -2947,7 +2947,7 @@ mod cross_call_field_tests {
     fn cross_call_receiver_field_uses_max_sentinel() {
         let (body, cache_id, pf) = caller_body();
         let mut state = SsaTaintState::initial();
-        // Seed receiver with taint — SsaValue(0) is the param/receiver.
+        // Seed receiver with taint, SsaValue(0) is the param/receiver.
         state.set(
             SsaValue(0),
             VarTaint {
@@ -3026,7 +3026,7 @@ mod cross_call_field_tests {
         );
     }
 
-    /// Field names the caller never interned are skipped silently —
+    /// Field names the caller never interned are skipped silently ,
     /// no FieldProj read in the caller could observe such a cell.
     #[test]
     fn cross_call_unknown_field_name_skipped() {
@@ -3062,7 +3062,7 @@ mod cross_call_field_tests {
         );
     }
 
-    /// Overflow summary is treated conservatively as no-op — the
+    /// Overflow summary is treated conservatively as no-op, the
     /// engine cannot soundly cell-flood, so it skips entirely.
     #[test]
     fn cross_call_overflow_summary_is_noop() {
@@ -3117,7 +3117,7 @@ mod cross_call_field_tests {
 //
 // `SsaTaintState.add_field` already routes through `merge_origins`, but
 // the FieldProj READ path used to walk the cell's origins inline,
-// deduping by node only — meaning a cell with N>cap origins surfaced
+// deduping by node only, meaning a cell with N>cap origins surfaced
 // all N to the projected SSA value.  After A7, the read path uses
 // `push_origin_bounded`, ensuring the cap-driven survivor selection
 // applies on read too.
@@ -3225,7 +3225,7 @@ mod field_taint_origin_cap_tests {
         let (body, cache_id, cfg, _n_proj) = build_body();
         let pf = crate::pointer::analyse_body(&body, crate::cfg::BodyId(0));
 
-        // Pre-populate the (Param, cache) cell with 4 origins —
+        // Pre-populate the (Param, cache) cell with 4 origins ,
         // 2× the cap.  The `add_field` path already truncates via
         // `merge_origins`, so we go through it 4 times to grow.
         let mut state = SsaTaintState::initial();
@@ -3326,14 +3326,14 @@ mod field_taint_origin_cap_tests {
 // the field_taint cells.
 //
 // Two scenarios:
-// 1. `must_validated_flows_through_join` — both predecessor blocks
+// 1. `must_validated_flows_through_join`, both predecessor blocks
 //    write the cell with `validated_must = true`.  After the join, the
 //    cell at the read site retains `validated_must = true` (AND
 //    intersection of two `true`s).
-// 2. `early_exit_branch_drops_validated_must` — only one predecessor
+// 2. `early_exit_branch_drops_validated_must`, only one predecessor
 //    writes; the other reaches the read block via an empty branch.
 //    After the join, the cell has `validated_must = false`,
-//    `validated_may = true` — W4's must/may intersection in action.
+//    `validated_may = true`, W4's must/may intersection in action.
 #[cfg(test)]
 mod pointer_lattice_worklist_tests {
     use super::super::*;
@@ -3425,7 +3425,7 @@ mod pointer_lattice_worklist_tests {
             succs: smallvec![BlockId(1), BlockId(2)],
         };
 
-        // Block 1: synth `obj.cache = src` — field_writes[v2] = (v0, cache_id)
+        // Block 1: synth `obj.cache = src`, field_writes[v2] = (v0, cache_id)
         let block1 = SsaBlock {
             id: BlockId(1),
             phis: vec![],
@@ -3441,7 +3441,7 @@ mod pointer_lattice_worklist_tests {
             succs: smallvec![BlockId(3)],
         };
 
-        // Block 2: identical synth write — keeps both branches
+        // Block 2: identical synth write, keeps both branches
         // contributing the same cell so AND-intersection of must
         // preserves true on the join.
         let block2 = SsaBlock {
@@ -3459,7 +3459,7 @@ mod pointer_lattice_worklist_tests {
             succs: smallvec![BlockId(3)],
         };
 
-        // Block 3: read — FieldProj uses obj from a phi between B1 and B2.
+        // Block 3: read, FieldProj uses obj from a phi between B1 and B2.
         let block3 = SsaBlock {
             id: BlockId(3),
             phis: vec![SsaInst {
@@ -3634,7 +3634,7 @@ mod pointer_lattice_worklist_tests {
         );
     }
 
-    /// A2.b: early-exit branch — only B1 writes, B2 reaches B3 via
+    /// A2.b: early-exit branch, only B1 writes, B2 reaches B3 via
     /// an empty body.  After the join, the cell exists (B1 wrote
     /// it), but `validated_must` is `false` (B2 didn't write, the
     /// orphan-side merge clears `must` per the W4 lattice rule);
@@ -3642,7 +3642,7 @@ mod pointer_lattice_worklist_tests {
     ///
     /// To exercise the validation channels we synthesise the cell
     /// directly at the appropriate exit state, then run the
-    /// worklist's join via two `SsaTaintState::join()` calls — the
+    /// worklist's join via two `SsaTaintState::join()` calls, the
     /// body's worklist itself doesn't seed `validated_must` on the
     /// rhs of an Assign, so we model the "writer recorded must=true"
     /// scenario at the lattice level rather than driving it through

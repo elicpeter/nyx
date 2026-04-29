@@ -19,7 +19,7 @@ pub enum CapHitReason {
     /// the cap; the SCC is just larger than budget.
     MonotoneShrinking { trajectory: SmallVec<[u32; 4]> },
     /// Change-set held steady at a non-zero value for ≥2 iterations.
-    /// Same keys updating back and forth — investigate.
+    /// Same keys updating back and forth, investigate.
     Plateau { delta: u32 },
     /// Period-2 oscillation detected. Non-monotone; raising the cap
     /// will not help. File a bug.
@@ -114,7 +114,7 @@ pub enum LossDirection {
     /// Analysis converged; the note records a harmless event.
     Informational,
     /// Analysis may have missed findings (worklist was capped). Reported
-    /// findings remain sound — the result set is a lower bound.
+    /// findings remain sound, the result set is a lower bound.
     UnderReport,
     /// Analysis may have reported a spurious finding (e.g. predicate
     /// state widened to top, dropping a guard). Likely FP.
@@ -148,7 +148,7 @@ pub enum EngineNote {
     /// Taint worklist hit its iteration budget. UnderReport.
     WorklistCapped { iterations: u32 },
     /// Per-value origin set truncated to `analysis.engine.max_origins`
-    /// (default 32). UnderReport — dropped origins correspond to real
+    /// (default 32). UnderReport, dropped origins correspond to real
     /// source flows whose findings won't emit.
     OriginsTruncated { dropped: u32 },
     /// JS/TS pass-2 in-file global propagation hit its cap. UnderReport.
@@ -168,7 +168,7 @@ pub enum EngineNote {
     /// Tree-sitter parse exceeded the timeout. Bail.
     ParseTimeout { timeout_ms: u32 },
     /// Predicate state widened to top to keep the lattice monotone.
-    /// OverReport — guards may have been lost.
+    /// OverReport, guards may have been lost.
     PredicateStateWidened,
     /// Path-environment constraints widened to top. OverReport.
     PathEnvCapped,

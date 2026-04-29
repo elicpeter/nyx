@@ -18,11 +18,11 @@ use petgraph::graph::NodeIndex;
 /// the parse rules are duplicated. A success here implies a FieldProj
 /// chain at SSA level (or a direct receiver for the 1-dot case).
 ///
-/// **Returns** `Some(("c", "Close"))` for `"c.Close"` (1 dot — the
+/// **Returns** `Some(("c", "Close"))` for `"c.Close"` (1 dot, the
 /// receiver is a bare ident); `Some(("c.mu", "Lock"))` for
-/// `"c.mu.Lock"` (2 dots — receiver is a 1-element chain);
+/// `"c.mu.Lock"` (2 dots, receiver is a 1-element chain);
 /// `Some(("c.writer.header", "set"))` for `"c.writer.header.set"`
-/// (3 dots — receiver is a 2-element chain).  Returns `None` for any
+/// (3 dots, receiver is a 2-element chain).  Returns `None` for any
 /// callee shape we can't safely decompose textually.
 fn try_chain_decompose(callee: &str) -> Option<(&str, &str)> {
     for ch in callee.chars() {
@@ -39,7 +39,7 @@ fn try_chain_decompose(callee: &str) -> Option<(&str, &str)> {
         return None;
     }
     // Reject if any segment in the receiver is empty (leading dot,
-    // double dots) — same discipline as the SSA-side helper.
+    // double dots), same discipline as the SSA-side helper.
     if receiver_text.split('.').any(str::is_empty) {
         return None;
     }
@@ -47,7 +47,7 @@ fn try_chain_decompose(callee: &str) -> Option<(&str, &str)> {
 }
 
 /// Events emitted during transfer for illegal state transitions.
-/// These are NOT lattice values — they become findings in `facts.rs`.
+/// These are NOT lattice values, they become findings in `facts.rs`.
 #[derive(Debug, Clone)]
 pub struct TransferEvent {
     pub kind: TransferEventKind,
@@ -156,7 +156,7 @@ pub struct ResourceMethodSummary {
     pub method_name: String,
     /// Whether this method acquires or releases a resource.
     pub effect: ResourceEffect,
-    /// `parent_body_id` of the declaring method — groups methods by class.
+    /// `parent_body_id` of the declaring method, groups methods by class.
     pub class_group: crate::cfg::BodyId,
     /// Span of the actual resource operation (e.g., fs.openSync at line 7).
     pub original_span: (usize, usize),
@@ -168,7 +168,7 @@ pub struct DefaultTransfer<'a> {
     pub interner: &'a SymbolInterner,
     /// Resource method summaries for cross-body proxy resolution.
     pub resource_method_summaries: &'a [ResourceMethodSummary],
-    /// Optional per-body field-only points-to hints — names that resolve
+    /// Optional per-body field-only points-to hints, names that resolve
     /// to a value whose entire abstract heap identity is one or more
     /// [`crate::pointer::AbsLoc::Field`] locations (e.g. `m := c.mu`).
     ///
@@ -301,8 +301,8 @@ impl DefaultTransfer<'_> {
         // whose abstract heap identity is purely `Field(_, _)` (e.g.
         // `m := c.mu` followed by `m.Lock()`), the receiver is a
         // sub-object alias rather than a standalone resource handle.
-        // Routing the entire call into `chain_proxies` here — *before*
-        // the SymbolId-based direct-acquire/release/proxy branches —
+        // Routing the entire call into `chain_proxies` here, *before*
+        // the SymbolId-based direct-acquire/release/proxy branches ,
         // suppresses the FP class where the local `m` would otherwise
         // be flagged as a leakable resource at function exit.
         //
@@ -377,12 +377,12 @@ impl DefaultTransfer<'_> {
         // single-dot band-aid (`callee.matches('.').count() == 1 &&
         // !callee.contains('(')`) silently dropped chained receivers
         // because the original textual extractor took the chain root as
-        // receiver — collapsing `c.writer.header().set` to `c` and
+        // receiver, collapsing `c.writer.header().set` to `c` and
         // marking `c` as proxy-acquired (the gin/context.go FP class).
         //
         // The band-aid is now deleted.  Chained-receiver method calls
         // are routed to a *separate* state map (`chain_proxies`) keyed by
-        // the joined receiver chain text — so `c.mu.Lock()` acquires
+        // the joined receiver chain text, so `c.mu.Lock()` acquires
         // `c.mu` (a chain-receiver entity), not `c`.  The chain receiver
         // is independent of the chain root: leaks/double-closes are
         // tracked per chain, never propagated up to the root.
@@ -431,7 +431,7 @@ impl DefaultTransfer<'_> {
             } else if !direct_acquire && !direct_release {
                 // Single-dot receiver (`<recv>.<method>`): existing
                 // SymbolId-based path.  Gated on direct_acquire/release
-                // because it shares state with the direct paths above —
+                // because it shares state with the direct paths above ,
                 // running both would double-transition.  Honour the
                 // explicit `info.call.receiver` when it's the same bare
                 // ident, otherwise fall back to the parsed receiver text.
@@ -532,7 +532,7 @@ impl DefaultTransfer<'_> {
     }
 
     fn apply_if(&self, info: &NodeInfo, edge: Option<EdgeKind>, state: &mut ProductState) {
-        // Determine the "positive edge" — the edge where the underlying
+        // Determine the "positive edge", the edge where the underlying
         // (de-negated) condition evaluates to true.
         //
         // For `if (is_authenticated(req))`:  positive = True edge
@@ -546,8 +546,8 @@ impl DefaultTransfer<'_> {
 
         // Resource null-check: `if (f)` or `if (!f)` where f is a tracked
         // resource currently in OPEN state.  The "var is falsy" edge means
-        // the acquisition returned null/zero — no resource was actually
-        // produced — so subsequent close requirements do not apply on that
+        // the acquisition returned null/zero, no resource was actually
+        // produced, so subsequent close requirements do not apply on that
         // path.  Clearing OPEN suppresses the spurious may-leak finding for
         // the canonical NULL-safe close idiom in C / C++ / similar:
         //
@@ -560,7 +560,7 @@ impl DefaultTransfer<'_> {
         //
         // Heuristic conditions:
         //   * condition is a single-variable truth check (no comparisons,
-        //     no calls — `condition_vars.len() == 1` and the trimmed text
+        //     no calls, `condition_vars.len() == 1` and the trimmed text
         //     equals that variable name).
         //   * the var has OPEN in its lifecycle bitset.
         //   * the edge represents "var is falsy" (= !is_positive_edge).
@@ -583,7 +583,7 @@ impl DefaultTransfer<'_> {
 
         if let Some(ref cond) = info.condition_text {
             let cond_lower = cond.to_ascii_lowercase();
-            // Strip leading negation operator for pattern matching —
+            // Strip leading negation operator for pattern matching ,
             // the edge selection above already encodes the semantics.
             let cond_inner = if info.condition_negated {
                 cond_lower.trim_start_matches('!').trim_start()
@@ -679,7 +679,7 @@ fn is_guard_like(callee: &str) -> bool {
 }
 
 /// True iff the condition is a single-variable truth check (no comparison,
-/// no method call, no boolean composition) — the bare `if (f)` or `if (!f)`
+/// no method call, no boolean composition), the bare `if (f)` or `if (!f)`
 /// shape used as a NULL-safe gate around resource access.
 ///
 /// Conservative: requires `condition_vars` to have exactly one entry, and
@@ -1081,7 +1081,7 @@ mod tests {
         let mut state = ProductState::initial();
         state.resource.set(sym_f, ResourceLifecycle::OPEN);
 
-        // `if (!f)` — condition_negated=true, true-edge means f is null
+        // `if (!f)`, condition_negated=true, true-edge means f is null
         let info = NodeInfo {
             kind: StmtKind::If,
             condition_text: Some("!f".into()),
@@ -1220,7 +1220,7 @@ mod tests {
 
     #[test]
     fn auth_token_underscore_camel_boundary_cases() {
-        // Underscore-joined identifiers are single tokens — must not match interior.
+        // Underscore-joined identifiers are single tokens, must not match interior.
         assert!(!condition_contains_auth_token(
             "req.user_is_authenticated_flag",
             "is_authenticated"
@@ -1247,12 +1247,12 @@ mod tests {
             "xmiddleware.auth()",
             "middleware.auth"
         ));
-        // Right boundary violation — "middleware.authz" extends past "middleware.auth".
+        // Right boundary violation, "middleware.authz" extends past "middleware.auth".
         assert!(!condition_contains_auth_token(
             "middleware.authz()",
             "middleware.auth"
         ));
-        // "middleware.auth.check" — matcher ends at '.', which is non-ident → matches.
+        // "middleware.auth.check", matcher ends at '.', which is non-ident → matches.
         assert!(condition_contains_auth_token(
             "middleware.auth.check()",
             "middleware.auth"
@@ -1320,7 +1320,7 @@ mod tests {
 
     #[test]
     fn auth_token_boolean_composition() {
-        // Compound conditions — each token should be individually matchable.
+        // Compound conditions, each token should be individually matchable.
         assert!(condition_contains_auth_token(
             "is_authenticated && is_admin",
             "is_authenticated"
@@ -1348,12 +1348,12 @@ mod tests {
     //      method, bailing on complex tokens.
     //   2. The proxy-method routing in `apply_call` records chained
     //      receivers in `state.chain_proxies` (keyed by joined chain
-    //      text) — independent from the chain root's `SymbolId`-based
+    //      text), independent from the chain root's `SymbolId`-based
     //      `state.receiver_class_group` entries.
     //   3. Single-dot callees still flow through the existing SymbolId
     //      path (regression guard).
     //   4. The deleted single-dot band-aid no longer suppresses chain
-    //      cases — `c.mu.Lock()` now fires the chain-proxies path
+    //      cases, `c.mu.Lock()` now fires the chain-proxies path
     //      instead of being silently dropped.
 
     #[test]
@@ -1395,7 +1395,7 @@ mod tests {
         // the simple `<ident>.<ident>...` shape; helper must bail to
         // preserve the conservative behaviour the band-aid established.
         for s in [
-            "Foo::bar::baz",     // Rust path — `::` rules it out
+            "Foo::bar::baz",     // Rust path, `::` rules it out
             "ptr->field.f",      // C arrow operator
             "obj.f().g",         // intermediate call
             "vec[0].field",      // index expression
@@ -1469,7 +1469,7 @@ mod tests {
         assert_eq!(entry.class_group, crate::cfg::BodyId(7));
         assert_eq!(entry.acquire_span, (10, 20));
 
-        // Root `c` is NOT marked in receiver_class_group — the gin/context FP
+        // Root `c` is NOT marked in receiver_class_group, the gin/context FP
         // the band-aid was guarding against can no longer reappear.
         assert!(
             state.receiver_class_group.is_empty(),
@@ -1552,7 +1552,7 @@ mod tests {
     #[test]
     fn chain_proxy_distinct_chains_dont_collide() {
         // `c.mu.Lock()` and `c.other.Lock()` are independent chain
-        // receivers — each gets its own entry in chain_proxies.
+        // receivers, each gets its own entry in chain_proxies.
         let interner = SymbolInterner::new();
         let class_group = crate::cfg::BodyId(3);
 
@@ -1598,7 +1598,7 @@ mod tests {
     #[test]
     fn single_dot_proxy_acquire_uses_symbol_id_path() {
         // REGRESSION: single-dot callees keep the existing SymbolId-based
-        // path — `f.acquireMine()` records against
+        // path, `f.acquireMine()` records against
         // `receiver_class_group[sym_f]`, NOT `chain_proxies["f"]`.  This
         // preserves all existing 1-dot proxy semantics (leak detection,
         // finding attribution).
@@ -1704,7 +1704,7 @@ mod tests {
     fn chain_proxy_lattice_join_unions_keys() {
         // Sanity check: the lattice join unions chain_proxies keys.
         // Branch A: `c.mu` OPEN.  Branch B: `c.other` OPEN.  Join must
-        // contain both — this is the dataflow-correctness invariant
+        // contain both, this is the dataflow-correctness invariant
         // for chain tracking across branches.
         use crate::state::lattice::Lattice;
         let mut a = ProductState::initial();
@@ -1733,7 +1733,7 @@ mod tests {
 
     #[test]
     fn chain_proxy_lattice_join_merges_lifecycle() {
-        // Same chain key on two branches — the lifecycle is OR-joined
+        // Same chain key on two branches, the lifecycle is OR-joined
         // (OPEN ∪ CLOSED).  Mirrors the `ResourceLifecycle::join`
         // bitflag-or semantics already used for SymbolId-based tracking.
         use crate::state::lattice::Lattice;
@@ -1771,7 +1771,7 @@ mod tests {
 
     #[test]
     fn field_only_hint_routes_single_dot_acquire_to_chain_proxies() {
-        // Models `m := c.mu; m.Lock()` — `m`'s pt set is `{Field(SelfParam, mu)}`,
+        // Models `m := c.mu; m.Lock()`, `m`'s pt set is `{Field(SelfParam, mu)}`,
         // so PtrProxyHint::FieldOnly applies.  The acquire must record
         // `m` in chain_proxies, NOT in receiver_class_group, so the
         // leak detector does not later flag `m` as an OPEN-at-exit
@@ -1833,7 +1833,7 @@ mod tests {
     #[test]
     fn field_only_hint_release_transitions_chain_entry_to_closed() {
         // Acquire + Release pair on the field-aliased local both route
-        // through chain_proxies — the entry transitions OPEN → CLOSED
+        // through chain_proxies, the entry transitions OPEN → CLOSED
         // exactly as the existing chain-receiver path does.
         let mut interner = SymbolInterner::new();
         let _sym_m = interner.intern_scoped(None, "m");
@@ -1897,7 +1897,7 @@ mod tests {
     #[test]
     fn no_hint_falls_through_to_existing_symbol_id_path() {
         // REGRESSION: when `ptr_proxy_hints` is `None`, the single-dot
-        // proxy-acquire branch behaves exactly as today — the SymbolId
+        // proxy-acquire branch behaves exactly as today, the SymbolId
         // path fires, `chain_proxies` stays empty.  Strict-additive
         // contract: pointer analysis disabled ⇒ no behavioural change.
         let mut interner = SymbolInterner::new();
@@ -1939,7 +1939,7 @@ mod tests {
     fn empty_hint_map_does_not_redirect() {
         // REGRESSION: an empty hint map means "every name resolves to
         // PtrProxyHint::Other".  The single-dot branch must fall
-        // through to the SymbolId path — not silently route to
+        // through to the SymbolId path, not silently route to
         // chain_proxies because the map happened to be empty.
         let mut interner = SymbolInterner::new();
         let sym_f = interner.intern_scoped(None, "f");

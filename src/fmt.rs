@@ -31,7 +31,7 @@ pub fn render_console(
     }
 
     for (path, issues) in &grouped {
-        // File path header — dim blue, never brighter than severity.
+        // File path header, dim blue, never brighter than severity.
         out.push_str(&format!("{}\n", style(path).blue().dim().underlined()));
         for d in issues {
             out.push_str(&render_diag(d, width));
@@ -261,7 +261,7 @@ fn render_diag(d: &Diag, width: usize) -> String {
     // Engine provenance notes: show count + worst direction so a user
     // scanning the console can see "this finding is from capped analysis"
     // at a glance.  Direction tags ("under-report", "over-report", "bail")
-    // are stable strings from `LossDirection::tag()` — kept in sync with
+    // are stable strings from `LossDirection::tag()`, kept in sync with
     // the SARIF `result.properties.engine_notes[].kind` serialization so
     // downstream tooling can cross-reference console and SARIF output.
     // Informational-only notes (e.g. InlineCacheReused) are not surfaced
@@ -453,7 +453,7 @@ fn state_remediation_hint(rule_id: &str) -> Option<&'static str> {
 /// Colored severity tag with icon. The tag is the visual anchor of each finding.
 ///
 /// - HIGH:   bold red
-/// - MEDIUM: bold 208 (orange) — distinct from yellow
+/// - MEDIUM: bold 208 (orange), distinct from yellow
 /// - LOW:    dim 67 (muted blue-gray)
 fn severity_tag(sev: Severity) -> String {
     match sev {
@@ -503,7 +503,7 @@ fn collapse_chain_spacing(s: &str) -> String {
                 // Collapse: emit `.` directly after `)`
                 continue;
             } else {
-                // Not a chain continuation — emit the whitespace we skipped
+                // Not a chain continuation, emit the whitespace we skipped
                 for c in &chars[ws_start..i] {
                     out.push(*c);
                 }

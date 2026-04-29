@@ -2,8 +2,8 @@
 //!
 //! When a callee's `CalleeSsaBody` is available, the symbolic executor walks
 //! the callee's SSA blocks as a nested frame instead of treating it as an
-//! opaque `mk_call`.  Full symbolic state — return values, heap mutations,
-//! taint, and path constraints — is propagated back to the caller.
+//! opaque `mk_call`.  Full symbolic state, return values, heap mutations,
+//! taint, and path constraints, is propagated back to the caller.
 //!
 //! Resolution order in `transfer_inst` Call arm:
 //!   container ops → string methods → **interprocedural execution** → summary → opaque mk_call.
@@ -247,7 +247,7 @@ pub struct InterprocCtx<'a> {
     /// Pre-lowered intra-file function bodies, keyed by canonical `FuncKey`.
     pub callee_bodies: &'a HashMap<crate::symbol::FuncKey, CalleeSsaBody>,
     /// The top-level caller's body CFG. Callees have their own per-body graphs
-    /// (see `CalleeSsaBody::body_graph`) — `execute_callee` must swap this for
+    /// (see `CalleeSsaBody::body_graph`), `execute_callee` must swap this for
     /// the callee's own graph before indexing by `SsaInst::cfg_node`.
     pub cfg: &'a Cfg,
     /// Source language.
@@ -373,7 +373,7 @@ impl CallOutcome {
     /// Create a cutoff outcome with conservative return.
     ///
     /// Returns `Unknown` with taint preserved if any argument was tainted.
-    /// This ensures cutoffs never silently drop taint — conservative soundness.
+    /// This ensures cutoffs never silently drop taint, conservative soundness.
     fn cutoff(reason: CutoffReason, any_arg_tainted: bool) -> Self {
         CallOutcome {
             exit_states: if any_arg_tainted {
@@ -478,7 +478,7 @@ pub fn select_merge_policy(exit_count: usize, has_cutoffs: bool) -> MergePolicy 
 ///   - bits 1-4: SymbolicValue discriminant
 ///   - bits 5-15: hash of concrete value (if Concrete/ConcreteStr)
 ///
-/// Richer than taint-only — captures concrete string/int identity.
+/// Richer than taint-only, captures concrete string/int identity.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ArgAbstraction(SmallVec<[(usize, u16); 4]>);
 
@@ -561,14 +561,14 @@ impl<'a> Drop for ReentryGuard<'a> {
 /// reasons and conservative return values (taint preserved).
 ///
 /// # Arguments
-/// * `ctx`          — shared interprocedural context
-/// * `callee_name`  — raw callee name from `SsaOp::Call`
-/// * `arg_values`   — per-argument (caller SsaValue, SymbolicValue, tainted)
-/// * `caller_heap`  — caller's current symbolic heap (for callee reads)
-/// * `depth`        — current call depth (0 = top-level caller)
-/// * `call_chain`   — function names from outermost caller to current
-/// * `summary_ctx`  — summary context for nested calls that can't be inlined
-/// * `heap_ctx`     — heap context for nested calls
+/// * `ctx`         , shared interprocedural context
+/// * `callee_name` , raw callee name from `SsaOp::Call`
+/// * `arg_values`  , per-argument (caller SsaValue, SymbolicValue, tainted)
+/// * `caller_heap` , caller's current symbolic heap (for callee reads)
+/// * `depth`       , current call depth (0 = top-level caller)
+/// * `call_chain`  , function names from outermost caller to current
+/// * `summary_ctx` , summary context for nested calls that can't be inlined
+/// * `heap_ctx`    , heap context for nested calls
 pub fn execute_callee(
     ctx: &InterprocCtx,
     callee_name: &str,
@@ -616,7 +616,7 @@ pub fn execute_callee(
         }
     }
 
-    // Resolve callee by leaf name — finds first FuncKey with matching name
+    // Resolve callee by leaf name, finds first FuncKey with matching name
     // (optionally agreeing on arity). Symex preserves its existing leaf-name
     // semantics; disambiguation happens upstream in the taint engine.
     let normalized = callee_leaf_name(callee_name);
@@ -642,7 +642,7 @@ pub fn execute_callee(
                 gs.resolve_callee_body(ctx.lang, normalized, arity_hint, ctx.caller_namespace)
             }) {
                 Some(b) => (b, true),
-                None => return None, // No body — fall through to summary
+                None => return None, // No body, fall through to summary
             }
         }
     };
@@ -825,7 +825,7 @@ pub fn execute_callee(
             } else {
                 None
             };
-            // `inst.cfg_node` indices are body-local — refer to `body.body_graph`,
+            // `inst.cfg_node` indices are body-local, refer to `body.body_graph`,
             // not `ctx.cfg` (the caller's graph). Fall back to `ctx.cfg` only for
             // cross-file bodies, where `node_meta` is populated and the graph is
             // never indexed directly.
@@ -838,7 +838,7 @@ pub fn execute_callee(
                 path.predecessor,
                 summary_ctx,
                 heap_ctx,
-                // Pass None for interproc_ctx — we handle nested calls directly below.
+                // Pass None for interproc_ctx, we handle nested calls directly below.
                 None,
                 Some(ctx.lang),
                 xfile_meta,
@@ -1033,7 +1033,7 @@ fn detect_internal_sinks(
 ) {
     for inst in block.body.iter() {
         let labels: &[DataLabel] = if let Some(meta) = node_meta {
-            // cross-file body — use embedded metadata
+            // cross-file body, use embedded metadata
             meta.get(&(inst.cfg_node.index() as u32))
                 .map(|m| m.info.taint.labels.as_slice())
                 .unwrap_or(&[])
@@ -1282,7 +1282,7 @@ fn compute_heap_delta(initial: &SymbolicHeap, final_heap: &SymbolicHeap) -> Vec<
 ///
 /// Full structural equality is expensive for deep trees. This checks the
 /// common cases (Concrete, ConcreteStr, Symbol, Unknown) and returns false
-/// for complex expressions (conservative — will over-report heap mutations).
+/// for complex expressions (conservative, will over-report heap mutations).
 fn sym_value_structurally_eq(a: &SymbolicValue, b: &SymbolicValue) -> bool {
     match (a, b) {
         (SymbolicValue::Concrete(x), SymbolicValue::Concrete(y)) => x == y,

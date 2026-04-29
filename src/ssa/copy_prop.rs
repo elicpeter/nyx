@@ -25,7 +25,7 @@ pub fn copy_propagate(body: &mut SsaBody, cfg: &Cfg) -> (usize, HashMap<SsaValue
                 if uses.len() == 1 {
                     let src = uses[0];
                     let info = &cfg[inst.cfg_node];
-                    // Skip if the node has labels — sanitizers, sources, sinks
+                    // Skip if the node has labels, sanitizers, sources, sinks
                     // have semantic meaning that must be preserved.
                     if !info.taint.labels.is_empty() {
                         continue;
@@ -244,7 +244,7 @@ mod tests {
     }
 
     /// A four-deep copy chain v3 = v2 = v1 = v0 must collapse to v0
-    /// in a single `copy_propagate` pass — the resolved replacement
+    /// in a single `copy_propagate` pass, the resolved replacement
     /// map drives downstream alias recovery, so the *transitive*
     /// closure must be exposed, not just the immediate parent.
     #[test]
@@ -390,7 +390,7 @@ mod tests {
     }
 
     /// Skip path 2: numeric-length reads (`arr.length`, `map.size`)
-    /// have a different type from their source — propagating through
+    /// have a different type from their source, propagating through
     /// would erase the Int type fact.
     #[test]
     fn copy_through_numeric_length_access_is_not_propagated() {

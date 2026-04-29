@@ -315,8 +315,8 @@ pub struct OutputConfig {
     /// When `true`, findings whose engine provenance notes include any
     /// `OverReport` (widening) or `Bail` (lowering/parse failure)
     /// direction are filtered out before output.  `UnderReport`
-    /// findings — where the result set is a lower bound but each
-    /// emitted flow is still real — are kept.
+    /// findings, where the result set is a lower bound but each
+    /// emitted flow is still real, are kept.
     ///
     /// Surfaced via `--require-converged`; intended for strict CI
     /// gating where a finding from capped analysis is worse than no
@@ -644,7 +644,7 @@ impl Default for RunsConfig {
     }
 }
 
-/// A named scan profile — a partial overlay of scan-related settings.
+/// A named scan profile, a partial overlay of scan-related settings.
 /// All fields are `Option<T>`: `None` means "don't override".
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
@@ -715,7 +715,7 @@ pub struct Config {
     pub server: ServerConfig,
     pub runs: RunsConfig,
     pub profiles: HashMap<String, ScanProfile>,
-    /// Detected frameworks for the current project — set by the scan pipeline,
+    /// Detected frameworks for the current project, set by the scan pipeline,
     /// not persisted to config files.
     #[serde(skip)]
     pub framework_ctx: Option<crate::utils::project::FrameworkContext>,

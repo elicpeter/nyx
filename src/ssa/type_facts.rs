@@ -28,13 +28,13 @@ pub enum TypeKind {
     /// A local, in-memory collection (HashMap, HashSet, Vec, etc.).
     /// The auth sink gate uses this so calls like `map.insert(...)`
     /// are treated as bookkeeping rather than cross-tenant sinks. No
-    /// `label_prefix` — never participates in label-based callee
+    /// `label_prefix`, never participates in label-based callee
     /// resolution.
     LocalCollection,
     /// A framework-injected DTO body whose field types are known.
     /// Populated when a parameter is recognised as a typed extractor and
     /// the DTO class / struct / Pydantic model is resolvable in scope.
-    /// Strictly additive — without a DTO definition, callers fall back
+    /// Strictly additive, without a DTO definition, callers fall back
     /// to name-only resolution.
     Dto(DtoFields),
 }
@@ -80,7 +80,7 @@ impl TypeKind {
         }
     }
 
-    /// Container name used by typed call-graph devirtualisation —
+    /// Container name used by typed call-graph devirtualisation ,
     /// the class / impl / module under which a receiver of this type
     /// would be looked up. Returns the DTO class name for `Dto`
     /// receivers, label prefixes for known abstract types, `None` for
@@ -180,10 +180,10 @@ impl TypeFactResult {
 ///
 /// Suppression policy:
 /// * [`TypeKind::Int`] (and float, treated as numeric): suppresses
-///   `SQL_QUERY`, `FILE_IO`, `SHELL_ESCAPE`, `HTML_ESCAPE`, `SSRF` —
+///   `SQL_QUERY`, `FILE_IO`, `SHELL_ESCAPE`, `HTML_ESCAPE`, `SSRF` ,
 ///   numeric values cannot carry the metacharacters required to drive
 ///   any of these injection classes.
-/// * [`TypeKind::Bool`]: suppresses every type-suppressible bit —
+/// * [`TypeKind::Bool`]: suppresses every type-suppressible bit ,
 ///   `true`/`false` cannot carry a payload of any kind.
 pub fn is_type_safe_for_sink(
     values: &[SsaValue],
@@ -422,7 +422,7 @@ fn is_rust_local_collection_constructor(base: &str) -> bool {
         "FxHashSet",
         "DashMap",
         "DashSet",
-        // `roaring` crate — RoaringBitmap / RoaringTreemap are
+        // `roaring` crate, RoaringBitmap / RoaringTreemap are
         // in-memory bitset / bitmap containers (set-of-u32 /
         // set-of-u64).  Used heavily by indexing systems
         // (meilisearch's index-scheduler) for `task_ids`,
@@ -470,7 +470,7 @@ pub fn is_int_producing_callee(callee: &str) -> bool {
         | "Atoi" | "ParseInt" | "ParseFloat"         // Go
         | "intval" | "floatval"                       // PHP
         | "to_i" | "to_f"                             // Ruby
-        | "parse" // Rust: `.parse::<N>()` / `.parse().unwrap()` — conservative
+        | "parse" // Rust: `.parse::<N>()` / `.parse().unwrap()`, conservative
                   // (most Rust .parse() calls target numeric types)
     )
 }
@@ -492,16 +492,16 @@ pub fn is_int_producing_callee(callee: &str) -> bool {
 /// `validate(x); if(x) ...` guard hides the semantic equivalence to
 /// `if (validate(x)) ...` (already classified as ValidationCall).  The
 /// classifier discriminates only on the textual head of the bare call
-/// — strict-additive: callees that don't match any pattern return
+///, strict-additive: callees that don't match any pattern return
 /// `None` and the engine falls through to its existing behaviour.
 ///
 /// Motivated by Novu CVE GHSA-4x48-cgf9-q33f
 /// (`const ssrfError = await validateUrlSsrf(child.webhookUrl); if (ssrfError) throw`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputValidatorPolarity {
-    /// Returns boolean — truthy means "valid".
+    /// Returns boolean, truthy means "valid".
     BooleanTrueIsValid,
-    /// Returns null/undefined on success, error/message on failure —
+    /// Returns null/undefined on success, error/message on failure ,
     /// truthy means "rejected".
     ErrorReturning,
 }
@@ -511,7 +511,7 @@ pub fn classify_input_validator_callee(callee: &str) -> Option<InputValidatorPol
     let suffix = base.rsplit(['.', ':']).next().unwrap_or(&base);
     let lower = suffix.to_ascii_lowercase();
 
-    // Boolean returners — name typically reads as a predicate
+    // Boolean returners, name typically reads as a predicate
     // (`isValid…`, `is_valid_…`, `is_safe…`, `has_valid…`).  Truthy
     // result → input is valid → TRUE branch carries the validation.
     if lower.starts_with("isvalid")
@@ -524,7 +524,7 @@ pub fn classify_input_validator_callee(callee: &str) -> Option<InputValidatorPol
         return Some(InputValidatorPolarity::BooleanTrueIsValid);
     }
 
-    // Error-returning validators — name reads as a verb whose return
+    // Error-returning validators, name reads as a verb whose return
     // value carries the error description.  `validateXxx`, `verifyXxx`
     // are the dominant idioms; we deliberately do NOT match `check…`
     // here because a name like `checkPermissions` overlaps with auth
@@ -643,7 +643,7 @@ pub fn analyze_types_with_param_types(
                             | BinOp::Gt
                             | BinOp::GtEq,
                         ) => TypeFact::from_kind(TypeKind::Int),
-                        // Add could be string concatenation — defer to operand types
+                        // Add could be string concatenation, defer to operand types
                         _ => TypeFact::unknown(),
                     }
                 }
@@ -659,7 +659,7 @@ pub fn analyze_types_with_param_types(
                     Some(tk) => TypeFact::from_kind(tk.clone()),
                     None => TypeFact::unknown(),
                 },
-                // Undef contributes no type information — phi joins
+                // Undef contributes no type information, phi joins
                 // pick up the type from the other (defined) operand.
                 SsaOp::Undef => TypeFact::unknown(),
             };
@@ -675,7 +675,7 @@ pub fn analyze_types_with_param_types(
 
         for block in &body.blocks {
             // Identity-preserving method calls: pass through receiver's type.
-            // E.g. `Connection::open(p).unwrap()` — the `.unwrap()` call's type
+            // E.g. `Connection::open(p).unwrap()`, the `.unwrap()` call's type
             // fact should mirror the receiver (Result<Connection>).  Only applies
             // when the current fact is still Unknown so explicit constructor
             // mappings win.
@@ -690,7 +690,7 @@ pub fn analyze_types_with_param_types(
                         continue;
                     }
                     // A numeric-length accessor pinned by the first pass is
-                    // load-bearing for sink suppression — do not let identity-
+                    // load-bearing for sink suppression, do not let identity-
                     // method receiver propagation overwrite the Int fact.
                     if cfg
                         .node_weight(inst.cfg_node)
@@ -773,7 +773,7 @@ pub fn analyze_types_with_param_types(
             // Copy assignments and binary arithmetic
             for inst in &block.body {
                 // Preserve the Int fact pinned by the numeric-length-access
-                // detector in the first pass — copy propagation would replace
+                // detector in the first pass, copy propagation would replace
                 // it with the receiver's (usually Unknown) type and defeat the
                 // whole point of the accessor rule.
                 if cfg
@@ -788,7 +788,7 @@ pub fn analyze_types_with_param_types(
                         // expression and the receiver value carries a
                         // `TypeKind::Dto(fields)` fact, route the assignment's
                         // type to the field's declared `TypeKind`.  Strictly
-                        // additive — falls through to copy-prop when the
+                        // additive, falls through to copy-prop when the
                         // receiver isn't a DTO or the field isn't recorded.
                         let dto_field_fact = cfg
                             .node_weight(inst.cfg_node)
@@ -849,7 +849,7 @@ pub fn analyze_types_with_param_types(
 /// Used for `instanceof` resolution and type-qualified method dispatch.
 pub struct TypeHierarchy;
 
-/// (subtype, &[supertypes]) — sink-relevant framework types only.
+/// (subtype, &[supertypes]), sink-relevant framework types only.
 static JAVA_HIERARCHY: &[(&str, &[&str])] = &[
     ("HttpServletResponse", &["ServletResponse"]),
     ("HttpServletRequest", &["ServletRequest"]),
@@ -925,7 +925,7 @@ impl TypeHierarchy {
 ///
 /// Conservative: unknown interfaces → `true` (could satisfy).
 /// Only [`definitely_not`](GoInterfaceTable::definitely_not) is used for
-/// suppression — it returns `true` only when the type provably cannot
+/// suppression, it returns `true` only when the type provably cannot
 /// implement the interface.
 pub struct GoInterfaceTable;
 
@@ -1220,7 +1220,7 @@ mod tests {
     }
 
     /// Int-typed values must suppress every type-suppressible
-    /// cap — including the freshly-added `SSRF` bit.  Numeric IDs
+    /// cap, including the freshly-added `SSRF` bit.  Numeric IDs
     /// cannot rewrite a URL host, cannot form path traversal sequences,
     /// cannot carry SQL/HTML/shell metacharacters.
     #[test]
@@ -1255,7 +1255,7 @@ mod tests {
         ));
     }
 
-    /// Bool-typed values are even safer than ints — `true` /
+    /// Bool-typed values are even safer than ints, `true` /
     /// `false` cannot carry any payload and must suppress every
     /// type-suppressible cap.
     #[test]
@@ -1279,7 +1279,7 @@ mod tests {
         }
     }
 
-    /// String-typed values must NOT trigger suppression — they are the
+    /// String-typed values must NOT trigger suppression, they are the
     /// canonical injection carrier.  Regression guard so a future
     /// change to `is_type_safe_for_sink` does not silently silence
     /// real String-payload findings.
@@ -1421,8 +1421,8 @@ mod tests {
         }
     }
 
-    /// Audit A3 (companion): mixed-type operand list — only one Int
-    /// among operands of unknown type — must NOT suppress.  The
+    /// Audit A3 (companion): mixed-type operand list, only one Int
+    /// among operands of unknown type, must NOT suppress.  The
     /// suppression rule requires every operand to be payload-incompatible.
     #[test]
     fn mixed_type_operands_do_not_suppress() {
@@ -1793,7 +1793,7 @@ mod tests {
             constructor_type(Lang::Rust, "diesel::SqliteConnection::establish"),
             Some(TypeKind::DatabaseConnection)
         );
-        // Bare `Connection::open` is accepted — Rust idiom
+        // Bare `Connection::open` is accepted, Rust idiom
         // `use rusqlite::Connection; Connection::open(…)` is common, and the
         // scanner sees the unqualified callee text after import resolution.
         // Accepting this matches the benchmark fixture `rs-sqli-001`.
@@ -2069,7 +2069,7 @@ mod tests {
         assert!(TypeFact::from_dto_field(&recv, "missing").is_none());
     }
 
-    /// a non-DTO receiver kind never produces a field fact —
+    /// a non-DTO receiver kind never produces a field fact ,
     /// `from_dto_field` falls through to the legacy copy-prop path.
     #[test]
     fn dto_field_lookup_on_non_dto_returns_none() {
@@ -2087,7 +2087,7 @@ mod tests {
         }
     }
 
-    /// Nested DTO — the parent DTO's field type is `TypeKind::Dto`,
+    /// Nested DTO, the parent DTO's field type is `TypeKind::Dto`,
     /// and `from_dto_field` returns that nested DTO fact directly.
     /// Callers can recurse via `as_dto()`.
     #[test]

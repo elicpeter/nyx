@@ -18,7 +18,7 @@ pub struct CallSiteKey {
 /// An explicit cross-language bridge edge.
 ///
 /// Connects a call site in one language to a function definition in another.
-/// Without an `InteropEdge`, cross-language resolution is never attempted —
+/// Without an `InteropEdge`, cross-language resolution is never attempted ,
 /// this prevents false positives from name collisions across languages.
 #[derive(Clone, Debug)]
 pub struct InteropEdge {

@@ -173,7 +173,7 @@ impl AuthAnalysisRules {
     /// Does the LAST segment of the callee match a configured non-sink
     /// method name (case-sensitive exact)?  Used to recognise DOM-API
     /// methods like `addEventListener` / `appendChild` regardless of
-    /// receiver — `someElement.addEventListener` is just as
+    /// receiver, `someElement.addEventListener` is just as
     /// categorically client-side as `document.addEventListener`.
     pub fn callee_has_non_sink_method(&self, callee: &str) -> bool {
         let last = bare_method_name(callee);
@@ -200,19 +200,19 @@ impl AuthAnalysisRules {
     /// Classify a call into a [`SinkClass`].
     ///
     /// Dispatch order (first match wins):
-    ///   1. `InMemoryLocal` — receiver is a known non-sink collection
+    ///   1. `InMemoryLocal`, receiver is a known non-sink collection
     ///      (tracked in `non_sink_vars` or matches a configured
     ///      non-sink prefix).
-    ///   2. `RealtimePublish` — receiver first-segment matches a
+    ///   2. `RealtimePublish`, receiver first-segment matches a
     ///      configured realtime prefix (e.g. `realtime`, `pubsub`).
-    ///   3. `OutboundNetwork` — receiver first-segment matches a
+    ///   3. `OutboundNetwork`, receiver first-segment matches a
     ///      configured outbound-network prefix (e.g. `http`, `reqwest`).
-    ///   4. `CacheCrossTenant` — receiver first-segment matches a
+    ///   4. `CacheCrossTenant`, receiver first-segment matches a
     ///      configured cache prefix (e.g. `cache`, `redis`).
-    ///   5. `DbMutation` — callee name matches `mutation_indicator_names`.
-    ///   6. `DbCrossTenantRead` — callee name matches `read_indicator_names`.
+    ///   5. `DbMutation`, callee name matches `mutation_indicator_names`.
+    ///   6. `DbCrossTenantRead`, callee name matches `read_indicator_names`.
     ///
-    /// Returns `None` when the callee matches none of the above — the
+    /// Returns `None` when the callee matches none of the above, the
     /// call site is ignored by ownership-gap checks.
     pub fn classify_sink_class(
         &self,
@@ -227,8 +227,8 @@ impl AuthAnalysisRules {
         // (`el.addEventListener`, `parent.appendChild`) are categorically
         // not data-layer auth-relevant operations.  These shapes would
         // otherwise prefix-match read/mutation indicators (`get`, `add`,
-        // `remove`) — `getElementById` canonicalises to `getelementbyid`
-        // which `starts_with("get")` — and falsely classify as
+        // `remove`), `getElementById` canonicalises to `getelementbyid`
+        // which `starts_with("get")`, and falsely classify as
         // `DbCrossTenantRead` / `DbMutation`.
         if self.callee_has_non_sink_global_receiver(callee)
             || self.callee_has_non_sink_method(callee)
@@ -251,7 +251,7 @@ impl AuthAnalysisRules {
         // receiver.  When the receiver chain itself contains a call
         // expression (`w.Header().Get(..)`, `r.URL.Query().Get(..)`,
         // `db.Tx(..).Query(..)`), the receiver is the *return value of
-        // another call* — its type is opaque to the auth analyser and
+        // another call*, its type is opaque to the auth analyser and
         // the bare verb match is too speculative to assume a data-layer
         // sink.  The realtime/outbound/cache prefix dispatches above
         // already match by the chain root; if none of them claimed the
@@ -622,7 +622,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "verify_access!".into(),
                 "can_access?".into(),
                 "can?".into(),
-                // Rails per-record permission predicates — the canonical
+                // Rails per-record permission predicates, the canonical
                 // "load by id, then check on the loaded record" idiom
                 // (see redmine `app/controllers/issues_controller.rb`,
                 // mastodon controllers, diaspora ApplicationController).
@@ -968,7 +968,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "can_access".into(),
                 "can_manage".into(),
                 // Common project-specific helpers seen in real Axum/Rocket
-                // codebases — kept as defaults so user code that names
+                // codebases, kept as defaults so user code that names
                 // its membership helper after the resource still gets
                 // recognised.  Users can extend via `nyx.toml`.
                 "require_group_member".into(),
@@ -1052,7 +1052,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "FxHashSet".into(),
                 "DashMap".into(),
                 "DashSet".into(),
-                // `serde_json::Map` (last-segment `Map`) — common JSON
+                // `serde_json::Map` (last-segment `Map`), common JSON
                 // body builder where `m.insert("k", v)` is a string-key
                 // assignment on an in-memory object, not a DB write.
                 "Map".into(),
@@ -1168,7 +1168,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             ],
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
-            // Browser/DOM globals — calls on these receivers are
+            // Browser/DOM globals, calls on these receivers are
             // categorically client-side (no server-side authorization
             // semantics).  Without this list, `document.getElementById`
             // would prefix-match the read-indicator `get`,
@@ -1203,7 +1203,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "WeakMap".into(),
                 "WeakSet".into(),
             ],
-            // DOM-API methods — when the LAST segment of the callee
+            // DOM-API methods, when the LAST segment of the callee
             // matches, the call is non-data-layer regardless of receiver
             // (`el.addEventListener`, `parent.appendChild`).  These
             // methods would otherwise prefix-match `add`, `remove`,
@@ -1352,7 +1352,7 @@ pub fn first_receiver_segment(callee: &str) -> &str {
     callee.split('.').next().unwrap_or(callee)
 }
 
-/// True when the callee's receiver chain contains a call expression —
+/// True when the callee's receiver chain contains a call expression ,
 /// i.e. the LAST segment is being invoked on the *return value* of an
 /// earlier call (`w.Header().Get`, `r.URL.Query().Get`,
 /// `db.Tx(opts).Query`).  Detected as: the substring before the last
@@ -1373,7 +1373,7 @@ pub fn receiver_is_chained_call(callee: &str) -> bool {
 /// (`member`, `owner`, `admin`, `access`, `permission`, `manager`,
 /// `editor`, `viewer`, `user`, `mod`).  The resource segment is
 /// project-specific (`trip`, `doc`, `project`, `community`, …) and
-/// cannot be enumerated in the static defaults — but the
+/// cannot be enumerated in the static defaults, but the
 /// prefix+role pattern is unambiguous enough that recognising it as
 /// an authorization check is safe.  Also accepts `is_<role>` /
 /// `is_<role>_(or|and)_<role>...` predicate forms (`is_admin`,
@@ -1405,7 +1405,7 @@ fn is_require_resource_role_call(name: &str) -> bool {
     }
 
     // Pattern 2: `is_<role>` and `is_<role>_(or|and)_<role>...`.
-    // Conservative role list — excludes `user` / `staff` to avoid
+    // Conservative role list, excludes `user` / `staff` to avoid
     // matching ambiguous predicates like `is_user`.
     if let Some(rest) = lower.strip_prefix("is_")
         && !rest.is_empty()
@@ -1689,7 +1689,7 @@ mod tests {
         assert!(receiver_is_chained_call("r.URL.Query().Get"));
         assert!(receiver_is_chained_call("db.Tx(opts).Query"));
         assert!(receiver_is_chained_call("client.WithToken(t).Get"));
-        // Pure field/identifier chain — no `(` anywhere.
+        // Pure field/identifier chain, no `(` anywhere.
         assert!(!receiver_is_chained_call("repo.Find"));
         assert!(!receiver_is_chained_call("c.Fs.Create"));
         assert!(!receiver_is_chained_call("globalBatchJobsMetrics.save"));
@@ -1708,7 +1708,7 @@ mod tests {
         let empty: HashSet<String> = HashSet::new();
 
         // Chained-call receiver: verb-name fallback is suppressed.
-        // The minio `w.Header().Get(constName)` cluster — `Get` would
+        // The minio `w.Header().Get(constName)` cluster, `Get` would
         // match the `Get` read indicator on a bare receiver but the
         // chained-call shape masks the receiver type.
         assert_eq!(rules.classify_sink_class("w.Header().Get", &empty), None);
@@ -1749,7 +1749,7 @@ mod tests {
         let rules = build_auth_rules(&cfg, "javascript");
         let empty: HashSet<String> = HashSet::new();
 
-        // Globals — receiver-first-segment match.
+        // Globals, receiver-first-segment match.
         assert_eq!(
             rules.classify_sink_class("document.getElementById", &empty),
             Some(SinkClass::InMemoryLocal)
@@ -1767,7 +1767,7 @@ mod tests {
             Some(SinkClass::InMemoryLocal)
         );
 
-        // Method allowlist — last-segment match regardless of receiver.
+        // Method allowlist, last-segment match regardless of receiver.
         assert_eq!(
             rules.classify_sink_class("input.addEventListener", &empty),
             Some(SinkClass::InMemoryLocal)
@@ -1808,13 +1808,13 @@ mod tests {
         assert!(rules.is_authorization_check("authz::require_trip_member"));
         assert!(rules.is_authorization_check("self.require_album_editor"));
 
-        // Negatives — random `require_*` calls without a known role
+        // Negatives, random `require_*` calls without a known role
         // suffix do NOT count as authorization.
         assert!(!rules.is_authorization_check("require_db"));
         assert!(!rules.is_authorization_check("require_user"));
         assert!(!rules.is_authorization_check("require_login"));
         // Bare `require_member` / `require_owner` (no resource segment)
-        // aren't enough — the resource segment is what makes the helper
+        // aren't enough, the resource segment is what makes the helper
         // unambiguous.
         assert!(!rules.is_authorization_check("require_member"));
         assert!(!rules.is_authorization_check("require_owner"));
@@ -1854,7 +1854,7 @@ mod tests {
         assert!(rules.is_authorization_check("is_admin_or_moderator"));
         assert!(rules.is_authorization_check("is_member_and_owner"));
 
-        // Negatives — predicates whose tokens are NOT known auth roles.
+        // Negatives, predicates whose tokens are NOT known auth roles.
         assert!(!rules.is_authorization_check("is_user"));
         assert!(!rules.is_authorization_check("is_logged_in"));
         assert!(!rules.is_authorization_check("is_active"));

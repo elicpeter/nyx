@@ -70,7 +70,7 @@ fn collect_java<F: FnMut(String, String)>(root: Node<'_>, code: &[u8], push: &mu
         let Some(sub) = text_of(name_node, code) else {
             return;
         };
-        // `superclass` field on class_declaration — singular `extends Y`.
+        // `superclass` field on class_declaration, singular `extends Y`.
         if let Some(superclass) = node.child_by_field_name("superclass") {
             let mut cursor = superclass.walk();
             for c in superclass.named_children(&mut cursor) {
@@ -79,13 +79,13 @@ fn collect_java<F: FnMut(String, String)>(root: Node<'_>, code: &[u8], push: &mu
                 }
             }
         }
-        // `interfaces` field on class_declaration — `implements I, J`
+        // `interfaces` field on class_declaration, `implements I, J`
         // wraps a `super_interfaces` → `type_list`.
         if let Some(ifaces) = node.child_by_field_name("interfaces") {
             collect_java_type_list(ifaces, code, &sub, push);
         }
         // `extends_interfaces` is an unnamed child on
-        // interface_declaration — `extends Foo, Bar` for an
+        // interface_declaration, `extends Foo, Bar` for an
         // interface.  Walk children directly since it's not a field.
         let mut cursor = node.walk();
         for c in node.named_children(&mut cursor) {
@@ -123,7 +123,7 @@ fn type_identifier_text(n: Node<'_>, code: &[u8]) -> Option<String> {
     match n.kind() {
         "type_identifier" | "identifier" => text_of(n, code),
         "generic_type" => {
-            // `Foo<T>` — the leading child is the bare type identifier.
+            // `Foo<T>`, the leading child is the bare type identifier.
             let mut cursor = n.walk();
             for c in n.named_children(&mut cursor) {
                 if matches!(
@@ -136,7 +136,7 @@ fn type_identifier_text(n: Node<'_>, code: &[u8]) -> Option<String> {
             None
         }
         "scoped_type_identifier" => {
-            // `pkg.Foo` — return last segment.
+            // `pkg.Foo`, return last segment.
             text_of(n, code).map(|s| {
                 let last = s.rsplit('.').next().unwrap_or(&s);
                 last.to_string()
@@ -152,7 +152,7 @@ fn type_identifier_text(n: Node<'_>, code: &[u8]) -> Option<String> {
 
 /// Walk for `impl_item` nodes and emit edges from the concrete type to
 /// the trait being implemented.  Inherent impls (`impl Foo {}`) emit
-/// no edge — there is no super-trait relationship to record.
+/// no edge, there is no super-trait relationship to record.
 fn collect_rust<F: FnMut(String, String)>(root: Node<'_>, code: &[u8], push: &mut F) {
     walk(root, &mut |node| {
         if node.kind() != "impl_item" {
@@ -179,7 +179,7 @@ fn rust_path_leaf(n: Node<'_>, code: &[u8]) -> Option<String> {
     match n.kind() {
         "type_identifier" | "identifier" => text_of(n, code),
         "scoped_type_identifier" | "scoped_identifier" => {
-            // `crate::foo::Bar` — last segment.
+            // `crate::foo::Bar`, last segment.
             let s = text_of(n, code)?;
             Some(s.rsplit("::").next().unwrap_or(&s).to_string())
         }
@@ -286,12 +286,12 @@ fn collect_python<F: FnMut(String, String)>(root: Node<'_>, code: &[u8], push: &
         let Some(superclasses) = node.child_by_field_name("superclasses") else {
             return; // no parents
         };
-        // `superclasses` is an `argument_list` — each non-keyword
+        // `superclasses` is an `argument_list`, each non-keyword
         // argument is a base class.
         let mut cursor = superclasses.walk();
         for arg in superclasses.named_children(&mut cursor) {
             if let Some(t) = python_base_text(arg, code) {
-                // Skip Python `object` — not informative.
+                // Skip Python `object`, not informative.
                 if t != "object" {
                     push(sub.clone(), t);
                 }
@@ -304,7 +304,7 @@ fn python_base_text(n: Node<'_>, code: &[u8]) -> Option<String> {
     match n.kind() {
         "identifier" => text_of(n, code),
         "attribute" => {
-            // `pkg.Base` — last segment.
+            // `pkg.Base`, last segment.
             let s = text_of(n, code)?;
             Some(s.rsplit('.').next().unwrap_or(&s).to_string())
         }
@@ -474,7 +474,7 @@ mod tests {
         let src = "interface Mine extends Foo, Bar {}";
         let edges = collect("java", src);
         // tree-sitter-java models `extends` on interface as `extends_interfaces`
-        // rooted at the same node — at least one of the parents should land.
+        // rooted at the same node, at least one of the parents should land.
         assert!(
             edges.iter().any(|(s, _)| s == "Mine"),
             "interface extends should emit at least one edge; got {edges:?}"
@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn python_class_object_base_skipped() {
-        // Inheriting from `object` is not informative — Python's
+        // Inheriting from `object` is not informative, Python's
         // implicit root.  We omit these edges to keep the
         // hierarchy index focused on user-defined relationships.
         let src = "class Plain(object):\n    pass\n";

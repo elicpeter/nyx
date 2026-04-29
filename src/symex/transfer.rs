@@ -102,18 +102,18 @@ pub fn transfer_inst(
         }
 
         SsaOp::SelfParam => {
-            // Implicit method receiver — symbolic input, not tainted by default.
+            // Implicit method receiver, symbolic input, not tainted by default.
             state.set(inst.value, SymbolicValue::Symbol(inst.value));
         }
 
         SsaOp::CatchParam => {
             if let Some(exc_val) = state.take_exception_context() {
-                // On an exception path — seed from exception context
+                // On an exception path, seed from exception context
                 // and mark tainted (matches taint engine: CatchParam gets Cap::all())
                 state.set(inst.value, exc_val);
                 state.mark_tainted(inst.value);
             } else {
-                // Normal path or no explicit exception context — still mark tainted
+                // Normal path or no explicit exception context, still mark tainted
                 // to match taint engine behavior (ssa_transfer.rs CatchParam gets Cap::all())
                 state.set(inst.value, SymbolicValue::Symbol(inst.value));
                 state.mark_tainted(inst.value);
@@ -121,7 +121,7 @@ pub fn transfer_inst(
         }
 
         SsaOp::Nop => {
-            // Nop does not define a meaningful value — skip.
+            // Nop does not define a meaningful value, skip.
         }
 
         SsaOp::Undef => {
@@ -139,7 +139,7 @@ pub fn transfer_inst(
             // This pass deliberately keeps the opaque-Symbol model: without
             // a field-sensitive heap, a dedicated `Field { receiver, name }`
             // SymbolicValue variant cannot soundly carry concrete reads
-            // across method boundaries — the witness pipeline already
+            // across method boundaries, the witness pipeline already
             // reconstructs `obj.field` text from `ValueDef.var_name`
             // (populated by lower.rs to `"base.f1.f2"` for chain projections).
             // The structured variant is deferred to the field-sensitive
@@ -166,7 +166,7 @@ pub fn transfer_inst(
                     // When RHS is a member expression, SSA produces 2 uses:
                     //   uses[0] = dotted-path SSA value (e.g., v for "user.name")
                     //   uses[1] = base variable SSA value (e.g., v for "user")
-                    // The first operand IS the field value — use it directly.
+                    // The first operand IS the field value, use it directly.
                     if let Some(def) = ssa.value_defs.get(uses_slice[0].0 as usize) {
                         if def.var_name.as_ref().is_some_and(|n| n.contains('.')) {
                             let sym = state.get(uses_slice[0]);
@@ -200,13 +200,13 @@ pub fn transfer_inst(
                         let sym = mk_binop(Op::from(bin_op), lhs, rhs);
                         state.set(inst.value, sym);
                     } else {
-                        // No structural info — conservative Unknown
+                        // No structural info, conservative Unknown
                         state.set(inst.value, SymbolicValue::Unknown);
                     }
                     state.propagate_taint(inst.value, uses_slice);
                 }
                 _ => {
-                    // 3+ operands — complex expression
+                    // 3+ operands, complex expression
                     state.set(inst.value, SymbolicValue::Unknown);
                     state.propagate_taint(inst.value, uses_slice);
                 }
@@ -306,7 +306,7 @@ pub fn transfer_inst(
                                 // Fall through to normal Call
                             }
                             ContainerOp::Writeback { .. } => {
-                                // Symex doesn't model writeback yet — taint
+                                // Symex doesn't model writeback yet, taint
                                 // engine handles the destination-arg taint
                                 // directly. Fall through to normal Call.
                             }
@@ -338,7 +338,7 @@ pub fn transfer_inst(
             }
 
             // Interprocedural symbolic execution.
-            // Execute callee body when available — full state propagation.
+            // Execute callee body when available, full state propagation.
             if let Some(ictx) = interproc_ctx {
                 let mut callee_args: Vec<(crate::ssa::ir::SsaValue, SymbolicValue, bool)> =
                     Vec::new();
@@ -550,7 +550,7 @@ fn try_heap_alias_load(
 
 /// Transfer a single SSA instruction with optional predecessor context.
 ///
-/// ONLY phi instructions use predecessor-sensitive selection — when
+/// ONLY phi instructions use predecessor-sensitive selection, when
 /// `predecessor` is `Some(bid)`, the phi resolves to the operand from
 /// that specific predecessor block instead of building a `Phi(...)`
 /// expression. All non-phi instructions delegate to [`transfer_inst`].
@@ -579,7 +579,7 @@ pub fn transfer_inst_with_predecessor(
                     return;
                 }
             }
-            // Predecessor not found among operands — propagate from all (fallback)
+            // Predecessor not found among operands, propagate from all (fallback)
             let operand_vals: Vec<_> = operands.iter().map(|(_, v)| *v).collect();
             state.propagate_taint(inst.value, &operand_vals);
         }
@@ -715,7 +715,7 @@ fn try_string_method(
             // If receiver was prepended to arg_syms, it's at index 0;
             // otherwise first explicit arg is at index 0.
             if let Some(recv) = receiver {
-                // Receiver was prepended — it IS the string operand
+                // Receiver was prepended, it IS the string operand
                 (state.get(*recv), *recv)
             } else if let Some(&first_op) = all_operands.first() {
                 (
@@ -764,7 +764,7 @@ fn try_string_method(
 /// Recognize encoding/decoding transforms and build structured
 /// `Encode`/`Decode` nodes instead of opaque `Call`.
 ///
-/// Taint is always propagated from the operand — encoding preserves taint
+/// Taint is always propagated from the operand, encoding preserves taint
 /// unconditionally. This function does NOT sanitize.
 fn try_transform_method(
     state: &SymbolicState,
@@ -902,7 +902,7 @@ fn model_from_summary(
 ///
 /// When a receiver has a known type via type facts, tries type-qualified
 /// callee name (e.g., `"HttpClient.send"`) before bare-name resolution. This
-/// improves summary-based modeling only — not general virtual dispatch.
+/// improves summary-based modeling only, not general virtual dispatch.
 fn resolve_callee_symbolically(
     ctx: &SymexSummaryCtx,
     callee: &str,
@@ -913,7 +913,7 @@ fn resolve_callee_symbolically(
     receiver: Option<SsaValue>,
 ) -> Option<SymbolicCallResult> {
     // Type-qualified symbolic resolution when receiver has a known type.
-    // Improves summary-based modeling only — not general virtual dispatch.
+    // Improves summary-based modeling only, not general virtual dispatch.
     // Precedence: exact qualified > type-aided disambiguation > bare-name fallback.
     if let (Some(tf), Some(recv)) = (ctx.type_facts, receiver)
         && let Some(receiver_type) = tf.get_type(recv)
@@ -935,7 +935,7 @@ fn resolve_callee_symbolically(
 
         // Attempt 2: Disambiguate among ambiguous bare-name candidates.
         // Only select when a candidate's FuncKey.name EXACTLY equals the
-        // qualified name — no substring matching, never guess.
+        // qualified name, no substring matching, never guess.
         let bare_resolution =
             ctx.global_summaries
                 .resolve_callee_key(method, ctx.lang, ctx.namespace, None);
@@ -1632,7 +1632,7 @@ mod tests {
         state.mark_tainted(SsaValue(0));
         state.set(SsaValue(1), SymbolicValue::Concrete(42));
 
-        // Two Identity entries — should fall back to mk_call, NOT pick one
+        // Two Identity entries, should fall back to mk_call, NOT pick one
         let mut gs = GlobalSummaries::new();
         insert_summary(
             &mut gs,
@@ -2131,7 +2131,7 @@ mod tests {
             },
         );
 
-        // Empty type facts — no receiver type info
+        // Empty type facts, no receiver type info
         let tf = make_type_facts(vec![]);
         let ctx = SymexSummaryCtx {
             global_summaries: &gs,
@@ -2170,7 +2170,7 @@ mod tests {
     #[test]
     fn transfer_call_type_qualified_disambiguation() {
         // Two summaries both named "send" in different namespaces.
-        // One named "HttpClient.send" — type disambiguation picks it.
+        // One named "HttpClient.send", type disambiguation picks it.
         let (cfg, node) = cfg_with_node(None);
         let ssa = empty_ssa();
         let mut state = SymbolicState::new();
@@ -2180,7 +2180,7 @@ mod tests {
         state.set(SsaValue(1), SymbolicValue::Symbol(SsaValue(1)));
 
         let mut gs = GlobalSummaries::new();
-        // First "send" — generic, in ns A (Identity: passes through)
+        // First "send", generic, in ns A (Identity: passes through)
         insert_java_summary(
             &mut gs,
             "send",
@@ -2209,7 +2209,7 @@ mod tests {
                 typed_call_receivers: vec![],
             },
         );
-        // Second "send" — in ns B, also with same arity → ambiguous bare-name
+        // Second "send", in ns B, also with same arity → ambiguous bare-name
         insert_java_summary(
             &mut gs,
             "send",
@@ -2247,7 +2247,7 @@ mod tests {
             SsaFuncSummary {
                 param_to_return: vec![],
                 param_to_sink: vec![],
-                source_caps: Cap::ENV_VAR, // Source — distinct signal
+                source_caps: Cap::ENV_VAR, // Source, distinct signal
                 param_to_sink_param: vec![],
                 param_container_to_return: vec![],
                 param_to_container_store: vec![],
@@ -2276,7 +2276,7 @@ mod tests {
             type_facts: Some(&tf),
         };
 
-        // v2 = v1.send(v0) — receiver v1 is HttpClient
+        // v2 = v1.send(v0), receiver v1 is HttpClient
         let inst = make_inst(
             2,
             SsaOp::Call {
@@ -2316,7 +2316,7 @@ mod tests {
         state.set(SsaValue(1), SymbolicValue::Symbol(SsaValue(1)));
 
         let mut gs = GlobalSummaries::new();
-        // Summary under "DatabaseConnection.send" — wrong type
+        // Summary under "DatabaseConnection.send", wrong type
         insert_java_summary(
             &mut gs,
             "DatabaseConnection.send",
@@ -2346,7 +2346,7 @@ mod tests {
             },
         );
 
-        // Receiver typed as HttpClient — constructs "HttpClient.send", not "DatabaseConnection.send"
+        // Receiver typed as HttpClient, constructs "HttpClient.send", not "DatabaseConnection.send"
         let tf = make_type_facts(vec![(SsaValue(1), TypeKind::HttpClient)]);
         let ctx = SymexSummaryCtx {
             global_summaries: &gs,
@@ -2396,7 +2396,7 @@ mod tests {
         state.set(SsaValue(1), SymbolicValue::Symbol(SsaValue(1)));
 
         let mut gs = GlobalSummaries::new();
-        // Two "send" summaries — different namespaces → ambiguous
+        // Two "send" summaries, different namespaces → ambiguous
         insert_java_summary(
             &mut gs,
             "send",
@@ -2453,7 +2453,7 @@ mod tests {
                 typed_call_receivers: vec![],
             },
         );
-        // No "HttpClient.send" summary registered — disambiguation has 0 exact matches
+        // No "HttpClient.send" summary registered, disambiguation has 0 exact matches
 
         let tf = make_type_facts(vec![(SsaValue(1), TypeKind::HttpClient)]);
         let ctx = SymexSummaryCtx {

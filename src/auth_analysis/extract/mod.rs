@@ -84,7 +84,7 @@ fn deduplicate_units_by_span(model: &mut AuthorizationModel) {
     use crate::auth_analysis::model::{AnalysisUnit, AnalysisUnitKind};
     use std::collections::HashMap;
 
-    // First pass: choose a winner for each span — prefer the
+    // First pass: choose a winner for each span, prefer the
     // first-seen `RouteHandler` over any `Function` copy.
     let mut winner_by_span: HashMap<(usize, usize), usize> = HashMap::new();
     for (idx, unit) in model.units.iter().enumerate() {

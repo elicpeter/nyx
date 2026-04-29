@@ -1,4 +1,4 @@
-//! Context-sensitive inline analysis — cache, body, and attribution types.
+//! Context-sensitive inline analysis, cache, body, and attribution types.
 //!
 //! The cache ([`InlineCache`]) is keyed by `(FuncKey, ArgTaintSig)`,
 //! where [`ArgTaintSig`] is per-arg cap bits only (not origin identity).
@@ -40,7 +40,7 @@ pub(crate) struct InlineResult {
 }
 
 /// Structural (callsite-agnostic) summary of an inline-analyzed
-/// callee. `None` means "no return taint for this arg shape" — still
+/// callee. `None` means "no return taint for this arg shape", still
 /// meaningful, short-circuits subsequent calls with matching caps.
 #[derive(Clone, Debug)]
 pub(crate) struct CachedInlineShape(pub(super) Option<ReturnShape>);
@@ -52,7 +52,7 @@ pub(crate) struct CachedInlineShape(pub(super) Option<ReturnShape>);
 /// origins.  See the module-level note above on origin attribution.
 #[derive(Clone, Debug)]
 pub(crate) struct ReturnShape {
-    /// Return value caps (cap bits only — structural).
+    /// Return value caps (cap bits only, structural).
     pub(super) caps: Cap,
     /// Origins produced **inside the callee body** (e.g. `Source` op fired
     /// in the callee).  `node` is set to a placeholder; at apply time the
@@ -159,7 +159,7 @@ pub fn populate_node_meta(body: &mut CalleeSsaBody, cfg: &crate::cfg::Cfg) -> bo
     // `compute_succ_states` via `cfg[*cond]`, so without it the synthesized
     // cross-file proxy CFG (`rebuild_body_graph`) ends up too small whenever
     // the callee body has any conditional branch whose `cond` index sits
-    // past the maximum `inst.cfg_node` index — inline analysis then panics
+    // past the maximum `inst.cfg_node` index, inline analysis then panics
     // with an out-of-bounds index.
     let mut referenced: Vec<NodeIndex> = Vec::new();
     for block in &body.ssa.blocks {
@@ -211,7 +211,7 @@ pub fn rebuild_body_graph(body: &mut CalleeSsaBody) -> bool {
     // index.  We fill any unreferenced intermediate indices with
     // `NodeInfo::default()`.
     //
-    // Walks both instruction `cfg_node`s and `Terminator::Branch.cond` —
+    // Walks both instruction `cfg_node`s and `Terminator::Branch.cond` ,
     // the latter is read by `compute_succ_states` via `cfg[*cond]`, so
     // missing it produces an OOB panic when a conditional branch's cond
     // node has a higher index than any `inst.cfg_node` in the body.
@@ -230,7 +230,7 @@ pub fn rebuild_body_graph(body: &mut CalleeSsaBody) -> bool {
             }
         }
     }
-    // Also consider node_meta keys — they should be a subset of the
+    // Also consider node_meta keys, they should be a subset of the
     // SSA-referenced indices, but be defensive.
     for &k in body.node_meta.keys() {
         if k > max_idx {

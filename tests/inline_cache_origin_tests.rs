@@ -9,7 +9,7 @@
 //! mis-attribute its source.
 //!
 //! A failure of this test implies a `taint-unsanitised-flow` finding is
-//! naming the wrong source file/line — a credibility-killer for users
+//! naming the wrong source file/line, a credibility-killer for users
 //! who then dismiss the tool as producing false positives.
 
 mod common;
@@ -89,7 +89,7 @@ fn two_call_sites_get_distinct_source_attributions() {
     //   16: const sourceA = process.env.USER_INPUT;   (call site 1 source)
     //   21: const sourceB = process.env.OTHER_INPUT;  (call site 2 source)
     //
-    // The critical assertion is inequality — a naive cache would report
+    // The critical assertion is inequality, a naive cache would report
     // the FIRST-cached caller's source line on both findings (baking in
     // `VarTaint.origins` from whichever call fired first during
     // traversal).  We also pin the exact expected lines so a silent
@@ -117,7 +117,7 @@ fn two_call_sites_get_distinct_source_attributions() {
 fn inline_cache_reused_note_fires_on_second_call() {
     // Observability: the `InlineCacheReused` engine note is recorded
     // on cache-hit apply.  At least one of the two call sites must
-    // carry it — whichever call loses the miss/hit race.
+    // carry it, whichever call loses the miss/hit race.
     //
     // The note is informational only: `EngineNote::InlineCacheReused`
     // returns `false` from `lowers_confidence()`, so its presence never

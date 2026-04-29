@@ -31,7 +31,7 @@ pub async fn handle_update_doc(req: Req, ctx: Ctx, doc_id: i64) -> Result<String
     );
     let owner_id = existing.get_i64("user_id");
 
-    // Equality compared but no early exit — the check has no effect.
+    // Equality compared but no early exit, the check has no effect.
     if owner_id != user.id {
         // missing return
         println!("not your doc (but proceeding anyway)");

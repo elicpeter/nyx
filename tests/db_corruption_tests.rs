@@ -6,10 +6,10 @@
 //! clear error instead of panicking, hanging, or producing nonsense
 //! findings.  These tests exercise both classes of corruption:
 //!
-//!   1. Truncation to zero bytes — SQLite treats a zero-length file as a
+//!   1. Truncation to zero bytes, SQLite treats a zero-length file as a
 //!      fresh empty DB.  We expect the indexer to bootstrap the schema and
 //!      carry on.
-//!   2. Arbitrary garbage in the header — SQLite rejects this with
+//!   2. Arbitrary garbage in the header, SQLite rejects this with
 //!      `SQLITE_NOTADB` during pragma/schema execution.  We expect the
 //!      indexer to return a structured error, not a panic.
 //!
@@ -122,7 +122,7 @@ fn zero_truncated_db_rebuilds_on_init() {
     let pool = Indexer::init(&db_path)
         .expect("Indexer::init should bootstrap a schema into an empty file");
 
-    // After init, the DB is empty of prior state — an indexed scan should
+    // After init, the DB is empty of prior state, an indexed scan should
     // still run end-to-end but will effectively be acting like a cold
     // rebuild.  We don't re-call build_index here because the plan is to
     // confirm the raw init path is resilient.
@@ -143,14 +143,14 @@ fn zero_truncated_db_rebuilds_on_init() {
 }
 
 /// Clobber the SQLite magic header with garbage bytes.  This is the
-/// "actual corruption" case — SQLite rejects it with `SQLITE_NOTADB` the
+/// "actual corruption" case, SQLite rejects it with `SQLITE_NOTADB` the
 /// first time pragma or SQL is executed, which surfaces as
 /// `NyxError::Sql(_)` from `Indexer::init`.
 #[test]
 fn garbage_header_db_returns_structured_error() {
     let (_project_name, db_path, _project, _db_dir) = build_indexed_project();
 
-    // Write 100 bytes of `0xFF` — guaranteed not to match SQLite's header
+    // Write 100 bytes of `0xFF`, guaranteed not to match SQLite's header
     // magic "SQLite format 3\0".
     clobber_header(&db_path, 0xFF, 100);
 
@@ -186,7 +186,7 @@ fn garbage_header_db_returns_structured_error() {
 // NOTE: A mid-file corruption test (garbage at bytes 100..200, preserving
 // SQLite magic) was attempted and is deliberately omitted.  That shape
 // triggers a slow corruption-detection path in SQLite where `Indexer::init`
-// takes 150–200 seconds before returning — unsuitable for CI wall-clock
+// takes 150–200 seconds before returning, unsuitable for CI wall-clock
 // budgets.  The two tests above already cover the "corrupt-on-arrival"
 // cases that users actually hit (crash-truncated file, deliberate clobber).
 // A follow-up should either short-circuit `PRAGMA integrity_check` up

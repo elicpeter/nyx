@@ -168,7 +168,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "expression_statement"   => Kind::CallWrapper,
     "assignment_expression"  => Kind::Assignment,
 
-    // struct expressions — recurse so env::var() calls inside field
+    // struct expressions, recurse so env::var() calls inside field
     // initialisers produce Source-labelled CFG nodes (needed for summaries).
     "struct_expression"       => Kind::Block,
     "field_initializer_list"  => Kind::Block,

@@ -1,7 +1,7 @@
 //! Witness generation for confirmed symbolic findings.
 //!
 //! When the multi-path explorer confirms a finding as feasible, this module
-//! generates a concrete proof witness — an actual input value that would
+//! generates a concrete proof witness, an actual input value that would
 //! trigger the vulnerability. Witnesses are best-effort: if the expression
 //! is not string-renderable or constraints are too complex, a generic
 //! description is produced instead.
@@ -44,7 +44,7 @@ pub fn extract_witness(
     }
 
     // 1b. When the sink is a Call node, the return value is typically opaque.
-    // Look for the best tainted argument instead — that's where injected
+    // Look for the best tainted argument instead, that's where injected
     // data actually flows into the sink.
     let sym = unwrap_sink_call_arg(&sym, state);
 
@@ -85,7 +85,7 @@ pub fn extract_witness(
 
     // 6. Branch on string-renderability
     if tainted.is_empty() {
-        // No tainted symbols — expression is fully concrete or opaque
+        // No tainted symbols, expression is fully concrete or opaque
         let concrete = evaluate_concrete(&sym);
         Some(format!(
             "input '{}' flows to {}(\"{}\")",
@@ -125,7 +125,7 @@ pub fn extract_witness(
 /// When the sink expression is a `Call`, find the most informative tainted
 /// argument to use for witness generation instead of the opaque return value.
 ///
-/// Scores each tainted arg by structural richness — args containing protective
+/// Scores each tainted arg by structural richness, args containing protective
 /// transforms (`Encode`/`Decode`), string composition (`Concat`/`BinOp(Add)`),
 /// or string methods (`Replace`/`Substr`/etc.) outrank bare `Call(...)`
 /// wrappers (which typically come from prepended receivers or opaque property
@@ -242,7 +242,7 @@ fn is_string_renderable(expr: &SymbolicValue) -> bool {
         SymbolicValue::Substr(s, _, _) => is_string_renderable(s),
         // Encoding/decoding transforms produce strings
         SymbolicValue::Encode(_, s) | SymbolicValue::Decode(_, s) => is_string_renderable(s),
-        // StrLen returns integer — not string-renderable
+        // StrLen returns integer, not string-renderable
         SymbolicValue::StrLen(_) => false,
         // BinOp(Add) on string-renderable operands is string concatenation
         // in languages where + is overloaded (JS, Python, etc.)
@@ -253,7 +253,7 @@ fn is_string_renderable(expr: &SymbolicValue) -> bool {
         // pass-through for witness purposes (covers property access, simple
         // wrappers). Multi-arg calls or calls with non-renderable args are opaque.
         SymbolicValue::Call(_, args) if args.len() == 1 => is_string_renderable(&args[0]),
-        // Other arithmetic, opaque calls, phis, integers, unknown — not string-renderable
+        // Other arithmetic, opaque calls, phis, integers, unknown, not string-renderable
         SymbolicValue::Concrete(_)
         | SymbolicValue::BinOp(_, _, _)
         | SymbolicValue::Call(_, _)
@@ -290,7 +290,7 @@ fn collect_tainted_inner(expr: &SymbolicValue, state: &SymbolicState, out: &mut 
                 collect_tainted_inner(v, state, out);
             }
         }
-        // String operations — recurse into operands
+        // String operations, recurse into operands
         SymbolicValue::ToLower(s)
         | SymbolicValue::ToUpper(s)
         | SymbolicValue::Trim(s)
@@ -352,7 +352,7 @@ fn substitute_tainted(
                 .collect();
             SymbolicValue::Phi(new_ops)
         }
-        // String operations — recurse into operands
+        // String operations, recurse into operands
         SymbolicValue::Trim(s) => {
             SymbolicValue::Trim(Box::new(substitute_tainted(s, tainted, payload)))
         }
@@ -376,14 +376,14 @@ fn substitute_tainted(
             end.as_ref()
                 .map(|e| Box::new(substitute_tainted(e, tainted, payload))),
         ),
-        // Encoding/decoding transforms — preserve structure
+        // Encoding/decoding transforms, preserve structure
         SymbolicValue::Encode(kind, s) => {
             SymbolicValue::Encode(*kind, Box::new(substitute_tainted(s, tainted, payload)))
         }
         SymbolicValue::Decode(kind, s) => {
             SymbolicValue::Decode(*kind, Box::new(substitute_tainted(s, tainted, payload)))
         }
-        // Leaf nodes that are not tainted symbols — return unchanged
+        // Leaf nodes that are not tainted symbols, return unchanged
         other => other.clone(),
     }
 }
@@ -407,7 +407,7 @@ fn evaluate_concrete(expr: &SymbolicValue) -> String {
             let right = evaluate_concrete(r);
             format!("{}{}", left, right)
         }
-        // String operations — apply to recursively evaluated inner
+        // String operations, apply to recursively evaluated inner
         SymbolicValue::Trim(s) => evaluate_concrete(s).trim().to_owned(),
         SymbolicValue::ToLower(s) => evaluate_concrete(s).to_lowercase(),
         SymbolicValue::ToUpper(s) => evaluate_concrete(s).to_uppercase(),
@@ -439,7 +439,7 @@ fn evaluate_concrete(expr: &SymbolicValue) -> String {
                 format!("{}", expr)
             }
         }
-        // Encoding/decoding — apply transform to recursively evaluated inner
+        // Encoding/decoding, apply transform to recursively evaluated inner
         SymbolicValue::Encode(kind, s) => {
             let inner = evaluate_concrete(s);
             super::strings::encode_concrete_for_witness(*kind, &inner)
@@ -465,7 +465,7 @@ fn evaluate_concrete(expr: &SymbolicValue) -> String {
 /// the sink's vulnerability class?
 ///
 /// Returns a human-readable note if a transform's `verified_cap()` is
-/// non-empty AND does NOT intersect the sink's cap — indicating the
+/// non-empty AND does NOT intersect the sink's cap, indicating the
 /// transform does not match the sink's neutralization class.
 ///
 /// This is a **heuristic witness annotation**, not a proof. Representation
@@ -485,7 +485,7 @@ fn detect_transform_mismatch(expr: &SymbolicValue, sink_cap: Cap) -> Option<Stri
                     cap_description(sink_cap),
                 ))
             } else {
-                // Correct transform or non-protective — recurse
+                // Correct transform or non-protective, recurse
                 detect_transform_mismatch(inner, sink_cap)
             }
         }
@@ -579,6 +579,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
         assert_eq!(sink_cap(&finding, &cfg), Cap::SQL_QUERY);
     }
@@ -613,6 +614,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
         let cap = sink_cap(&finding, &cfg);
         assert!(cap.contains(Cap::SQL_QUERY));
@@ -806,6 +808,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);
@@ -849,6 +852,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
 
         assert!(extract_witness(&state, &finding, &ssa, &cfg).is_none());
@@ -862,7 +866,7 @@ mod tests {
         let sink_val = SsaValue(10);
         let tainted_val = SsaValue(5);
 
-        // BinOp(Add, tainted, 5) — not string-renderable
+        // BinOp(Add, tainted, 5), not string-renderable
         state.set(
             sink_val,
             SymbolicValue::BinOp(
@@ -913,6 +917,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);
@@ -931,7 +936,7 @@ mod tests {
 
         let mut state = SymbolicState::new();
         let sink_val = SsaValue(10);
-        // Fully concrete — no taint
+        // Fully concrete, no taint
         state.set(sink_val, SymbolicValue::ConcreteStr("SELECT 1".into()));
 
         let mut cfg = Cfg::new();
@@ -974,6 +979,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);
@@ -1007,7 +1013,7 @@ mod tests {
             Box::new(SymbolicValue::Concrete(0)),
             Some(Box::new(SymbolicValue::Concrete(5))),
         )));
-        // StrLen returns int — NOT string-renderable
+        // StrLen returns int, NOT string-renderable
         assert!(!is_string_renderable(&SymbolicValue::StrLen(Box::new(
             SymbolicValue::Symbol(SsaValue(0))
         ))));
@@ -1160,7 +1166,7 @@ mod tests {
             TransformKind::HtmlEscape,
             Box::new(SymbolicValue::Symbol(SsaValue(0))),
         );
-        // HTML escape at HTML_ESCAPE sink — correct match
+        // HTML escape at HTML_ESCAPE sink, correct match
         assert!(detect_transform_mismatch(&expr, Cap::HTML_ESCAPE).is_none());
     }
 
@@ -1198,7 +1204,7 @@ mod tests {
             Box::new(SymbolicValue::ConcreteStr("prefix".into())),
             Box::new(encoded),
         );
-        // ShellEscape at SQL sink — mismatch
+        // ShellEscape at SQL sink, mismatch
         let result = detect_transform_mismatch(&expr, Cap::SQL_QUERY);
         assert!(result.is_some());
         assert!(result.unwrap().contains("shellEscape"));

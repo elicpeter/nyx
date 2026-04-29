@@ -115,8 +115,8 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
 /// Benchmark-driven output-parameter source positions for known C APIs.
 /// Maps callee name → argument positions that receive Source taint.
 pub static OUTPUT_PARAM_SOURCES: &[(&str, &[usize])] = &[
-    ("fgets", &[0]),    // fgets(buf, size, stream) — buf receives input
-    ("gets", &[0]),     // gets(buf) — buf receives input
+    ("fgets", &[0]),    // fgets(buf, size, stream), buf receives input
+    ("gets", &[0]),     // gets(buf), buf receives input
     ("recv", &[1]),     // recv(fd, buf, len, flags)
     ("recvfrom", &[1]), // recvfrom(fd, buf, len, flags, ...)
 ];

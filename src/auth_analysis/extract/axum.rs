@@ -384,8 +384,8 @@ fn classify_rocket_param(
 ///
 /// **Looser than [`super::common::is_self_actor_type_text`] by
 /// design.**  This recogniser runs only on the type of a route-bound
-/// parameter — appearing in a route handler signature is itself a
-/// strong signal — and a false positive here just over-credits the
+/// parameter, appearing in a route handler signature is itself a
+/// strong signal, and a false positive here just over-credits the
 /// route with a login guard, which is conservative w.r.t. flagging.
 /// `is_self_actor_type_text` runs on every parameter, including in
 /// non-route functions, and a false positive there suppresses

@@ -115,7 +115,7 @@ fn maybe_collect_controller(
                     // Spring `@PreAuthorize` / `@Secured` /
                     // `@RolesAllowed` annotations are declared at the
                     // method or class boundary and authorize the entire
-                    // request — same shape as FastAPI / Flask
+                    // request, same shape as FastAPI / Flask
                     // `dependencies=[Depends(...)]`.  Mark route-level
                     // so `auth_check_covers_subject` covers row fetches
                     // and downstream sinks in the handler body.

@@ -3,7 +3,7 @@
 //! The forward taint engine (`ssa_transfer.rs`) proceeds source-to-sink,
 //! spending analysis budget on every function the source might touch.  Its
 //! precision ceiling is fixed by what summaries + inline re-analysis can
-//! preserve on every edge of a flow — a single lossy edge drops the finding.
+//! preserve on every edge of a flow, a single lossy edge drops the finding.
 //!
 //! This module implements the opposite direction: start at each sink value,
 //! walk *reverse* SSA edges and (when needed) cross-file callee bodies on
@@ -16,7 +16,7 @@
 //!   reaches a matching source, we append `backwards-confirmed` to the
 //!   finding's evidence notes.
 //! * When the backwards walk proves the flow infeasible via accumulated
-//!   path predicates, we append `backwards-infeasible` — consumed by the
+//!   path predicates, we append `backwards-infeasible`, consumed by the
 //!   confidence scorer as a cap-to-Low signal.
 //! * Backward flows that reach a source with no matching forward finding
 //!   become standalone `taint-backwards-flow` diags (a separate rule id so
@@ -63,7 +63,7 @@ pub const MAX_BACKWARDS_CALLEE_BLOCKS: usize = 500;
 /// the finding, and which predicate evidence (if any) has been gathered so
 /// far.
 ///
-/// `caps` is monotone — the walk can only narrow the demand (by proving
+/// `caps` is monotone, the walk can only narrow the demand (by proving
 /// operands validated or sanitized against specific capability bits), never
 /// widen it.  This keeps backwards composition with summary-derived
 /// transforms sound.
@@ -140,7 +140,7 @@ pub const MAX_CHAIN_LEN: usize = 16;
 /// The context is intentionally narrow: it borrows from whatever analysis
 /// objects the caller has already prepared (summaries, the current body,
 /// cross-file body maps) and does not build its own.  This keeps the
-/// backwards pass cheap to enable — when off, none of this code is touched.
+/// backwards pass cheap to enable, when off, none of this code is touched.
 pub struct BackwardsCtx<'a> {
     /// Callee's SSA body.
     pub ssa: &'a SsaBody,
@@ -178,7 +178,7 @@ impl<'a> BackwardsCtx<'a> {
 
 /// One step of the backwards transfer: given a demand on `value`, compute
 /// the demand on its immediate SSA operands.  Returns the list of
-/// `(operand, demand)` pairs — possibly empty if the defining op terminates
+/// `(operand, demand)` pairs, possibly empty if the defining op terminates
 /// the walk (Source/Const/Param).
 ///
 /// This is a pure function over the op and demand; cycle detection and
@@ -224,7 +224,7 @@ pub fn backward_transfer(
         SsaOp::CatchParam => (BackwardStep::ReachedCatchParam, SmallVec::new()),
         SsaOp::Nop => (BackwardStep::Unknown, SmallVec::new()),
         // Undef is a phi-operand sentinel on edges with no reaching
-        // definition — nothing to trace backwards through.
+        // definition, nothing to trace backwards through.
         SsaOp::Undef => (BackwardStep::ReachedConst, SmallVec::new()),
         SsaOp::Phi(operands) => {
             // Demand fans out to every incoming value: the runtime value of
@@ -254,7 +254,7 @@ pub fn backward_transfer(
             ..
         } => {
             // For Call ops the full demand transfer depends on callee
-            // metadata (summary or body).  The driver handles that —
+            // metadata (summary or body).  The driver handles that ,
             // return a `BackwardStep::Call` carrying the receiver + args
             // so the driver can consult [`GlobalSummaries`] / bodies_by_key.
             let mut flat: SmallVec<[(SsaValue, DemandState); 4]> = SmallVec::new();
@@ -276,7 +276,7 @@ pub fn backward_transfer(
         SsaOp::FieldProj { receiver, .. } => {
             // Field projection: demand for `obj.f` flows to `obj`.  Treated
             // structurally like a single-operand Assign for the backwards
-            // walk — sufficient until future passes will introduce field-sensitive
+            // walk, sufficient until future passes will introduce field-sensitive
             // demand discrimination.
             let mut next: SmallVec<[(SsaValue, DemandState); 4]> = SmallVec::new();
             next.push((*receiver, demand.clone()));
@@ -290,12 +290,12 @@ pub fn backward_transfer(
 /// resolution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackwardStep {
-    /// Defining op is a tainted [`SsaOp::Source`] — walk terminates with a
+    /// Defining op is a tainted [`SsaOp::Source`], walk terminates with a
     /// confirmed flow.
     ReachedSource(NodeIndex),
-    /// Defining op is a [`SsaOp::Const`] — walk terminates without a source.
+    /// Defining op is a [`SsaOp::Const`], walk terminates without a source.
     ReachedConst,
-    /// Defining op is an [`SsaOp::Param`] / [`SsaOp::SelfParam`] — walk may
+    /// Defining op is an [`SsaOp::Param`] / [`SsaOp::SelfParam`], walk may
     /// continue by resolving the parameter against the caller's arguments
     /// (requires reverse call-graph expansion, which is out of scope for
     /// the current cut and is handled as a terminal step).
@@ -305,13 +305,13 @@ pub enum BackwardStep {
     /// the actual exception source requires exception-edge traversal not
     /// performed here.
     ReachedCatchParam,
-    /// Phi node — driver fans out to predecessors.
+    /// Phi node, driver fans out to predecessors.
     Phi,
-    /// Arithmetic / copy / cast — driver fans out to operands.
+    /// Arithmetic / copy / cast, driver fans out to operands.
     Assign,
-    /// Call op — driver consults summaries and/or callee bodies.
+    /// Call op, driver consults summaries and/or callee bodies.
     Call { callee: String },
-    /// Defining op could not be located or was a [`SsaOp::Nop`] — walk
+    /// Defining op could not be located or was a [`SsaOp::Nop`], walk
     /// terminates as inconclusive.
     Unknown,
 }
@@ -321,7 +321,7 @@ pub enum BackwardStep {
 /// Walk backwards from `sink_value` in `ctx.ssa`, producing at most one
 /// [`BackwardFlow`] per reached source (phi fan-outs can produce multiple).
 ///
-/// Does not consult forward findings — the caller is responsible for
+/// Does not consult forward findings, the caller is responsible for
 /// matching the returned flows against its finding set.
 pub fn analyse_sink_backwards(
     ctx: &BackwardsCtx<'_>,
@@ -385,7 +385,7 @@ fn walk_dfs(
     // Before dispatching on the SSA op kind, consult the defining CFG node's
     // label set.  Many Source-labelled callables in the CFG lower to an
     // `SsaOp::Call` rather than `SsaOp::Source` (request.args.get,
-    // os.getenv, …) — recognising the label here keeps the walk in
+    // os.getenv, …), recognising the label here keeps the walk in
     // sync with the forward engine's source model.
     let def_cfg_node = ctx.ssa.def_of(value).cfg_node;
     if def_cfg_node.index() < ctx.cfg.node_count() {
@@ -429,7 +429,7 @@ fn walk_dfs(
             });
         }
         BackwardStep::ReachedConst => {
-            // Constants never supply taint — treat as a silent prune.
+            // Constants never supply taint, treat as a silent prune.
         }
         BackwardStep::ReachedParam { index: _, node } => {
             // Reverse-call-graph expansion is intentionally left out of the
@@ -452,7 +452,7 @@ fn walk_dfs(
             });
         }
         BackwardStep::ReachedCatchParam => {
-            // Exception-borne taint — record but don't confirm.  Marked
+            // Exception-borne taint, record but don't confirm.  Marked
             // non-confirmatory so unit tests can distinguish "walk reached
             // catch-param" from "walk reached source".
         }
@@ -514,7 +514,7 @@ fn walk_dfs(
                     }
                 }
                 // Prevent an unused-variable warning while still accepting
-                // the key in the matcher — the key is useful for debug
+                // the key in the matcher, the key is useful for debug
                 // logging in bigger expansions.
                 let _ = callee_key;
                 return;
@@ -539,7 +539,7 @@ fn walk_dfs(
             }
         }
         BackwardStep::Unknown => {
-            // No information — terminate silently.
+            // No information, terminate silently.
         }
     }
 }
@@ -632,12 +632,12 @@ pub const NOTE_BUDGET: &str = "backwards-budget-exhausted";
 /// Classification for a forward finding after backwards post-processing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FindingVerdict {
-    /// Backwards reached a matching source — finding corroborated.
+    /// Backwards reached a matching source, finding corroborated.
     Confirmed,
     /// Backwards was inconclusive (no source, not infeasible).  Finding
     /// keeps its forward-assigned confidence.
     Inconclusive,
-    /// Backwards proved the flow infeasible — finding confidence must drop.
+    /// Backwards proved the flow infeasible, finding confidence must drop.
     Infeasible,
     /// Budget exhausted before a verdict was reached.
     BudgetExhausted,
@@ -658,7 +658,7 @@ pub fn aggregate_verdict(flows: &[BackwardFlow]) -> FindingVerdict {
 }
 
 /// Apply a verdict as a note on a [`Finding`].  No-ops when the verdict is
-/// [`FindingVerdict::Inconclusive`] — the forward finding retains its
+/// [`FindingVerdict::Inconclusive`], the forward finding retains its
 /// original metadata.
 pub fn annotate_finding(finding: &mut Finding, verdict: FindingVerdict) {
     // `Finding` does not own an Evidence struct directly (that lives on
@@ -1079,6 +1079,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
         annotate_finding(&mut f, FindingVerdict::Confirmed);
         let sv = f.symbolic.as_ref().expect("symbolic verdict created");
@@ -1116,6 +1117,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
         annotate_finding(&mut f, FindingVerdict::Inconclusive);
         assert!(f.symbolic.is_none());

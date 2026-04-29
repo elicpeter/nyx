@@ -31,7 +31,7 @@ impl FieldId {
     /// assigns it.
     pub const ELEM: FieldId = FieldId(u32::MAX);
 
-    /// "Tainted at every field" wildcard sentinel — distinct from
+    /// "Tainted at every field" wildcard sentinel, distinct from
     /// [`Self::ELEM`] (which is container-element semantics: every
     /// numeric/dynamic index access projects through it).
     /// `ANY_FIELD` represents the case where a writeback-shaped sink
@@ -86,12 +86,12 @@ impl FieldInterner {
     ///
     /// Used by cross-call resolvers to avoid growing the caller's
     /// interner with field names introduced solely by callee summaries
-    /// — such cells would be write-only.
+    ///, such cells would be write-only.
     pub fn lookup(&self, name: &str) -> Option<FieldId> {
         // Walk `names` directly so we don't require the post-deserialise
         // `ensure_lookup()` rebuild before this method is callable.
-        // Callers usually own `&SsaBody` — interning was either done at
-        // lowering time or via `ensure_lookup` post-deserialise — so the
+        // Callers usually own `&SsaBody`, interning was either done at
+        // lowering time or via `ensure_lookup` post-deserialise, so the
         // hot path goes through the `lookup` table; the linear walk is
         // a fallback for the (small) deserialised-but-not-rebuilt case.
         if let Some(&id) = self.lookup.get(name) {
@@ -158,7 +158,7 @@ pub enum SsaOp {
     Call {
         callee: String,
         /// Original textual full path when SSA decomposed a chained receiver.
-        /// `None` when the callee was not rewritten — `callee` already holds
+        /// `None` when the callee was not rewritten, `callee` already holds
         /// the source-level textual form.
         ///
         /// **Debug / display only.** Analysis code must walk the SSA receiver
@@ -178,7 +178,7 @@ pub enum SsaOp {
     /// Models member-access expressions (`obj.field`) as a first-class SSA
     /// op.  Lowering walks the receiver tree so chained accesses like
     /// `c.writer.header` produce a chain of `FieldProj` ops with explicit
-    /// per-step receivers — eliminating the textual-prefix parsing that
+    /// per-step receivers, eliminating the textual-prefix parsing that
     /// previously misclassified deep receivers (the gin/context.go FP).
     ///
     /// `field` is interned in the owning [`SsaBody`]'s [`FieldInterner`].
@@ -213,7 +213,7 @@ pub enum SsaOp {
     ///
     /// Emitted by SSA lowering as a synthesized instruction in the entry
     /// block and referenced from phi operands whose incoming edge does
-    /// not carry a definition of the phi's variable — e.g. a try/catch
+    /// not carry a definition of the phi's variable, e.g. a try/catch
     /// rejoin where a variable is only defined on the normal path, or
     /// an early-return branch on a later-defined variable.
     ///
@@ -259,7 +259,7 @@ pub enum Terminator {
     /// `targets` lists the per-case successor blocks (order matches the
     /// source-order of cases in the switch); `default` is the fallback
     /// branch taken when no case matches. Block `succs` remain the
-    /// authoritative flow set — the terminator is a structured summary.
+    /// authoritative flow set, the terminator is a structured summary.
     ///
     /// Emitted only for switch-like dispatch whose semantics are
     /// guaranteed-exclusive across cases (e.g. Go `switch`, Java
@@ -275,11 +275,11 @@ pub enum Terminator {
         ///
         /// `Some(c)` records the constant value the scrutinee must equal for
         /// the corresponding target to be taken. `None` means the literal is
-        /// unknown — emitted for synthetic ≥3-way CFG fanouts or for case
+        /// unknown, emitted for synthetic ≥3-way CFG fanouts or for case
         /// patterns that aren't plain literals (OR-patterns, ranges, guards).
         ///
         /// When omitted/empty (length zero), all targets behave as "unknown
-        /// literal" — preserves backward compatibility with consumers that
+        /// literal", preserves backward compatibility with consumers that
         /// only inspect `targets`/`default`.
         #[serde(default)]
         case_values: SmallVec<[Option<ConstValue>; 4]>,
@@ -493,10 +493,10 @@ mod tests {
         assert_eq!(uses, vec![SsaValue(1)]);
     }
 
-    ///the [`FieldId::ELEM`] sentinel is
+    /// the [`FieldId::ELEM`] sentinel is
     /// reserved for "any element of a container".  The interner assigns
     /// IDs monotonically from `0`, so the sentinel `u32::MAX` can only
-    /// collide if the body declares ~4 billion fields — a corner case
+    /// collide if the body declares ~4 billion fields, a corner case
     /// no realistic codebase reaches.  Pin the contract with a stress
     /// loop so future implementation drift can't silently shift IDs to
     /// the sentinel value.
@@ -514,7 +514,7 @@ mod tests {
         // Lookup of the sentinel name (used by W3 to round-trip
         // container-element flow through summary) must NOT match a
         // real interned name even when the same name is interned.
-        // The wire-format keeps `<elem>` as a *string marker* — it
+        // The wire-format keeps `<elem>` as a *string marker*, it
         // never goes through `intern`.  Instead, callers compare
         // explicitly against `FieldId::ELEM`.
         assert_ne!(interner.intern("<elem>"), FieldId::ELEM);

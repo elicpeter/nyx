@@ -40,7 +40,7 @@ struct File<'a> {
 }
 
 /// Run pass-1 extraction + merge over a synthetic file set, then
-/// install the hierarchy index — mirroring exactly what production
+/// install the hierarchy index, mirroring exactly what production
 /// scan paths do before pass 2 runs.
 fn build_gs(files: &[File<'_>]) -> GlobalSummaries {
     let cfg = test_config(AnalysisMode::Taint);
@@ -63,7 +63,7 @@ fn build_gs(files: &[File<'_>]) -> GlobalSummaries {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  C1 — Java interface fan-out
+//  C1, Java interface fan-out
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Pass-1 must extract the `class FileLogger implements ILogger`
@@ -148,7 +148,7 @@ public class FileLogger implements ILogger {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  C2 — Rust trait fan-out
+//  C2, Rust trait fan-out
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Pass-1 must extract `impl Logger for SafeLogger` and
@@ -222,7 +222,7 @@ impl Logger for EvalLogger {
         arity: Some(2),
     });
     // `arity = 2` because the trait method takes `(&self, &str)`.
-    // Some Rust pipelines record the receiver in arity, others don't —
+    // Some Rust pipelines record the receiver in arity, others don't ,
     // accept either as long as both impls fan out.
     let widened_any_arity = if widened.is_empty() {
         gs.resolve_callee_widened(&CalleeQuery {
@@ -252,7 +252,7 @@ impl Logger for EvalLogger {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  C3 — TypeScript class extends fan-out
+//  C3, TypeScript class extends fan-out
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Pass-1 must extract `class Sub extends Super` and
@@ -310,7 +310,7 @@ export class SubB extends Base {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  C4 — Python class hierarchy
+//  C4, Python class hierarchy
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Pass-1 must extract `class Concrete(Base)` edges.  The
@@ -350,7 +350,7 @@ class Concrete(Base):
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  C5 — Languages without an extractor are silently empty
+//  C5, Languages without an extractor are silently empty
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Go's structural / implicit interface satisfaction is intractable
@@ -358,7 +358,7 @@ class Concrete(Base):
 /// omitted** from the extractor.  This test pins the contract: a Go
 /// program with what looks like inheritance produces an empty
 /// hierarchy index, and `resolve_callee_widened` collapses to today's
-/// single-result behaviour — no fan-out, no regression.
+/// single-result behaviour, no fan-out, no regression.
 #[test]
 fn go_program_produces_empty_hierarchy() {
     // Go interface + struct that satisfies it implicitly.  No `extends`
@@ -403,7 +403,7 @@ func (c *ConsoleLogger) Log(s string) {
         arity: Some(1),
     });
     // Either empty (Logger has no Log method body in summaries) or
-    // single result — must NEVER fan out.
+    // single result, must NEVER fan out.
     assert!(
         widened.len() <= 1,
         "Go must produce ≤ 1 result with no hierarchy fan-out, got {widened:?}"
@@ -411,7 +411,7 @@ func (c *ConsoleLogger) Log(s string) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  C6 — Hierarchy install is idempotent
+//  C6, Hierarchy install is idempotent
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Calling `install_hierarchy` twice produces the same view.  This

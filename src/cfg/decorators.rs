@@ -5,7 +5,7 @@ use tree_sitter::Node;
 ///
 /// Used by decorator extraction to reduce `login_required`, `permission_required(...)`,
 /// `flask_login.login_required`, `hasRole('ADMIN')` to their first identifier
-/// name — the matcher target.
+/// name, the matcher target.
 fn leading_ident_text(node: Node<'_>, code: &[u8]) -> Option<String> {
     let mut cur = node;
     loop {
@@ -56,7 +56,7 @@ fn normalize_decorator_name(raw: &str) -> String {
     let trimmed = raw.trim();
     let trimmed = trimmed.trim_start_matches(':').trim_start_matches('@');
     // If a call syntax leaked through (e.g. `UseGuards(AuthGuard)`), keep only
-    // the head — callers that want the arg handle it separately.
+    // the head, callers that want the arg handle it separately.
     let head = trimmed
         .split(['(', ' ', '\t', '\n'])
         .next()
@@ -115,7 +115,7 @@ fn decorator_arg_names(decorator_ast: Node<'_>, code: &[u8]) -> Vec<String> {
 ///   are `decorator` nodes containing an `identifier` or `call` expression.
 /// - **JS/TS**: decorators attach to `method_definition` children or appear
 ///   as siblings inside `class_body`; stage-3 decorators use `decorator` nodes.
-///   `@UseGuards(AuthGuard)` — we include the call args too.
+///   `@UseGuards(AuthGuard)`, we include the call args too.
 /// - **Java**: annotations live in the `modifiers` child of `method_declaration`;
 ///   kinds are `marker_annotation` / `annotation`.
 /// - **Rust**: `function_item` has `attribute_item` siblings (outer `#[..]`).
@@ -127,7 +127,7 @@ fn decorator_arg_names(decorator_ast: Node<'_>, code: &[u8]) -> Vec<String> {
 ///   at class body scope applies to every method in the class. `only:` /
 ///   `except:` hash args scope the filter to the listed action names; the
 ///   filter is only recorded for the current method when the scope matches.
-///   Conditional filters (`if:` / `unless:`) are not honored — those require
+///   Conditional filters (`if:` / `unless:`) are not honored, those require
 ///   predicate evaluation and are deferred.
 pub(super) fn extract_auth_decorators<'a>(
     func_node: Node<'a>,
@@ -379,12 +379,12 @@ pub(super) fn extract_auth_decorators<'a>(
 }
 
 /// If a Ruby statement is `before_action :name` (or `before_filter :name`),
-/// push the normalized filter name into `out` — honoring any `only:` / `except:`
+/// push the normalized filter name into `out`, honoring any `only:` / `except:`
 /// hash arguments against `method_name`.
 ///
 /// Positional symbol args (`before_action :a, :b, only: [:x]`) all share the
 /// single trailing scope. Conditional filters (`if:` / `unless:`) are not
-/// honored here — those require predicate evaluation and are deferred.
+/// honored here, those require predicate evaluation and are deferred.
 fn collect_ruby_before_action(
     node: Node<'_>,
     code: &[u8],
@@ -499,7 +499,7 @@ fn collect_ruby_before_action(
 
 /// Parse a single `only:` / `except:` hash pair and append the symbol list into
 /// the corresponding out-vec. Sets the `*_present` flag when the key is seen,
-/// regardless of whether the value parses into any symbols — treating
+/// regardless of whether the value parses into any symbols, treating
 /// `only: []` as "no actions match" is safer than ignoring the scope.
 fn collect_ruby_filter_pair(
     pair_node: Node<'_>,

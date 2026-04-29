@@ -43,7 +43,7 @@ fn is_container_read_callee(callee: &str) -> bool {
     )
 }
 
-/// Container-write callees — mirror of [`is_container_read_callee`].
+/// Container-write callees, mirror of [`is_container_read_callee`].
 pub fn is_container_write_callee(callee: &str) -> bool {
     let bare = match callee.rsplit_once('.') {
         Some((_, m)) => m,
@@ -76,19 +76,19 @@ pub fn is_container_read_callee_pub(callee: &str) -> bool {
 ///
 /// Records two channels:
 ///
-/// 1. **Reads** — walks every [`SsaOp::FieldProj`] in the body; for
+/// 1. **Reads**, walks every [`SsaOp::FieldProj`] in the body; for
 ///    each `loc ∈ pt(receiver)` that resolves to a parameter
 ///    location ([`AbsLoc::Param`] / [`AbsLoc::SelfParam`]), records
 ///    the projected field name into the summary's
 ///    `param_field_reads`.
-/// 2. **Writes** — walks the body's [`SsaBody::field_writes`] side-
+/// 2. **Writes**, walks the body's [`SsaBody::field_writes`] side-
 ///    table (populated by SSA lowering's W1 synth-Assign hook) and
 ///    records each `(receiver, FieldId)` pair against the receiver's
 ///    pt set the same way reads are recorded.
 ///
 /// Field name resolution goes through the body's
 /// [`SsaBody::field_interner`] because [`crate::ssa::ir::FieldId`]
-/// is body-local — names are the only stable cross-file identity.
+/// is body-local, names are the only stable cross-file identity.
 ///
 /// Receiver (`SelfParam`) reads/writes are recorded under the
 /// [`u32::MAX`] sentinel parameter index, mirroring the convention in
@@ -187,7 +187,7 @@ pub fn extract_field_points_to(
 /// Per-body points-to result.
 ///
 /// Owns the body-local [`LocInterner`] and a flat `SsaValue → PointsToSet`
-/// table.  The table is dense — one slot per SSA value — so lookups
+/// table.  The table is dense, one slot per SSA value, so lookups
 /// are O(1).
 #[derive(Clone, Debug)]
 pub struct PointsToFacts {
@@ -203,7 +203,7 @@ pub struct PointsToFacts {
 }
 
 impl PointsToFacts {
-    /// Empty result — every value points to nothing.  Used by callers
+    /// Empty result, every value points to nothing.  Used by callers
     /// that need a "no facts" placeholder when the analysis is
     /// disabled or the body could not be analysed.
     pub fn empty(body: BodyId) -> Self {
@@ -266,7 +266,7 @@ impl PointsToFacts {
     /// Build a `var_name → PtrProxyHint` map by scanning the body's
     /// value defs for the latest definition of each named variable.
     /// Names that resolve to no variable, or whose latest definition is
-    /// `Other`, are omitted — only `FieldOnly` entries appear.
+    /// `Other`, are omitted, only `FieldOnly` entries appear.
     ///
     /// Iterates over [`SsaBody::value_defs`] in *reverse* order so the
     /// last (post-renaming) SSA definition for each name wins.  Used by
@@ -296,13 +296,13 @@ impl PointsToFacts {
 /// Analyse a single body and return its [`PointsToFacts`].
 ///
 /// `body_id` is used as the disambiguator inside the abstract
-/// locations — supplying a stable id (e.g. the file's
+/// locations, supplying a stable id (e.g. the file's
 /// `BodyMeta.id`) lets callers compare facts emitted by different
 /// bodies in the same file.
 pub fn analyse_body(body: &SsaBody, body_id: BodyId) -> PointsToFacts {
     let mut state = AnalysisState::new(body_id, body.num_values());
 
-    // Pass 1 — emit constraints from ops that don't depend on
+    // Pass 1, emit constraints from ops that don't depend on
     // representative resolution (Param, SelfParam, Call result,
     // etc.).  These produce the "leaf" points-to sets.
     for block in &body.blocks {
@@ -311,7 +311,7 @@ pub fn analyse_body(body: &SsaBody, body_id: BodyId) -> PointsToFacts {
         }
     }
 
-    // Pass 2+ — propagate through field projections, phis, and
+    // Pass 2+, propagate through field projections, phis, and
     // assignments until a fixpoint.  Field projections need iteration
     // because a `FieldProj` whose receiver's representative changes
     // (via a later unification) must re-emit its constraint with the
@@ -333,7 +333,7 @@ pub fn analyse_body(body: &SsaBody, body_id: BodyId) -> PointsToFacts {
 
 // ── Constraint solver internals ────────────────────────────────────
 
-/// Mutable analysis state — the interner, points-to table, and
+/// Mutable analysis state, the interner, points-to table, and
 /// union-find arrays.  Lives inside `analyse_body` only.
 struct AnalysisState {
     /// Body-id forwarded to [`PointsToFacts::body`] when the analysis
@@ -413,7 +413,7 @@ impl AnalysisState {
 
     /// `pt(rep_a) ∪= pt(rep_b)`.  Caller is responsible for passing
     /// already-resolved representatives if it wants Steensgaard
-    /// unification — see `union` for that.
+    /// unification, see `union` for that.
     fn copy_pt(&mut self, dst: u32, src: u32) -> bool {
         let dr = self.find(dst);
         let sr = self.find(src);
@@ -442,7 +442,7 @@ impl AnalysisState {
                 self.add_loc(v, loc);
             }
             SsaOp::CatchParam => {
-                // Exception bindings come from the runtime — model as
+                // Exception bindings come from the runtime, model as
                 // an opaque allocation-site keyed by the SSA value.
                 let loc = self.interner.intern_alloc(body_id, v);
                 self.add_loc(v, loc);
@@ -457,7 +457,7 @@ impl AnalysisState {
                 // value referencing the container.  The receiver's
                 // points-to set may not be fully resolved on this
                 // pass, so we *also* add a fresh allocation site as a
-                // fallback — the fixpoint pass below absorbs the
+                // fallback, the fixpoint pass below absorbs the
                 // proper Field projection once the receiver's set
                 // converges.
                 let loc = self.interner.intern_alloc(body_id, v);
@@ -494,7 +494,7 @@ impl AnalysisState {
                 }
             }
             SsaOp::FieldProj { .. } => {
-                // Resolved during the fixpoint pass — see
+                // Resolved during the fixpoint pass, see
                 // `propagate_inst`.
             }
             SsaOp::Source | SsaOp::Const(_) | SsaOp::Nop | SsaOp::Undef => {
@@ -504,7 +504,7 @@ impl AnalysisState {
     }
 
     /// Fixpoint-pass transfer.  Re-runs constraints whose result
-    /// depends on the current set of representatives — i.e. field
+    /// depends on the current set of representatives, i.e. field
     /// projections, phis, and assignments may need to absorb new
     /// members emitted after the first pass.  Returns `true` when
     /// any points-to set changed.
@@ -564,7 +564,7 @@ impl AnalysisState {
     }
 
     /// Materialise the dense `SsaValue → PointsToSet` table.  Each
-    /// value's set is the set of its representative — values in the
+    /// value's set is the set of its representative, values in the
     /// same Steensgaard class share the same set.
     fn into_facts(mut self) -> PointsToFacts {
         let mut by_value = Vec::with_capacity(self.pt.len());
@@ -670,7 +670,7 @@ mod tests {
         }
     }
 
-    /// `let c = self; let m = c.mu;`  — pt(m) must be `{Field(SelfParam, mu)}`,
+    /// `let c = self; let m = c.mu;` , pt(m) must be `{Field(SelfParam, mu)}`,
     /// distinct from pt(c) = `{SelfParam}`.
     #[test]
     fn field_subobject_distinct_from_receiver() {
@@ -718,7 +718,7 @@ mod tests {
         }
     }
 
-    /// `let y = x;`  — y and x share the same points-to set.
+    /// `let y = x;` , y and x share the same points-to set.
     #[test]
     fn copy_propagation_unifies() {
         let mut b = BodyBuilder::new();
@@ -739,7 +739,7 @@ mod tests {
         assert!(!facts.pt(y).is_empty());
     }
 
-    /// `if (cond) z = a; else z = b;`  — phi at the merge unifies
+    /// `if (cond) z = a; else z = b;` , phi at the merge unifies
     /// `pt(z)` with both `pt(a)` and `pt(b)`.
     #[test]
     fn phi_unifies_branches() {
@@ -749,7 +749,7 @@ mod tests {
         let b_v = b.fresh(Some("b"));
         b.emit(b_v, SsaOp::Param { index: 1 }, Some("b"));
 
-        // Phi(0: a, 0: b) — predecessor block ids are placeholders.
+        // Phi(0: a, 0: b), predecessor block ids are placeholders.
         let z = b.fresh(Some("z"));
         b.emit(
             z,
@@ -768,7 +768,7 @@ mod tests {
         assert_eq!(pt_z.len(), 2);
     }
 
-    /// `node = node.next;` — the `FieldProj` self-cycle must
+    /// `node = node.next;`, the `FieldProj` self-cycle must
     /// terminate via the union-find / depth bound, not loop.
     #[test]
     fn self_referential_field_chain_terminates() {
@@ -803,7 +803,7 @@ mod tests {
         let facts = analyse_body(&body, body_id());
         let pt_node = facts.pt(node);
         // Either we converge to a non-empty set including a Field chain,
-        // or we saturate to Top — either is a valid termination outcome.
+        // or we saturate to Top, either is a valid termination outcome.
         assert!(!pt_node.is_empty());
     }
 
@@ -820,7 +820,7 @@ mod tests {
         assert!(facts.pt(s).is_empty());
     }
 
-    /// `Call` produces a fresh allocation-site location for its result —
+    /// `Call` produces a fresh allocation-site location for its result ,
     /// distinct from its arguments.
     #[test]
     fn call_result_is_fresh_alloc() {
@@ -857,7 +857,7 @@ mod tests {
 
     /// Driver smoke-test: the analysis runs on an SsaBody produced by
     /// the real lowering pipeline without panicking.  This pins the
-    /// "no behaviour change" gate — analysis runs to completion on
+    /// "no behaviour change" gate, analysis runs to completion on
     /// representative input.
     #[test]
     fn smoke_runs_on_lowered_body() {
@@ -977,7 +977,7 @@ mod tests {
         // `arr` is the parameter container.
         let arr = b.fresh(Some("arr"));
         b.emit(arr, SsaOp::Param { index: 0 }, Some("arr"));
-        // `e := arr.shift()` — container read.
+        // `e := arr.shift()`, container read.
         let e = b.fresh(Some("e"));
         b.emit(
             e,
@@ -1018,7 +1018,7 @@ mod tests {
         // `obj` is parameter 0.
         let obj = b.fresh(Some("obj"));
         b.emit(obj, SsaOp::Param { index: 0 }, Some("obj"));
-        // `let n = obj.name;` — field projection from a param.
+        // `let n = obj.name;`, field projection from a param.
         let name_field = b.intern_field("name");
         let n = b.fresh(Some("n"));
         b.emit(
@@ -1187,7 +1187,7 @@ mod tests {
         assert!(is_container_write_callee("arr.__index_set__"));
     }
 
-    /// W5: regression guard — neither synth name should match the
+    /// W5: regression guard, neither synth name should match the
     /// opposite predicate, otherwise the W2 read/write hooks would
     /// double-fire on the same call.
     #[test]
@@ -1199,10 +1199,10 @@ mod tests {
     #[test]
     fn name_proxy_hints_collects_field_only_locals() {
         let mut b = BodyBuilder::new();
-        // `c` is the receiver — root location, hint=Other.
+        // `c` is the receiver, root location, hint=Other.
         let c = b.fresh(Some("c"));
         b.emit(c, SsaOp::SelfParam, Some("c"));
-        // `m := c.mu` — field projection, hint=FieldOnly.
+        // `m := c.mu`, field projection, hint=FieldOnly.
         let mu = b.intern_field("mu");
         let m = b.fresh(Some("m"));
         b.emit(

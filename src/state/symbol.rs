@@ -8,7 +8,7 @@ pub struct SymbolId(pub(crate) u32);
 
 /// Function-scope discriminator for symbol interning.
 ///
-/// This provides **function-level isolation only** — not full lexical/block
+/// This provides **function-level isolation only**, not full lexical/block
 /// scope modeling.  Variables in different functions with the same name get
 /// distinct [`SymbolId`]s.  Top-level / module-scope code uses `scope: None`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -21,8 +21,8 @@ struct ScopedKey {
 ///
 /// Built once from CFG node `defines`/`uses`, reused throughout analysis.
 /// Two construction modes:
-/// - [`from_cfg`](Self::from_cfg): flat (unscoped) interning — used by taint/SSA pipeline
-/// - [`from_cfg_scoped`](Self::from_cfg_scoped): function-scoped interning — used by state analysis
+/// - [`from_cfg`](Self::from_cfg): flat (unscoped) interning, used by taint/SSA pipeline
+/// - [`from_cfg_scoped`](Self::from_cfg_scoped): function-scoped interning, used by state analysis
 #[derive(Default)]
 pub struct SymbolInterner {
     to_id: HashMap<ScopedKey, SymbolId>,
@@ -43,7 +43,7 @@ impl SymbolInterner {
     /// scoped key.
     pub fn intern_scoped(&mut self, scope: Option<&str>, name: &str) -> SymbolId {
         // Member expressions (e.g. `this.fd`, `self.conn`) are shared class/
-        // instance state — keep them in the global (None) scope so that
+        // instance state, keep them in the global (None) scope so that
         // `open()` and `close()` methods can track the same resource symbol.
         // Only plain local variables get function-scoped isolation.
         let effective_scope = if name.contains('.') { None } else { scope };
@@ -70,7 +70,7 @@ impl SymbolInterner {
         self.to_id.get(&key).copied()
     }
 
-    /// Intern a name (unscoped — equivalent to `intern_scoped(None, name)`).
+    /// Intern a name (unscoped, equivalent to `intern_scoped(None, name)`).
     ///
     /// Used by the taint/SSA pipeline and unit tests that don't need
     /// function-scope isolation.
@@ -78,7 +78,7 @@ impl SymbolInterner {
         self.intern_scoped(None, name)
     }
 
-    /// Look up a name without interning it (unscoped — equivalent to
+    /// Look up a name without interning it (unscoped, equivalent to
     /// `get_scoped(None, name)`).
     pub fn get(&self, name: &str) -> Option<SymbolId> {
         self.get_scoped(None, name)

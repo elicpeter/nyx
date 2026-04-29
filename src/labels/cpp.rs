@@ -120,7 +120,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     // and extract them as separate bodies.  Without these, a
     // `class_specifier` / `struct_specifier` falls through to the
     // generic `_ =>` arm in `build_sub`, which records a leaf `Seq`
-    // node and never walks the body — so inline member-function
+    // node and never walks the body, so inline member-function
     // definitions (and methods of nested classes) are silently dropped.
     "declaration_list"      => Kind::Block,
     "field_declaration_list" => Kind::Block,
@@ -160,7 +160,7 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
 
 /// Benchmark-driven output-parameter source positions for known C++ APIs.
 pub static OUTPUT_PARAM_SOURCES: &[(&str, &[usize])] = &[
-    ("getline", &[1]), // std::getline(stream, str) — str receives input
+    ("getline", &[1]), // std::getline(stream, str), str receives input
     ("std::getline", &[1]),
     ("fgets", &[0]),
     ("gets", &[0]),

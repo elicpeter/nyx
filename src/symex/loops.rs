@@ -94,11 +94,11 @@ impl LoopInfo {
                 match (true_in, false_in) {
                     (true, false) => Some(*false_blk),
                     (false, true) => Some(*true_blk),
-                    (false, false) => Some(*true_blk), // both exit — deterministic pick
+                    (false, false) => Some(*true_blk), // both exit, deterministic pick
                     (true, true) => None,              // nested: no clear exit
                 }
             }
-            _ => None, // Goto or Return — no branching exit
+            _ => None, // Goto or Return, no branching exit
         }
     }
 

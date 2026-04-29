@@ -123,7 +123,7 @@ pub fn build_index_with_observer(
     logs: Option<&Arc<ScanLogCollector>>,
 ) -> NyxResult<()> {
     // Pass 1 of the indexed scan reads persisted summaries produced here, so
-    // framework context must be populated at index-build time — otherwise
+    // framework context must be populated at index-build time, otherwise
     // framework-conditional label rules never contribute to the summaries
     // and indexed scans diverge from non-indexed ones.  Matches the
     // auto-fill in scan_filesystem_with_observer /
@@ -152,7 +152,7 @@ pub fn build_index_with_observer(
 
     let walk_start = std::time::Instant::now();
     let (rx, handle) = spawn_file_walker(project_path, config);
-    // Drain the channel BEFORE joining — the bounded channel will deadlock
+    // Drain the channel BEFORE joining, the bounded channel will deadlock
     // if we join first and the walker blocks on send.
     let paths: Vec<PathBuf> = rx.into_iter().flatten().collect();
     if let Err(err) = handle.join() {
@@ -205,7 +205,7 @@ pub fn build_index_with_observer(
         .try_for_each(|path| -> NyxResult<()> {
             let mut idx = Indexer::from_pool(project_name, &pool)?;
 
-            // Read once, hash once — pass bytes to both rule execution and
+            // Read once, hash once, pass bytes to both rule execution and
             // summary extraction.  Use pre-computed hash for upsert to avoid
             // a redundant file read inside upsert_file.
             let bytes = std::fs::read(&path)?;

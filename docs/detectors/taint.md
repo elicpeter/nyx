@@ -134,7 +134,8 @@ Sources, sanitizers, and sinks are linked by named capabilities. A sanitizer onl
 | `fmt_string` | | | `printf(var)` |
 | `sql_query` | | parameterized query binders | `cursor.execute`, `db.query` with concatenation |
 | `deserialize` | | | `pickle.loads`, `yaml.load`, `Marshal.load` |
-| `ssrf` | | URL-prefix locks | `requests.get`, `fetch`, `HttpClient.send` |
+| `ssrf` | | URL-prefix locks | `requests.get`, `fetch` URL arg, outbound HTTP destination |
+| `data_exfil` | | | `fetch` body / headers / json, `XMLHttpRequest.send` body |
 | `code_exec` | | | `eval`, `exec`, `Function` |
 | `crypto` | | | weak-algorithm constructors |
 | `unauthorized_id` | request-bound scoped IDs (Rust auth analysis) | ownership check | row-level write |

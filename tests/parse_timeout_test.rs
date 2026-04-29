@@ -45,7 +45,7 @@ fn build_bulk_source(bytes_target: usize) -> String {
 
 #[test]
 fn parse_timeout_config_short_circuits_parse() {
-    // ~1 MiB of valid JS — plenty of real parser work to observe the
+    // ~1 MiB of valid JS, plenty of real parser work to observe the
     // timeout.  Still well under MAX_PARSE_BYTES.
     let source = build_bulk_source(1_000_000);
 
@@ -68,7 +68,7 @@ fn parse_timeout_config_short_circuits_parse() {
     // A timed-out parse surfaces a synthetic informational diag
     // carrying an `EngineNote::ParseTimeout` so downstream tooling can
     // tell "we found nothing" from "we stopped looking".  Any other
-    // finding would imply the parser actually produced a tree — i.e.
+    // finding would imply the parser actually produced a tree, i.e.
     // the timeout did not short-circuit.
     assert!(
         diags.iter().all(|d| d.id == "engine.parse_timeout"),

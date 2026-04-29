@@ -204,7 +204,7 @@ fn tier_a_patterns_have_no_heuristic_in_description() {
         }
     }
 
-    // Warn but don't fail — descriptions are informational
+    // Warn but don't fail, descriptions are informational
     if !violations.is_empty() {
         eprintln!(
             "WARNING: Tier A patterns with heuristic-like descriptions:\n  {}",

@@ -106,7 +106,7 @@ impl ConstValue {
         if let Ok(i) = t.parse::<i64>() {
             return Some(ConstValue::Int(i));
         }
-        // Negative with space: "- 5" — not supported, conservative
+        // Negative with space: "- 5", not supported, conservative
         None
     }
 }
@@ -118,9 +118,9 @@ impl ConstValue {
 pub struct TypeSet(u16);
 
 impl TypeSet {
-    /// All 12 type bits set — no type constraint (Top).
+    /// All 12 type bits set, no type constraint (Top).
     pub const TOP: Self = Self(0x0FFF);
-    /// No type bits — unsatisfiable (Bottom).
+    /// No type bits, unsatisfiable (Bottom).
     pub const BOTTOM: Self = Self(0);
 
     pub fn singleton(kind: &TypeKind) -> Self {
@@ -149,7 +149,7 @@ impl TypeSet {
         self == Self::TOP
     }
 
-    /// Complement — all types NOT in this set.
+    /// Complement, all types NOT in this set.
     pub fn complement(self) -> Self {
         Self(!self.0 & Self::TOP.0)
     }
@@ -274,7 +274,7 @@ impl Nullability {
 
 /// Boolean state lattice.
 ///
-/// Same shape as [`Nullability`]. No `negate()` — negation is structural
+/// Same shape as [`Nullability`]. No `negate()`, negation is structural
 /// on [`ConditionExpr`](super::lower::ConditionExpr).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BoolState {
@@ -313,7 +313,7 @@ impl BoolState {
 /// Abstract fact about a single SSA value.
 ///
 /// Combines interval, constant, type, null, and boolean constraints.
-/// There is intentionally no generic `negate()` on ValueFact — negation
+/// There is intentionally no generic `negate()` on ValueFact, negation
 /// is structural on [`ConditionExpr`](super::lower::ConditionExpr) and
 /// then applied as atomic refinements by the solver.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -857,14 +857,14 @@ impl PathEnv {
         // `assume_neq`, and a few internal sites.  Large generated inputs
         // (thousands of short statements on one line) can drive millions
         // of calls and overflow a plain u16 `refine_count`.  Saturate to
-        // stay within bounds — the refinement pipeline is already
+        // stay within bounds, the refinement pipeline is already
         // idempotent past the cap, so saturation is semantically a no-op.
         self.refine_count = self.refine_count.saturating_add(1);
 
         // Check size bound
         let pos = self.facts.binary_search_by_key(&v, |(k, _)| *k);
         if pos.is_err() && self.facts.len() >= MAX_PATH_ENV_ENTRIES {
-            return; // bounded — don't grow
+            return; // bounded, don't grow
         }
 
         // Get meet count for widening
@@ -963,7 +963,7 @@ impl PathEnv {
         let ra = self.uf.find_immutable(a);
         let rb = self.uf.find_immutable(b);
         if ra == rb {
-            // Already known equal — contradiction
+            // Already known equal, contradiction
             self.unsat = true;
             return;
         }
@@ -1040,7 +1040,7 @@ impl PathEnv {
             return;
         }
 
-        // Step 4: dedup check — if this exact constraint already exists, skip
+        // Step 4: dedup check, if this exact constraint already exists, skip
         let already_present = self
             .relational
             .iter()
@@ -1052,7 +1052,7 @@ impl PathEnv {
             if self.relational.len() < MAX_RELATIONAL {
                 self.relational.push((ra, op, rb));
             }
-            // If at capacity, skip — conservative: losing a constraint only
+            // If at capacity, skip, conservative: losing a constraint only
             // loses pruning power, never introduces unsoundness.
         }
 
@@ -1089,7 +1089,7 @@ impl PathEnv {
                         if has_strict || op == RelOp::Lt {
                             return true;
                         }
-                        // All Le: a <= b <= ... <= a means all equal — satisfiable
+                        // All Le: a <= b <= ... <= a means all equal, satisfiable
                         return false;
                     }
                     // Continue walking (take first outgoing edge)
@@ -1181,11 +1181,11 @@ impl PathEnv {
         while i < self.facts.len() && j < other.facts.len() {
             match self.facts[i].0.cmp(&other.facts[j].0) {
                 std::cmp::Ordering::Less => {
-                    // Only in self — drop (absent on other side = Top)
+                    // Only in self, drop (absent on other side = Top)
                     i += 1;
                 }
                 std::cmp::Ordering::Greater => {
-                    // Only in other — drop
+                    // Only in other, drop
                     j += 1;
                 }
                 std::cmp::Ordering::Equal => {

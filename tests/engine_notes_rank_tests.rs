@@ -26,7 +26,7 @@ use nyx_scanner::rank::{compute_attack_rank, rank_diags};
 // ── Diag factories ─────────────────────────────────────────────────────
 
 /// A converged taint finding that the points-based scorer will score
-/// as `Confidence::High`.  Used as the "clean" baseline — any delta
+/// as `Confidence::High`.  Used as the "clean" baseline, any delta
 /// against this must come from attached engine notes.
 fn high_confidence_taint_diag(path: &str, line: u32) -> Diag {
     Diag {
@@ -204,7 +204,7 @@ fn rank_diags_sorts_converged_above_capped_at_same_severity() {
 #[test]
 fn rank_diags_preserves_severity_tier_under_bail() {
     // High + Bail must still outrank Medium + clean at the same
-    // evidence-strength baseline — this is the tier-boundary invariant
+    // evidence-strength baseline, this is the tier-boundary invariant
     // that the -8 completeness magnitude is calibrated for.
     let mut high_bailed = high_confidence_taint_diag("a.rs", 1);
     attach_notes(
@@ -421,7 +421,7 @@ fn sarif_omits_loss_direction_for_informational_only() {
 fn every_engine_note_direction_is_documented() {
     // Enumerate every EngineNote variant and assert its direction.
     // The intent is that a contributor adding a new variant will cause
-    // this test to fail to compile (no match arm) — a structural guard
+    // this test to fail to compile (no match arm), a structural guard
     // against silent misclassification.
     fn check(note: EngineNote, expected: LossDirection) {
         assert_eq!(

@@ -89,7 +89,7 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
                 converged = false;
                 break;
             }
-            // Budget exceeded but transfer requested continuation — mark non-converged
+            // Budget exceeded but transfer requested continuation, mark non-converged
             converged = false;
         }
 
@@ -100,7 +100,7 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
 
         let edges: Vec<_> = cfg.edges(node).map(|e| (*e.weight(), e.target())).collect();
 
-        // No outgoing edges — nothing to propagate (exit/dead end).
+        // No outgoing edges, nothing to propagate (exit/dead end).
         if edges.is_empty() {
             continue;
         }
@@ -159,7 +159,7 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
         let edges: Vec<_> = cfg.edges(node).map(|e| (*e.weight(), e.target())).collect();
 
         if edges.is_empty() {
-            // Exit / dead end — apply transfer for event collection.
+            // Exit / dead end, apply transfer for event collection.
             let info = &cfg[node];
             let (_out_state, new_events) = transfer.apply(node, info, None, node_state);
             events.extend(new_events);
@@ -487,7 +487,7 @@ mod tests {
         assert!(in_wl.insert(n1));
         wl.push_back(n1);
 
-        // Duplicate n0 — should not insert
+        // Duplicate n0, should not insert
         assert!(!in_wl.insert(n0));
         // wl still has only 2 entries
         assert_eq!(wl.len(), 2);
@@ -597,7 +597,7 @@ mod tests {
     }
 
     /// Self-loop on a single node: `entry → A → A → … → exit`. The
-    /// worklist must not livelock — once A's state is stable, the
+    /// worklist must not livelock, once A's state is stable, the
     /// back-edge stops re-enqueueing it.
     #[test]
     fn self_loop_terminates() {

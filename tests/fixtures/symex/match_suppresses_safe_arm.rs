@@ -19,7 +19,7 @@ enum Cap {
 pub fn dispatch(cap: Cap) {
     let user_cmd = env::var("USER_CMD").unwrap_or_default();
     match cap {
-        // Raw arm — tainted user_cmd flows directly into the shell.
+        // Raw arm, tainted user_cmd flows directly into the shell.
         Cap::Raw => {
             Command::new("sh")
                 .arg("-c")
@@ -27,7 +27,7 @@ pub fn dispatch(cap: Cap) {
                 .output()
                 .unwrap();
         }
-        // Safe arm — allowlist-guarded execution.
+        // Safe arm, allowlist-guarded execution.
         Cap::Safe => {
             let allowed = ["ls", "date"];
             if allowed.contains(&user_cmd.as_str()) {

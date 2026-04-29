@@ -29,7 +29,7 @@ pub struct UnguardedSink;
 /// receiver recorded as a compound identifier rather than a named binding).
 fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     // Fast path: syntactic literal detection from CFG construction.
-    // Strictly weaker than the one-hop trace below — serves as an
+    // Strictly weaker than the one-hop trace below, serves as an
     // optimization for the common case of inline literal arguments.
     if ctx.cfg[sink].all_args_literal {
         return true;
@@ -127,17 +127,17 @@ fn ssa_all_sink_operands_constant(
 /// SSA-backed reassign-aware safety probe: every operand of the sink
 /// resolves to a constant, callee fragment, OR a function parameter that
 /// is not itself a Source.  Used at the cfg-unguarded-sink site under
-/// `!has_taint` — the taint engine has already proved no source-tainted
+/// `!has_taint`, the taint engine has already proved no source-tainted
 /// data reaches the sink, so a non-source Param at operand position is
 /// inert payload-wise (e.g. HTTP writer in `Fprintf(w, "<h1>", "Guest")`).
 ///
 /// Gated on the function body actually exhibiting the reassign-to-constant
-/// signature — at least one named SSA def whose RHS is a literal Const
+/// signature, at least one named SSA def whose RHS is a literal Const
 /// (`name = "Guest"`).  In a thin wrapper without a same-block named
 /// const assignment (`fn wrap(p) { sink(p) }`, or C `popen(buf, "r")` where
 /// `buf` is filled in-place by `sprintf` with no Const Assign on `buf`),
 /// the bare Param at operand position IS the payload and the suppression's
-/// rationale does not apply — `cfg-unguarded-sink` must still fire.
+/// rationale does not apply, `cfg-unguarded-sink` must still fire.
 fn ssa_all_sink_operands_const_or_param(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     let Some(facts) = ctx.body_const_facts else {
         return false;
@@ -165,13 +165,13 @@ fn ssa_all_sink_operands_const_or_param(ctx: &AnalysisContext, sink: NodeIndex) 
 }
 
 /// Return true if the SSA body contains a *named* variable whose definition
-/// is a constant — the SSA signature of an explicit `name = "literal"`
+/// is a constant, the SSA signature of an explicit `name = "literal"`
 /// reassignment.  Used as the gate for the broader operand-Param suppression:
 /// the suppression's purpose is the reassign-to-constant idiom, which by
 /// definition has at least one named const assignment.  In a thin wrapper
 /// (`fn wrap(p) { sink(p) }` or `popen(buf, "r")` where `buf` is filled by
 /// `sprintf`), no such named const assignment exists and the suppression's
-/// rationale doesn't apply — so the bare-Param structural finding fires.
+/// rationale doesn't apply, so the bare-Param structural finding fires.
 fn func_body_has_named_const_assign(facts: &BodyConstFacts) -> bool {
     for block in &facts.ssa.blocks {
         for inst in &block.body {
@@ -228,7 +228,7 @@ fn ssa_operand_const_or_param(
         // CFG-node-level Source label: when an SSA `Call` corresponds to a
         // Source-labeled CFG node (e.g. `env::var(...)` whose callee
         // matches a `LabelRule` Source matcher), the call's result is
-        // tainted user input — refuse, regardless of how the SSA
+        // tainted user input, refuse, regardless of how the SSA
         // happened to lower.  Catches the `SsaOp::Call` lowering of
         // labeled Source functions, which the `SsaOp::Source` arm only
         // sees for callee-less pure sources like PHP `$_GET`.
@@ -266,7 +266,7 @@ fn ssa_operand_const_or_param(
             }
             SsaOp::Source => return false,
             SsaOp::Nop | SsaOp::Undef => {}
-            // FieldProj: walk the receiver — `obj.f` is constant iff `obj`
+            // FieldProj: walk the receiver, `obj.f` is constant iff `obj`
             // is constant under the same definition.  The field name itself
             // is structural and adds no runtime value.
             SsaOp::FieldProj { receiver, .. } => stack.push(*receiver),
@@ -321,7 +321,7 @@ fn ssa_operand_constant(
             }
             SsaOp::Param { .. } | SsaOp::SelfParam | SsaOp::CatchParam | SsaOp::Source => {
                 // Only acceptable when the param's `var_name` is a callee
-                // fragment — i.e. an identifier that only appears because
+                // fragment, i.e. an identifier that only appears because
                 // the CFG recorded name components of the dotted/chained
                 // callee as uses.  Real parameters and sources are dynamic.
                 let name = inst.var_name.as_deref().unwrap_or("");
@@ -333,7 +333,7 @@ fn ssa_operand_constant(
                 }
             }
             SsaOp::Nop => {}
-            // Undef is a non-user, non-dynamic sentinel — treat like Const
+            // Undef is a non-user, non-dynamic sentinel, treat like Const
             // (no additional operands to trace).
             SsaOp::Undef => {}
             // FieldProj: structural field read; constness reduces to the
@@ -440,7 +440,7 @@ fn sink_args_typed_safe(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) 
                 !is_callee_fragment(name, callee_desc, &callee_parts, &outer_parts)
             }
             // Constant string literals used as inline args (e.g. `"listener"`,
-            // `"-c"`) are not user-controlled — treat as non-real for the
+            // `"-c"`) are not user-controlled, treat as non-real for the
             // "all int-typed" test so they don't block suppression.
             SsaOp::Const(_) => false,
             _ => true,
@@ -477,7 +477,7 @@ fn type_facts_suppress(values: &[SsaValue], sink_caps: Cap, type_facts: &TypeFac
 /// lookup idiom (e.g. `map.get(x).unwrap_or("safe")` over literal inserts)
 /// should clear a command-injection sink.
 ///
-/// Only fires for `Cap::SHELL_ESCAPE` — SQL / path suppression from this
+/// Only fires for `Cap::SHELL_ESCAPE`, SQL / path suppression from this
 /// domain would require stronger reasoning (literal keys can still carry
 /// SQL tokens if the inserts themselves contain them).
 fn sink_args_static_map_safe(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) -> bool {
@@ -623,12 +623,14 @@ fn cond_indirect_validator_callee(
     }
     let var_name = info.condition_vars[0].as_str();
     let cond_func = info.ast.enclosing_func.as_deref();
+    let cond_span_start = info.ast.span.0;
 
     // Walk the CFG for any node that DEFINES `var_name` via a Call
-    // expression.  Same-function only; in the rare case of multiple
-    // assignments, take the textually-last one (highest span start)
-    // — a conservative latest-def proxy without paying for full
-    // dominator analysis.
+    // expression.  Same-function only, and only consider definitions
+    // textually before the condition: a reassignment after the `if`
+    // cannot be the def reaching it.  Among the eligible defs, take
+    // the textually-last one (highest span start), a conservative
+    // latest-def proxy without paying for full dominator analysis.
     let mut best: Option<(usize, &str)> = None;
     for nidx in ctx.cfg.node_indices() {
         let n = &ctx.cfg[nidx];
@@ -641,10 +643,13 @@ fn cond_indirect_validator_callee(
         if n.ast.enclosing_func.as_deref() != cond_func {
             continue;
         }
+        let span_start = n.ast.span.0;
+        if span_start >= cond_span_start {
+            continue;
+        }
         let Some(callee) = n.call.callee.as_deref() else {
             continue;
         };
-        let span_start = n.ast.span.0;
         match best {
             Some((s, _)) if s >= span_start => {}
             _ => best = Some((span_start, callee)),
@@ -686,15 +691,15 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
                     //   const ok = isValid(x);   if (!ok) throw …;
                     // The classifier returns Unknown / NullCheck / ErrorCheck
                     // because the if-condition is a bare result variable, not
-                    // a direct call expression.  Resolve the variable's reaching
-                    // SSA def via `body_const_facts.ssa` and check whether the
-                    // def is a Call to an
-                    // `is_input_validator_callee`-recognised callee — the same
-                    // structural recognition the SSA branch-narrowing layer
-                    // uses.  Mirror layer to layer keeps the cfg-unguarded-sink
-                    // suppression coherent with the taint suppression: when the
-                    // taint engine clears the source, the structural pattern
-                    // shouldn't refire on the same span.
+                    // a direct call expression. `cond_indirect_validator_callee`
+                    // handles that by scanning the CFG for nodes whose
+                    // `TaintMeta.defines` matches the condition variable and
+                    // checking whether any defining Call has an
+                    // `is_input_validator_callee`-recognised callee. This keeps
+                    // cfg-unguarded-sink suppression aligned with the same
+                    // structural validator recognition the SSA branch-narrowing
+                    // layer uses, without requiring the condition itself to be
+                    // a direct call expression.
                     //
                     // Motivated by Novu CVE GHSA-4x48-cgf9-q33f.
                     result.push((idx, Cap::all()));
@@ -811,7 +816,7 @@ fn sink_arg_is_parameter_only(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
 
     let sink_uses = &sink_info.taint.uses;
     if sink_uses.is_empty() {
-        // No identifiable arguments — could be a constant call like Command::new("ls")
+        // No identifiable arguments, could be a constant call like Command::new("ls")
         return true; // treat as non-dangerous (constant arg)
     }
 
@@ -865,7 +870,7 @@ pub(crate) fn has_redirect_path_prefix(source_bytes: &[u8], span: (usize, usize)
     false
 }
 
-/// Check if this sink is an internal redirect — a `res.redirect` (SSRF sink)
+/// Check if this sink is an internal redirect, a `res.redirect` (SSRF sink)
 /// whose argument is a template literal or string starting with `/`, indicating
 /// a server-relative path rather than an attacker-controlled URL.
 fn is_internal_redirect(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) -> bool {
@@ -974,7 +979,7 @@ impl CfgAnalysis for UnguardedSink {
             let source_derived = sink_arg_is_source_derived(ctx, *sink);
 
             // If sink args are all constants (including one-hop constant bindings)
-            // and taint didn't confirm, this is a false positive — skip it.
+            // and taint didn't confirm, this is a false positive, skip it.
             if is_all_args_constant(ctx, *sink) && !has_taint {
                 continue;
             }
@@ -982,7 +987,7 @@ impl CfgAnalysis for UnguardedSink {
             // SSA latest-def suppression: when the taint engine has already
             // proved no source-tainted data reaches this sink (`!has_taint`)
             // and every SSA operand resolves to a constant, callee-fragment
-            // pseudo-name, OR a function parameter that is not a Source —
+            // pseudo-name, OR a function parameter that is not a Source ,
             // the sink's actual arguments cannot carry an injection payload.
             // Catches the reassign-to-constant idiom (`name := req.x; name =
             // "Guest"; sink(name)`) where the latest SSA def is a literal
@@ -997,7 +1002,7 @@ impl CfgAnalysis for UnguardedSink {
             // Type-aware suppression: when all SSA operand values of the sink
             // are proven to carry non-injectable types (e.g. integers parsed
             // from a raw source), the arguments cannot form a payload for
-            // SHELL/SQL/FILE sinks.  Skip the structural finding — the taint
+            // SHELL/SQL/FILE sinks.  Skip the structural finding, the taint
             // engine already covers the source→sink flow via type-aware
             // suppression.  Unknown-typed or mixed operands fall through.
             if !has_taint && sink_args_typed_safe(ctx, *sink, sink_caps) {
@@ -1014,13 +1019,13 @@ impl CfgAnalysis for UnguardedSink {
 
             // Parameterized SQL queries: arg 0 is a string literal with
             // placeholders ($1, ?, %s, :name) and a params argument exists.
-            // These are safe by construction — the driver handles escaping.
+            // These are safe by construction, the driver handles escaping.
             if sink_info.parameterized_query {
                 continue;
             }
 
             // Internal redirects: res.redirect(`/path/...`) with a path-prefix
-            // argument are server-relative — not attacker-controlled URLs.
+            // argument are server-relative, not attacker-controlled URLs.
             if is_internal_redirect(ctx, *sink, sink_caps) {
                 continue;
             }
@@ -1031,10 +1036,10 @@ impl CfgAnalysis for UnguardedSink {
             let (severity, confidence) = if has_taint || source_derived {
                 (Severity::High, Confidence::High)
             } else if param_only && !in_entrypoint {
-                // Wrapper function with param-only args — zero signal. Suppress.
+                // Wrapper function with param-only args, zero signal. Suppress.
                 continue;
             } else if !ctx.taint_active {
-                // AST-only / cfg-only mode — preserve as LOW (unchanged)
+                // AST-only / cfg-only mode, preserve as LOW (unchanged)
                 (Severity::Low, Confidence::Low)
             } else {
                 // taint_active=true but found nothing.
@@ -1048,7 +1053,7 @@ impl CfgAnalysis for UnguardedSink {
                 // If the function containing the sink has no Source-labeled
                 // nodes AND no parameters (through which taint could flow
                 // from callers), taint ran and found nothing because there
-                // is nothing to find.  Suppress — the structural finding
+                // is nothing to find.  Suppress, the structural finding
                 // is noise.
                 let sink_func = sink_info.ast.enclosing_func.as_deref();
                 let has_sources = ctx.cfg.node_indices().any(|n| {

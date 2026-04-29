@@ -40,7 +40,7 @@ pub struct BodyConstFacts {
 }
 
 /// Lower a body to SSA and run constant propagation.  Returns `None` when
-/// lowering fails (empty CFG, invalid entry) — callers treat absence as
+/// lowering fails (empty CFG, invalid entry), callers treat absence as
 /// "no SSA facts available" and fall back to the syntactic path.
 pub fn build_body_const_facts(body: &crate::cfg::BodyCfg, lang: Lang) -> Option<BodyConstFacts> {
     let mut ssa = crate::ssa::lower_to_ssa_with_params(
@@ -116,13 +116,13 @@ pub struct AnalysisContext<'a> {
     /// Structural analyses use it to suppress findings when a sink's argument
     /// SSA values are proven to carry non-injectable types (e.g. integers
     /// parsed from a raw source can't form SHELL/SQL/path payloads).  Sourced
-    /// from `body_const_facts` when present — keep both pointers coherent.
+    /// from `body_const_facts` when present, keep both pointers coherent.
     pub type_facts: Option<&'a TypeFactResult>,
     /// Decorators / annotations / attributes attached to the body's
     /// declaration (e.g. Python `@login_required`, Java `@PreAuthorize`,
     /// Symfony `#[IsGranted(...)]`).  Consumed by the AuthGap analysis to
     /// suppress `cfg-auth-gap` when the framework already enforces auth at
-    /// the function-declaration level — the gap only matters when the
+    /// the function-declaration level, the gap only matters when the
     /// auth call has to live inside the body.
     pub auth_decorators: &'a [String],
 }

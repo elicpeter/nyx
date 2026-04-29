@@ -2,11 +2,11 @@
 //!
 //! Two related shapes live here:
 //!
-//! 1. [`line_snippet`] — extracts the trimmed source line containing
+//! 1. [`line_snippet`], extracts the trimmed source line containing
 //!    a byte offset, capped at ~120 bytes.  Used by [`crate::ast`]
 //!    (per-finding evidence) and [`crate::summary`] (cross-file
 //!    `SinkSite`).
-//! 2. [`truncate_at_char_boundary`] — the underlying primitive: cap a
+//! 2. [`truncate_at_char_boundary`], the underlying primitive: cap a
 //!    string at `max_bytes`, rounded down to the nearest UTF-8 char
 //!    boundary.
 //!

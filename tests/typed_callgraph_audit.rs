@@ -5,7 +5,7 @@
 //! The lower-level Phase 1 / 2 / 3 unit tests under
 //! `src/callgraph.rs::tests` and `src/taint/tests.rs` already prove the
 //! per-module API behaviour.  These tests pin the *integration*
-//! invariants — that the pipeline as a whole still produces the right
+//! invariants, that the pipeline as a whole still produces the right
 //! `typed_call_receivers` entries on real source code, that the call
 //! graph picks the receiver-typed candidate at edge-insertion time,
 //! and that today's behaviour is preserved on every negative /
@@ -39,7 +39,7 @@ struct File<'a> {
 ///
 /// The caller is responsible for picking absolute paths whose `Path`
 /// representation matches the namespace it expects on the resulting
-/// [`FuncKey`]s — `extract_all_summaries_from_bytes` writes the raw
+/// [`FuncKey`]s, `extract_all_summaries_from_bytes` writes the raw
 /// `path` into `FuncSummary::file_path` which then flows through to
 /// `FuncKey::namespace` after `merge_summaries`.
 fn pipeline_global_summaries(files: &[File<'_>]) -> GlobalSummaries {
@@ -77,7 +77,7 @@ fn find_ssa<'a>(
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  A.2.1 — End-to-end pipeline test
+//  A.2.1, End-to-end pipeline test
 // ─────────────────────────────────────────────────────────────────────
 
 /// Pipeline test: Java caller invokes a method on a constructor-typed
@@ -87,7 +87,7 @@ fn find_ssa<'a>(
 /// the typed receiver to `FileHandle::close`, not the same-name
 /// `Cache::close` overload).
 ///
-/// **Audit gap A.2.1.G1 — closed 2026-04-26.**  Previously, the SSA
+/// **Audit gap A.2.1.G1, closed 2026-04-26.**  Previously, the SSA
 /// summary extractor leaked synthetic external-capture `Param` ops
 /// into the summary's parameter-index references, so its FuncKey
 /// disambig got synthesised away from the matching FuncSummary
@@ -203,7 +203,7 @@ class Cache {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  A.2.4 — SQLite round-trip + rescan-cache parity
+//  A.2.4, SQLite round-trip + rescan-cache parity
 // ─────────────────────────────────────────────────────────────────────
 
 /// SQLite round-trip test for `typed_call_receivers`: an SSA summary
@@ -333,7 +333,7 @@ class P {
     );
 }
 
-/// P-2: Java `HttpClient.newHttpClient(); c.send(...)` — typed receiver
+/// P-2: Java `HttpClient.newHttpClient(); c.send(...)`, typed receiver
 /// `HttpClient`.  This is the canonical Phase-10 type-inference shape.
 #[test]
 fn audit_p2_java_http_client_typed_receiver() {
@@ -362,7 +362,7 @@ class P {
     );
 }
 
-/// P-3: Python `c = sqlite3.connect(...); c.execute(...)` — typed
+/// P-3: Python `c = sqlite3.connect(...); c.execute(...)`, typed
 /// receiver `DatabaseConnection`.
 #[test]
 fn audit_p3_python_sqlite_connection_typed_receiver() {
@@ -395,7 +395,7 @@ def use():
 //  A.3 negatives
 // ─────────────────────────────────────────────────────────────────────
 
-/// N-1: a free-function call (no receiver — `new FileInputStream(...)`
+/// N-1: a free-function call (no receiver, `new FileInputStream(...)`
 /// with no method-call follow-up) must not surface in
 /// `typed_call_receivers`.  Even if the constructor produces a known
 /// type, the SSA Call carries `receiver: None` and the devirtualisation
@@ -422,7 +422,7 @@ class P {
     );
 }
 
-/// N-3: Receiver type known but no matching container method —
+/// N-3: Receiver type known but no matching container method ,
 /// devirtualisation must NOT silently drop the edge.  Today's
 /// name-only resolution still fires and finds the target.  This is
 /// the receiver-misclassification fall-through invariant from
@@ -444,7 +444,7 @@ fn audit_n3_zero_match_falls_through_to_today() {
     };
 
     // Single `process` on `Worker`.  Caller's typed_call_receivers
-    // says "Other" — there is no such container, so the typed lookup
+    // says "Other", there is no such container, so the typed lookup
     // misses and we fall through to today's name-only resolution.
     let worker = make("process", "Worker", "src/worker.rs", 1);
     let caller = FuncSummary {
@@ -521,7 +521,7 @@ class P {
 
 /// R-3: Without a typed receiver entry, an ambiguous unqualified call
 /// must remain ambiguous (no edge added).  Pin: devirtualisation is
-/// strictly additive — it never resolves edges that today's pipeline
+/// strictly additive, it never resolves edges that today's pipeline
 /// considers ambiguous unless real type info is present.
 #[test]
 fn audit_r3_ambiguous_without_typed_receiver_stays_ambiguous() {
@@ -537,7 +537,7 @@ fn audit_r3_ambiguous_without_typed_receiver_stays_ambiguous() {
 
     let send_http = make("send", "src/http.rs");
     let send_mail = make("send", "src/mail.rs");
-    // Caller in a third file calls bare `send` — genuinely ambiguous.
+    // Caller in a third file calls bare `send`, genuinely ambiguous.
     let caller = FuncSummary {
         name: "go".into(),
         file_path: "src/main.rs".into(),
@@ -571,7 +571,7 @@ fn audit_r3_ambiguous_without_typed_receiver_stays_ambiguous() {
 /// R-4: Arity overloads on the same container.  When the typed
 /// receiver picks a container that hosts two arity-overloaded
 /// methods, the per-call-site `arity` filter must still pick the
-/// right one — devirtualisation does not bypass arity narrowing.
+/// right one, devirtualisation does not bypass arity narrowing.
 #[test]
 fn audit_r4_arity_filter_still_applies_after_devirt() {
     use nyx_scanner::summary::{CalleeSite, FuncSummary, merge_summaries};

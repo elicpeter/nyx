@@ -43,7 +43,7 @@ pub fn scan_ejs_file(path: &Path, bytes: &[u8]) -> Vec<Diag> {
             // Advance past this match for the next iteration.
             search_from = abs_end + 2; // skip "%>"
 
-            // Skip <%- include(...) %> — EJS partial inclusion, not user-controlled.
+            // Skip <%- include(...) %>, EJS partial inclusion, not user-controlled.
             if is_include_call(expr) {
                 continue;
             }

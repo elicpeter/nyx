@@ -5,10 +5,10 @@
 //!
 //! # Environment Variables
 //!
-//! - `NYX_TEST_LANG=python`     — run only fixtures for one language
-//! - `NYX_TEST_FIXTURE=cmdi_subprocess` — run only fixtures whose name contains this string
-//! - `NYX_TEST_VERBOSE=1`       — print full diff details for every fixture
-//! - `NYX_TEST_CATEGORY=taint`  — run only one category (taint/cfg/state/mixed)
+//! - `NYX_TEST_LANG=python`    , run only fixtures for one language
+//! - `NYX_TEST_FIXTURE=cmdi_subprocess`, run only fixtures whose name contains this string
+//! - `NYX_TEST_VERBOSE=1`      , print full diff details for every fixture
+//! - `NYX_TEST_CATEGORY=taint` , run only one category (taint/cfg/state/mixed)
 //!
 //! # Known-failure handling
 //!
@@ -47,7 +47,7 @@ struct RealWorldExpectations {
     ///
     /// Use this to lock in precision for fixtures whose expected set is
     /// exhaustive for a given rule family. Typical value:
-    /// `["taint-unsanitised-flow"]` — any extra taint flow is a
+    /// `["taint-unsanitised-flow"]`, any extra taint flow is a
     /// precision regression. AST-pattern families (`*.code_exec.*`,
     /// `*.quality.*`) are intentionally excluded by default since they
     /// fire syntactically and bystander triggers aren't precision drift.
@@ -72,7 +72,7 @@ struct ExpectedFinding {
     #[serde(default = "default_must_match")]
     must_match: bool,
     /// If true, presence of a matching finding is a hard failure (regression guard).
-    /// Overrides `must_match`. Useful for locking in FP suppressions — sanitizer
+    /// Overrides `must_match`. Useful for locking in FP suppressions, sanitizer
     /// wrappers, gated sinks, field-aware absence, Layer-B suppressions, etc.
     #[serde(default)]
     must_not_match: bool,
@@ -87,7 +87,7 @@ struct ExpectedFinding {
     notes: String,
     /// Optional per-expectation mode filter.  When absent, the expectation
     /// applies in every mode listed at the fixture level.  When present,
-    /// only the listed modes evaluate this expectation — useful when a
+    /// only the listed modes evaluate this expectation, useful when a
     /// finding is mode-specific (e.g. a taint flow only resolves in `full`
     /// mode while the fixture also runs in `ast` mode for AST-pattern
     /// coverage).
@@ -96,7 +96,7 @@ struct ExpectedFinding {
     /// Upper bound on matching diags. When set, the count of diags that
     /// match this expectation's filters (rule_id / severity / line_range /
     /// evidence_contains) must not exceed this value. Composes with
-    /// `must_match: true` — a `must_match: true, max_count: 1` expectation
+    /// `must_match: true`, a `must_match: true, max_count: 1` expectation
     /// means "exactly one matching finding must exist". Mutually exclusive
     /// with `must_not_match: true`; the combination is rejected at parse
     /// time.
@@ -257,7 +257,7 @@ struct MatchResult {
     count_violations: Vec<(ExpectedFinding, usize)>,
     unexpected: Vec<Diag>,
     /// Subset of `unexpected` whose rule-id matched a `strict_unexpected`
-    /// prefix for this fixture — these cause hard failure.
+    /// prefix for this fixture, these cause hard failure.
     strict_unexpected: Vec<Diag>,
     matched: usize,
 }

@@ -13,7 +13,7 @@ use std::sync::{Mutex, OnceLock};
 /// fields don't require a bump.
 pub const SCHEMA_VERSION: u32 = 1;
 
-/// One convergence event — either a cross-file SCC batch or a JS/TS
+/// One convergence event, either a cross-file SCC batch or a JS/TS
 /// in-file pass-2 run.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -49,7 +49,7 @@ pub struct SccBatchRecord {
     /// True iff the batch reached the fixed point before the cap
     /// fired.
     pub converged: bool,
-    /// Per-iteration change-set size — the same trajectory the
+    /// Per-iteration change-set size, the same trajectory the
     /// [`crate::engine_notes::CapHitReason`] classifier consumes.  Empty
     /// when the loop terminated on iteration 0 (pathological case).
     pub trajectory: SmallVec<[u32; 4]>,
@@ -142,7 +142,7 @@ pub fn write_jsonl(path: &std::path::Path) -> std::io::Result<usize> {
 /// Canonical sidecar path: uses `NYX_CONVERGENCE_TELEMETRY_PATH` if
 /// set, otherwise derives from the current working directory.
 ///
-/// The `_derive_from_root` hint is the scan root — when no explicit
+/// The `_derive_from_root` hint is the scan root, when no explicit
 /// path is configured we place the sidecar next to it as
 /// `nyx-convergence.jsonl` so the file lands alongside the SARIF
 /// output by default.
@@ -165,7 +165,7 @@ mod tests {
     static COLLECTOR_TEST_GUARD: Mutex<()> = Mutex::new(());
 
     /// Clear the global collector so each test starts with a known
-    /// state.  Does **not** force `is_enabled()` true — the unit
+    /// state.  Does **not** force `is_enabled()` true, the unit
     /// tests below bypass `record()` (which is a no-op unless
     /// env-enabled) by pushing directly into the collector.
     fn reset_and_enable_telemetry() {

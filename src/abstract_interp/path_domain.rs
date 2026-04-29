@@ -15,7 +15,7 @@
 //! Each axis is a three-value lattice [`Tri::No`] / [`Tri::Yes`] / [`Tri::Maybe`]
 //! where `Maybe` is Top (unknown) and `No` / `Yes` are the two definite
 //! refinements.  A value is path-safe for a FILE_IO sink iff
-//! `dotdot == No && absolute == No` — i.e. we have proof that *no* `..`
+//! `dotdot == No && absolute == No`, i.e. we have proof that *no* `..`
 //! component and *no* absolute root can leak through.  `normalized == Yes`
 //! alone is not sufficient (canonicalising an absolute input still produces
 //! an absolute path); prefix_lock is used separately to certify containment
@@ -52,7 +52,7 @@ pub enum Tri {
     No,
     /// Proven present.
     Yes,
-    /// Unknown — no transfer or guard has proved the axis yet.
+    /// Unknown, no transfer or guard has proved the axis yet.
     Maybe,
 }
 
@@ -367,12 +367,12 @@ impl AbstractDomain for PathFact {
 /// narrowed axis can be proved safe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathRejection {
-    /// `x.contains("..")` — false branch proves `dotdot = No` on the receiver.
+    /// `x.contains("..")`, false branch proves `dotdot = No` on the receiver.
     DotDot,
-    /// `x.starts_with("/")` / `x.starts_with('\\')` — false branch proves
+    /// `x.starts_with("/")` / `x.starts_with('\\')`, false branch proves
     /// `absolute = No` on the receiver.
     AbsoluteSlash,
-    /// `x.is_absolute()` / `Path::new(x).is_absolute()` — false branch proves
+    /// `x.is_absolute()` / `Path::new(x).is_absolute()`, false branch proves
     /// `absolute = No` on the argument/receiver.
     IsAbsolute,
     /// Not a path-rejection idiom.
@@ -384,7 +384,7 @@ pub enum PathRejection {
 /// the listed axis is refined.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathAssertion {
-    /// `x.starts_with("<literal_root>")` — true branch attaches
+    /// `x.starts_with("<literal_root>")`, true branch attaches
     /// `prefix_lock = Some("<literal_root>")` to the receiver.
     PrefixLock(String),
     /// Not a path-assertion idiom.
@@ -426,7 +426,7 @@ pub fn classify_path_rejection_axes(text: &str) -> smallvec::SmallVec<[PathRejec
         let clause = clause.trim();
         // Multi-axis special case: `!filepath.IsLocal(p)` (Go).
         // `filepath.IsLocal` returns true iff the path stays within the
-        // current directory — no leading `/`, no `..` segments, no Windows
+        // current directory, no leading `/`, no `..` segments, no Windows
         // drive root.  Idiomatic Go path-traversal guard:
         //   `if !filepath.IsLocal(p) { return }`
         // The TRUE branch terminates; the FALSE branch (where IsLocal is
@@ -449,7 +449,7 @@ pub fn classify_path_rejection_axes(text: &str) -> smallvec::SmallVec<[PathRejec
     out
 }
 
-/// Detect `!filepath.IsLocal(<expr>)` — Go's idiomatic path-traversal
+/// Detect `!filepath.IsLocal(<expr>)`, Go's idiomatic path-traversal
 /// guard.  Whitespace-tolerant: `! filepath.IsLocal(`, `!filepath . IsLocal(`,
 /// etc.  Used by [`classify_path_rejection_axes`] to inject both
 /// [`PathRejection::DotDot`] and [`PathRejection::IsAbsolute`] on the false
@@ -475,7 +475,7 @@ fn has_negated_filepath_is_local(clause: &str) -> bool {
 fn classify_path_rejection_atom(clause: &str) -> PathRejection {
     // `.contains("..")` (Rust, Java) / `.includes("..")` (JS/TS) /
     // `.include?("..")` (Ruby) / `strings.Contains(s, "..")` (Go) /
-    // `strstr(s, "..")` (C/C++) — every form recognised by
+    // `strstr(s, "..")` (C/C++), every form recognised by
     // `extract_contains_arg` returns `..` if the needle is the dotdot
     // segment.
     if let Some(needle) = extract_contains_arg(clause)
@@ -483,7 +483,7 @@ fn classify_path_rejection_atom(clause: &str) -> PathRejection {
     {
         return PathRejection::DotDot;
     }
-    // Python `".." in s` — operator form.  Look for `".." in <something>`
+    // Python `".." in s`, operator form.  Look for `".." in <something>`
     // anywhere in the clause text.  Conservative: requires the literal
     // `".." in ` substring (whitespace-tolerant).
     if has_python_dotdot_in(clause) {
@@ -681,7 +681,7 @@ pub fn classify_path_assertion(text: &str) -> PathAssertion {
 ///   * Must be non-empty.
 ///   * The leaf segment must begin with an ASCII uppercase letter
 ///     (Rust's variant / struct / type grammar).
-///   * The leaf segment must be ASCII alphanumeric / underscore — no
+///   * The leaf segment must be ASCII alphanumeric / underscore, no
 ///     method call noise (parentheses, argument lists) survives here
 ///     because callees arrive in their normalised scoped-identifier
 ///     form.
@@ -700,7 +700,7 @@ pub fn is_structural_variant_ctor(callee: &str) -> bool {
     // upper-camel-case names an enum variant or tuple struct (`Some`,
     // `Ok`, `MyResult`).  A scoped identifier whose *penultimate*
     // segment is upper-camel-case names an associated constructor on
-    // that type — `Box::new`, `Cell::from`, `PathBuf::with_capacity`,
+    // that type, `Box::new`, `Cell::from`, `PathBuf::with_capacity`,
     // etc.  The latter is the lower-leaf-case shape we want to admit
     // alongside the bare-variant shape.
     let segments: smallvec::SmallVec<[&str; 4]> =
@@ -731,7 +731,7 @@ pub fn is_structural_variant_ctor(callee: &str) -> bool {
 /// PathFact of the receiver/first argument (the value being sanitised);
 /// it is used as the baseline to which the call's effect is applied.
 ///
-/// Returned [`None`] means the callee is not a recognised path primitive —
+/// Returned [`None`] means the callee is not a recognised path primitive ,
 /// the caller should leave the result at its pre-existing PathFact (Top).
 ///
 /// Backwards-compatible wrapper around [`classify_path_primitive_rust`].
@@ -743,7 +743,7 @@ pub fn classify_path_primitive(callee: &str, input_fact: &PathFact) -> Option<Pa
 
 /// Per-language path-primitive dispatcher.
 ///
-/// Routes to the language-specific classifier — Rust, Python, JS/TS, Go,
+/// Routes to the language-specific classifier, Rust, Python, JS/TS, Go,
 /// Java, Ruby, PHP, or C/C++.  Returns [`None`] for languages without a
 /// classifier (or callees the language's classifier doesn't recognise).
 pub fn classify_path_primitive_for_lang(
@@ -784,7 +784,7 @@ pub fn is_structural_variant_ctor_for_lang(lang: crate::symbol::Lang, callee: &s
 }
 
 /// Per-language predicate for "this callee is a zero-arg fresh-allocation
-/// constructor" — used by the variant-rejection-path classifier so that
+/// constructor", used by the variant-rejection-path classifier so that
 /// `String::new()` (Rust) / `''` (Python/JS/Java/...) is recognised as a
 /// no-attacker-content fresh value with cleared `dotdot`/`absolute` axes.
 ///
@@ -803,7 +803,7 @@ pub fn is_zero_arg_allocator_for_lang(lang: crate::symbol::Lang, _callee: &str) 
     false
 }
 
-/// Rust path-primitive classifier — `fs::canonicalize`, `Path::new`,
+/// Rust path-primitive classifier, `fs::canonicalize`, `Path::new`,
 /// `PathBuf::from`, identity-string conversions.
 pub fn classify_path_primitive_rust(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
     // Accept both path-qualified (`std::fs::canonicalize`, `fs::canonicalize`)
@@ -826,7 +826,7 @@ pub fn classify_path_primitive_rust(callee: &str, input_fact: &PathFact) -> Opti
         // `Path::new(s)` / `PathBuf::from(s)`:
         //   pass-through of the input's PathFact so downstream `starts_with`
         //   checks against a Path/PathBuf value still see the underlying
-        //   string's narrowed axes.  No axis is forced — wrapping does not
+        //   string's narrowed axes.  No axis is forced, wrapping does not
         //   sanitize on its own.
         "new" | "from" => {
             if callee_contains_segment(callee, "Path") || callee_contains_segment(callee, "PathBuf")
@@ -837,8 +837,8 @@ pub fn classify_path_primitive_rust(callee: &str, input_fact: &PathFact) -> Opti
             }
         }
         // Identity conversions on strings/paths.  Each one re-binds the
-        // same logical value — the converted String / PathBuf / OsString
-        // still describes the exact same filesystem path — so the PathFact
+        // same logical value, the converted String / PathBuf / OsString
+        // still describes the exact same filesystem path, so the PathFact
         // flows through unchanged.  Without this, a sanitised `s: &str`
         // would lose its narrowed axes the moment the helper returns
         // `s.to_string()` / `s.to_owned()` / `String::from(s)`.
@@ -849,7 +849,7 @@ pub fn classify_path_primitive_rust(callee: &str, input_fact: &PathFact) -> Opti
     }
 }
 
-/// Python path-primitive classifier — `os.path.normpath`, `os.path.realpath`,
+/// Python path-primitive classifier, `os.path.normpath`, `os.path.realpath`,
 /// `pathlib.Path.resolve`, `os.path.abspath`.
 ///
 /// Pattern conventions: tree-sitter-python emits dotted attribute access as
@@ -893,7 +893,7 @@ pub fn classify_path_primitive_python(callee: &str, input_fact: &PathFact) -> Op
     }
 }
 
-/// JavaScript / TypeScript path-primitive classifier — Node's `path` module:
+/// JavaScript / TypeScript path-primitive classifier, Node's `path` module:
 /// `path.normalize`, `path.resolve`, `path.join`.
 pub fn classify_path_primitive_js(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
     let leaf = rightmost_segment(callee);
@@ -920,7 +920,7 @@ pub fn classify_path_primitive_js(callee: &str, input_fact: &PathFact) -> Option
     }
 }
 
-/// Go path-primitive classifier — `path/filepath` package:
+/// Go path-primitive classifier, `path/filepath` package:
 /// `filepath.Clean`, `filepath.Abs`.
 pub fn classify_path_primitive_go(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
     let leaf = rightmost_segment(callee);
@@ -947,7 +947,7 @@ pub fn classify_path_primitive_go(callee: &str, input_fact: &PathFact) -> Option
     }
 }
 
-/// Java path-primitive classifier — `java.nio.file.Path.normalize` /
+/// Java path-primitive classifier, `java.nio.file.Path.normalize` /
 /// `Paths.get(s).normalize().toAbsolutePath()`.
 pub fn classify_path_primitive_java(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
     let leaf = rightmost_segment(callee);
@@ -980,7 +980,7 @@ pub fn classify_path_primitive_java(callee: &str, input_fact: &PathFact) -> Opti
     }
 }
 
-/// Ruby path-primitive classifier — `File.expand_path` / `Pathname#cleanpath`.
+/// Ruby path-primitive classifier, `File.expand_path` / `Pathname#cleanpath`.
 pub fn classify_path_primitive_ruby(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
     let leaf = rightmost_segment(callee);
     match leaf {
@@ -1005,13 +1005,13 @@ pub fn classify_path_primitive_ruby(callee: &str, input_fact: &PathFact) -> Opti
     }
 }
 
-/// PHP path-primitive classifier — `realpath`, `basename`.
+/// PHP path-primitive classifier, `realpath`, `basename`.
 pub fn classify_path_primitive_php(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
     let leaf = rightmost_segment(callee);
     match leaf {
         // `realpath($s)`:
         //   Resolves symlinks and `..`, returns absolute path.  Returns
-        //   `false` if the file doesn't exist — but on the success path
+        //   `false` if the file doesn't exist, but on the success path
         //   (which is what reaches a sink), it produces a clean absolute path.
         "realpath" => {
             let mut f = input_fact.clone();
@@ -1021,7 +1021,7 @@ pub fn classify_path_primitive_php(callee: &str, input_fact: &PathFact) -> Optio
             Some(f)
         }
         // `basename($s)`:
-        //   Strips directory components — guaranteed to contain no `..`
+        //   Strips directory components, guaranteed to contain no `..`
         //   (basename of `..` is `..`, but basename of any traversal-
         //   prefixed path is just the leaf).  Conservative: clear dotdot.
         "basename" => {
@@ -1034,7 +1034,7 @@ pub fn classify_path_primitive_php(callee: &str, input_fact: &PathFact) -> Optio
     }
 }
 
-/// C / C++ path-primitive classifier — POSIX `realpath`,
+/// C / C++ path-primitive classifier, POSIX `realpath`,
 /// `std::filesystem::canonical`.
 pub fn classify_path_primitive_c_cpp(callee: &str, input_fact: &PathFact) -> Option<PathFact> {
     let leaf = rightmost_segment(callee);
@@ -1089,7 +1089,7 @@ fn extract_contains_arg(text: &str) -> Option<String> {
         "strstr(",
     ] {
         if let Some(idx) = text.find(prefix) {
-            // Skip past the first argument (receiver) — the literal needle
+            // Skip past the first argument (receiver), the literal needle
             // is the second arg, separated by a comma.  Find the comma at
             // top level inside this call.
             let inner = &text[idx + prefix.len()..];
@@ -1123,7 +1123,7 @@ fn extract_starts_with_arg(text: &str) -> Option<String> {
             return Some(s);
         }
     }
-    // Go free-function form `strings.HasPrefix(r, "/")` — second arg.
+    // Go free-function form `strings.HasPrefix(r, "/")`, second arg.
     if let Some(idx) = text.find("strings.HasPrefix(") {
         let inner = &text[idx + "strings.HasPrefix(".len()..];
         if let Some(comma_idx) = top_level_comma(inner) {
@@ -1762,7 +1762,7 @@ mod tests {
         assert!(is_structural_variant_ctor("Box::new"));
         assert!(is_structural_variant_ctor("std::option::Option::Some"));
         // User-defined upper-camel-case variant name participates the
-        // same way — name list is not part of the contract.
+        // same way, name list is not part of the contract.
         assert!(is_structural_variant_ctor("MyResult::Ok"));
         assert!(is_structural_variant_ctor("Wrapper"));
     }

@@ -1,7 +1,7 @@
 // Target: authorization happens inside `require_owner`, which
 // delegates to `require_group_member` (a configured authorization
 // check name).  The handler in `cross_file_helper_handler.rs`
-// delegates ownership validation to this helper — cross-file helper
+// delegates ownership validation to this helper, cross-file helper
 // lifting should recognise the call as an auth check covering the
 // supplied `row`.
 struct Db;

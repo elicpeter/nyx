@@ -174,7 +174,7 @@ fn analyse_finding_path(finding: &Finding, ctx: &SymexContext) -> SymbolicVerdic
     }
 
     if path_blocks.len() < 2 {
-        // Short path (single block, no branches) — skip the multi-path
+        // Short path (single block, no branches), skip the multi-path
         // explorer but still run a linear transfer to extract a witness.
         let witness = linear_witness(finding, ctx, &path_blocks);
         return SymbolicVerdict {
@@ -411,6 +411,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
 
         let blocks = extract_path_blocks(&finding, &ssa);
@@ -483,6 +484,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
 
         let ctx = SymexContext {
@@ -541,6 +543,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
 
         let ssa = SsaBody {
@@ -567,7 +570,7 @@ mod tests {
             cross_file_bodies: None,
         };
         annotate_findings(std::slice::from_mut(&mut finding), &ctx);
-        // Should remain None — skipped due to path_validated
+        // Should remain None, skipped due to path_validated
         assert!(finding.symbolic.is_none());
     }
 
@@ -600,6 +603,7 @@ mod tests {
             path_hash: 0,
             finding_id: String::new(),
             alternative_finding_ids: smallvec::SmallVec::new(),
+            effective_sink_caps: crate::labels::Cap::empty(),
         };
 
         let ssa = SsaBody {
@@ -626,7 +630,7 @@ mod tests {
             cross_file_bodies: None,
         };
         annotate_findings(std::slice::from_mut(&mut finding), &ctx);
-        // Should remain None — only 1 flow step
+        // Should remain None, only 1 flow step
         assert!(finding.symbolic.is_none());
     }
 }

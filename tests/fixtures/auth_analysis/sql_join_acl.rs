@@ -2,7 +2,7 @@
 // against an ACL table (`group_members`) with a WHERE clause that pins
 // the row to the current user (`gm.user_id = ?1` bound to `user.id`).
 // Every returned row is membership-gated by construction, so downstream
-// uses of the row's columns (`group_id` here) are authorized — the
+// uses of the row's columns (`group_id` here) are authorized, the
 // `realtime::publish_to_group` call MUST NOT be flagged as missing an
 // ownership check after B3.
 struct Ctx;

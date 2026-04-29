@@ -8,10 +8,10 @@
 //! 1. **Structural:** `condition_negated` (AST-level boolean)
 //! 2. **Structural:** `condition_vars` (AST-extracted identifiers)
 //! 3. **Structural:** compound decomposition (already handled by
-//!    `build_condition_chain` — each leaf is a separate Block/Branch)
-//! 4. **Structural:** `value_defs` — resolve var names to [`SsaValue`]s
-//! 5. **Structural:** `const_values` — augment with known constants
-//! 6. **Text fallback:** `condition_text` — parse comparison operator and
+//!    `build_condition_chain`, each leaf is a separate Block/Branch)
+//! 4. **Structural:** `value_defs`, resolve var names to [`SsaValue`]s
+//! 5. **Structural:** `const_values`, augment with known constants
+//! 6. **Text fallback:** `condition_text`, parse comparison operator and
 //!    literal operand. Necessary because individual comparisons are NOT
 //!    decomposed into separate SSA operations (condition nodes → `Nop`).
 
@@ -82,7 +82,7 @@ impl CompOp {
 /// Structured condition expression with SSA-resolved operands.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConditionExpr {
-    /// `lhs op rhs` — e.g., `x > 5`, `x == y`.
+    /// `lhs op rhs`, e.g., `x > 5`, `x == y`.
     Comparison {
         lhs: Operand,
         op: CompOp,
@@ -98,7 +98,7 @@ pub enum ConditionExpr {
     },
     /// Boolean truthiness test: `if (x)`.
     BoolTest { var: SsaValue },
-    /// Could not parse or resolve — conservatively no refinement.
+    /// Could not parse or resolve, conservatively no refinement.
     Unknown,
 }
 
@@ -240,7 +240,7 @@ pub fn lower_condition_with_stacks(
         .map(|(name, val)| (name.as_str(), *val))
         .collect();
 
-    // No const_values at lowering time — empty lookup
+    // No const_values at lowering time, empty lookup
     let const_lookup: HashMap<SsaValue, super::domain::ConstValue> = HashMap::new();
 
     let lower = text.to_ascii_lowercase();

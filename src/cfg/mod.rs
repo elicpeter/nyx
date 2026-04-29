@@ -94,7 +94,7 @@ pub fn clear_dto_classes_for_test() {
 
 // Per-file map of function-node start_byte → DFS preorder index. Stable
 // against unrelated edits (inserting a line above a function doesn't
-// change its index). Thread-local is safe — `build_cfg` is not
+// change its index). Thread-local is safe, `build_cfg` is not
 // re-entrant within a single rayon worker.
 thread_local! {
     static FN_DFS_INDICES: RefCell<HashMap<usize, u32>> = RefCell::new(HashMap::new());
@@ -227,7 +227,7 @@ pub struct CallMeta {
     ///
     /// CFG construction does NOT populate this field today (callee already
     /// carries the full path). It is the canonical place to read the original
-    /// textual callee for **debug/display only** — analysis code should walk
+    /// textual callee for **debug/display only**, analysis code should walk
     /// SSA `FieldProj` receivers or use the
     /// [`crate::labels::bare_method_name`] textual fallback.
     #[doc(hidden)]
@@ -240,14 +240,14 @@ pub struct CallMeta {
     pub outer_callee: Option<String>,
     /// Byte span of the inner call that supplied the classification, when
     /// `find_classifiable_inner_call` overrode the outer callee.  `None` when
-    /// the classification came from the outer AST node directly — in that
+    /// the classification came from the outer AST node directly, in that
     /// case `AstMeta.span` already points at the classified expression.
     ///
     /// Consumers that want the location of the *labeled* call (sink/source/
     /// sanitizer display, flow-step rendering, taint origin attribution)
     /// should use [`NodeInfo::classification_span`] rather than reading this
     /// field directly.  `AstMeta.span` remains the authoritative "whole
-    /// statement" span — used by structural passes (unreachability,
+    /// statement" span, used by structural passes (unreachability,
     /// resource lifecycle, guard byte scans, CFG/taint span dedup).
     #[serde(default)]
     pub callee_span: Option<(usize, usize)>,
@@ -275,7 +275,7 @@ pub struct CallMeta {
     /// only positional arguments.
     pub kwargs: Vec<(String, Vec<String>)>,
     /// String-literal value at each positional argument of this call, parallel
-    /// to `arg_uses` — `Some(s)` when the argument is a syntactic string
+    /// to `arg_uses`, `Some(s)` when the argument is a syntactic string
     /// literal, `None` otherwise.  Empty for non-call nodes or when positional
     /// boundaries can't be determined.  Consumed by the static-map abstract
     /// analysis (and future literal-aware passes) so they don't need the
@@ -294,9 +294,40 @@ pub struct CallMeta {
     ///
     /// Takes priority over `sink_payload_args` in the SSA sink scan: when a
     /// call has an object-literal destination arg, only idents under the
-    /// listed fields may contribute sink findings — not every ident in the
+    /// listed fields may contribute sink findings, not every ident in the
     /// positional slot.
+    ///
+    /// Legacy single-gate path: populated only when this call site matched
+    /// exactly one gate.  When a callee carries multiple gates (e.g. `fetch`
+    /// is both an SSRF and a `DATA_EXFIL` gate), per-gate filters live in
+    /// [`Self::gate_filters`] and this field is left `None`.
     #[serde(default)]
+    pub destination_uses: Option<Vec<String>>,
+    /// Per-gate filters for callees that carry multiple gated-sink rules.
+    ///
+    /// Each entry preserves one matching gate's `(label_caps, payload_args,
+    /// destination_uses)` so the SSA sink scan can attribute findings
+    /// per-cap.  Empty when the call site matches zero or exactly one gate
+    /// (the single-gate case continues to use [`Self::sink_payload_args`] +
+    /// [`Self::destination_uses`]).
+    #[serde(default)]
+    pub gate_filters: Vec<GateFilter>,
+}
+
+/// One gate's contribution at a call site whose callee matches multiple
+/// gates.  The SSA taint engine processes each filter independently so a
+/// `fetch({url: tainted}, {body: tainted})` flow surfaces as one SSRF
+/// finding (URL filter) plus one `DATA_EXFIL` finding (body filter), each
+/// carrying its own cap mask rather than a conflated union.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GateFilter {
+    /// Sink caps emitted by this gate (e.g. `Cap::SSRF`, `Cap::DATA_EXFIL`).
+    pub label_caps: crate::labels::Cap,
+    /// Argument positions that carry the tainted payload for this gate.
+    pub payload_args: Vec<usize>,
+    /// Destination-aware filter: when `Some(names)`, the sink check only
+    /// considers SSA values whose `var_name` matches one of `names` (object-
+    /// literal destination fields lifted at CFG time).  `None` ⇒ whole arg.
     pub destination_uses: Option<Vec<String>>,
 }
 
@@ -341,7 +372,7 @@ pub struct NodeInfo {
     ///
     /// This flag is scoped to taint-style sink suppression: it indicates
     /// that no attacker-controlled data enters through the immediate
-    /// arguments. It does NOT mean the call is "safe" in general — other
+    /// arguments. It does NOT mean the call is "safe" in general, other
     /// detectors (resource lifecycle, structural analysis) may still
     /// legitimately flag these calls.
     pub all_args_literal: bool,
@@ -403,7 +434,7 @@ pub struct NodeInfo {
     pub is_eq_with_const: bool,
     /// True when this node reads a numeric-length property on a container:
     /// `arr.length`, `map.size`, `buf.byteLength`, `items.count`, `vec.len()`
-    /// — either as a pure property access or as a zero-arg method call.
+    ///, either as a pure property access or as a zero-arg method call.
     /// Populated by inspecting the AST in `push_node` across JS/TS, Python,
     /// Ruby, Java, Rust, PHP, and C/C++ idioms where these accessors return
     /// an integer.  Consumed by the type-fact analysis (`ssa::type_facts`)
@@ -416,7 +447,7 @@ pub struct NodeInfo {
     /// Set to `Some("email")` for that shape; left `None` otherwise.
     /// Consumed by the type-fact analysis (`ssa::type_facts`) so reads
     /// against a [`crate::ssa::type_facts::TypeKind::Dto`] receiver pick
-    /// up the field's declared `TypeKind`.  Strictly additive — when
+    /// up the field's declared `TypeKind`.  Strictly additive, when
     /// `None`, the legacy copy-prop semantics apply.
     pub member_field: Option<String>,
 }
@@ -434,7 +465,7 @@ impl NodeInfo {
     /// lines, flow-step rendering, symbolic witness extraction, debug views.
     ///
     /// Use `ast.span` directly for **structural grain**: unreachability,
-    /// resource lifecycle, guard byte scans, CFG/taint span dedup — anywhere
+    /// resource lifecycle, guard byte scans, CFG/taint span dedup, anywhere
     /// the enclosing statement is the meaningful unit.
     #[inline]
     pub fn classification_span(&self) -> (usize, usize) {
@@ -506,7 +537,7 @@ pub struct BodyMeta {
     /// Per-parameter [`crate::ssa::type_facts::TypeKind`] inferred from
     /// decorators / annotations / static type text at CFG construction
     /// time.  Same length as `params`; positions with no recoverable
-    /// type info are `None`.  Strictly additive — when every entry is
+    /// type info are `None`.  Strictly additive, when every entry is
     /// `None`, downstream behaviour is identical to the pre-Phase-1
     /// engine.
     pub param_types: Vec<Option<crate::ssa::type_facts::TypeKind>>,
@@ -520,7 +551,7 @@ pub struct BodyMeta {
     /// `LocalFuncSummary`.  `None` for the synthetic top-level body.
     ///
     /// All intra-file maps keyed on function identity (SSA summaries, callee
-    /// bodies, inline cache, callback bindings) use this key — never the bare
+    /// bodies, inline cache, callback bindings) use this key, never the bare
     /// leaf `name`, which is collision-prone across (container, arity,
     /// disambig, kind).
     pub func_key: Option<FuncKey>,
@@ -703,7 +734,7 @@ fn extract_condition_raw<'a>(
     vars.dedup();
     vars.truncate(MAX_COND_VARS);
 
-    // 4. Extract text, truncated.  UTF-8-safe — gogs (Gurmukhi) /
+    // 4. Extract text, truncated.  UTF-8-safe, gogs (Gurmukhi) /
     //    discourse (Cyrillic) trip raw byte slices on regex literals.
     let text = text_of(cond, code)
         .map(|t| truncate_at_char_boundary(&t, MAX_CONDITION_TEXT_LEN).to_string());
@@ -727,7 +758,7 @@ pub(super) fn detect_negation<'a>(
     _if_ast: Node<'a>,
     _lang: &str,
 ) -> (Node<'a>, bool) {
-    // Unwrap parenthesized_expression — JS/Java/PHP wrap if-conditions in parens.
+    // Unwrap parenthesized_expression, JS/Java/PHP wrap if-conditions in parens.
     // This lets us detect negation inside: `if (!expr)` → cond is `(!expr)`.
     let cond = if cond.kind() == "parenthesized_expression" {
         cond.child_by_field_name("expression")
@@ -799,7 +830,7 @@ fn extract_bin_op(ast: Node, lang: &str) -> Option<BinOp> {
             "*" => Some(BinOp::Mul),
             "/" => Some(BinOp::Div),
             "%" => Some(BinOp::Mod),
-            // Bitwise (single-char tokens — no conflict with && / ||)
+            // Bitwise (single-char tokens, no conflict with && / ||)
             "&" => Some(BinOp::BitAnd),
             "|" => Some(BinOp::BitOr),
             "^" => Some(BinOp::BitXor),
@@ -897,7 +928,7 @@ fn extract_template_prefix(ast: Node, lang: &str, code: &[u8]) -> Option<String>
 /// `extract_template_prefix` for both assignment RHS and call arguments.
 ///
 /// Also descends through `await` / `yield` wrappers and into the first
-/// argument of a call expression — this covers the common sink shape
+/// argument of a call expression, this covers the common sink shape
 /// `await axios.get(\`https://host/…${x}\`)` where the template literal lives
 /// inside a call inside an `await` wrapper.
 fn prefix_of_expression(node: Node, code: &[u8]) -> Option<String> {
@@ -918,7 +949,7 @@ fn prefix_of_expression(node: Node, code: &[u8]) -> Option<String> {
             }
             "call_expression" | "call" | "new_expression" => {
                 // Descend into the first positional argument (e.g.
-                // `axios.get(\`https://…${x}\`)` — the URL we want to lock
+                // `axios.get(\`https://…${x}\`)`, the URL we want to lock
                 // is the template-literal first argument of the call).
                 let args = cur
                     .child_by_field_name("arguments")
@@ -930,7 +961,7 @@ fn prefix_of_expression(node: Node, code: &[u8]) -> Option<String> {
         }
     }
 
-    // Case 1: template literal — `\`scheme://host/…${x}…\``.
+    // Case 1: template literal, `\`scheme://host/…${x}…\``.
     if cur.kind() == "template_string" {
         let mut w = cur.walk();
         let first_child = cur.named_children(&mut w).next()?;
@@ -945,7 +976,7 @@ fn prefix_of_expression(node: Node, code: &[u8]) -> Option<String> {
         return None;
     }
 
-    // Case 2: `"scheme://host/" + x` — LHS is a string literal.
+    // Case 2: `"scheme://host/" + x`, LHS is a string literal.
     if cur.kind() == "binary_expression" {
         let mut w2 = cur.walk();
         let mut ops = cur.children(&mut w2).filter(|c| !c.is_named());
@@ -1016,7 +1047,7 @@ fn extract_bin_op_const(ast: Node, lang: &str, code: &[u8]) -> Option<i64> {
         }
     }
 
-    // Try left, then right — one of them should be a literal
+    // Try left, then right, one of them should be a literal
     try_parse_number(left, code).or_else(|| try_parse_number(right, code))
 }
 
@@ -1055,7 +1086,7 @@ fn is_boolean_eq_const_tree(node: Node, lang: &str) -> bool {
             .named_child(0)
             .is_some_and(|c| is_boolean_eq_const_tree(c, lang)),
         "unary_expression" | "not_operator" => {
-            // `!` / `not` — operator is an anonymous child; operand is the
+            // `!` / `not`, operator is an anonymous child; operand is the
             // single named child.
             let mut w = node.walk();
             let mut op_is_not = false;
@@ -1072,7 +1103,7 @@ fn is_boolean_eq_const_tree(node: Node, lang: &str) -> bool {
                 .is_some_and(|c| is_boolean_eq_const_tree(c, lang))
         }
         "boolean_operator" => {
-            // Python `and`/`or` — operands are named children.
+            // Python `and`/`or`, operands are named children.
             let l = node.named_child(0);
             let r = node.named_child(1);
             l.is_some_and(|n| is_boolean_eq_const_tree(n, lang))
@@ -1125,9 +1156,9 @@ fn binary_operator_token(node: Node) -> Option<String> {
 /// Property names whose value is provably an integer across the supported
 /// languages: JS/TS `arr.length` (Array/String/TypedArray), `map.size`
 /// (Map/Set), `buffer.byteLength` (ArrayBuffer/TypedArray); Python `.count`
-/// (`str.count`, `list.count`, `tuple.count` — all return int); Ruby `.length`
+/// (`str.count`, `list.count`, `tuple.count`, all return int); Ruby `.length`
 /// / `.size` / `.count`; Java `.size()` / `.length()`; Rust `.len()`.  This
-/// list is intentionally narrow — only properties whose semantics across every
+/// list is intentionally narrow, only properties whose semantics across every
 /// host we scan return an integer, so the `TypeKind::Int` fact is sound.
 fn is_numeric_length_property(name: &str) -> bool {
     matches!(name, "length" | "size" | "byteLength" | "count" | "len")
@@ -1309,7 +1340,7 @@ fn find_single_binary_expr<'a>(ast: Node<'a>, lang: &str) -> Option<Node<'a>> {
 
     // Check if ast itself is a binary expression
     if is_binary_expr_kind(ast_kind, lang) {
-        // Verify it has exactly 2 named children (left, right) — no nesting
+        // Verify it has exactly 2 named children (left, right), no nesting
         let named_count = ast.named_child_count();
         if named_count == 2 {
             // Ensure neither child is itself a binary expression (that would
@@ -1423,7 +1454,7 @@ pub(super) fn push_node<'a>(
             // (e.g. PHP `object_creation_expression` has positional children).
             .or_else(|| find_constructor_type_child(ast))
             .and_then(|n| {
-                // IIFE: `(function(x){...})(arg)` — the called expression is a
+                // IIFE: `(function(x){...})(arg)`, the called expression is a
                 // function literal with no identifier. Bind the call to the
                 // anonymous body's synthetic name so resolve_callee can find
                 // the extracted BodyCfg/summary. Without this, text_of() would
@@ -1500,7 +1531,7 @@ pub(super) fn push_node<'a>(
     // If this is a declaration/expression wrapper or an assignment that
     // *contains* a call, prefer the first inner call identifier instead of
     // the whole line.  Track the inner call's byte span so we can populate
-    // `CallMeta.callee_span` once the labels settle — enabling narrow
+    // `CallMeta.callee_span` once the labels settle, enabling narrow
     // source-location reporting when the classified call lives several lines
     // below the enclosing statement (e.g. call inside a multi-line template
     // literal).
@@ -1534,9 +1565,9 @@ pub(super) fn push_node<'a>(
     let mut labels = classify_all(lang, &text, extra);
 
     // If the outermost call didn't classify, try inner/nested calls.
-    // E.g. `str(eval(expr))` — `str` is not a sink, but `eval` is.
+    // E.g. `str(eval(expr))`, `str` is not a sink, but `eval` is.
     // When the callee is overridden, save the original for container ops
-    // (e.g. `parts.add(req.getParameter(...))` — callee becomes
+    // (e.g. `parts.add(req.getParameter(...))`, callee becomes
     // "req.getParameter" but outer_callee preserves "parts.add").
     let mut outer_callee: Option<String> = None;
     let mut inner_callee_span: Option<(usize, usize)> = None;
@@ -1556,7 +1587,7 @@ pub(super) fn push_node<'a>(
 
     // For assignments like `element.innerHTML = value`, the inner-call heuristic
     // above may have overridden `text` with a call on the RHS (e.g. getElementById).
-    // If that didn't produce a label, check the LHS property name — it may be a
+    // If that didn't produce a label, check the LHS property name, it may be a
     // sink like `innerHTML`.
     //
     // This covers both direct `Kind::Assignment` nodes and `Kind::CallWrapper`
@@ -1576,7 +1607,7 @@ pub(super) fn push_node<'a>(
         if let Some(assign) = assign_node
             && let Some(lhs) = assign.child_by_field_name("left")
         {
-            // Try full member expression first (e.g. "location.href") — more
+            // Try full member expression first (e.g. "location.href"), more
             // specific and avoids false positives on `a.href`.
             if let Some(full) = member_expr_text(lhs, code) {
                 if let Some(l) = classify(lang, &full, extra) {
@@ -1600,7 +1631,7 @@ pub(super) fn push_node<'a>(
     // try to classify the member expression text as a source.
     // This handles `var x = process.env.CMD` (JS), `os.environ["KEY"]` (Python),
     // and similar property-access-based source patterns.
-    // Skip when the assignment's RHS is itself a function/lambda literal —
+    // Skip when the assignment's RHS is itself a function/lambda literal ,
     // labels found by `first_member_label` would come from inside the
     // closure body and shouldn't tag the outer wrapper (e.g. Go's
     // `run := func() { exec.Command(...) }` would otherwise inherit
@@ -1675,7 +1706,7 @@ pub(super) fn push_node<'a>(
     if labels.is_empty()
         && let Some(outer) = call_ast
         && let Some((inner, inner_callee_text)) = find_chained_inner_call(outer, lang, code)
-        && classify_gated_sink(lang, &inner_callee_text, |_| None, |_| None, |_| false).is_some()
+        && !classify_gated_sink(lang, &inner_callee_text, |_| None, |_| None, |_| false).is_empty()
     {
         call_ast = Some(inner);
         outer_callee = Some(text.clone());
@@ -1695,13 +1726,14 @@ pub(super) fn push_node<'a>(
     // the outer statement `text`, so gate matcher names like `"fetch"` hit.
     let mut sink_payload_args: Option<Vec<usize>> = None;
     let mut destination_uses: Option<Vec<String>> = None;
+    let mut gate_filters: Vec<GateFilter> = Vec::new();
     if labels.is_empty() {
         let gate_call = call_ast.or_else(|| find_call_node_deep(ast, lang, 4));
         if let Some(cn) = gate_call {
             let gate_callee_text = if call_ast.is_some() {
                 text.clone()
             } else {
-                // Inner call reached via wrapper — use the call-expression's
+                // Inner call reached via wrapper, use the call-expression's
                 // function name directly. Falls back to `text` so non-call-
                 // expression kinds (method calls, Ruby `call` nodes, macros)
                 // still have a usable callee string.
@@ -1711,51 +1743,86 @@ pub(super) fn push_node<'a>(
                     .and_then(|f| text_of(f, code))
                     .unwrap_or_else(|| text.clone())
             };
-            if let Some(gm) = classify_gated_sink(
+            let matches = classify_gated_sink(
                 lang,
                 &gate_callee_text,
                 |idx| extract_const_string_arg(cn, idx, code),
                 |kw| extract_const_keyword_arg(cn, kw, code),
                 |kw| has_keyword_arg(cn, kw, code),
-            ) {
-                labels.push(gm.label);
-                let payload = gm.payload_args;
-                if payload == crate::labels::ALL_ARGS_PAYLOAD {
-                    // Dynamic-activation sentinel: every positional arg is
-                    // conservatively a payload. Expand using the actual call
-                    // arity so `collect_tainted_sink_values` checks each one.
-                    let arity = extract_arg_uses(cn, code).len();
-                    if arity > 0 {
-                        sink_payload_args = Some((0..arity).collect());
-                    }
-                } else if !payload.is_empty() {
-                    sink_payload_args = Some(payload.to_vec());
-                }
+            );
 
-                // Destination-aware gates (outbound HTTP clients): when the
-                // gate declares destination-bearing object fields and the
-                // positional destination arg at call time is an object
-                // literal, narrow sink-taint checks to identifiers under
-                // those fields. Non-object arg forms (string / ident /
-                // expression) return `None` from the extractor and fall
-                // through to whole-arg positional filtering.
-                //
-                // We only populate destination_uses for the FIRST payload
-                // position that is an object literal. For outbound HTTP
-                // gates `payload_args` is always a single position (arg 0)
-                // so this is exact.
-                if !gm.object_destination_fields.is_empty() {
-                    for &pos in gm.payload_args {
-                        if let Some(names) = extract_destination_field_idents(
-                            cn,
-                            pos,
-                            gm.object_destination_fields,
-                            code,
-                        ) {
-                            destination_uses = Some(names);
-                            break;
+            if !matches.is_empty() {
+                // Per-gate filter accumulation.  Each match contributes:
+                //   * its label (added to `labels` so `resolve_sink_caps`
+                //     downstream sees the union),
+                //   * a `GateFilter` carrying that gate's specific
+                //     `(label_caps, payload_args, destination_uses)` so
+                //     the SSA sink scan can attribute taint per-cap.
+                let mut union_payload: Vec<usize> = Vec::new();
+                for gm in &matches {
+                    labels.push(gm.label);
+
+                    let payload_vec: Vec<usize> = if gm.payload_args
+                        == crate::labels::ALL_ARGS_PAYLOAD
+                    {
+                        // Dynamic-activation sentinel: every positional arg is
+                        // conservatively a payload.  Expand using the actual
+                        // call arity so `collect_tainted_sink_values` checks
+                        // each one.
+                        let arity = extract_arg_uses(cn, code).len();
+                        (0..arity).collect()
+                    } else {
+                        gm.payload_args.to_vec()
+                    };
+
+                    // Destination-aware gates: when the gate declares
+                    // destination-bearing object fields and a payload-position
+                    // arg is an object literal at call time, narrow sink-taint
+                    // checks to identifiers under those fields.  Non-object
+                    // arg forms return `None` from the extractor and the gate
+                    // falls back to whole-arg positional filtering.
+                    let mut dest_uses: Option<Vec<String>> = None;
+                    if !gm.object_destination_fields.is_empty() {
+                        for &pos in gm.payload_args {
+                            if let Some(names) = extract_destination_field_idents(
+                                cn,
+                                pos,
+                                gm.object_destination_fields,
+                                code,
+                            ) {
+                                dest_uses = Some(names);
+                                break;
+                            }
                         }
                     }
+
+                    let label_caps = match gm.label {
+                        crate::labels::DataLabel::Sink(c) => c,
+                        _ => crate::labels::Cap::empty(),
+                    };
+
+                    for &p in &payload_vec {
+                        if !union_payload.contains(&p) {
+                            union_payload.push(p);
+                        }
+                    }
+                    gate_filters.push(GateFilter {
+                        label_caps,
+                        payload_args: payload_vec,
+                        destination_uses: dest_uses,
+                    });
+                }
+                if !union_payload.is_empty() {
+                    sink_payload_args = Some(union_payload);
+                }
+                // Legacy single-gate path keeps `destination_uses` populated so
+                // the SSA fast-path (one filter) continues to work without
+                // consulting `gate_filters`.  When multiple gates match,
+                // per-position filters live in `gate_filters` and the legacy
+                // field is intentionally left `None`.
+                if gate_filters.len() == 1 {
+                    destination_uses =
+                        gate_filters[0].destination_uses.clone();
                 }
             }
         }
@@ -1766,7 +1833,7 @@ pub(super) fn push_node<'a>(
     // path-traversal or HTML metacharacters.  The CFG collapses the whole
     // chain into a single call node, so detection must inspect the AST of
     // that node directly.  Only fires when no Sanitizer label already
-    // classifies this node — existing label rules win.
+    // classifies this node, existing label rules win.
     if lang == "rust" && !labels.iter().any(|l| matches!(l, DataLabel::Sanitizer(_))) {
         if let Some(cn) = call_ast {
             if cn.kind() == "call_expression" || cn.kind() == "method_call_expression" {
@@ -1803,7 +1870,7 @@ pub(super) fn push_node<'a>(
     // `having` / `joins` as `Sink(SQL_QUERY)` because their string-interpolation
     // form (`Model.where("id = #{x}")`) is a real SQLi vector.  But the same
     // methods are intrinsically parameterised when arg 0 is a hash, symbol,
-    // array, or non-interpolated string — Rails escapes the values.  Rather
+    // array, or non-interpolated string, Rails escapes the values.  Rather
     // than dropping the sink (which would lose the genuine TPs), synthesise
     // a same-node `Sanitizer(SQL_QUERY)` for the safe shapes; this clears
     // SQL taint at the call and reflexively dominates the sink, suppressing
@@ -1813,7 +1880,7 @@ pub(super) fn push_node<'a>(
     // Chained calls (`Model.where(...).preload(...).to_a`) collapse into a
     // single CFG node whose outer `call_ast` may be `to_a` (no args). The
     // shape inspection has to walk the receiver chain to reach the AR query
-    // call itself — `ruby_chain_arg0_for_method` does that walk.
+    // call itself, `ruby_chain_arg0_for_method` does that walk.
     if (lang == "ruby" || lang == "rb")
         && labels
             .iter()
@@ -1847,7 +1914,7 @@ pub(super) fn push_node<'a>(
     // and `Statement.executeQuery(String)` overloads are real injection
     // sinks when given a concatenated SQL string.  But the same method
     // names on JPA `javax.persistence.Query` and JDBC `PreparedStatement`
-    // are zero-arg — they execute SQL that was bound upstream by
+    // are zero-arg, they execute SQL that was bound upstream by
     // `entityManager.createQuery(LITERAL)` / `connection.prepareStatement(LITERAL)`,
     // and any bind values went through `setParameter` / `setString`
     // (which the JDBC/JPA driver escapes).  Walk the receiver chain to
@@ -1882,7 +1949,7 @@ pub(super) fn push_node<'a>(
                 // (`createQuery` / `createNativeQuery` / `prepareStatement`)
                 // and require its arg 0 to be a string literal.  Anything
                 // else (binary concat, identifier, method call) leaves
-                // the sink in place — we cannot prove the SQL is
+                // the sink in place, we cannot prove the SQL is
                 // parameterised, so the structural finding stands.
                 const JPA_BIND_METHODS: &[&str] = &[
                     "createQuery",
@@ -1910,7 +1977,7 @@ pub(super) fn push_node<'a>(
     // takes a model UID literal and returns a chainable model accessor:
     // `strapi.db.query('admin::api-token').findOne({ where: whereParams })`.
     // The trailing `.findOne({...})` / `.findMany({...})` / `.create(...)`
-    // calls are intrinsically parameterised — the actual SQL is generated
+    // calls are intrinsically parameterised, the actual SQL is generated
     // by the ORM, and the per-call values arrive through field-keyed object
     // literals that the ORM driver escapes.
     //
@@ -1922,7 +1989,7 @@ pub(super) fn push_node<'a>(
     // same-node `Sanitizer(SQL_QUERY)` mirroring the Java JPA fix.  Bare
     // `connection.query("SELECT ...")` (no chained method) and
     // `db.query("UPDATE x SET y=" + name)` (non-literal arg 0) leave the
-    // sink in place — both are genuine SQLi shapes.
+    // sink in place, both are genuine SQLi shapes.
     if (lang == "javascript"
         || lang == "js"
         || lang == "typescript"
@@ -1938,7 +2005,7 @@ pub(super) fn push_node<'a>(
         const QUERY_TARGETS: &[&str] = &["query", "execute"];
         // ORM-accessor methods that take object-literal args and return
         // promises of rows / row counts.  Promise methods (`then`, `catch`,
-        // `finally`) deliberately excluded — they don't prove ORM shape.
+        // `finally`) deliberately excluded, they don't prove ORM shape.
         const ORM_CHAIN_METHODS: &[&str] = &[
             "findOne",
             "findMany",
@@ -1959,7 +2026,7 @@ pub(super) fn push_node<'a>(
             "save",
         ];
         // Fall back to a deeper walk (up to 4 levels) for await/return-
-        // wrapped calls (e.g. `const x = await db.query(...).findOne(...)` —
+        // wrapped calls (e.g. `const x = await db.query(...).findOne(...)` ,
         // call sits at depth 3 inside lexical_declaration > variable_declarator
         // > await_expression > call_expression).
         let chain_call = call_ast.or_else(|| find_call_node_deep(ast, lang, 4));
@@ -2107,7 +2174,7 @@ pub(super) fn push_node<'a>(
     // (SSA `SsaOp::Call.receiver`, summary `receiver_to_return`/`receiver_to_sink`).
     //
     // Two cases:
-    // 1. Kind::CallMethod — native method call AST (Java method_invocation,
+    // 1. Kind::CallMethod, native method call AST (Java method_invocation,
     //    Rust method_call_expression, Ruby call, PHP member_call_expression).
     //    Receiver is exposed via "object"/"receiver"/"scope" field on the call.
     // 2. Kind::CallFn whose function child is a member_expression (JS/TS) or
@@ -2136,7 +2203,7 @@ pub(super) fn push_node<'a>(
                     // value, which is what type-qualified resolution
                     // anchors on.  Falls back to `root_receiver_text` (which
                     // returns raw text like "conn.execute") only if drilling
-                    // fails — preserving prior behavior for types we can't
+                    // fails, preserving prior behavior for types we can't
                     // structurally reduce.
                     root_member_receiver(rn, code).or_else(|| root_receiver_text(cn, lang, code))
                 } else {
@@ -2147,7 +2214,7 @@ pub(super) fn push_node<'a>(
                 // JS/TS `obj.method(x)`: call_expression.function = member_expression.
                 // Python `obj.method(x)`: call.function = attribute.
                 // Rust `obj.method(x)`: call_expression.function = field_expression
-                //    (field on `value`, not `object` — value can be another call
+                //    (field on `value`, not `object`, value can be another call
                 //    for chained forms like `Connection::open(p).unwrap().execute(...)`).
                 // Pull the receiver from the object/attribute-owner field.
                 let func_child = cn.child_by_field_name("function");
@@ -2210,7 +2277,7 @@ pub(super) fn push_node<'a>(
     // Python `with` and Java try-with-resources.
     let is_raii_managed = is_raii_factory(lang, &text);
 
-    // Ruby block form auto-close: `File.open(path) { |f| f.read }` —
+    // Ruby block form auto-close: `File.open(path) { |f| f.read }` ,
     // the block parameter receives the resource and Ruby guarantees close
     // at block exit.  If assigned (`f = File.open(p) { ... }`), the
     // variable holds the block's return value, not an open resource.
@@ -2227,7 +2294,7 @@ pub(super) fn push_node<'a>(
     // Prefer the span of the call found by `find_classifiable_inner_call`
     // (deeper, classification-driven) over the one from `first_call_ident`
     // (shallower, text-override-driven).  Only record `callee_span` when it
-    // actually narrows against `ast.span` — storing a redundant copy would
+    // actually narrows against `ast.span`, storing a redundant copy would
     // just bloat every labeled Call node.
     let callee_span = inner_callee_span.or(inner_text_span).filter(|s| *s != span);
 
@@ -2245,6 +2312,7 @@ pub(super) fn push_node<'a>(
             kwargs,
             arg_string_literals,
             destination_uses,
+            gate_filters,
         },
         taint: TaintMeta {
             labels,
@@ -2299,7 +2367,7 @@ pub(super) fn connect_all(g: &mut Cfg, froms: &[NodeIndex], to: NodeIndex, kind:
 /// Pre-emit dedicated Source CFG nodes for call arguments that contain source
 /// member expressions.
 ///
-/// **Two-step API** — Source nodes must be created *before* the Call node so
+/// **Two-step API**, Source nodes must be created *before* the Call node so
 /// they receive lower graph indices.  This is critical because the If handler
 /// uses `NodeIndex::new(g.node_count())` to capture the first node built in a
 /// branch and wires a True/False edge to it.  If the Source node has a lower
@@ -2310,7 +2378,7 @@ pub(super) fn connect_all(g: &mut Cfg, froms: &[NodeIndex], to: NodeIndex, kind:
 /// the branch body.
 ///
 /// True when `ast` is an assignment / declaration whose RHS is a
-/// function or lambda literal — i.e. shapes like
+/// function or lambda literal, i.e. shapes like
 ///   * Go     `run := func() { ... }`
 ///   * JS/TS  `var run = function() { ... }` / `const run = () => ...`
 ///   * Python `run = lambda x: ...`
@@ -2382,7 +2450,7 @@ fn rhs_is_function_literal(ast: Node, lang: &str) -> bool {
     false
 }
 
-///when `ast` is (or wraps) an assignment whose
+/// when `ast` is (or wraps) an assignment whose
 /// LHS is a single subscript / index expression with a plain-identifier
 /// receiver, emit a synthetic `__index_set__` Call node and return its
 /// `NodeIndex`.  Returns `None` for non-subscript LHSs, multi-target
@@ -2399,7 +2467,7 @@ fn try_lower_subscript_write(
     enclosing_func: Option<&str>,
     call_ordinal: &mut u32,
 ) -> Option<NodeIndex> {
-    // Locate the assignment node — `ast` may be the assignment itself
+    // Locate the assignment node, `ast` may be the assignment itself
     // (Go `assignment_statement`) or a wrapper (`expression_statement`
     // containing JS `assignment_expression` / Python `assignment`).
     let assign_ast = if matches!(lookup(lang, ast.kind()), Kind::Assignment) {
@@ -2454,7 +2522,7 @@ fn try_lower_subscript_write(
 /// `synth_bindings` carry `(arg_pos, synth_name)` pairs that should be
 /// appended to both the call's `arg_uses[arg_pos]` and its `taint.uses`.
 /// `uses_only_synth_names` carry synth names that should *only* be
-/// appended to `taint.uses` — used for chain-inner-arg sources where the
+/// appended to `taint.uses`, used for chain-inner-arg sources where the
 /// synth value is not a positional argument of the OUTER call but still
 /// participates in the call's implicit dependency chain (e.g. `r.Body`
 /// inside `json.NewDecoder(r.Body).Decode(emoji)`'s receiver).
@@ -2517,7 +2585,7 @@ fn pre_emit_arg_source_nodes(
     for (pos, child) in children.iter().enumerate() {
         let src_label = first_member_label(*child, lang, code, extra);
         if let Some(DataLabel::Source(caps)) = src_label {
-            // Use the *current* node count as a unique token — it equals the
+            // Use the *current* node count as a unique token, it equals the
             // index the new Source node will receive.
             let synth_name = format!("__nyx_src_{}_{}", g.node_count(), pos);
             let member_text = first_member_text(*child, code);
@@ -2560,7 +2628,7 @@ fn pre_emit_arg_source_nodes(
         //
         // Gated on `pointer::is_enabled()` so the env-var=0 path keeps
         // CFG shapes bit-identical to today's output.  Only fires when
-        // the array operand resolves to a plain identifier — see
+        // the array operand resolves to a plain identifier, see
         // `subscript_components` for the bail conditions.
         if pointer_on
             && is_subscript_kind(child.kind())
@@ -2610,7 +2678,7 @@ fn pre_emit_arg_source_nodes(
     // Gated to Go and to writeback-shaped outer callees (`Decode` /
     // `Unmarshal`) because the synth-source emission is only useful when
     // a downstream writeback consumer reads from the chain's tainted
-    // receiver — broader gating risks emitting synth sources whose taint
+    // receiver, broader gating risks emitting synth sources whose taint
     // never propagates and whose presence trips Layer B AST-pattern
     // suppression on unrelated sinks (see
     // `tests/fixtures/real_world/go/taint/func_literal_capture.go`).
@@ -2684,7 +2752,7 @@ fn pre_emit_arg_source_nodes(
 
 /// Step 2: wire synthetic variable names from pre-emitted Source nodes into
 /// the Call node's `arg_uses` and `uses`.  `uses_only` synth names are
-/// appended only to `taint.uses` — used for chain-inner-arg sources whose
+/// appended only to `taint.uses`, used for chain-inner-arg sources whose
 /// synth value is not a positional outer-call argument.
 fn apply_arg_source_bindings(
     g: &mut Cfg,
@@ -2795,7 +2863,7 @@ pub(super) fn build_sub<'a>(
                 .unwrap_or(false);
 
             // Check for negation wrapping the entire condition (e.g. `!(a && b)`)
-            // — if present, skip short-circuit decomposition (De Morgan out of scope).
+            //, if present, skip short-circuit decomposition (De Morgan out of scope).
             let has_short_circuit = has_short_circuit
                 && cond_subtree.map_or(false, |c| {
                     let unwrapped = unwrap_parens(c);
@@ -3495,7 +3563,7 @@ pub(super) fn build_sub<'a>(
             // When the grammar-level name is anonymous, try to derive a binding
             // name from the surrounding declaration or assignment. This lets
             // `var h = function(x){...}` / `this.run = () => {...}` participate
-            // in callback resolution — callers referencing `h` or `run` can
+            // in callback resolution, callers referencing `h` or `run` can
             // find the body via `resolve_local_func_key` and intra-file calls
             // like `h()` can resolve to the anonymous body's summary. Without
             // this, the body is keyed with the synthetic anon name and there
@@ -3802,7 +3870,7 @@ pub(super) fn build_sub<'a>(
             // would lower the return as a plain `StmtKind::Call`, losing
             // the return semantics and letting fall-through Seq edges
             // survive into the SSA terminator (the OR-chain rejection-arm
-            // defect — see `or_chain_rejection_block_terminates_with_return`).
+            // defect, see `or_chain_rejection_block_terminates_with_return`).
             if let Some(inner) = ast.children(&mut cursor).find(|c| {
                 matches!(
                     lookup(lang, c.kind()),
@@ -3895,7 +3963,7 @@ pub(super) fn build_sub<'a>(
             // Pre-emit Source nodes for call arguments containing source
             // member expressions (e.g. `req.body.returnTo` inside
             // `res.redirect(req.body.returnTo)`).  Created BEFORE the Call
-            // node so they get lower indices — see doc comment on
+            // node so they get lower indices, see doc comment on
             // `pre_emit_arg_source_nodes` for why this ordering matters.
             let (effective_preds, src_bindings, src_uses_only) = if kind == StmtKind::Call {
                 pre_emit_arg_source_nodes(g, ast, lang, code, enclosing_func, analysis_rules, preds)
@@ -4055,7 +4123,7 @@ pub(super) fn build_sub<'a>(
 
         // Assignment that may contain a call (Python `x = os.getenv(...)`, Ruby `x = gets()`)
         Kind::Assignment => {
-            // JS/TS ternary-RHS split — same rationale as the CallWrapper branch.
+            // JS/TS ternary-RHS split, same rationale as the CallWrapper branch.
             if matches!(lang, "javascript" | "typescript" | "tsx")
                 && let (Some(left), Some(right)) = (
                     ast.child_by_field_name("left"),
@@ -4221,7 +4289,7 @@ pub(crate) fn build_cfg<'a>(
         connect_all(&mut g, &[e], exit, EdgeKind::Seq);
     }
 
-    debug!(target: "cfg", "CFG DONE — top-level nodes: {}, bodies: {}", g.node_count(), bodies.len() + 1);
+    debug!(target: "cfg", "CFG DONE, top-level nodes: {}, bodies: {}", g.node_count(), bodies.len() + 1);
 
     if cfg!(debug_assertions) {
         for idx in g.node_indices() {
@@ -4368,14 +4436,14 @@ fn apply_promisify_labels(
 /// Build a `CalleeSite` carrying the richer per-call-site metadata for a
 /// CFG node.
 ///
-/// * `arity` — positional argument count.  `None` when `extract_arg_uses`
+/// * `arity`, positional argument count.  `None` when `extract_arg_uses`
 ///   bailed out on splats/keyword-args (length 0 does not distinguish
 ///   zero-arg calls from unknown; we treat 0 as a concrete zero).  The
 ///   receiver is a separate channel via `CallMeta.receiver` and is not
 ///   represented in `arg_uses`, so `arity == arg_uses.len()` for calls.
-/// * `receiver` — forwarded verbatim from `CallMeta.receiver` (already
+/// * `receiver`, forwarded verbatim from `CallMeta.receiver` (already
 ///   normalized to the root identifier).
-/// * `qualifier` — the segment(s) before the leaf identifier of the callee.
+/// * `qualifier`, the segment(s) before the leaf identifier of the callee.
 ///   For **Rust** specifically, this is the *full* `::`-joined prefix (e.g.
 ///   `"crate::auth::token"` for `crate::auth::token::validate`) so that
 ///   cross-file `use`-map resolution in `callgraph.rs` has everything it

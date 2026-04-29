@@ -1,5 +1,5 @@
 // B4 regression guard: `format_target` does NOT auth-check
-// `group_id` — it just constructs a string from it. The helper-lift
+// `group_id`, it just constructs a string from it. The helper-lift
 // pass must not synthesise a covering AuthCheck on the handler's call
 // site, so the subsequent `db.exec("INSERT INTO comments …", &[group_id])`
 // MUST still flag.
@@ -19,7 +19,7 @@ mod auth {
 }
 
 fn format_target(group_id: i64, suffix: &str) -> String {
-    // No auth check here — pure formatting.
+    // No auth check here, pure formatting.
     format!("group:{}{}", group_id, suffix)
 }
 

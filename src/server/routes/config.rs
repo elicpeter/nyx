@@ -282,7 +282,7 @@ async fn remove_terminator(
 // ── Sources / Sinks / Sanitizers (by kind) ───────────────────────────────────
 
 fn list_by_kind(state: &AppState, target_kind: &str) -> Vec<LabelEntryView> {
-    // Built-in rules live on /api/rules — keep this endpoint focused on the
+    // Built-in rules live on /api/rules, keep this endpoint focused on the
     // user's own additions in nyx.local.
     let target_rule_kind = match target_kind {
         "source" => RuleKind::Source,

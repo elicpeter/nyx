@@ -99,7 +99,7 @@ enum VarSort {
     Str,
 }
 
-/// Polymorphic Z3 variable — either integer or string sort.
+/// Polymorphic Z3 variable, either integer or string sort.
 enum Z3Var {
     Int(Z3Int),
     Str(Z3Str),
@@ -140,7 +140,7 @@ impl SmtContext {
     /// proves the constraints are contradictory.
     ///
     /// Constraints that cannot be fully translated (unknown sorts, sort
-    /// conflicts, etc.) are silently skipped — this is sound because omitting
+    /// conflicts, etc.) are silently skipped, this is sound because omitting
     /// a constraint can only make Z3 return `Sat` when the actual result
     /// might be `Unsat`, never the reverse.
     pub fn check_path_feasibility(
@@ -366,7 +366,7 @@ fn seed_from_path_env(solver: &Solver, var_map: &mut VarMap, env: &PathEnv) {
                 (Some(Z3Var::Str(r)), Some(Z3Var::Str(vi))) => {
                     solver.assert(&vi.eq(r));
                 }
-                _ => {} // Sort mismatch or missing — skip.
+                _ => {} // Sort mismatch or missing, skip.
             }
         }
     }
@@ -380,7 +380,7 @@ fn seed_from_path_env(solver: &Solver, var_map: &mut VarMap, env: &PathEnv) {
             (Some(Z3Var::Str(za)), Some(Z3Var::Str(zb))) => {
                 solver.assert(&za.ne(zb));
             }
-            _ => {} // Sort mismatch or missing — skip.
+            _ => {} // Sort mismatch or missing, skip.
         }
     }
 
@@ -402,7 +402,7 @@ fn seed_from_path_env(solver: &Solver, var_map: &mut VarMap, env: &PathEnv) {
 /// Translate a single path constraint into a Z3 assertion.
 ///
 /// Skips constraints that cannot be fully translated (unknown sort, sort
-/// conflict, etc.). This is sound — see module-level docs.
+/// conflict, etc.). This is sound, see module-level docs.
 fn assert_path_constraint(
     solver: &Solver,
     var_map: &mut VarMap,
@@ -440,7 +440,7 @@ fn assert_path_constraint(
                 }
             }
         }
-        // NullCheck, TypeCheck, Unknown — skip (not modeled).
+        // NullCheck, TypeCheck, Unknown, skip (not modeled).
         ConditionExpr::NullCheck { .. }
         | ConditionExpr::TypeCheck { .. }
         | ConditionExpr::Unknown => {}
@@ -450,7 +450,7 @@ fn assert_path_constraint(
 /// Infer a sort hint from a constant operand.
 ///
 /// When one side of a comparison is a known constant, it hints the sort of
-/// the other side (a `Value`). This is the lowest-priority evidence — used
+/// the other side (a `Value`). This is the lowest-priority evidence, used
 /// only when var_map and PathEnv provide no information.
 fn operand_sort_hint(op: &Operand) -> Option<VarSort> {
     match op {
@@ -487,7 +487,7 @@ fn translate_operand(var_map: &mut VarMap, op: &Operand, env: &PathEnv) -> Optio
             if is_known_int(*v, env) {
                 return force_int_var(var_map, *v).map(Z3Expr::Int);
             }
-            // 3. Unknown sort — return None; caller may apply hint.
+            // 3. Unknown sort, return None; caller may apply hint.
             None
         }
         Operand::Const(ConstValue::Null) | Operand::Unknown => None,
@@ -723,7 +723,7 @@ mod tests {
     #[test]
     fn cross_variable_contradiction() {
         // x > y AND y > x → Unsat
-        // PathEnv cannot detect this — it tracks per-variable intervals.
+        // PathEnv cannot detect this, it tracks per-variable intervals.
         let constraints = vec![
             comparison_constraint(val(0), CompOp::Gt, val(1), true),
             comparison_constraint(val(1), CompOp::Gt, val(0), true),

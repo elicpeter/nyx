@@ -88,7 +88,7 @@ pub fn handle(
 
         // Invalidate the findings cache whenever a scan finishes so the next
         // request rebuilds against fresh diags. The next-request rebuild keeps
-        // this hot-path simple — we only clear the slot here, never recompute.
+        // this hot-path simple, we only clear the slot here, never recompute.
         let cache_for_invalidate = Arc::clone(&state.findings_cache);
         let mut event_rx = event_tx.subscribe();
         tokio::spawn(async move {
@@ -152,7 +152,7 @@ async fn shutdown_signal() {
         .expect("failed to listen for Ctrl+C");
     eprintln!("\n  Shutting down...");
     // SSE connections block graceful shutdown indefinitely.
-    // Use a raw OS thread to force exit — tokio tasks may not
+    // Use a raw OS thread to force exit, tokio tasks may not
     // run reliably during shutdown.
     std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_millis(250));

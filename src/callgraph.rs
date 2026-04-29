@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct CallEdge {
     /// The raw callee string as it appeared in source (e.g. `"env::var"`).
-    /// Preserved for diagnostics — **not** the normalized form used for resolution.
+    /// Preserved for diagnostics, **not** the normalized form used for resolution.
     #[allow(dead_code)] // used for future diagnostics and path display
     pub call_site: String,
 }
@@ -28,7 +28,7 @@ pub struct UnresolvedCallee {
     pub callee_name: String,
 }
 
-/// A callee that matched multiple function definitions — ambiguous.
+/// A callee that matched multiple function definitions, ambiguous.
 #[derive(Debug, Clone)]
 pub struct AmbiguousCallee {
     pub caller: FuncKey,
@@ -168,14 +168,14 @@ pub(crate) fn callee_container_hint(raw: &str) -> &str {
 ///
 /// Key design notes:
 ///
-/// * Keys are **language-scoped** — a Java `findById` and a Python
+/// * Keys are **language-scoped**, a Java `findById` and a Python
 ///   `findById` never alias.  Every other index in this module is also
 ///   language-scoped (`by_lang_name`, `by_lang_qualified`); keeping the
 ///   same partition here means devirtualisation's "subset of today's
 ///   targets" invariant is structurally preserved.
 /// * The container key carries the [`FuncKey::container`] verbatim
 ///   (e.g. `"Repository"` or nested `"Outer::Inner"`).  Empty containers
-///   are not indexed in `by_container` — free top-level functions live
+///   are not indexed in `by_container`, free top-level functions live
 ///   only in `by_name` and are looked up via the `None` container path.
 /// * `SmallVec` inline capacity is sized for the common case (≤ 2 same-
 ///   container overloads, ≤ 4 same-name candidates across containers);
@@ -199,7 +199,7 @@ impl ClassMethodIndex {
     /// Iteration is over every `FuncKey` in the map; each key is
     /// inserted into `by_name` and (when its container is non-empty)
     /// into `by_container`.  No ordering guarantees on the candidate
-    /// vectors — call sites that need determinism should sort downstream.
+    /// vectors, call sites that need determinism should sort downstream.
     pub fn build(summaries: &GlobalSummaries) -> Self {
         let mut by_container: HashMap<(Lang, String, String), SmallVec<[FuncKey; 2]>> =
             HashMap::new();
@@ -223,11 +223,11 @@ impl ClassMethodIndex {
 
     /// Resolve `(container, method)` to its candidate target set.
     ///
-    /// * `container = Some(c)` — return only candidates whose defining
+    /// * `container = Some(c)`, return only candidates whose defining
     ///   container equals `c`.  Empty slice when no such target exists,
     ///   even if a same-name function lives in another container.
     ///   This is the **devirtualised** path: a hard subset of `by_name`.
-    /// * `container = None` — return every same-name candidate in the
+    /// * `container = None`, return every same-name candidate in the
     ///   language.  This is the **fallback** path used when the receiver
     ///   type is unknown; matches today's name-only behaviour.
     ///
@@ -273,7 +273,7 @@ impl ClassMethodIndex {
 /// Covers Java `extends`/`implements`, Rust `impl Trait for Type`, TS
 /// `extends`/`implements`, Python `class X(Base)`, plus PHP/Ruby/C++
 /// (see [`crate::cfg::hierarchy`]). Go's structural interfaces are
-/// intentionally omitted — name-only resolution is used instead.
+/// intentionally omitted, name-only resolution is used instead.
 ///
 /// Container names are bare (no namespace), so cross-namespace aliases
 /// may over-fan-out. That is conservative for correctness.
@@ -487,7 +487,7 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
             let leaf = callee_leaf_name(raw_callee);
             // Two-segment form for diagnostics / fallback disambiguation.
             let qualified = normalize_callee_name(raw_callee);
-            // Structured arity carried per call site — used to disambiguate
+            // Structured arity carried per call site, used to disambiguate
             // same-name/different-arity overloads during resolution.
             let arity_hint: Option<usize> = site.arity;
 
@@ -533,7 +533,7 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                     continue;
                 }
                 // multiple arity-filtered candidates means
-                // genuine virtual dispatch through a super-type — fan
+                // genuine virtual dispatch through a super-type, fan
                 // out to *every* implementer.  This widens edges
                 // (correctly: the call genuinely may target any
                 // implementer at runtime) so SCC sizes may grow on
@@ -571,7 +571,7 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                     continue;
                 }
                 // Either zero matches (fall through to legacy path) or
-                // multiple matches on the direct container — let
+                // multiple matches on the direct container, let
                 // `resolve_callee` apply its authoritative
                 // receiver_type filter + tie-breakers.
                 if !arity_filtered.is_empty() {
@@ -609,8 +609,8 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
 
             // Rust callers with a module-qualified call (no receiver) go
             // through the `use`-map aware resolver first.  When the call has
-            // a structured receiver it is a method call — the qualifier is
-            // an impl/trait name, not a module path — so we fall back to the
+            // a structured receiver it is a method call, the qualifier is
+            // an impl/trait name, not a module path, so we fall back to the
             // structured resolver.  All other languages skip the use-map
             // branch entirely.
             let use_rust_path = caller_key.lang == Lang::Rust && site.receiver.is_none();
@@ -628,11 +628,11 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                 // categorize each hint so the resolver can apply the right
                 // policy:
                 //
-                //   * `namespace_qualifier` — structured module/namespace
+                //   * `namespace_qualifier`, structured module/namespace
                 //     prefix (`env` in `env::var`, `http` in `http.Get`).
-                //   * `receiver_var` — syntactic receiver variable (e.g.
+                //   * `receiver_var`, syntactic receiver variable (e.g.
                 //     `obj` in `obj.method`); used only as a last tie-break.
-                //   * `caller_container` — caller's own class/impl, so bare
+                //   * `caller_container`, caller's own class/impl, so bare
                 //     `foo()` inside a method resolves to the same class.
                 //
                 // The raw text-parsed container (legacy
@@ -772,7 +772,7 @@ fn resolve_via_interop(
 /// Compute SCC decomposition and topological ordering of the call graph.
 ///
 /// `petgraph::algo::tarjan_scc` returns SCCs in *reverse* topological order
-/// of the condensation DAG — i.e. leaf SCCs (no outgoing cross-SCC edges)
+/// of the condensation DAG, i.e. leaf SCCs (no outgoing cross-SCC edges)
 /// come **first**.  That is exactly the **callee-first** order suitable for
 /// bottom-up taint propagation.
 pub fn analyse(cg: &CallGraph) -> CallGraphAnalysis {
@@ -807,7 +807,7 @@ pub fn analyse(cg: &CallGraph) -> CallGraphAnalysis {
 /// [`crate::commands::scan::run_topo_batches`].  `cross_file` is a tighter
 /// signal used by joint fixed-point convergence: it implies the
 /// recursion involves at least one cross-file call edge, so the inline
-/// cache and per-iteration findings need joint convergence — not just
+/// cache and per-iteration findings need joint convergence, not just
 /// summary convergence.
 pub struct FileBatch<'a> {
     pub files: Vec<&'a PathBuf>,
@@ -858,7 +858,7 @@ pub fn callers_of(cg: &CallGraph, callee: &FuncKey) -> Vec<FuncKey> {
 /// result is a `HashSet<String>` suitable for membership checks while
 /// filtering the batch's file list.
 ///
-/// A changed callee's *own* namespace is also included — if the
+/// A changed callee's *own* namespace is also included, if the
 /// callee's summary was refined, the file it lives in may itself
 /// have been a caller (intra-file recursion) or may carry sibling
 /// functions whose analysis should be re-run alongside the callee
@@ -915,7 +915,7 @@ pub fn scc_file_batches_with_metadata<'a>(
 
     // 2. Build file relative-path → (min topo index, has_mutual_recursion, cross_file).
     //    `cross_file` is set whenever the file participates in an SCC whose
-    //    nodes span more than one namespace — the cross-file signal.
+    //    nodes span more than one namespace, the cross-file signal.
     let mut file_topo: HashMap<&str, (usize, bool, bool)> = HashMap::new();
     for (topo_pos, &scc_idx) in analysis.topo_scc_callee_first.iter().enumerate() {
         let scc_recursive = analysis.sccs[scc_idx].len() > 1;
@@ -972,7 +972,7 @@ pub fn scc_file_batches_with_metadata<'a>(
 /// of its functions appear. This ensures leaf callees are available as early
 /// as possible for files that depend on them. Caller functions in the same
 /// file that happen to be in a later SCC are no worse off than the current
-/// fully-parallel approach — they simply don't yet benefit from ordering,
+/// fully-parallel approach, they simply don't yet benefit from ordering,
 /// but nothing is lost.
 ///
 /// Returns `(ordered_batches, orphan_files)` where orphan_files are paths
@@ -1145,7 +1145,7 @@ mod tests {
     fn same_name_python_and_rust() {
         let py_foo = make_summary("foo", "handler.py", "python", 0, vec![]);
         let rs_foo = make_summary("foo", "handler.rs", "rust", 0, vec![]);
-        // Python caller calls "foo" — should only see the Python one
+        // Python caller calls "foo", should only see the Python one
         let py_caller = make_summary("main", "app.py", "python", 0, vec!["foo"]);
 
         let gs = merge_summaries(vec![py_foo, rs_foo, py_caller], None);
@@ -1272,7 +1272,7 @@ mod tests {
         let gs = merge_summaries(vec![helper_a, helper_b, caller], None);
         let cg = build_call_graph(&gs, &[]);
 
-        assert_eq!(cg.graph.edge_count(), 0); // no edge — ambiguous
+        assert_eq!(cg.graph.edge_count(), 0); // no edge, ambiguous
         assert!(cg.unresolved_not_found.is_empty());
         assert_eq!(cg.unresolved_ambiguous.len(), 1);
         assert_eq!(cg.unresolved_ambiguous[0].callee_name, "helper");
@@ -1685,7 +1685,7 @@ mod tests {
         // Two "send" functions in different namespaces.
         let send_http = make_summary("send", "src/http.rs", "rust", 0, vec![]);
         let send_mail = make_summary("send", "src/mail.rs", "rust", 0, vec![]);
-        // Caller is in a third namespace, calling "http::send" — leaf "send"
+        // Caller is in a third namespace, calling "http::send", leaf "send"
         // is ambiguous, but "http" qualifier should match "src/http.rs".
         let caller = make_summary("caller", "src/main.rs", "rust", 0, vec!["http::send"]);
 
@@ -1723,7 +1723,7 @@ mod tests {
 
     #[test]
     fn unqualified_callee_stays_ambiguous() {
-        // Same setup but caller uses unqualified "send" — no disambiguation
+        // Same setup but caller uses unqualified "send", no disambiguation
         let send_http = make_summary("send", "src/http.rs", "rust", 0, vec![]);
         let send_mail = make_summary("send", "src/mail.rs", "rust", 0, vec![]);
         let caller = make_summary("caller", "src/main.rs", "rust", 0, vec!["send"]);
@@ -1763,7 +1763,7 @@ mod tests {
     // ── structured-metadata disambiguation (callee metadata) ─────────────
 
     /// Helper: build a summary whose callees carry structured CalleeSite
-    /// metadata — used by the tests below to exercise arity / receiver /
+    /// metadata, used by the tests below to exercise arity / receiver /
     /// qualifier propagation into resolution.
     fn summary_with_sites(
         name: &str,
@@ -1797,7 +1797,7 @@ mod tests {
         // Two `encode` functions in the same file, different arities.
         let encode1 = make_summary("encode", "src/codec.rs", "rust", 1, vec![]);
         let encode2 = make_summary("encode", "src/codec.rs", "rust", 2, vec![]);
-        // Caller lives in *another* file so namespace does not disambiguate —
+        // Caller lives in *another* file so namespace does not disambiguate ,
         // the only signal is the per-call-site arity.
         let caller = summary_with_sites(
             "driver",
@@ -1964,7 +1964,7 @@ mod tests {
     #[test]
     fn legacy_string_callees_still_resolve() {
         let helper = make_summary("helper", "src/lib.rs", "rust", 0, vec![]);
-        // make_summary already returns CalleeSite::bare entries — i.e. the
+        // make_summary already returns CalleeSite::bare entries, i.e. the
         // "lifted legacy" form with no arity or receiver metadata.
         let caller = make_summary("main", "src/lib.rs", "rust", 0, vec!["helper"]);
         let gs = merge_summaries(vec![helper, caller], None);
@@ -2015,7 +2015,7 @@ mod tests {
         assert_eq!(cache_hits.len(), 1);
         assert_eq!(cache_hits[0].container, "Cache");
 
-        // Bare-name lookup keeps both candidates — fallback behaviour.
+        // Bare-name lookup keeps both candidates, fallback behaviour.
         let bare_hits = idx.resolve(Lang::Rust, None, "findById");
         assert_eq!(
             bare_hits.len(),
@@ -2027,7 +2027,7 @@ mod tests {
     #[test]
     fn class_method_index_falls_back_to_name_when_container_unknown() {
         // `None` container or empty-string container both route to
-        // the bare-name index — equivalent to today's name-only edge
+        // the bare-name index, equivalent to today's name-only edge
         // insertion.
         let svc = make_method_summary("process", "OrderService", "src/svc.rs", "rust", 1);
         let helper = make_summary("process", "src/util.rs", "rust", 1, vec![]);
@@ -2039,7 +2039,7 @@ mod tests {
         let none_hits = idx.resolve(Lang::Rust, None, "process");
         assert_eq!(none_hits.len(), 2);
 
-        // Empty string container behaves identically to None — it is
+        // Empty string container behaves identically to None, it is
         // not stored under any container key.
         let empty_hits = idx.resolve(Lang::Rust, Some(""), "process");
         assert_eq!(empty_hits.len(), 2);
@@ -2064,7 +2064,7 @@ mod tests {
                 .is_empty()
         );
         // Right method, wrong container → empty (no fallback to bare-name
-        // when a container is supplied — that's the whole devirtualisation
+        // when a container is supplied, that's the whole devirtualisation
         // promise).
         assert!(
             idx.resolve(Lang::Rust, Some("OtherClass"), "findById")
@@ -2097,7 +2097,7 @@ mod tests {
     #[test]
     fn class_method_index_handles_arity_overloads() {
         // Two arity overloads on the same container are both kept under
-        // the same `(container, name)` key — arity narrowing is the
+        // the same `(container, name)` key, arity narrowing is the
         // caller's responsibility (today's resolver also does this).
         let one = make_method_summary("encode", "Codec", "src/codec.rs", "rust", 1);
         let two = make_method_summary("encode", "Codec", "src/codec.rs", "rust", 2);
@@ -2198,7 +2198,7 @@ mod tests {
         use crate::summary::ssa_summary::SsaFuncSummary;
 
         // Single `process` on `Worker`.  No `process` exists on
-        // `Other` — that's the receiver type the caller's SSA
+        // `Other`, that's the receiver type the caller's SSA
         // summary will (incorrectly) record.
         let worker = make_method_summary("process", "Worker", "src/worker.rs", "rust", 1);
         let caller = summary_with_sites(
@@ -2227,7 +2227,7 @@ mod tests {
         gs.insert_ssa(
             caller_key.clone(),
             SsaFuncSummary {
-                // Wrong receiver type — `Other::process` does not exist.
+                // Wrong receiver type, `Other::process` does not exist.
                 typed_call_receivers: vec![(0, "Other".to_string())],
                 ..Default::default()
             },
@@ -2291,7 +2291,7 @@ mod tests {
         TypeHierarchyIndex::build(&gs)
     }
 
-    /// B-1: Round-trip — a hierarchy built from a small set of edges
+    /// B-1: Round-trip, a hierarchy built from a small set of edges
     /// answers `subs_of` correctly and `super_keys_len` matches the
     /// distinct super count.
     #[test]
@@ -2313,7 +2313,7 @@ mod tests {
         assert_eq!(h.super_keys_len(), 2);
     }
 
-    /// B-2: Java interface dispatch — `Repository r; r.findById(...)`
+    /// B-2: Java interface dispatch, `Repository r; r.findById(...)`
     /// fans out to every concrete implementer's `findById`.
     #[test]
     fn b2_java_interface_dispatch_fans_out_to_all_impls() {
@@ -2378,7 +2378,7 @@ mod tests {
         assert_eq!(targets.len(), 2, "B-2: exactly two fan-out edges expected");
     }
 
-    /// B-3: Java extends — `Base b; b.foo()` reaches Base AND Derived
+    /// B-3: Java extends, `Base b; b.foo()` reaches Base AND Derived
     /// when Derived extends Base.  Pins inheritance fan-out separately
     /// from interface implements.
     #[test]
@@ -2436,7 +2436,7 @@ mod tests {
         );
     }
 
-    /// B-4: Rust trait dispatch — `Box<dyn Repo>; r.find(...)` reaches
+    /// B-4: Rust trait dispatch, `Box<dyn Repo>; r.find(...)` reaches
     /// every `impl Repo for X` `find`.
     #[test]
     fn b4_rust_trait_dispatch_fans_out_to_impls() {
@@ -2493,7 +2493,7 @@ mod tests {
         );
     }
 
-    /// B-7: Empty hierarchy — when the typed container has no recorded
+    /// B-7: Empty hierarchy, when the typed container has no recorded
     /// sub-types, `resolve_with_hierarchy` collapses to the direct
     /// `ClassMethodIndex::resolve` lookup.
     #[test]
@@ -2517,7 +2517,7 @@ mod tests {
         );
 
         let mut gs = merge_summaries(vec![repo, cache, caller], None);
-        // No hierarchy_edges set anywhere — Repository has no
+        // No hierarchy_edges set anywhere, Repository has no
         // sub-types, so devirtualisation collapses to direct match.
         let caller_key = FuncKey {
             lang: Lang::Rust,
@@ -2545,7 +2545,7 @@ mod tests {
         assert_eq!(targets[0].container, "Repository");
     }
 
-    /// B-8: Concrete sub-type — when the receiver is typed as the
+    /// B-8: Concrete sub-type, when the receiver is typed as the
     /// concrete sub-class (not the super-type), no hierarchy
     /// expansion fires.
     #[test]
@@ -2609,7 +2609,7 @@ mod tests {
         assert_eq!(targets[0].container, "UserRepo");
     }
 
-    /// B-9: Diamond — multiple impls sharing a super-type, dedup
+    /// B-9: Diamond, multiple impls sharing a super-type, dedup
     /// applied per call site so each FuncKey is edged at most once.
     #[test]
     fn b9_diamond_dedup_one_edge_per_funckey() {
@@ -2617,7 +2617,7 @@ mod tests {
 
         let a = make_method_summary("doIt", "A", "src/A.java", "java", 0);
         let b = make_method_summary("doIt", "B", "src/B.java", "java", 0);
-        // A and B both extend Iface in two separate file emissions —
+        // A and B both extend Iface in two separate file emissions ,
         // hierarchy_edges duplicates across files; dedup expected.
         let mut h1 = make_method_summary("__h", "Iface", "src/I1.java", "java", 0);
         h1.hierarchy_edges = vec![
@@ -2677,7 +2677,7 @@ mod tests {
         assert!(containers.contains("A") && containers.contains("B"));
     }
 
-    /// B-13: Stale hierarchy edge — sub-type referenced by an edge
+    /// B-13: Stale hierarchy edge, sub-type referenced by an edge
     /// no longer has a matching FuncKey.  Resolver must not panic
     /// and must still resolve to whatever IS present.
     #[test]
@@ -2770,7 +2770,7 @@ mod tests {
             arity: Some(0),
             ..Default::default()
         };
-        // A typed_call_receivers entry with ordinal=0 — but since the
+        // A typed_call_receivers entry with ordinal=0, but since the
         // site has receiver=None, this MUST be ignored.
         gs.insert_ssa(
             caller_key.clone(),

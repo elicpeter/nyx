@@ -16,11 +16,11 @@ fn main() {
     println!("cargo:rerun-if-changed=src/server/assets/dist/index.html");
 
     if index_html.exists() {
-        // Dist already built — nothing to do
+        // Dist already built, nothing to do
         return;
     }
 
-    // Dist missing — try to build frontend
+    // Dist missing, try to build frontend
     let frontend_dir = Path::new("frontend");
     if !frontend_dir.join("package.json").exists() {
         emit_placeholder_and_warn(dist_dir);
@@ -202,7 +202,7 @@ fn rewrite_links_in_line(line: &str, source_dir: &str, out: &mut String) {
     let bytes = line.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        // Inline link: `](URL)` — markdown URLs do not contain a raw `)`.
+        // Inline link: `](URL)`, markdown URLs do not contain a raw `)`.
         if i + 1 < bytes.len() && bytes[i] == b']' && bytes[i + 1] == b'(' {
             out.push_str("](");
             i += 2;
@@ -283,11 +283,11 @@ fn maybe_rewrite_url(url: &str, source_dir: &str) -> String {
     if url.is_empty() {
         return url.to_string();
     }
-    // Already absolute (scheme://, mailto:, ssh://, etc.) — leave alone.
+    // Already absolute (scheme://, mailto:, ssh://, etc.), leave alone.
     if has_scheme(url) {
         return url.to_string();
     }
-    // Pure anchor — leave alone.
+    // Pure anchor, leave alone.
     if url.starts_with('#') {
         return url.to_string();
     }

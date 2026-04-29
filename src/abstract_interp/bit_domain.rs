@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 
 /// Bit-level abstract fact: known-zero and known-one masks.
 ///
-/// - `top()` = `{known_zero: 0, known_one: 0}` — no bits known
-/// - `bottom()` = `{known_zero: MAX, known_one: MAX}` — contradictory
+/// - `top()` = `{known_zero: 0, known_one: 0}`, no bits known
+/// - `bottom()` = `{known_zero: MAX, known_one: MAX}`, contradictory
 /// - `from_const(n)` = all 64 bits known
 ///
 /// Invariant: `known_zero & known_one == 0` for non-bottom values.
@@ -253,7 +253,7 @@ impl AbstractDomain for BitFact {
         }
     }
 
-    /// Widen: same as join (finite lattice height — 64 bits × 3 states).
+    /// Widen: same as join (finite lattice height, 64 bits × 3 states).
     fn widen(&self, other: &Self) -> Self {
         self.join(other)
     }
@@ -511,7 +511,7 @@ mod tests {
 
     #[test]
     fn right_shift_unknown_sign() {
-        // Sign bit unknown — high bits after shift should be unknown
+        // Sign bit unknown, high bits after shift should be unknown
         let a = BitFact {
             known_zero: 0x0F,
             known_one: 0,
@@ -687,7 +687,7 @@ mod tests {
         }
     }
 
-    /// `a ⊓ b ⊑ a` and `a ⊓ b ⊑ b` — meet is the greatest lower bound.
+    /// `a ⊓ b ⊑ a` and `a ⊓ b ⊑ b`, meet is the greatest lower bound.
     #[test]
     fn meet_is_lower_bound_bit() {
         let xs = sample_bits();
@@ -700,7 +700,7 @@ mod tests {
         }
     }
 
-    /// `a ⊑ a ⊔ b` and `b ⊑ a ⊔ b` — join is the least upper bound.
+    /// `a ⊑ a ⊔ b` and `b ⊑ a ⊔ b`, join is the least upper bound.
     #[test]
     fn join_is_upper_bound_bit() {
         let xs = sample_bits();
