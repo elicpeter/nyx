@@ -10118,14 +10118,14 @@
       "expected_category": "Security",
       "expected_sink_lines": [
         [
-          69,
-          69
+          72,
+          72
         ]
       ],
       "expected_source_lines": [
         [
-          59,
-          59
+          64,
+          64
         ]
       ],
       "tags": [
@@ -10134,8 +10134,7 @@
         "path_traversal",
         "emoji"
       ],
-      "disabled": true,
-      "disabled_reason": "Engine gap: Go `json.NewDecoder(r.Body).Decode(&dest)` taint propagation requires (a) the new `ContainerOp::Writeback` rule (landed this session) AND (b) bridging the writeback into `dest`'s heap-field cells so subsequent `dest.Field` access inherits taint via the FieldProj path. Today's writeback only taints the destination SSA value, which fails for `body.Name` reads. Adding a hardcoded `os.Remove` recognizer would be a bandaid — the real fix is making the writeback drive the field-cell store the FieldProj reader consults. Tracked in CVE_DEFERRED.md.",
+      "disabled": false,
       "notes": "CVE-2024-31450: Owncast 0.1.2 emoji-delete API joined a body-supplied filename to the emoji directory and called `os.Remove` without `filepath.Base`. Fixed in 0.1.3 with `filepath.IsLocal(targetPath)` early return."
     },
     {
@@ -10164,8 +10163,7 @@
         "patched",
         "negative"
       ],
-      "disabled": true,
-      "disabled_reason": "Paired with cve-go-2024-31450-vulnerable; re-enable both when Decode-writeback-to-field-cell propagation lands.",
+      "disabled": false,
       "notes": "CVE-2024-31450 patched counterpart: `filepath.IsLocal(targetPath)` early-return. Regression guard."
     },
     {

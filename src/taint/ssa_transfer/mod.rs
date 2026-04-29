@@ -1029,12 +1029,60 @@ fn compute_succ_states(
                     }
                 }
 
-                // Contradiction pruning
-                if true_state.has_contradiction() {
+                // Contradiction pruning.
+                //
+                // Two sources of contradiction:
+                //   (a) `predicates` — a known_true and known_false bit
+                //       set for the same predicate kind on the same
+                //       symbol.  This is genuine: prior branches asserted
+                //       conflicting truth values about the same predicate,
+                //       so the joined branch is unreachable.  Reset the
+                //       branch state to bot.
+                //   (b) `path_env.is_unsat()` — the constraint solver's
+                //       interval / nullability domain proved the branch
+                //       infeasible.  Empirically the constraint refinement
+                //       can over-prune branches whose feasibility hinges
+                //       on data introduced by writeback / container ops
+                //       (`err` from `dec.Decode(body)` becoming
+                //       constraint-bounded only after the writeback's
+                //       caps land on the destination).  In those cases
+                //       resetting the data state to bot drops legitimate
+                //       taint flow that travels through the surviving
+                //       branch — see CVE-2024-31450's
+                //       `if err := …Decode(emoji); err != nil { return }`
+                //       shape.
+                //
+                // To preserve soundness without losing real flow, only
+                // reset to bot when the contradiction is in `predicates`.
+                // For path_env-only unsat, drop path_env (treat as Top
+                // for downstream path-sensitive reasoning) and keep the
+                // rest of the state — values, field_taint, heap,
+                // predicates, validated_*, abstract_state.
+                let true_pred_contra = true_state
+                    .predicates
+                    .iter()
+                    .any(|(_, s)| s.has_contradiction());
+                let false_pred_contra = false_state
+                    .predicates
+                    .iter()
+                    .any(|(_, s)| s.has_contradiction());
+                if true_pred_contra {
                     true_state = SsaTaintState::bot();
+                } else if true_state
+                    .path_env
+                    .as_ref()
+                    .is_some_and(|e| e.is_unsat())
+                {
+                    true_state.path_env = None;
                 }
-                if false_state.has_contradiction() {
+                if false_pred_contra {
                     false_state = SsaTaintState::bot();
+                } else if false_state
+                    .path_env
+                    .as_ref()
+                    .is_some_and(|e| e.is_unsat())
+                {
+                    false_state.path_env = None;
                 }
 
                 smallvec::smallvec![(*true_blk, true_state), (*false_blk, false_state),]
@@ -5844,9 +5892,27 @@ fn try_container_propagation(
             // (unlike Go's `append`), so the existing `resolve_container`
             // helper either returns the wrong value or `None` here.  Look
             // up the receiver SSA value by var-name from the callee prefix.
+            // Detect a chained-call receiver shape (`a.b(c).d(e)`) where
+            // the receiver of the writeback method is itself a call
+            // expression — so its return value never gets a separate SSA
+            // value and there is no `var_name` to look up.
+            //
+            // For `json.NewDecoder(r.Body).Decode(emoji)` the callee text
+            // is `"json.NewDecoder(r.Body).Decode"`: parens appear inside
+            // the dotted prefix.  In that case we fall back to unioning
+            // the taint of every implicit-arg group (the synth-source
+            // bindings produced by `walk_chain_inner_call_args`) and
+            // treating that as the receiver taint.
+            let chain_shape = {
+                let dot_pos = callee.rfind('.');
+                match dot_pos {
+                    Some(p) => callee[..p].contains('('),
+                    None => false,
+                }
+            };
             let recv_val = if let Some(v) = *receiver {
                 Some(v)
-            } else if let Some(dot_pos) = callee.rfind('.') {
+            } else if !chain_shape && let Some(dot_pos) = callee.rfind('.') {
                 let recv_name = &callee[..dot_pos];
                 let mut found = None;
                 'outer: for arg_group in args {
@@ -5873,18 +5939,73 @@ fn try_container_propagation(
             } else {
                 None
             };
-            let recv_val = match recv_val {
-                Some(v) => v,
-                None => {
-                    if std::env::var("NYX_DEBUG_WRITEBACK").is_ok() {
-                        eprintln!("  writeback: no receiver SSA value for callee {callee:?}");
+            let recv_taint = if let Some(v) = recv_val {
+                if let Some(t) = state.get(v) {
+                    t.clone()
+                } else if chain_shape {
+                    // Receiver SSA value found but carries no direct
+                    // taint — fall through to chain-shape arg union.
+                    let mut caps = Cap::empty();
+                    let mut origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+                    for (idx, arg_group) in args.iter().enumerate() {
+                        if idx == dest_arg {
+                            continue;
+                        }
+                        for &v in arg_group {
+                            if let Some(t) = state.get(v) {
+                                caps |= t.caps;
+                                for orig in &t.origins {
+                                    push_origin_bounded(&mut origins, *orig);
+                                }
+                            }
+                        }
                     }
-                    return false;
+                    if caps.is_empty() {
+                        return true;
+                    }
+                    VarTaint {
+                        caps,
+                        origins,
+                        uses_summary: false,
+                    }
+                } else {
+                    return true; // claimed but receiver carries no taint
                 }
-            };
-            let recv_taint = match state.get(recv_val) {
-                Some(t) => t.clone(),
-                None => return true, // claimed but receiver carries no taint
+            } else if chain_shape {
+                // Sum taint across every arg group except the destination
+                // arg.  In the chained shape, synth-source bindings
+                // emitted by `walk_chain_inner_call_args` land in the
+                // implicit-arg slot (`info.taint.uses` → `args[N]`); the
+                // dest_arg itself is the writeback's destination, never
+                // a source.
+                let mut caps = Cap::empty();
+                let mut origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+                for (idx, arg_group) in args.iter().enumerate() {
+                    if idx == dest_arg {
+                        continue;
+                    }
+                    for &v in arg_group {
+                        if let Some(t) = state.get(v) {
+                            caps |= t.caps;
+                            for orig in &t.origins {
+                                push_origin_bounded(&mut origins, *orig);
+                            }
+                        }
+                    }
+                }
+                if caps.is_empty() {
+                    return true;
+                }
+                VarTaint {
+                    caps,
+                    origins,
+                    uses_summary: false,
+                }
+            } else {
+                if std::env::var("NYX_DEBUG_WRITEBACK").is_ok() {
+                    eprintln!("  writeback: no receiver SSA value for callee {callee:?}");
+                }
+                return false;
             };
             // For method-call form, the receiver is implicit in the callee
             // string and `args` holds positional args starting at 0.  Taint

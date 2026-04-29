@@ -412,6 +412,57 @@ pub(super) fn find_chained_inner_call<'a>(
     Some((object, inner_text))
 }
 
+/// Recursively walk the receiver chain of `outer` (a CallFn / CallMethod
+/// node) and yield each *named argument* of every inner call along the
+/// way.  Outer's own arguments are NOT included — the caller already
+/// handles those via the standard `pre_emit_arg_source_nodes` pass over
+/// `outer.arguments`.
+///
+/// For `json.NewDecoder(r.Body).Decode(emoji)`:
+///   outer  = `.Decode(emoji)`           — caller iterates `emoji`
+///   inner  = `json.NewDecoder(r.Body)`  — yielded arg: `r.Body`
+///
+/// We only pull from each inner call's `arguments` field, never from its
+/// `function`/`method`/receiver expressions.  That distinction matters
+/// because chained source-receivers like `r.URL.Query()` expose a
+/// member-text path that classifies as a Source — but it's the OUTER
+/// chain text (`r.URL.Query.Get`) that already classifies, so emitting
+/// a synth source for the inner-call's own callee would double-count.
+///
+/// Used by Go (where chain shapes like `json.NewDecoder(r.Body).Decode`
+/// hide source-labeled args inside parens between dots, leaving the
+/// outer callee text un-classifiable).  The helper itself is
+/// language-neutral, but callers should gate per-language until each
+/// language's regression coverage catches up.
+pub(super) fn walk_chain_inner_call_args<'a>(
+    outer: Node<'a>,
+    lang: &str,
+    out: &mut Vec<Node<'a>>,
+) {
+    if !matches!(lookup(lang, outer.kind()), Kind::CallFn | Kind::CallMethod) {
+        return;
+    }
+    let function = outer
+        .child_by_field_name("function")
+        .or_else(|| outer.child_by_field_name("method"));
+    let Some(function) = function else { return };
+    let object = function
+        .child_by_field_name("object")
+        .or_else(|| function.child_by_field_name("operand"))
+        .or_else(|| function.child_by_field_name("value"));
+    let Some(inner) = object else { return };
+    if !matches!(lookup(lang, inner.kind()), Kind::CallFn | Kind::CallMethod) {
+        return;
+    }
+    if let Some(args) = inner.child_by_field_name("arguments") {
+        let mut cursor = args.walk();
+        for arg in args.named_children(&mut cursor) {
+            out.push(arg);
+        }
+    }
+    walk_chain_inner_call_args(inner, lang, out);
+}
+
 /// Recursively find a call-expression node within an AST subtree (up to
 /// 4 levels deep).  Unlike `find_call_node` which only checks 2 levels,
 /// this handles `await`-wrapped calls inside declarations.

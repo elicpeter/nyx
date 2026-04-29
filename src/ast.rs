@@ -2492,10 +2492,20 @@ fn pattern_category_cap(pattern_id: &str) -> Option<Cap> {
 struct TaintSuppressionCtx {
     /// For each function scope, the set of lines containing Source-labeled nodes.
     source_lines_by_func: HashMap<Option<String>, HashSet<usize>>,
+    /// For each function scope, the set of lines containing Sanitizer-labeled
+    /// nodes.  Presence of an explicit sanitizer is the structural signal
+    /// that taint analysis successfully evaluated (and cleared) the flow,
+    /// so AST-pattern suppression is safe even when no taint findings
+    /// fired in the function.
+    sanitizer_lines_by_func: HashMap<Option<String>, HashSet<usize>>,
     /// For each sink node line, its enclosing function scope.
     sink_func_at_line: HashMap<usize, Option<String>>,
     /// Lines where taint emitted a `taint-unsanitised-flow` finding.
     taint_finding_lines: HashSet<usize>,
+    /// Per-function set of taint-finding lines.  Used by Condition 4 of
+    /// [`should_suppress`] alongside [`sanitizer_lines_by_func`] to
+    /// distinguish "taint proved safe" from "taint failed to track".
+    taint_finding_lines_by_func: HashMap<Option<String>, HashSet<usize>>,
 }
 
 impl TaintSuppressionCtx {
@@ -2506,6 +2516,7 @@ impl TaintSuppressionCtx {
     /// nodes inside function bodies are visible for suppression decisions.
     fn build(file_cfg: &FileCfg, tree: &tree_sitter::Tree, taint_diags: &[Diag]) -> Self {
         let mut source_lines_by_func: HashMap<Option<String>, HashSet<usize>> = HashMap::new();
+        let mut sanitizer_lines_by_func: HashMap<Option<String>, HashSet<usize>> = HashMap::new();
         let mut sink_func_at_line: HashMap<usize, Option<String>> = HashMap::new();
 
         for body in &file_cfg.bodies {
@@ -2513,18 +2524,42 @@ impl TaintSuppressionCtx {
                 let info = &body.graph[idx];
                 let mut has_source = false;
                 let mut has_sink = false;
+                let mut has_sanitizer = false;
                 for label in &info.taint.labels {
                     match label {
                         DataLabel::Source(_) => has_source = true,
                         DataLabel::Sink(_) => has_sink = true,
-                        _ => {}
+                        DataLabel::Sanitizer(_) => has_sanitizer = true,
                     }
                 }
+                // Skip synthetic source nodes emitted by `pre_emit_arg_source_nodes`
+                // (`__nyx_src_*` / `__nyx_chainsrc_*`).  These are a CFG-level
+                // synthesis that hoists a source-labeled member-expression into
+                // its own Source node so taint can see a definition; absence of
+                // a downstream taint finding through such a synth source does
+                // NOT prove safety, it can also mean the engine couldn't
+                // propagate the taint (e.g. `&req` with `var req struct{}`
+                // where points-to doesn't track the address-of of a stack
+                // variable).  Treating synth sources as "real" sources here
+                // would silently silence AST-pattern findings on every Go
+                // CRUD handler whose Decode destination is an `&req`-style
+                // address-of-local.
+                let is_synth_source = info
+                    .taint
+                    .defines
+                    .as_deref()
+                    .is_some_and(|d| d.starts_with("__nyx_src_") || d.starts_with("__nyx_chainsrc_"));
                 let byte = info.classification_span().0;
                 let point = byte_offset_to_point(tree, byte);
                 let line = point.row + 1;
-                if has_source {
+                if has_source && !is_synth_source {
                     source_lines_by_func
+                        .entry(info.ast.enclosing_func.clone())
+                        .or_default()
+                        .insert(line);
+                }
+                if has_sanitizer {
+                    sanitizer_lines_by_func
                         .entry(info.ast.enclosing_func.clone())
                         .or_default()
                         .insert(line);
@@ -2541,10 +2576,26 @@ impl TaintSuppressionCtx {
             .map(|d| d.line)
             .collect();
 
+        // Per-function partition of taint findings.  Maps each finding's
+        // line to the enclosing function scope by reusing
+        // `sink_func_at_line` (the same span/function mapping the Sink-side
+        // of taint analysis populated above).
+        let mut taint_finding_lines_by_func: HashMap<Option<String>, HashSet<usize>> =
+            HashMap::new();
+        for line in &taint_finding_lines {
+            let func = sink_func_at_line.get(line).cloned().unwrap_or(None);
+            taint_finding_lines_by_func
+                .entry(func)
+                .or_default()
+                .insert(*line);
+        }
+
         Self {
             source_lines_by_func,
+            sanitizer_lines_by_func,
             sink_func_at_line,
             taint_finding_lines,
+            taint_finding_lines_by_func,
         }
     }
 
@@ -2558,21 +2609,50 @@ impl TaintSuppressionCtx {
         // at an EARLIER line (upstream in control flow). This prevents suppression
         // when the only Source is co-located (dual-label) or downstream from the
         // sink, since taint couldn't have evaluated a flow that doesn't exist.
-        if let Some(func) = self.sink_func_at_line.get(&line) {
-            match self.source_lines_by_func.get(func) {
-                Some(source_lines) => {
-                    if !source_lines.iter().any(|&sl| sl < line) {
-                        return false;
-                    }
+        let func = match self.sink_func_at_line.get(&line) {
+            Some(f) => f,
+            None => return false, // No CFG sink at this line — taint had no opportunity to evaluate
+        };
+        match self.source_lines_by_func.get(func) {
+            Some(source_lines) => {
+                if !source_lines.iter().any(|&sl| sl < line) {
+                    return false;
                 }
-                None => return false,
             }
-        } else {
-            // No CFG sink at this line — taint had no opportunity to evaluate
-            return false;
+            None => return false,
         }
         // Condition 3: no taint finding at this line (taint found it safe)
-        !self.taint_finding_lines.contains(&line)
+        if self.taint_finding_lines.contains(&line) {
+            return false;
+        }
+        // Condition 4: distinguish "taint proved safe" from "taint failed
+        // to track".  Suppress only when there's a structural signal that
+        // taint analysis actually evaluated this flow:
+        //   (a) the function fired at least one taint-unsanitised-flow
+        //       finding (engine ran successfully and reached *some* sink),
+        //       OR
+        //   (b) the function contains an explicit Sanitizer node (the
+        //       canonical mechanism by which a flow is cleared, e.g.
+        //       `escapeshellarg` between $_GET and `system`).
+        //
+        // When the function has neither, we can't distinguish silent
+        // engine failure from real safety — e.g. Go points-to limitation
+        // on `&local` Decode destinations leaves the chain writeback
+        // fired but the field-cell propagation dead, suppressing
+        // legitimate AST-pattern findings on every Go CRUD handler whose
+        // Decode destination is a stack-local address-of.
+        let func_has_taint_finding = self
+            .taint_finding_lines_by_func
+            .get(func)
+            .is_some_and(|s| !s.is_empty());
+        let func_has_sanitizer = self
+            .sanitizer_lines_by_func
+            .get(func)
+            .is_some_and(|s| !s.is_empty());
+        if !func_has_taint_finding && !func_has_sanitizer {
+            return false;
+        }
+        true
     }
 }
 

@@ -424,12 +424,52 @@ pub fn classify_path_rejection_axes(text: &str) -> smallvec::SmallVec<[PathRejec
     let mut out: smallvec::SmallVec<[PathRejection; 3]> = smallvec::SmallVec::new();
     for clause in split_top_level_or(text) {
         let clause = clause.trim();
+        // Multi-axis special case: `!filepath.IsLocal(p)` (Go).
+        // `filepath.IsLocal` returns true iff the path stays within the
+        // current directory — no leading `/`, no `..` segments, no Windows
+        // drive root.  Idiomatic Go path-traversal guard:
+        //   `if !filepath.IsLocal(p) { return }`
+        // The TRUE branch terminates; the FALSE branch (where IsLocal is
+        // true) proves both `dotdot = No` and `absolute = No` on the
+        // argument simultaneously.  Recognise it here so both axes flow
+        // into the surviving branch's PathFact narrowing.
+        if has_negated_filepath_is_local(clause) {
+            for axis in [PathRejection::DotDot, PathRejection::IsAbsolute] {
+                if !out.contains(&axis) {
+                    out.push(axis);
+                }
+            }
+            continue;
+        }
         let cls = classify_path_rejection_atom(clause);
         if !matches!(cls, PathRejection::None) && !out.contains(&cls) {
             out.push(cls);
         }
     }
     out
+}
+
+/// Detect `!filepath.IsLocal(<expr>)` — Go's idiomatic path-traversal
+/// guard.  Whitespace-tolerant: `! filepath.IsLocal(`, `!filepath . IsLocal(`,
+/// etc.  Used by [`classify_path_rejection_axes`] to inject both
+/// [`PathRejection::DotDot`] and [`PathRejection::IsAbsolute`] on the false
+/// branch (which is the local-path branch by construction).
+fn has_negated_filepath_is_local(clause: &str) -> bool {
+    // Strip surrounding parens once to handle `(!filepath.IsLocal(p))`.
+    let trimmed = clause.trim();
+    let inner = trimmed
+        .strip_prefix('(')
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(trimmed)
+        .trim();
+    // Remove the leading `!` and any whitespace.
+    let after_not = match inner.strip_prefix('!') {
+        Some(rest) => rest.trim_start(),
+        None => return false,
+    };
+    // Compress whitespace around `.` so `filepath . IsLocal(` matches.
+    let compact: String = after_not.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.starts_with("filepath.IsLocal(")
 }
 
 fn classify_path_rejection_atom(clause: &str) -> PathRejection {

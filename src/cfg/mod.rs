@@ -54,7 +54,7 @@ use literals::{
     extract_const_string_arg, extract_destination_field_idents, extract_kwargs,
     extract_literal_rhs, find_call_node, find_call_node_deep, find_chained_inner_call,
     has_keyword_arg, has_only_literal_args, is_parameterized_query_call,
-    java_chain_arg0_kind_for_method, ruby_chain_arg0_for_method,
+    java_chain_arg0_kind_for_method, ruby_chain_arg0_for_method, walk_chain_inner_call_args,
 };
 use params::{
     compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
@@ -1615,11 +1615,18 @@ pub(super) fn push_node<'a>(
     // try to classify the member expression text as a source.
     // This handles `var x = process.env.CMD` (JS), `os.environ["KEY"]` (Python),
     // and similar property-access-based source patterns.
+    // Skip when the assignment's RHS is itself a function/lambda literal —
+    // labels found by `first_member_label` would come from inside the
+    // closure body and shouldn't tag the outer wrapper (e.g. Go's
+    // `run := func() { exec.Command(...) }` would otherwise inherit
+    // `exec.Command`'s Sink label).  The function literal is handled as
+    // its own scope by `collect_nested_function_nodes`.
     if labels.is_empty()
         && matches!(
             lookup(lang, ast.kind()),
             Kind::CallWrapper | Kind::Assignment
         )
+        && !rhs_is_function_literal(ast, lang)
         && let Some(found) = first_member_label(ast, lang, code, extra)
     {
         labels.push(found);
@@ -2224,6 +2231,79 @@ pub(super) fn connect_all(g: &mut Cfg, froms: &[NodeIndex], to: NodeIndex, kind:
 /// the auth-elevation transfer on the True edge and send Unauthed state into
 /// the branch body.
 ///
+/// True when `ast` is an assignment / declaration whose RHS is a
+/// function or lambda literal — i.e. shapes like
+///   * Go     `run := func() { ... }`
+///   * JS/TS  `var run = function() { ... }` / `const run = () => ...`
+///   * Python `run = lambda x: ...`
+///   * Ruby   `run = ->() { ... }` / `run = proc { ... }`
+///
+/// Detected by walking the assignment's `right` / `value` field (or the
+/// `init` field for declarators) and checking whether the resolved RHS
+/// node classifies as `Kind::Function`.  Conservative: when the assignment
+/// shape isn't recognised the function returns `false`.
+///
+/// Used by `push_node`'s RHS member-text fallback to suppress source/sink
+/// label propagation from inside the literal's body up onto the outer
+/// wrapper assignment.  The literal is processed as its own scope by
+/// `collect_nested_function_nodes`.
+fn rhs_is_function_literal(ast: Node, lang: &str) -> bool {
+    use conditions::unwrap_parens;
+
+    // Find the RHS node across the languages we support.  Most grammars
+    // expose `right` (assignment_statement, assignment_expression,
+    // short_var_declaration); JS / Java use `value` on
+    // `variable_declarator` / `init_declarator`; Rust uses `value` on
+    // `let_declaration`.
+    let mut candidate = ast.child_by_field_name("right");
+
+    if candidate.is_none() {
+        // Walk one level into declarations whose direct child is the
+        // declarator (variable_declaration → variable_declarator →
+        // value).
+        let mut cursor = ast.walk();
+        for c in ast.children(&mut cursor) {
+            if matches!(
+                c.kind(),
+                "variable_declarator" | "init_declarator" | "let_declaration"
+            ) {
+                candidate = c
+                    .child_by_field_name("value")
+                    .or_else(|| c.child_by_field_name("init"));
+                if candidate.is_some() {
+                    break;
+                }
+            }
+        }
+    }
+
+    if candidate.is_none() {
+        // Some grammars wrap the RHS in `expression_list` or similar.
+        // Search recursively for a Kind::Function descendant of the
+        // direct RHS-bearing fields.
+        candidate = ast
+            .child_by_field_name("value")
+            .or_else(|| ast.child_by_field_name("init"));
+    }
+
+    let Some(rhs) = candidate else { return false };
+    let rhs = unwrap_parens(rhs);
+    if matches!(lookup(lang, rhs.kind()), Kind::Function) && rhs.child_count() > 0 {
+        return true;
+    }
+    // Go's `expression_list` wrapping for short_var_declaration's RHS.
+    if rhs.kind() == "expression_list" {
+        let mut cursor = rhs.walk();
+        for c in rhs.named_children(&mut cursor) {
+            let c = unwrap_parens(c);
+            if matches!(lookup(lang, c.kind()), Kind::Function) && c.child_count() > 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Pointer-Phase 6 / W5: when `ast` is (or wraps) an assignment whose
 /// LHS is a single subscript / index expression with a plain-identifier
 /// receiver, emit a synthetic `__index_set__` Call node and return its
@@ -2290,7 +2370,16 @@ fn try_lower_subscript_write(
 }
 
 /// Step 1 (`pre_emit_arg_source_nodes`): scan the AST, create Source nodes,
-/// wire them to `preds`, and return (effective_preds, synth_bindings).
+/// wire them to `preds`, and return (effective_preds, synth_bindings,
+/// uses_only_synth_names).
+///
+/// `synth_bindings` carry `(arg_pos, synth_name)` pairs that should be
+/// appended to both the call's `arg_uses[arg_pos]` and its `taint.uses`.
+/// `uses_only_synth_names` carry synth names that should *only* be
+/// appended to `taint.uses` — used for chain-inner-arg sources where the
+/// synth value is not a positional argument of the OUTER call but still
+/// participates in the call's implicit dependency chain (e.g. `r.Body`
+/// inside `json.NewDecoder(r.Body).Decode(emoji)`'s receiver).
 ///
 /// Step 2 (`apply_arg_source_bindings`): after `push_node` creates the Call
 /// node, add the synthetic variable names to its `arg_uses` and `uses`.
@@ -2302,9 +2391,10 @@ fn pre_emit_arg_source_nodes(
     enclosing_func: Option<&str>,
     analysis_rules: Option<&LangAnalysisRules>,
     preds: &[NodeIndex],
-) -> (SmallVec<[NodeIndex; 4]>, Vec<(usize, String)>) {
+) -> (SmallVec<[NodeIndex; 4]>, Vec<(usize, String)>, Vec<String>) {
     let mut effective_preds: SmallVec<[NodeIndex; 4]> = SmallVec::from_slice(preds);
     let mut bindings: Vec<(usize, String)> = Vec::new();
+    let mut uses_only: Vec<String> = Vec::new();
 
     let extra = analysis_rules.and_then(|r| {
         if r.extra_labels.is_empty() {
@@ -2315,10 +2405,10 @@ fn pre_emit_arg_source_nodes(
     });
 
     let Some(call_ast) = find_call_node(ast, lang) else {
-        return (effective_preds, bindings);
+        return (effective_preds, bindings, uses_only);
     };
     let Some(args_node) = call_ast.child_by_field_name("arguments") else {
-        return (effective_preds, bindings);
+        return (effective_preds, bindings, uses_only);
     };
 
     // Collect children first (can't borrow cursor across mutable graph ops).
@@ -2338,7 +2428,7 @@ fn pre_emit_arg_source_nodes(
             || k == "hash_splat_argument"
             || k == "named_argument"
         {
-            return (effective_preds, bindings);
+            return (effective_preds, bindings, uses_only);
         }
     }
 
@@ -2427,12 +2517,102 @@ fn pre_emit_arg_source_nodes(
         }
     }
 
-    (effective_preds, bindings)
+    // Chain-shape source pre-emission: walk the receiver chain of `call_ast`
+    // and emit synth Source nodes for any source-labeled inner-call ARGs.
+    //
+    // This is what carries `r.Body` into the OUTER call's implicit-uses
+    // group for shapes like `json.NewDecoder(r.Body).Decode(emoji)`, where
+    // the outer callee text (`json.NewDecoder.Decode` after chain
+    // normalisation) doesn't classify as a Source on its own.  Without
+    // this, the writeback receiver-resolution path has nothing to read
+    // from and the CVE-2024-31450 chain stays clean.
+    //
+    // Gated to Go and to writeback-shaped outer callees (`Decode` /
+    // `Unmarshal`) because the synth-source emission is only useful when
+    // a downstream writeback consumer reads from the chain's tainted
+    // receiver — broader gating risks emitting synth sources whose taint
+    // never propagates and whose presence trips Layer B AST-pattern
+    // suppression on unrelated sinks (see
+    // `tests/fixtures/real_world/go/taint/func_literal_capture.go`).
+    // Synth names land in `uses_only` (not `bindings`) because they
+    // don't correspond to a positional outer-call argument; they surface
+    // only via `info.taint.uses`.
+    let outer_method_is_writeback = call_ast
+        .child_by_field_name("function")
+        .or_else(|| call_ast.child_by_field_name("method"))
+        .and_then(|f| {
+            f.child_by_field_name("field")
+                .or_else(|| f.child_by_field_name("property"))
+                .or_else(|| f.child_by_field_name("name"))
+        })
+        .and_then(|n| text_of(n, code))
+        .is_some_and(|name| name == "Decode" || name == "Unmarshal");
+    if lang == "go" && outer_method_is_writeback {
+        let mut inner_args: Vec<Node> = Vec::new();
+        walk_chain_inner_call_args(call_ast, lang, &mut inner_args);
+        for arg in inner_args {
+            let k = arg.kind();
+            // Mirror the splat/keyword bail from the outer-args pass.
+            if k == "spread_element"
+                || k == "dictionary_splat"
+                || k == "list_splat"
+                || k == "keyword_argument"
+                || k == "splat_argument"
+                || k == "hash_splat_argument"
+                || k == "named_argument"
+            {
+                continue;
+            }
+            let src_label = first_member_label(arg, lang, code, extra);
+            if let Some(DataLabel::Source(caps)) = src_label {
+                let synth_name =
+                    format!("__nyx_chainsrc_{}_{}", g.node_count(), uses_only.len());
+                let member_text = first_member_text(arg, code);
+                let span = (arg.start_byte(), arg.end_byte());
+
+                let mut src_labels: SmallVec<[DataLabel; 2]> = SmallVec::new();
+                src_labels.push(DataLabel::Source(caps));
+
+                let src_idx = g.add_node(NodeInfo {
+                    kind: StmtKind::Seq,
+                    call: CallMeta {
+                        callee: member_text,
+                        ..Default::default()
+                    },
+                    taint: TaintMeta {
+                        labels: src_labels,
+                        defines: Some(synth_name.clone()),
+                        ..Default::default()
+                    },
+                    ast: AstMeta {
+                        span,
+                        enclosing_func: enclosing_func.map(|s| s.to_string()),
+                    },
+                    ..Default::default()
+                });
+
+                connect_all(g, &effective_preds, src_idx, EdgeKind::Seq);
+                effective_preds.clear();
+                effective_preds.push(src_idx);
+
+                uses_only.push(synth_name);
+            }
+        }
+    }
+
+    (effective_preds, bindings, uses_only)
 }
 
 /// Step 2: wire synthetic variable names from pre-emitted Source nodes into
-/// the Call node's `arg_uses` and `uses`.
-fn apply_arg_source_bindings(g: &mut Cfg, call_node: NodeIndex, bindings: &[(usize, String)]) {
+/// the Call node's `arg_uses` and `uses`.  `uses_only` synth names are
+/// appended only to `taint.uses` — used for chain-inner-arg sources whose
+/// synth value is not a positional outer-call argument.
+fn apply_arg_source_bindings(
+    g: &mut Cfg,
+    call_node: NodeIndex,
+    bindings: &[(usize, String)],
+    uses_only: &[String],
+) {
     for (pos, synth_name) in bindings {
         let arg_uses = &mut g[call_node].call.arg_uses;
         if *pos < arg_uses.len() {
@@ -2443,6 +2623,9 @@ fn apply_arg_source_bindings(g: &mut Cfg, call_node: NodeIndex, bindings: &[(usi
             }
             arg_uses.push(vec![synth_name.clone()]);
         }
+        g[call_node].taint.uses.push(synth_name.clone());
+    }
+    for synth_name in uses_only {
         g[call_node].taint.uses.push(synth_name.clone());
     }
 }
@@ -2894,7 +3077,7 @@ pub(super) fn build_sub<'a>(
                 // that callee labels (source/sanitizer/sink) are applied.
                 let ord = *call_ordinal;
                 *call_ordinal += 1;
-                let (effective_preds, src_bindings) = pre_emit_arg_source_nodes(
+                let (effective_preds, src_bindings, src_uses_only) = pre_emit_arg_source_nodes(
                     g,
                     ast,
                     lang,
@@ -2913,7 +3096,7 @@ pub(super) fn build_sub<'a>(
                     ord,
                     analysis_rules,
                 );
-                apply_arg_source_bindings(g, call_idx, &src_bindings);
+                apply_arg_source_bindings(g, call_idx, &src_bindings, &src_uses_only);
                 connect_all(g, &effective_preds, call_idx, EdgeKind::Seq);
                 let ret = push_node(
                     g,
@@ -2976,7 +3159,7 @@ pub(super) fn build_sub<'a>(
             if has_call_descendant(ast, lang) {
                 let ord = *call_ordinal;
                 *call_ordinal += 1;
-                let (effective_preds, src_bindings) = pre_emit_arg_source_nodes(
+                let (effective_preds, src_bindings, src_uses_only) = pre_emit_arg_source_nodes(
                     g,
                     ast,
                     lang,
@@ -2995,7 +3178,7 @@ pub(super) fn build_sub<'a>(
                     ord,
                     analysis_rules,
                 );
-                apply_arg_source_bindings(g, call_idx, &src_bindings);
+                apply_arg_source_bindings(g, call_idx, &src_bindings, &src_uses_only);
                 connect_all(g, &effective_preds, call_idx, EdgeKind::Seq);
                 let ret = push_node(
                     g,
@@ -3636,10 +3819,10 @@ pub(super) fn build_sub<'a>(
             // `res.redirect(req.body.returnTo)`).  Created BEFORE the Call
             // node so they get lower indices — see doc comment on
             // `pre_emit_arg_source_nodes` for why this ordering matters.
-            let (effective_preds, src_bindings) = if kind == StmtKind::Call {
+            let (effective_preds, src_bindings, src_uses_only) = if kind == StmtKind::Call {
                 pre_emit_arg_source_nodes(g, ast, lang, code, enclosing_func, analysis_rules, preds)
             } else {
-                (SmallVec::from_slice(preds), Vec::new())
+                (SmallVec::from_slice(preds), Vec::new(), Vec::new())
             };
 
             let node = push_node(
@@ -3652,7 +3835,7 @@ pub(super) fn build_sub<'a>(
                 ord,
                 analysis_rules,
             );
-            apply_arg_source_bindings(g, node, &src_bindings);
+            apply_arg_source_bindings(g, node, &src_bindings, &src_uses_only);
 
             // Python `with_item`: acquisition inside a context manager.
             // Only mark if this is actually an acquisition (Call + defines).
@@ -3736,7 +3919,7 @@ pub(super) fn build_sub<'a>(
         Kind::CallFn | Kind::CallMethod | Kind::CallMacro => {
             let ord = *call_ordinal;
             *call_ordinal += 1;
-            let (effective_preds, src_bindings) = pre_emit_arg_source_nodes(
+            let (effective_preds, src_bindings, src_uses_only) = pre_emit_arg_source_nodes(
                 g,
                 ast,
                 lang,
@@ -3755,7 +3938,7 @@ pub(super) fn build_sub<'a>(
                 ord,
                 analysis_rules,
             );
-            apply_arg_source_bindings(g, n, &src_bindings);
+            apply_arg_source_bindings(g, n, &src_bindings, &src_uses_only);
             connect_all(g, &effective_preds, n, EdgeKind::Seq);
 
             // If the callee is a configured terminator, treat as a dead end

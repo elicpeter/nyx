@@ -328,13 +328,21 @@ pub(crate) fn member_expr_text(n: Node, code: &[u8]) -> Option<String> {
 pub(crate) fn member_expr_text_inner(n: Node, code: &[u8]) -> Option<String> {
     match n.kind() {
         "member_expression" | "attribute" | "selector_expression" => {
+            // Tree-sitter exposes the receiver under `object` (JS/TS, Python),
+            // `value` (Rust field_expression — handled in the matching arm
+            // above), or `operand` (Go selector_expression).  Without the
+            // `operand` fallback, Go member access like `r.Body` collapsed to
+            // just the trailing field (`Body`), so source rules keyed on the
+            // dotted form (e.g. Go's `r.Body`) would never match.
             let obj = n
                 .child_by_field_name("object")
                 .or_else(|| n.child_by_field_name("value"))
+                .or_else(|| n.child_by_field_name("operand"))
                 .and_then(|o| member_expr_text_inner(o, code))
                 .or_else(|| {
                     n.child_by_field_name("object")
                         .or_else(|| n.child_by_field_name("value"))
+                        .or_else(|| n.child_by_field_name("operand"))
                         .and_then(|o| text_of(o, code))
                 });
             let prop = n
