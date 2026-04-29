@@ -1504,7 +1504,11 @@ mod tests {
             &member("req", "dag_run_id"),
             &unit
         ));
-        assert!(auth_check_covers_subject(&route_check, &plain("dag"), &unit));
+        assert!(auth_check_covers_subject(
+            &route_check,
+            &plain("dag"),
+            &unit
+        ));
 
         // Sanity check: an in-body check with no subjects (the prior
         // shape) does NOT cover arbitrary subjects.  Without the

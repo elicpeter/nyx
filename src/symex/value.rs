@@ -474,11 +474,7 @@ impl fmt::Display for SymbolicValue {
         // (e.g. Cyrillic / Gurmukhi regex literals).
         let s = display_inner(self);
         if s.len() > MAX_DISPLAY_LEN {
-            write!(
-                f,
-                "{}...",
-                truncate_at_char_boundary(&s, MAX_DISPLAY_LEN)
-            )
+            write!(f, "{}...", truncate_at_char_boundary(&s, MAX_DISPLAY_LEN))
         } else {
             write!(f, "{}", s)
         }

@@ -2776,11 +2776,7 @@ fn python_decorated_definition_is_background_task(node: Node<'_>, bytes: &[u8]) 
         let last = callee_text.rsplit('.').next().unwrap_or(&callee_text);
         if matches!(
             last,
-            "task"
-                | "shared_task"
-                | "periodic_task"
-                | "instrumented_task"
-                | "receiver"
+            "task" | "shared_task" | "periodic_task" | "instrumented_task" | "receiver"
         ) {
             return true;
         }
@@ -3306,10 +3302,7 @@ fn collect_param_names(
 /// what counts as id-like.
 fn is_python_id_like_typed_param(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    lower == "id"
-        || lower.ends_with("id")
-        || lower.ends_with("_id")
-        || lower.ends_with("ids")
+    lower == "id" || lower.ends_with("id") || lower.ends_with("_id") || lower.ends_with("ids")
 }
 
 pub fn is_function_like(node: Node<'_>) -> bool {
@@ -3613,9 +3606,8 @@ fn matches_session_context(chain: &[String]) -> bool {
     // its Session classification.  Length 3+ chains with `session` at
     // the root always stay auth (they describe a session-stored
     // member or sub-member).
-    let bare_session_chain_is_auth =
-        lower.first().is_some_and(|segment| segment == "session")
-            && (lower.len() == 1 || lower.len() >= 3 || !is_orm_session_verb(&lower[1]));
+    let bare_session_chain_is_auth = lower.first().is_some_and(|segment| segment == "session")
+        && (lower.len() == 1 || lower.len() >= 3 || !is_orm_session_verb(&lower[1]));
     let unambiguous_chain_root = lower.first().is_some_and(|segment| {
         matches!(
             segment.as_str(),

@@ -1029,9 +1029,7 @@ fn compute_succ_states(
                 //   if (ssrfError) throw …;`).
                 if matches!(
                     kind,
-                    PredicateKind::Unknown
-                        | PredicateKind::NullCheck
-                        | PredicateKind::ErrorCheck
+                    PredicateKind::Unknown | PredicateKind::NullCheck | PredicateKind::ErrorCheck
                 ) {
                     apply_input_validator_branch_narrowing(
                         &mut true_state,
@@ -1426,11 +1424,10 @@ fn apply_input_validator_branch_narrowing(
         return;
     };
 
-    let polarity =
-        match crate::ssa::type_facts::classify_input_validator_callee(callee.as_str()) {
-            Some(p) => p,
-            None => return,
-        };
+    let polarity = match crate::ssa::type_facts::classify_input_validator_callee(callee.as_str()) {
+        Some(p) => p,
+        None => return,
+    };
 
     // Determine the success branch.
     //

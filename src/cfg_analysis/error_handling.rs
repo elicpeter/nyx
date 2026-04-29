@@ -190,25 +190,13 @@ fn call_never_returns(info: &crate::cfg::NodeInfo) -> bool {
         // Go builtin
         "panic" => return true,
         // Go std
-        "os.Exit"
-        | "syscall.Exit"
-        | "runtime.Goexit"
-        | "log.Fatal"
-        | "log.Fatalf"
-        | "log.Fatalln"
-        | "log.Panic"
-        | "log.Panicf"
-        | "log.Panicln"
-        | "slog.Fatal"
-        | "klog.Fatal"
-        | "klog.Fatalf"
-        | "klog.Exit"
-        | "klog.Exitf" => return true,
+        "os.Exit" | "syscall.Exit" | "runtime.Goexit" | "log.Fatal" | "log.Fatalf"
+        | "log.Fatalln" | "log.Panic" | "log.Panicf" | "log.Panicln" | "slog.Fatal"
+        | "klog.Fatal" | "klog.Fatalf" | "klog.Exit" | "klog.Exitf" => return true,
         // Rust std
-        "process::exit"
-        | "process::abort"
-        | "std::process::exit"
-        | "std::process::abort" => return true,
+        "process::exit" | "process::abort" | "std::process::exit" | "std::process::abort" => {
+            return true;
+        }
         // Python std
         "sys.exit" | "os._exit" | "os.abort" => return true,
         _ => {}

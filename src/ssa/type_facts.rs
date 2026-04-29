@@ -246,9 +246,7 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
             // Map lookup in pure data-manipulation code (excalidraw's
             // `elementsMap.get(id)`, `origIdToDuplicateId.get(...)`,
             // `groupIdMapForOperation.set(...)` shapes).
-            "Map" | "Set" | "WeakMap" | "WeakSet" | "Array" => {
-                Some(TypeKind::LocalCollection)
-            }
+            "Map" | "Set" | "WeakMap" | "WeakSet" | "Array" => Some(TypeKind::LocalCollection),
             _ => None,
         },
         Lang::Python => {

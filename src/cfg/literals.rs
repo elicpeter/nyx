@@ -390,7 +390,9 @@ pub(super) fn js_chain_arg0_kind_for_method(
                 prop_text.as_deref() == Some(*m)
                     || leaf_text.as_deref() == Some(*m)
                     || full_text.as_deref() == Some(*m)
-                    || full_text.as_deref().is_some_and(|s| s.ends_with(&format!(".{m}")))
+                    || full_text
+                        .as_deref()
+                        .is_some_and(|s| s.ends_with(&format!(".{m}")))
             });
             if matched {
                 return arg0_kind_and_interpolation(n);
@@ -444,7 +446,9 @@ pub(super) fn js_chain_outer_method_for_inner<'a>(
                 prop_text.as_deref() == Some(*m)
                     || leaf_text.as_deref() == Some(*m)
                     || full_text.as_deref() == Some(*m)
-                    || full_text.as_deref().is_some_and(|s| s.ends_with(&format!(".{m}")))
+                    || full_text
+                        .as_deref()
+                        .is_some_and(|s| s.ends_with(&format!(".{m}")))
             });
             if inner_matched {
                 return function

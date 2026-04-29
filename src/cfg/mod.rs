@@ -55,9 +55,8 @@ use literals::{
     extract_arg_uses, extract_const_keyword_arg, extract_const_string_arg,
     extract_destination_field_idents, extract_kwargs, extract_literal_rhs, find_call_node,
     find_call_node_deep, find_chained_inner_call, has_keyword_arg, has_only_literal_args,
-    is_parameterized_query_call, java_chain_arg0_kind_for_method,
-    js_chain_arg0_kind_for_method, js_chain_outer_method_for_inner,
-    ruby_chain_arg0_for_method, walk_chain_inner_call_args,
+    is_parameterized_query_call, java_chain_arg0_kind_for_method, js_chain_arg0_kind_for_method,
+    js_chain_outer_method_for_inner, ruby_chain_arg0_for_method, walk_chain_inner_call_args,
 };
 use params::{
     compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
@@ -1924,7 +1923,11 @@ pub(super) fn push_node<'a>(
     // `connection.query("SELECT ...")` (no chained method) and
     // `db.query("UPDATE x SET y=" + name)` (non-literal arg 0) leave the
     // sink in place — both are genuine SQLi shapes.
-    if (lang == "javascript" || lang == "js" || lang == "typescript" || lang == "ts" || lang == "tsx")
+    if (lang == "javascript"
+        || lang == "js"
+        || lang == "typescript"
+        || lang == "ts"
+        || lang == "tsx")
         && labels
             .iter()
             .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(Cap::SQL_QUERY)))
@@ -1972,7 +1975,10 @@ pub(super) fn push_node<'a>(
                 && let Some((arg0_kind, has_interp)) =
                     js_chain_arg0_kind_for_method(call_node, QUERY_TARGETS, code)
                 && !has_interp
-                && matches!(arg0_kind.as_str(), "string" | "string_fragment" | "template_string")
+                && matches!(
+                    arg0_kind.as_str(),
+                    "string" | "string_fragment" | "template_string"
+                )
             {
                 labels.push(DataLabel::Sanitizer(Cap::SQL_QUERY));
             }
@@ -4174,7 +4180,8 @@ pub(crate) fn build_cfg<'a>(
     // aliases so JS/TS param classifiers resolve `m: ElementsMap`
     // to `LocalCollection`.  Empty for non-JS/TS languages.
     TYPE_ALIAS_LC.with(|cell| {
-        *cell.borrow_mut() = dto::collect_type_alias_local_collections(tree.root_node(), lang, code);
+        *cell.borrow_mut() =
+            dto::collect_type_alias_local_collections(tree.root_node(), lang, code);
     });
 
     // Create the top-level body graph (BodyId(0)).
