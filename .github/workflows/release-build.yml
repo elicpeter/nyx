@@ -3,12 +3,19 @@ name: Release build & publish
 on:
   release:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to (re)build and publish (e.g. v0.5.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 env:
   BIN_NAME: nyx
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
   frontend:
@@ -17,6 +24,8 @@ jobs:
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: actions/setup-node@v6
         with:
@@ -60,6 +69,8 @@ jobs:
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Download prebuilt frontend dist
         uses: actions/download-artifact@v8
@@ -136,6 +147,8 @@ jobs:
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Download prebuilt frontend dist
         uses: actions/download-artifact@v8
@@ -192,13 +205,15 @@ jobs:
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@v0
         with:
           path: .
           format: cyclonedx-json
-          output-file: nyx-${{ github.event.release.tag_name }}.cdx.json
+          output-file: nyx-${{ env.RELEASE_TAG }}.cdx.json
           upload-artifact: false
           upload-release-assets: false
 
@@ -229,7 +244,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SBOM="nyx-${{ github.event.release.tag_name }}.cdx.json"
+          SBOM="nyx-${{ env.RELEASE_TAG }}.cdx.json"
           (
             cd release-artifacts
             for f in *.zip SHA256SUMS; do
@@ -249,17 +264,18 @@ jobs:
           subject-path: |
             release-artifacts/*.zip
             release-artifacts/SHA256SUMS
-            nyx-${{ github.event.release.tag_name }}.cdx.json
+            nyx-${{ env.RELEASE_TAG }}.cdx.json
 
       - name: Upload to the release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             release-artifacts/*.zip
             release-artifacts/*.zip.bundle
             release-artifacts/SHA256SUMS
             release-artifacts/SHA256SUMS.bundle
-            nyx-${{ github.event.release.tag_name }}.cdx.json
-            nyx-${{ github.event.release.tag_name }}.cdx.json.bundle
+            nyx-${{ env.RELEASE_TAG }}.cdx.json
+            nyx-${{ env.RELEASE_TAG }}.cdx.json.bundle
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
