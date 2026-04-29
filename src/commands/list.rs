@@ -47,10 +47,7 @@ pub fn handle(verbose: bool, database_dir: &std::path::Path) -> NyxResult<()> {
     }
 
     println!();
-    println!(
-        "{}",
-        style(format!("{} project(s)", entries.len())).dim()
-    );
+    println!("{}", style(format!("{} project(s)", entries.len())).dim());
 
     std::process::exit(0);
 }

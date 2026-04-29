@@ -99,8 +99,7 @@ pub fn handle_command(
             // structured output formats so machine pipelines stay clean.
             use crate::cli::OutputFormat;
             let effective_format = format.unwrap_or(config.output.default_format);
-            let structured =
-                matches!(effective_format, OutputFormat::Json | OutputFormat::Sarif);
+            let structured = matches!(effective_format, OutputFormat::Json | OutputFormat::Sarif);
             let suppress_warnings = quiet || config.output.quiet || structured;
             let warn_dep = |old: &str, new: &str| {
                 if !suppress_warnings {
@@ -429,10 +428,7 @@ fn print_engine_explanation(config: &Config, engine_profile: Option<EngineProfil
         println!("  {}", style(title).cyan().bold());
     };
 
-    println!(
-        "{}",
-        style("Effective engine configuration").white().bold()
-    );
+    println!("{}", style("Effective engine configuration").white().bold());
     println!(
         "    {:<24} {}",
         "Engine profile:",

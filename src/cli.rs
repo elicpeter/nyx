@@ -41,10 +41,9 @@ impl Commands {
         match self {
             Commands::Scan { explain_engine, .. } => *explain_engine,
             Commands::List { .. } => true,
-            Commands::Config { action } => matches!(
-                action,
-                ConfigAction::Show | ConfigAction::Path
-            ),
+            Commands::Config { action } => {
+                matches!(action, ConfigAction::Show | ConfigAction::Path)
+            }
             Commands::Index { action } => matches!(action, IndexAction::Status { .. }),
             _ => false,
         }
@@ -314,7 +313,11 @@ pub enum Commands {
 
         // ── Analysis engine toggles (override [analysis.engine] config) ───
         /// Enable path-constraint solving (default: on)
-        #[arg(long, overrides_with = "no_constraint_solving", help_heading = "Engine")]
+        #[arg(
+            long,
+            overrides_with = "no_constraint_solving",
+            help_heading = "Engine"
+        )]
         constraint_solving: bool,
         /// Disable path-constraint solving
         #[arg(long, overrides_with = "constraint_solving", help_heading = "Engine")]
@@ -363,7 +366,11 @@ pub enum Commands {
         no_smt: bool,
 
         /// Enable demand-driven backwards analysis (default: off)
-        #[arg(long, overrides_with = "no_backwards_analysis", help_heading = "Engine")]
+        #[arg(
+            long,
+            overrides_with = "no_backwards_analysis",
+            help_heading = "Engine"
+        )]
         backwards_analysis: bool,
         /// Disable demand-driven backwards analysis
         #[arg(long, overrides_with = "backwards_analysis", help_heading = "Engine")]
