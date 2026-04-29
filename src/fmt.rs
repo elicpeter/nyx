@@ -276,7 +276,7 @@ fn render_diag(d: &Diag, width: usize) -> String {
             Some(format!(
                 "  {}",
                 style(format!(
-                    "[capped: {count} note{} — {}]",
+                    "[capped: {count} note{}, {}]",
                     if count == 1 { "" } else { "s" },
                     direction.tag(),
                 ))

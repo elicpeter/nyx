@@ -11,7 +11,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Code execution ─────────────────────────────────────────
     Pattern {
         id: "py.code_exec.eval",
-        description: "eval() — dynamic code execution",
+        description: "eval() runs dynamic code",
         query: r#"(call function: (identifier) @id (#eq? @id "eval")) @vuln"#,
         severity: Severity::High,
         tier: PatternTier::A,
@@ -20,7 +20,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "py.code_exec.exec",
-        description: "exec() — dynamic code execution",
+        description: "exec() runs dynamic code",
         query: r#"(call function: (identifier) @id (#eq? @id "exec")) @vuln"#,
         severity: Severity::High,
         tier: PatternTier::A,
@@ -29,7 +29,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "py.code_exec.compile",
-        description: "compile() with exec/eval mode — code compilation from string",
+        description: "compile() with exec/eval mode compiles code from a string",
         query: r#"(call function: (identifier) @id (#eq? @id "compile")) @vuln"#,
         severity: Severity::Medium,
         tier: PatternTier::A,
@@ -39,7 +39,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Command execution ──────────────────────────────────────
     Pattern {
         id: "py.cmdi.os_system",
-        description: "os.system() — shell command execution",
+        description: "os.system() runs a shell command",
         query: r#"(call
                      function: (attribute
                        object: (identifier) @pkg (#eq? @pkg "os")
@@ -52,7 +52,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "py.cmdi.os_popen",
-        description: "os.popen() — shell command execution",
+        description: "os.popen() runs a shell command",
         query: r#"(call
                      function: (attribute
                        object: (identifier) @pkg (#eq? @pkg "os")
@@ -83,7 +83,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Deserialization ────────────────────────────────────────
     Pattern {
         id: "py.deser.pickle_loads",
-        description: "pickle.loads/load — arbitrary object deserialization",
+        description: "pickle.loads/load deserializes arbitrary objects",
         query: r#"(call
                      function: (attribute
                        object: (identifier) @pkg (#eq? @pkg "pickle")
@@ -96,7 +96,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "py.deser.yaml_load",
-        description: "yaml.load() without SafeLoader — arbitrary object instantiation",
+        description: "yaml.load() without SafeLoader instantiates arbitrary objects",
         query: r#"(call
                      function: (attribute
                        object: (identifier) @pkg (#eq? @pkg "yaml")
@@ -109,7 +109,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "py.deser.shelve_open",
-        description: "shelve.open() — pickle-backed deserialization",
+        description: "shelve.open() performs pickle-backed deserialization",
         query: r#"(call
                      function: (attribute
                        object: (identifier) @pkg (#eq? @pkg "shelve")
@@ -123,7 +123,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier B: SQL injection (format/concat heuristic) ────────────────
     Pattern {
         id: "py.sqli.execute_format",
-        description: "cursor.execute with string concatenation — SQL injection risk",
+        description: "cursor.execute with string concatenation risks SQL injection",
         query: r#"(call
                      function: (attribute
                        attribute: (identifier) @fn (#eq? @fn "execute"))
@@ -138,7 +138,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Weak crypto ────────────────────────────────────────────
     Pattern {
         id: "py.crypto.md5",
-        description: "hashlib.md5() — weak hash algorithm",
+        description: "hashlib.md5() uses a weak hash algorithm",
         query: r#"(call
                      function: (attribute
                        object: (identifier) @pkg (#eq? @pkg "hashlib")
@@ -151,7 +151,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "py.crypto.sha1",
-        description: "hashlib.sha1() — weak hash algorithm",
+        description: "hashlib.sha1() uses a weak hash algorithm",
         query: r#"(call
                      function: (attribute
                        object: (identifier) @pkg (#eq? @pkg "hashlib")
@@ -165,7 +165,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Template injection ─────────────────────────────────────
     Pattern {
         id: "py.xss.jinja_from_string",
-        description: "jinja2.Template from string — potential template injection",
+        description: "jinja2.Template from string risks template injection",
         query: r#"(call
                      function: (attribute
                        attribute: (identifier) @fn (#eq? @fn "from_string")))

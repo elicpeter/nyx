@@ -5,3 +5,9 @@ edition = "2021"
 
 [dependencies]
 axum = "0.7"
+
+# Sources live at the crate root rather than under src/, so cargo-machete's
+# manifest scan misses the `use` lines and flags this as unused. Nyx scans
+# the .rs files directly; the dep is real.
+[package.metadata.cargo-machete]
+ignored = ["axum"]

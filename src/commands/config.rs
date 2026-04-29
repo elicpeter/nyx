@@ -31,7 +31,7 @@ pub fn show(config: &Config, all: bool) -> NyxResult<()> {
             "# No overrides, using built-in defaults. Run `nyx config show --all` for the full effective config.".to_string()
         } else {
             format!(
-                "# {} override(s) shown — `nyx config show --all` for the full effective config.",
+                "# {} override(s) shown. Run `nyx config show --all` for the full effective config.",
                 override_count
             )
         };

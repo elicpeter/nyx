@@ -393,7 +393,7 @@ fn print_engine_explanation(config: &Config, engine_profile: Option<EngineProfil
     let scanner = &config.scanner;
     let profile_label = engine_profile
         .map(|p| p.to_string())
-        .unwrap_or_else(|| "(none — using config defaults)".to_string());
+        .unwrap_or_else(|| "(none, using config defaults)".to_string());
     let smt_compiled = cfg!(feature = "smt");
     let pipeline_on = matches!(
         config.scanner.mode,

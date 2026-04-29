@@ -7,3 +7,9 @@ edition = "2021"
 axum = "0.7"
 actix-web = "4"
 rocket = "0.5"
+
+# Handler sources live at the crate root rather than under src/, so
+# cargo-machete's manifest scan misses the `use` lines and flags these
+# as unused. Nyx scans the .rs files directly; the deps are real.
+[package.metadata.cargo-machete]
+ignored = ["axum", "actix-web", "rocket"]

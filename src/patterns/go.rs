@@ -10,7 +10,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Command execution ──────────────────────────────────────
     Pattern {
         id: "go.cmdi.exec_command",
-        description: "exec.Command() — arbitrary process execution",
+        description: "exec.Command() runs an arbitrary process",
         query: r#"(call_expression
                      function: (selector_expression
                        field: (field_identifier) @f (#eq? @f "Command")))
@@ -23,7 +23,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Unsafe pointer ─────────────────────────────────────────
     Pattern {
         id: "go.memory.unsafe_pointer",
-        description: "unsafe.Pointer — bypasses Go type system",
+        description: "unsafe.Pointer bypasses the Go type system",
         query: r#"(call_expression
                      function: (selector_expression
                        operand: (identifier) @pkg (#eq? @pkg "unsafe")
@@ -37,7 +37,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: TLS misconfiguration ───────────────────────────────────
     Pattern {
         id: "go.transport.insecure_skip_verify",
-        description: "InsecureSkipVerify: true — disables TLS certificate validation",
+        description: "InsecureSkipVerify: true disables TLS certificate validation",
         query: r#"(keyed_element
                      (literal_element
                        (identifier) @k (#eq? @k "InsecureSkipVerify"))
@@ -51,7 +51,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Weak crypto ────────────────────────────────────────────
     Pattern {
         id: "go.crypto.md5",
-        description: "md5.New() / md5.Sum() — weak hash algorithm",
+        description: "md5.New() / md5.Sum() use a weak hash algorithm",
         query: r#"(call_expression
                      function: (selector_expression
                        operand: (identifier) @pkg (#eq? @pkg "md5")))
@@ -63,7 +63,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "go.crypto.sha1",
-        description: "sha1.New() / sha1.Sum() — weak hash algorithm",
+        description: "sha1.New() / sha1.Sum() use a weak hash algorithm",
         query: r#"(call_expression
                      function: (selector_expression
                        operand: (identifier) @pkg (#eq? @pkg "sha1")))
@@ -106,7 +106,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Deserialization ────────────────────────────────────────
     Pattern {
         id: "go.deser.gob_decode",
-        description: "gob.NewDecoder — Go binary deserialization",
+        description: "gob.NewDecoder performs Go binary deserialization",
         query: r#"(call_expression
                      function: (selector_expression
                        operand: (identifier) @pkg (#eq? @pkg "gob")

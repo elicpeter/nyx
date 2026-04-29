@@ -11,7 +11,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Deserialization ────────────────────────────────────────
     Pattern {
         id: "java.deser.readobject",
-        description: "ObjectInputStream.readObject() — unsafe deserialization",
+        description: "ObjectInputStream.readObject() performs unsafe deserialization",
         // Match any .readObject() call — the method name is specific enough.
         query: r#"(method_invocation
                      name: (identifier) @id (#eq? @id "readObject"))
@@ -24,7 +24,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Command execution ──────────────────────────────────────
     Pattern {
         id: "java.cmdi.runtime_exec",
-        description: "Runtime.getRuntime().exec() — shell command execution",
+        description: "Runtime.getRuntime().exec() runs a shell command",
         query: r#"(method_invocation
                      object: (method_invocation
                        name: (identifier) @n (#eq? @n "getRuntime"))
@@ -38,7 +38,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Reflection ─────────────────────────────────────────────
     Pattern {
         id: "java.reflection.class_forname",
-        description: "Class.forName() — dynamic class loading",
+        description: "Class.forName() performs dynamic class loading",
         query: r#"(method_invocation
                      object: (identifier) @c (#eq? @c "Class")
                      name: (identifier) @id (#eq? @id "forName"))
@@ -50,7 +50,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "java.reflection.method_invoke",
-        description: "Method.invoke() — reflective method invocation",
+        description: "Method.invoke() is a reflective method invocation",
         query: r#"(method_invocation
                      name: (identifier) @id (#eq? @id "invoke"))
                    @vuln"#,
@@ -76,7 +76,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Weak crypto ────────────────────────────────────────────
     Pattern {
         id: "java.crypto.insecure_random",
-        description: "new Random() — java.util.Random is not cryptographically secure",
+        description: "new Random() (java.util.Random) is not cryptographically secure",
         query: r#"(object_creation_expression
                      type: (type_identifier) @t (#eq? @t "Random"))
                    @vuln"#,
@@ -87,7 +87,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "java.crypto.weak_digest",
-        description: "MessageDigest.getInstance(\"MD5\"/\"SHA1\") — weak hash algorithm",
+        description: "MessageDigest.getInstance(\"MD5\"/\"SHA1\") uses a weak hash algorithm",
         query: r#"(method_invocation
                      object: (identifier) @c (#eq? @c "MessageDigest")
                      name: (identifier) @id (#eq? @id "getInstance")
@@ -102,7 +102,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: XSS (servlet) ──────────────────────────────────────────
     Pattern {
         id: "java.xss.getwriter_print",
-        description: "response.getWriter().print/println — direct output without encoding",
+        description: "response.getWriter().print/println writes output without encoding",
         query: r#"(method_invocation
                      object: (method_invocation
                        name: (identifier) @gw (#eq? @gw "getWriter"))

@@ -301,9 +301,9 @@ pub enum Commands {
         ///
         /// Suppresses any finding whose engine provenance notes indicate
         /// over-reporting (predicate/path widening) or analysis bail
-        /// (SSA lowering failure, parse timeout).  Under-report notes —
-        /// where the emitted finding is still a real flow but the
-        /// result set is a lower bound — are kept.
+        /// (SSA lowering failure, parse timeout).  Under-report notes
+        /// (where the emitted finding is still a real flow but the
+        /// result set is a lower bound) are kept.
         ///
         /// Intended for strict CI gates where a finding from non-converged
         /// analysis is worse than no finding.  Applied after ranking and

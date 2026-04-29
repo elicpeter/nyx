@@ -12,7 +12,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Code execution ─────────────────────────────────────────
     Pattern {
         id: "php.code_exec.eval",
-        description: "eval() — dynamic code execution",
+        description: "eval() runs dynamic code",
         query: r#"(function_call_expression
                      function: (name) @n (#eq? @n "eval"))
                    @vuln"#,
@@ -23,7 +23,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "php.code_exec.create_function",
-        description: "create_function() — deprecated eval-like constructor",
+        description: "create_function() is a deprecated eval-like constructor",
         query: r#"(function_call_expression
                      function: (name) @n (#eq? @n "create_function"))
                    @vuln"#,
@@ -34,7 +34,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "php.code_exec.preg_replace_e",
-        description: "preg_replace with /e modifier — code execution via regex",
+        description: "preg_replace with /e modifier executes code via regex",
         query: r#"(function_call_expression
                      function: (name) @n (#eq? @n "preg_replace")
                      arguments: (arguments
@@ -48,7 +48,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "php.code_exec.assert_string",
-        description: "assert() with string argument — evaluates PHP code",
+        description: "assert() with a string argument evaluates PHP code",
         query: r#"(function_call_expression
                      function: (name) @n (#eq? @n "assert")
                      arguments: (arguments
@@ -62,7 +62,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Command execution ──────────────────────────────────────
     Pattern {
         id: "php.cmdi.system",
-        description: "system/shell_exec/exec/passthru — shell command execution",
+        description: "system/shell_exec/exec/passthru runs a shell command",
         query: r#"(function_call_expression
                      function: (name) @n (#match? @n "^(system|shell_exec|exec|passthru|proc_open|popen)$"))
                    @vuln"#,
@@ -74,7 +74,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Deserialization ────────────────────────────────────────
     Pattern {
         id: "php.deser.unserialize",
-        description: "unserialize() — PHP object injection",
+        description: "unserialize() enables PHP object injection",
         query: r#"(function_call_expression
                      function: (name) @n (#eq? @n "unserialize"))
                    @vuln"#,
@@ -100,7 +100,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier B: Path traversal (include with variable) ─────────────────
     Pattern {
         id: "php.path.include_variable",
-        description: "include/require with variable path — file inclusion vulnerability",
+        description: "include/require with a variable path is a file-inclusion vulnerability",
         query: r#"(include_expression (variable_name)) @vuln"#,
         severity: Severity::High,
         tier: PatternTier::B,
@@ -110,7 +110,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Crypto ─────────────────────────────────────────────────
     Pattern {
         id: "php.crypto.md5",
-        description: "md5() — weak hash function",
+        description: "md5() is a weak hash function",
         query: r#"(function_call_expression
                      function: (name) @n (#eq? @n "md5"))
                    @vuln"#,
@@ -121,7 +121,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "php.crypto.sha1",
-        description: "sha1() — weak hash function",
+        description: "sha1() is a weak hash function",
         query: r#"(function_call_expression
                      function: (name) @n (#eq? @n "sha1"))
                    @vuln"#,
@@ -132,7 +132,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "php.crypto.rand",
-        description: "rand()/mt_rand() — not cryptographically secure",
+        description: "rand()/mt_rand() is not cryptographically secure",
         query: r#"(function_call_expression
                      function: (name) @n (#match? @n "^(rand|mt_rand)$"))
                    @vuln"#,

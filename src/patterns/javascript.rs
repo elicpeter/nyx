@@ -12,7 +12,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Code execution ─────────────────────────────────────────
     Pattern {
         id: "js.code_exec.eval",
-        description: "eval() — dynamic code execution",
+        description: "eval() runs dynamic code",
         query: r#"(call_expression
                      function: (identifier) @id (#eq? @id "eval"))
                    @vuln"#,
@@ -23,7 +23,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "js.code_exec.new_function",
-        description: "new Function() constructor — eval equivalent",
+        description: "new Function() constructor is equivalent to eval",
         query: r#"(new_expression
                      constructor: (identifier) @id (#eq? @id "Function"))
                    @vuln"#,
@@ -34,7 +34,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "js.code_exec.settimeout_string",
-        description: "setTimeout/setInterval with string argument — implicit eval",
+        description: "setTimeout/setInterval with a string argument runs implicit eval",
         query: r#"(call_expression
                      function: (identifier) @id (#match? @id "^(setTimeout|setInterval)$")
                      arguments: (arguments (string) @code))
@@ -47,7 +47,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: XSS sinks ──────────────────────────────────────────────
     Pattern {
         id: "js.xss.document_write",
-        description: "document.write() — XSS sink",
+        description: "document.write() is an XSS sink",
         query: r#"(call_expression
                      function: (member_expression
                        object: (identifier) @obj (#eq? @obj "document")
@@ -60,7 +60,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "js.xss.outer_html",
-        description: "Assignment to .outerHTML — XSS sink",
+        description: "Assignment to .outerHTML is an XSS sink",
         query: r#"(assignment_expression
                      left: (member_expression
                        property: (property_identifier) @prop (#eq? @prop "outerHTML")))
@@ -72,7 +72,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "js.xss.insert_adjacent_html",
-        description: "insertAdjacentHTML() — XSS sink",
+        description: "insertAdjacentHTML() is an XSS sink",
         query: r#"(call_expression
                      function: (member_expression
                        property: (property_identifier) @prop (#eq? @prop "insertAdjacentHTML")))
@@ -85,7 +85,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Prototype pollution ────────────────────────────────────
     Pattern {
         id: "js.prototype.proto_assignment",
-        description: "Assignment to __proto__ — prototype pollution",
+        description: "Assignment to __proto__ causes prototype pollution",
         query: r#"(assignment_expression
                      left: (member_expression
                        property: (property_identifier) @prop (#eq? @prop "__proto__")))
@@ -97,7 +97,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "js.prototype.extend_object",
-        description: "Assignment to Object.prototype — prototype mutation",
+        description: "Assignment to Object.prototype mutates the prototype",
         query: r#"(assignment_expression
                      left: (member_expression
                        object: (member_expression
@@ -126,7 +126,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "js.crypto.weak_hash_import",
-        description: "Direct md5()/sha1() call — weak hash from imported package",
+        description: "Direct md5()/sha1() call uses a weak hash from an imported package",
         query: r#"(call_expression
                      function: (identifier) @id (#match? @id "^(md5|sha1)$"))
                    @vuln"#,
@@ -137,7 +137,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "js.crypto.math_random",
-        description: "Math.random() — not cryptographically secure",
+        description: "Math.random() is not cryptographically secure",
         query: r#"(call_expression
                      function: (member_expression
                        object: (identifier) @obj (#eq? @obj "Math")
@@ -165,7 +165,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Open redirect ──────────────────────────────────────────
     Pattern {
         id: "js.xss.location_assign",
-        description: "Assignment to location/location.href — open redirect",
+        description: "Assignment to location/location.href is an open-redirect sink",
         query: r#"(assignment_expression
                      left: (member_expression
                        object: (identifier) @obj (#match? @obj "^(window|location|document)$")
@@ -207,7 +207,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Insecure session / cookie configuration ─────────────────
     Pattern {
         id: "js.config.insecure_session_httponly",
-        description: "Session cookie with httpOnly: false — allows XSS-based session theft",
+        description: "Session cookie with httpOnly: false allows XSS-based session theft",
         query: r#"(pair
                      key: (property_identifier) @key (#eq? @key "httpOnly")
                      value: (false) @val)
@@ -219,7 +219,7 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "js.config.insecure_session_secure",
-        description: "Session cookie with secure: false — cookie sent over plain HTTP",
+        description: "Session cookie with secure: false sends the cookie over plain HTTP",
         query: r#"(pair
                      key: (property_identifier) @key (#eq? @key "secure")
                      value: (false) @val)
@@ -276,7 +276,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier A: Verbose error response ────────────────────────────────
     Pattern {
         id: "js.config.verbose_error_response",
-        description: "Error object passed to response renderer — may leak stack traces to users",
+        description: "Error object passed to response renderer can leak stack traces to users",
         query: r#"(call_expression
                      function: (member_expression
                        property: (property_identifier) @method
@@ -295,7 +295,7 @@ pub const PATTERNS: &[Pattern] = &[
     // ── Tier B: CORS dynamic origin reflection ────────────────────────
     Pattern {
         id: "js.config.cors_dynamic_origin",
-        description: "CORS Access-Control-Allow-Origin set to dynamic value — may reflect arbitrary origins",
+        description: "CORS Access-Control-Allow-Origin set to a dynamic value can reflect arbitrary origins",
         query: r#"(call_expression
                      function: (member_expression
                        property: (property_identifier) @method (#eq? @method "setHeader"))
