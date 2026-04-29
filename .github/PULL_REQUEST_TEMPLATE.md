@@ -1,6 +1,6 @@
 ## Summary
 
-<!-- What does this PR change, and why? Keep it short — the diff already shows the "what". -->
+<!-- What does this PR change, and why? Keep it short. The diff already shows the "what". -->
 
 ## Related issues
 

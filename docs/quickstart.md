@@ -23,7 +23,7 @@ The same scan in console form:
       Sink:   os.system
 
   6:5  ✖ [HIGH] py.cmdi.os_system  (Score: 64, Confidence: High)
-      Os.system() — shell command execution
+      os.system() runs a shell command
 
 /tmp/demo/xss_document_write.js
   5:5  ✖ [HIGH] taint-unsanitised-flow (source 3:18)  (Score: 81, Confidence: High)
@@ -33,7 +33,7 @@ The same scan in console form:
       Sink:   document.write
 
   5:5  ⚠ [MEDIUM] js.xss.document_write  (Score: 34, Confidence: High)
-      Document.write() — XSS sink
+      document.write() is an XSS sink
 
 warning 'demo' generated 10 issues.
 Finished in 0.054s.

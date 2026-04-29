@@ -1,14 +1,14 @@
 # Benchmark Results
 
-Current baseline (2026-04-28):
+Current baseline (2026-04-29):
 
 | Metric    | File-level | Rule-level | CI floor |
 |-----------|------------|------------|----------|
-| Precision | 0.995      | 0.995      | 0.861    |
-| Recall    | 1.000      | 1.000      | 0.944    |
-| F1        | 0.998      | 0.998      | 0.901    |
+| Precision | 0.991      | 0.991      | 0.861    |
+| Recall    | 0.995      | 0.995      | 0.944    |
+| F1        | 0.993      | 0.993      | 0.901    |
 
-Corpus: 433 cases across 10 languages, 430 evaluated. Per-run JSON lands in `tests/benchmark/results/` (`latest.json` plus dated snapshots). See `README.md` for what the scoring modes mean and how to run a subset.
+Corpus: 433 cases across 10 languages, 432 evaluated (1 disabled). Per-run JSON lands in `tests/benchmark/results/` (`latest.json` plus dated snapshots). See `README.md` for what the scoring modes mean and how to run a subset.
 
 The corpus is mostly synthetic 8-20 line fixtures, one vulnerability or one safe pattern per file. A smaller real-CVE replay set under `cve_corpus/` covers 18 published CVEs across all 10 languages. Both contribute to the headline numbers.
 
@@ -24,7 +24,7 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2025-64430 | JavaScript | Parse Server               | Apache-2.0           | SSRF            | detected |
 | CVE-2023-26159 | TypeScript | follow-redirects           | MIT                  | SSRF            | detected |
 | CVE-2022-30323 | Go         | hashicorp/go-getter        | MPL-2.0              | CMDI            | detected |
-| CVE-2023-3188  | Go         | owncast                    | MIT                  | SSRF            | detected |
+| CVE-2023-3188  | Go         | owncast                    | MIT                  | SSRF            | open FN  |
 | CVE-2024-31450 | Go         | owncast                    | MIT                  | path_traversal  | detected |
 | CVE-2015-7501  | Java       | Apache Commons Collections | Apache-2.0           | Deserialization | detected |
 | CVE-2017-12629 | Java       | Apache Solr                | Apache-2.0           | CMDI            | detected |

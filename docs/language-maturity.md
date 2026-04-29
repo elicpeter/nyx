@@ -9,23 +9,24 @@ The classifications here are grounded in three concrete signals:
 1. **Rule depth**: how many distinct source / sanitizer / sink matchers exist
    for the language in `src/labels/<lang>.rs`, and how many vulnerability
    classes (Cap bits) those matchers cover.
-2. **Benchmark results**: rule-level precision / recall / F1 on the 378-case
+2. **Benchmark results**: rule-level precision / recall / F1 on the 433-case
    corpus in
    [`tests/benchmark/RESULTS.md`](https://github.com/elicpeter/nyx/blob/master/tests/benchmark/RESULTS.md),
-   last measured 2026-04-26 with scanner version 0.5.0.
+   last measured 2026-04-29 with scanner version 0.5.0.
 3. **Known weak spots**: FPs and FNs the maintainers have deliberately left
    in the benchmark rather than suppressed, plus structural engine
    limitations the corpus does not stress, documented release-by-release in
    [`RESULTS.md`](https://github.com/elicpeter/nyx/blob/master/tests/benchmark/RESULTS.md).
 
-As of 2026-04-27 the synthetic corpus has effectively saturated: nine of ten
-languages report rule-level F1 = 100.0% and Ruby reports 96.3% (one FN on an
-interprocedural SQLi case). Aggregate rule-level P=1.000, R=0.995, F1=0.997.
-That means F1 alone no longer differentiates tiers, so the differentiators
-are **rule depth**, **gated-sink coverage**, and **structural idioms the
-corpus does not fully stress** (deep pointer aliasing in C/C++,
-framework-specific context). All parser integrations use tree-sitter and are
-stable; parsing is not a differentiator.
+As of 2026-04-29 the synthetic corpus has effectively saturated: nine of ten
+languages report rule-level F1 = 100.0% and Go reports 94.1% (two FPs and
+one FN on a real-CVE SSRF case, `cve-go-2023-3188-vulnerable`). Aggregate
+rule-level P=0.991, R=0.995, F1=0.993. That means F1 alone no longer
+differentiates tiers, so the differentiators are **rule depth**,
+**gated-sink coverage**, and **structural idioms the corpus does not fully
+stress** (deep pointer aliasing in C/C++, framework-specific context). All
+parser integrations use tree-sitter and are stable; parsing is not a
+differentiator.
 
 ---
 
@@ -34,7 +35,7 @@ stable; parsing is not a differentiator.
 | Tier | Languages | F1 | What to expect |
 |------|-----------|----|----------------|
 | **Stable** | Python, JavaScript, TypeScript | 100% | Deep rule sets, gated sinks (argument-role-aware), framework detection, extensive fixtures, and the bulk of advanced-analysis (SSA two-level solve, context-sensitivity, symbolic execution, abstract interpretation) coverage. Safe to depend on in CI gates. |
-| **Beta** | Go, Java, PHP, Ruby, Rust | 96.3% – 100% | Solid mid-depth rule sets with narrower cap coverage and **no gated sinks**. Cross-file flows work; some idioms (variable-typed method receivers, framework context, string interpolation, match-arm guards) are partially modeled. Usable in CI; review FP/FN lists before tightening gates. |
+| **Beta** | Go, Java, PHP, Ruby, Rust | 94.1% to 100% | Solid mid-depth rule sets with narrower cap coverage and **no gated sinks**. Cross-file flows work; some idioms (variable-typed method receivers, framework context, string interpolation, match-arm guards) are partially modeled. Usable in CI; review FP/FN lists before tightening gates. |
 | **Preview** | C, C++ | 100% on synthetic corpus | Recent work taught the engine to follow taint through `std::vector` / `std::string` / map containers (including `c_str()`), through fluent builder chains like `Socket::builder().host(h).connect()`, and through inline class member functions. Function pointers and deeper pointer aliasing through `*p` / `p->field` are still not tracked. Rule-level scores against a corpus of obvious unsafe-API uses look perfect, but that is not the same as a clean audit on a real codebase. Pair with clang-tidy, Clang Static Analyzer, or Infer. |
 
 ---
@@ -43,7 +44,7 @@ stable; parsing is not a differentiator.
 
 ### Stable tier
 
-#### Python: 100% P / 100% R / 100% F1 *(42-case corpus)*
+#### Python: 100% P / 100% R / 100% F1 *(46-case corpus)*
 
 - **Rule depth**: 5 source families, 7 sanitizer families, 21 sink matchers
   spanning HTML, URL, Shell, SQL, Code, SSRF, File I/O, and Deserialization.
@@ -57,7 +58,7 @@ stable; parsing is not a differentiator.
   distinct taint-producing construct; string-formatting flows are caught by
   the general concatenation path.
 
-#### JavaScript: 100% P / 100% R / 100% F1 *(37-case corpus)*
+#### JavaScript: 100% P / 100% R / 100% F1 *(42-case corpus)*
 
 - **Rule depth**: 3 source families, 10 sanitizer families, 24 sink matchers
   spanning HTML, URL, JSON, Shell, SQL, Code, SSRF, and File I/O.
@@ -73,7 +74,7 @@ stable; parsing is not a differentiator.
   than modeled as a first-class taint operator; dynamic property access
   (`obj[user]`) is conservatively treated.
 
-#### TypeScript: 100% P / 100% R / 100% F1 *(42-case corpus)*
+#### TypeScript: 100% P / 100% R / 100% F1 *(47-case corpus)*
 
 - **Rule depth**: Shares the JS ruleset (3 sources, 10 sanitizers, 24 sinks)
   plus TS-specific grammar handling.
@@ -89,18 +90,22 @@ stable; parsing is not a differentiator.
 
 ### Beta tier
 
-#### Go: 100% P / 100% R / 100% F1 *(36-case corpus)*
+#### Go: 92.3% P / 96.0% R / 94.1% F1 *(53-case corpus, 2 FPs, 1 FN)*
 
 - **Rule depth**: 4 source families, 4 sanitizer families, 9 sink matchers
   covering HTML, URL, Shell, SQL, SSRF, Crypto, and File I/O.
 - **Framework context**: Gin, Echo source matchers.
-- **Known gaps**: no gated sinks, no deserialization class. `fmt.Sprintf` is
-  deliberately not a sink. Rule-level F1 is 100% on the synthetic corpus,
-  but cap coverage is narrower than the Stable tier and argument-role-aware
-  sink modeling is not yet implemented for Go — production CI gates may
-  surface FPs the corpus does not exercise.
+- **Open weak spots**: `cve-go-2023-3188-vulnerable` (owncast SSRF) goes
+  undetected, and two safe Go fixtures (`go-safe-007`, `go-safe-009`) draw
+  spurious SQLi and CMDi findings respectively. These are the only
+  imperfect language scores in the current corpus.
+- **Known gaps**: no gated sinks, no deserialization class. `fmt.Sprintf`
+  is deliberately not a sink. Cap coverage is narrower than the Stable
+  tier and argument-role-aware sink modeling is not yet implemented for Go,
+  so production CI gates may surface additional FPs the corpus does not
+  exercise.
 
-#### Java: 100% P / 100% R / 100% F1 *(33-case corpus)*
+#### Java: 100% P / 100% R / 100% F1 *(35-case corpus)*
 
 - **Rule depth**: 3 source families, 8 sanitizer families, 10 sink matchers
   covering HTML, URL, Shell, SQL, Code, SSRF, and Deserialization.
@@ -112,7 +117,7 @@ stable; parsing is not a differentiator.
   cannot be inferred are conservatively over-tainted on unusual builder
   chains.
 
-#### PHP: 100% P / 100% R / 100% F1 *(33-case corpus)*
+#### PHP: 100% P / 100% R / 100% F1 *(37-case corpus)*
 
 - **Rule depth**: 3 source families (`$_GET`, `$_POST`, `$_REQUEST`
   superglobals), 7 sanitizer families, 10 sink matchers covering HTML, URL,
@@ -121,7 +126,7 @@ stable; parsing is not a differentiator.
   methods only). `echo` language-construct detection is wired but its
   inner-argument propagation is narrower than function-call sinks.
 
-#### Ruby: 100% P / 92.9% R / 96.3% F1 *(30-case corpus, 1 FN)*
+#### Ruby: 100% P / 100% R / 100% F1 *(39-case corpus)*
 
 - **Rule depth**: 3 source families, 7 sanitizer families, 15 sink matchers
   covering HTML, Shell, SQL, Code, SSRF, File I/O, and Deserialization.
@@ -129,12 +134,11 @@ stable; parsing is not a differentiator.
 - **Known gaps**: string interpolation inside shell and SQL strings is
   recognized structurally but not modeled as a distinct operator.
   `begin/rescue/ensure` exception-edge wiring is documented as deferred
-  (structurally incompatible with `build_try()`). The single open FN is
-  `rb-interproc-001` — interprocedural SQL flow that fires
-  `cfg-unguarded-sink` instead of the expected taint rule (rule-ID
-  mismatch, not a missed flow).
+  (structurally incompatible with `build_try()`). The previous open
+  `rb-interproc-001` FN closed in the 2026-04-28 baseline after the
+  Ruby `Kernel#open` CMDI sink and exact-match sigil work landed.
 
-#### Rust: 100% P / 100% R / 100% F1 *(59-case adversarial corpus)*
+#### Rust: 100% P / 100% R / 100% F1 *(70-case adversarial corpus)*
 
 Rust holds the largest per-language adversarial corpus and was promoted
 from Experimental to Beta in the 2026-04-25 measurement after the PathFact
@@ -145,7 +149,7 @@ landings closed every previously-open `rs-safe-*` regression.
   Deserialization, and File I/O. Extensive framework source coverage
   (Axum, Actix, Rocket); the most of any language on the source side. The
   narrow sanitizer count is the primary reason Rust is not in the Stable
-  tier — engine-side path/typed sanitizer recognition (PathFact) compensates,
+  tier. Engine-side path/typed sanitizer recognition (PathFact) compensates,
   but the ruleset itself is shallow.
 - **Recent additions**: SQL class (`rusqlite`, `sqlx`, `diesel`,
   `postgres`), Deserialization class (`serde_yaml`, `bincode`,
@@ -218,7 +222,7 @@ Clang Static Analyzer, or Infer for production use.
   general case but doesn't make `buf` an alias for every element.
 - Nested classes beyond one level (C++ only).
 
-#### C: 100% P / 100% R / 100% F1 *(27-case corpus)*
+#### C: 100% P / 100% R / 100% F1 *(30-case corpus)*
 
 - **Rule depth**: 3 source families, **2** sanitizer families (the
   `sanitize_*` prefix and numeric-parse functions), 5 sink matchers spanning
@@ -227,7 +231,7 @@ Clang Static Analyzer, or Infer for production use.
   limitations listed above are the dominant concern; rule additions alone
   will not lift this language out of the Preview tier.
 
-#### C++: 100% P / 100% R / 100% F1 *(27-case corpus, plus 6 new fixtures for STL / builder / inline-method flows)*
+#### C++: 100% P / 100% R / 100% F1 *(33-case corpus, plus 6 new fixtures for STL / builder / inline-method flows)*
 
 - **Rule depth**: Builds on the C ruleset with `std::cin` / `std::getline`
   sources and a wider numeric-sanitizer set covering the full `std::sto*`
@@ -254,10 +258,10 @@ A language lands in **Stable** when all three hold:
 - Advanced analysis (SSA lowering, context-sensitivity, symbolic execution,
   abstract interpretation) is exercised by fixtures for the language.
 
-A language lands in **Beta** when benchmark F1 ≥ 95% on a meaningful corpus
-but at least one Stable criterion fails — typically the absence of gated
-sinks, or sanitizer rule depth narrow enough that the engine compensates
-structurally rather than via the ruleset.
+A language lands in **Beta** when benchmark F1 is in the mid-90s or higher
+on a meaningful corpus but at least one Stable criterion fails. Typical
+gaps: absence of gated sinks, or sanitizer rule depth narrow enough that
+the engine compensates structurally rather than via the ruleset.
 
 A language lands in **Preview** when the engine has documented structural
 blind spots for constructs that are pervasive in typical codebases for that

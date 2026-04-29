@@ -41,6 +41,6 @@ This policy covers vulnerabilities that let an **untrusted Nyx input** cause:
 * Remote or local code execution in the Nyx process
 * Privilege escalation, data exfiltration, or denial of service
 
-**False positives / missed detections** in scan results are *quality issues*, not security issues—please file normal GitHub issues for those.
+**False positives / missed detections** in scan results are *quality issues*, not security issues. Please file normal GitHub issues for those.
 
 [Semantic Versioning]: https://semver.org

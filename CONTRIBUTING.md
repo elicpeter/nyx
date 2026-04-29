@@ -45,7 +45,7 @@ cargo install --path . # Install as `nyx` binary
 
 ```bash
 cargo test --bin nyx                   # Unit tests (inline in modules)
-cargo clippy --all -- -D warnings      # Lint — treats warnings as errors
+cargo clippy --all -- -D warnings      # Lint, treats warnings as errors
 cargo fmt                              # Format code
 cargo fmt -- --check                   # Check formatting without modifying
 ```
@@ -66,14 +66,12 @@ Benchmark fixtures live in `benches/fixtures/`. Criterion produces HTML reports 
 
 ```
 src/
-  main.rs               CLI entry point
+  main.rs                CLI entry point
   lib.rs                 Library re-exports (benchmarks, integration tests)
   cli.rs                 Clap command definitions
-  commands/
-    mod.rs               Command dispatch
-    scan.rs              Two-pass scan orchestration, Diag struct
+  commands/              Subcommand handlers (scan, index, list, clean, config, serve)
   ast.rs                 Entry points for both passes; tree-sitter parsing
-  cfg.rs                 CFG construction from AST
+  cfg/                   CFG construction from AST, type hierarchy
   cfg_analysis/          CFG structural detectors
     guards.rs            Unguarded sink detection (dominator analysis)
     auth.rs              Auth gap detection
@@ -81,33 +79,36 @@ src/
     error_handling.rs    Error fallthrough detection
     unreachable.rs       Unreachable security code detection
     rules.rs             Guard rules, auth rules, resource pairs
-  taint/
-    mod.rs               Taint analysis facade + JS two-level solve
-    domain.rs            TaintState lattice (VarTaint, Cap, TaintOrigin)
-    transfer.rs          TaintTransfer function (source/sanitizer/sink/call)
+  ssa/                   SSA IR (lowering, optimization passes, const prop)
+  taint/                 SSA-based taint engine (sole engine since 0.5.0)
+    mod.rs               Facade + JS two-level solve
+    domain.rs            Shared lattice types (VarTaint, Cap, TaintOrigin)
+    ssa_transfer/        Block-level worklist, k=1 inline cache, gated sinks
+    backwards.rs         Demand-driven backwards taint walk (opt-in)
     path_state.rs        Predicate tracking and contradiction pruning
   state/
     engine.rs            Generic monotone dataflow engine (Transfer<S: Lattice>)
-    transfer.rs          DefaultTransfer — resource lifecycle + auth state
-  summary.rs             FuncSummary, GlobalSummaries, conservative merge
-  labels/                Per-language label rules
-    mod.rs               classify() dispatch, Cap bitflags, DataLabel, LabelRule
-    rust.rs              Rust sources, sinks, sanitizers
-    javascript.rs        JS sources, sinks, sanitizers
-    ...                  (one file per language)
-  patterns/              Per-language AST pattern queries
-    mod.rs               Pattern struct, Severity, SeverityFilter, registry
-    rust.rs              Rust patterns
-    javascript.rs        JS patterns
-    ...                  (one file per language)
+    transfer.rs          DefaultTransfer: resource lifecycle + auth state
+  summary/               FuncSummary, SsaFuncSummary, GlobalSummaries, hierarchy index
+  abstract_interp/       Interval + string prefix/suffix domains
+  pointer/               Field-sensitive points-to (Steensgaard-style)
+  symex/                 Symbolic execution + witness generation
+  constraint/            Path-constraint solving (optional Z3 via `smt` feature)
+  auth_analysis/         Rust auth rule (`rs.auth.missing_ownership_check`) + sink classes
+  suppress/              Inline `nyx:ignore` directive parsing
+  labels/                Per-language label rules (one file per language)
+  patterns/              Per-language AST pattern queries (one file per language)
   callgraph.rs           Call graph construction (petgraph), SCC, topo sort
   database.rs            SQLite indexing via r2d2 pool
   rank.rs                Attack-surface ranking
-  fmt.rs                 Output formatting and evidence normalization
+  fmt.rs                 Console output formatting
   output.rs              SARIF 2.1 builder
   walk.rs                Parallel file walker (ignore crate, respects .gitignore)
-  symbol.rs              Symbol interning (SymbolId)
+  symbol/                Symbol interning (SymbolId)
+  server/                `nyx serve` HTTP layer, routes, triage sync
   interop.rs             Cross-language interop edges
+  engine_notes.rs        Direction-aware engine notes (UnderReport / OverReport / Bail)
+  evidence.rs            Structured evidence emitted with each finding
   errors.rs              NyxError, NyxResult types
   utils/
     config.rs            TOML config loading, merging, Config struct
@@ -137,7 +138,7 @@ AST patterns are the simplest detector to add. Each pattern is a tree-sitter que
    ```rust
    Pattern {
        id: "py.cmdi.os_popen",
-       description: "os.popen() — shell command execution",
+       description: "os.popen() shell command execution",
        query: r#"(call
                     function: (attribute
                       object: (identifier) @pkg (#eq? @pkg "os")
@@ -248,8 +249,8 @@ Adding a new language requires changes across several modules. Use an existing l
 6. **AST patterns**: Create `src/patterns/<lang>.rs` with a `PATTERNS` constant.
 
 7. **Registry updates**:
-   - `src/patterns/mod.rs` — add to the `REGISTRY` HashMap
-   - `src/labels/mod.rs` — add to the `classify()` dispatch
+   - `src/patterns/mod.rs`: add to the `REGISTRY` HashMap
+   - `src/labels/mod.rs`: add to the `classify()` dispatch
 
 8. **File extension mapping**: Add the extension in `ast.rs`.
 
@@ -318,10 +319,10 @@ First-time contributors are welcome. If you are unsure where to start, open an i
 
 Please [open an issue](https://github.com/elicpeter/nyx/issues) for:
 
-- **Crashes or panics** — include the backtrace (`RUST_BACKTRACE=1 nyx scan .`)
-- **False positives** — include the minimal code snippet, rule ID, and Nyx version
-- **False negatives** — describe what you expected Nyx to find and why
-- **Documentation errors** — point to the specific page and what's wrong
+- **Crashes or panics**: include the backtrace (`RUST_BACKTRACE=1 nyx scan .`)
+- **False positives**: include the minimal code snippet, rule ID, and Nyx version
+- **False negatives**: describe what you expected Nyx to find and why
+- **Documentation errors**: point to the specific page and what's wrong
 
 ---
 
@@ -329,9 +330,9 @@ Please [open an issue](https://github.com/elicpeter/nyx/issues) for:
 
 We welcome well-motivated feature proposals. Please describe:
 
-1. **Problem statement** — what pain point does this solve?
-2. **Proposed solution** — high-level description, optionally with pseudo-code.
-3. **Alternatives considered** — why existing functionality is not enough.
+1. **Problem statement**: what pain point does this solve?
+2. **Proposed solution**: high-level description, optionally with pseudo-code.
+3. **Alternatives considered**: why existing functionality is not enough.
 
 ---
 
