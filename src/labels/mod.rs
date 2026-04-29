@@ -621,7 +621,7 @@ pub fn build_lang_rules(
         Vec::new()
     };
 
-    // Phase C: fold `auth_analysis` into the taint engine by injecting
+    // fold `auth_analysis` into the taint engine by injecting
     // `Cap::UNAUTHORIZED_ID` sink/sanitizer rules.  Gated by config; default
     // OFF so the standalone `auth_analysis` subsystem remains authoritative.
     if config.scanner.enable_auth_as_taint {
@@ -636,7 +636,7 @@ pub fn build_lang_rules(
     }
 }
 
-/// Return Phase C auth-as-taint rules for a given language (currently Rust-only).
+/// Return the auth-as-taint rules for a given language (Rust-only).
 fn phase_c_auth_rules_for_lang(lang_slug: &str) -> Vec<RuntimeLabelRule> {
     match lang_slug {
         "rust" | "rs" => rust::phase_c_auth_rules(),
@@ -1090,25 +1090,11 @@ pub fn normalize_chained_call_for_classify(text: &str) -> String {
     normalize_chained_call(text)
 }
 
-/// Return the bare method-name segment of a callee text.
-///
-/// Centralised replacement for the textual `callee.rsplit('.').next().unwrap_or(callee)`
-/// pattern that used to be scattered across the codebase.
-///
-/// Behaviour-preserving across the Phase 2 SSA chain decomposition rollout:
-/// - When SSA lowering rewrites a chained-receiver call (`c.mu.Lock()` →
-///   `Call("Lock", [v_mu])`), the call's `callee` is already the bare method
-///   name, so this helper is a no-op pass-through.
-/// - For 1-dot callees (`obj.method`) and for languages where Phase 2 lowering
-///   doesn't run yet (PHP/Ruby) the helper still extracts the trailing method
-///   from the textual form, exactly as the old per-callsite split did.
-/// - For bare callees (no dot), it returns the input unchanged.
-///
-/// Use this helper when you need the *terminal* method name from a callee
-/// string regardless of whether the call had a chained receiver. When you
-/// have an `SsaOp::Call` in hand, prefer reading `callee` directly and
-/// walking `receiver` through `FieldProj` ops — that's the precise path.
-/// This helper is the textual fallback for callsites that only see a `&str`.
+/// Return the bare method-name segment of a callee text. Returns the
+/// input unchanged for bare callees. When you have an `SsaOp::Call`,
+/// prefer reading `callee` directly and walking `receiver` through
+/// `FieldProj` ops — this helper is the textual fallback for callsites
+/// that only see a `&str`.
 pub fn bare_method_name(callee: &str) -> &str {
     callee.rsplit('.').next().unwrap_or(callee)
 }
@@ -1314,19 +1300,15 @@ mod tests {
     fn bare_method_name_strips_chain() {
         // No-dot input → returned as-is.
         assert_eq!(bare_method_name("foo"), "foo");
-        // 1-dot → trailing segment (Phase 2 leaves these alone in SSA).
+        // 1-dot → trailing segment.
         assert_eq!(bare_method_name("obj.method"), "method");
-        // Multi-dot → trailing segment (matches AST-only callees from
-        // PHP/Ruby and any pre-Phase-2 textual paths kept around in
-        // `callee_text` for display).
+        // Multi-dot → trailing segment.
         assert_eq!(bare_method_name("a.b.c.method"), "method");
-        // Trailing dot → empty trailing segment, matching the legacy
-        // `rsplit('.').next()` behaviour bit-for-bit.
+        // Trailing dot → empty trailing segment.
         assert_eq!(bare_method_name("foo."), "");
         // Empty input.
         assert_eq!(bare_method_name(""), "");
-        // Phase 2 invariant: when SSA decomposed a chain, `callee` is
-        // the bare method already and the helper is a no-op.
+        // SSA-decomposed chains pass through untouched.
         assert_eq!(bare_method_name("Lock"), "Lock");
     }
 
@@ -1572,7 +1554,7 @@ mod tests {
 
     #[test]
     fn classify_cpp_sto_family_is_sanitizer() {
-        // Phase 1: full `std::sto*` family (including 64-bit and `long
+        // full `std::sto*` family (including 64-bit and `long
         // double` variants) clears every taint cap that flows through it,
         // matching the existing `std::stoi`/`std::stol` rule.
         for callee in [

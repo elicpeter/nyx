@@ -1,4 +1,4 @@
-//! Phase 6: per-language class / trait / interface hierarchy extraction.
+//! per-language class / trait / interface hierarchy extraction.
 //!
 //! Walks a parsed file's AST and emits `(sub_container, super_container)`
 //! pairs for every declared inheritance / impl / implements relationship.
@@ -47,7 +47,7 @@ pub(crate) fn collect_hierarchy_edges(
         "php" => collect_php(root, code, &mut push),
         "cpp" | "c++" => collect_cpp(root, code, &mut push),
         // Go: structural / implicit interface satisfaction is intractable
-        // per-file; Phase 6 deliberately skips it.
+        // per-file; deliberately skipped it.
         // C: no inheritance.
         _ => {}
     }
@@ -517,7 +517,7 @@ mod tests {
     #[test]
     fn python_class_object_base_skipped() {
         // Inheriting from `object` is not informative — Python's
-        // implicit root.  Phase 6 omits these edges to keep the
+        // implicit root.  We omit these edges to keep the
         // hierarchy index focused on user-defined relationships.
         let src = "class Plain(object):\n    pass\n";
         let edges = collect("python", src);

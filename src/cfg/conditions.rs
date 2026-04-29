@@ -4,6 +4,7 @@ use super::{
     member_expr_text, push_node, text_of,
 };
 use crate::labels::{DataLabel, LangAnalysisRules, classify};
+use crate::utils::snippet::truncate_at_char_boundary;
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
 use tree_sitter::Node;
@@ -79,13 +80,8 @@ pub(super) fn push_condition_node<'a>(
     vars.sort();
     vars.dedup();
     vars.truncate(MAX_COND_VARS);
-    let text = text_of(cond_ast, code).map(|t| {
-        if t.len() > MAX_CONDITION_TEXT_LEN {
-            t[..MAX_CONDITION_TEXT_LEN].to_string()
-        } else {
-            t
-        }
-    });
+    let text = text_of(cond_ast, code)
+        .map(|t| truncate_at_char_boundary(&t, MAX_CONDITION_TEXT_LEN).to_string());
     let span = (cond_ast.start_byte(), cond_ast.end_byte());
     g.add_node(NodeInfo {
         kind: StmtKind::If,
@@ -154,13 +150,8 @@ pub(super) fn emit_rust_match_guard_if<'a>(
     vars.sort();
     vars.dedup();
     vars.truncate(MAX_COND_VARS);
-    let text = text_of(guard, code).map(|t| {
-        if t.len() > MAX_CONDITION_TEXT_LEN {
-            t[..MAX_CONDITION_TEXT_LEN].to_string()
-        } else {
-            t
-        }
-    });
+    let text = text_of(guard, code)
+        .map(|t| truncate_at_char_boundary(&t, MAX_CONDITION_TEXT_LEN).to_string());
     let span = (guard.start_byte(), guard.end_byte());
     g.add_node(NodeInfo {
         kind: StmtKind::If,

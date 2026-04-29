@@ -106,6 +106,19 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::URL_ENCODE),
         case_sensitive: false,
     },
+    // SQLAlchemy bound-parameter sanitizer.  Values passed as keyword
+    // arguments to `text("…:name…").bindparams(name=value)` are bound
+    // by the driver, so injection cannot break out of the literal
+    // context.  The accompanying SQL-string check (py.sqli.text_format)
+    // already flags the `text(f"…")` shape at construction, so this
+    // sanitizer only clears flow when the SQL is a literal and the
+    // values reach the engine via bindparams.  Recognises both the
+    // method form (`text(…).bindparams(...)`) and the bare call form.
+    LabelRule {
+        matchers: &["bindparams", ".bindparams"],
+        label: DataLabel::Sanitizer(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
     // Path canonicalization
     LabelRule {
         matchers: &["os.path.abspath", "os.path.normpath"],
@@ -224,6 +237,30 @@ pub static RULES: &[LabelRule] = &[
             "aiohttp.put",
             "aiohttp.delete",
             "aiohttp.request",
+        ],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+    },
+    // Type-qualified SSRF sinks: when the receiver is tracked as
+    // TypeKind::HttpClient (e.g. `client = requests.Session()`,
+    // `client = httpx.Client()`, or `s = aiohttp.ClientSession()`),
+    // resolve_type_qualified_labels() constructs `"HttpClient.<method>"`
+    // call texts so the receiver-name is no longer load-bearing.  Matches
+    // the existing Rust HttpClient.<method> sink set so both languages
+    // stay in step on the type-aware SSRF model.  Motivated by the
+    // upstream LMDeploy CVE-2026-33626 shape:
+    //   client = requests.Session()
+    //   response = client.get(url, ...)
+    LabelRule {
+        matchers: &[
+            "HttpClient.get",
+            "HttpClient.post",
+            "HttpClient.put",
+            "HttpClient.delete",
+            "HttpClient.patch",
+            "HttpClient.head",
+            "HttpClient.request",
+            "HttpClient.send",
         ],
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,

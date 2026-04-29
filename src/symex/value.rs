@@ -5,6 +5,7 @@ use std::fmt;
 
 use crate::cfg;
 use crate::ssa::ir::{BlockId, SsaValue};
+use crate::utils::snippet::truncate_at_char_boundary;
 
 /// Maximum expression tree depth before collapsing to `Unknown`.
 pub const MAX_EXPR_DEPTH: u32 = 32;
@@ -468,10 +469,16 @@ const MAX_STR_DISPLAY_LEN: usize = 64;
 
 impl fmt::Display for SymbolicValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Use an internal formatter, then truncate if needed.
+        // Use an internal formatter, then truncate if needed.  UTF-8-safe
+        // truncation — `ConcreteStr` may carry localised text from source
+        // (e.g. Cyrillic / Gurmukhi regex literals).
         let s = display_inner(self);
         if s.len() > MAX_DISPLAY_LEN {
-            write!(f, "{}...", &s[..MAX_DISPLAY_LEN])
+            write!(
+                f,
+                "{}...",
+                truncate_at_char_boundary(&s, MAX_DISPLAY_LEN)
+            )
         } else {
             write!(f, "{}", s)
         }
@@ -483,7 +490,10 @@ fn display_inner(val: &SymbolicValue) -> String {
         SymbolicValue::Concrete(n) => format!("{}", n),
         SymbolicValue::ConcreteStr(s) => {
             if s.len() > MAX_STR_DISPLAY_LEN {
-                format!("\"{}...\"", &s[..MAX_STR_DISPLAY_LEN])
+                format!(
+                    "\"{}...\"",
+                    truncate_at_char_boundary(s, MAX_STR_DISPLAY_LEN)
+                )
             } else {
                 format!("\"{}\"", s)
             }

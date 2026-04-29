@@ -17,61 +17,35 @@ pub enum TaintTransform {
     AddBits(Cap),
 }
 
-/// Maximum [`ReturnPathTransform`] entries retained per parameter.
-///
-/// Most functions have one or two return paths; eight is a generous bound
-/// that still keeps per-summary memory O(1).  Beyond the cap, extraction
-/// joins the overflow into a single Top-predicate entry so the caller-side
-/// application always sees a bounded vector.
+/// Cap on per-parameter return-path entries. Overflow is joined into
+/// a single Top-predicate entry so callers always see a bounded vec.
 pub const MAX_RETURN_PATHS: usize = 8;
 
-/// A single return-path entry in a per-parameter summary.
-///
-/// Per-return-path decomposition preserves callee-internal path splits that
-/// the aggregate [`TaintTransform`] would erase.  Each entry records the
-/// path predicate under which this return is reached, the behavioural
-/// transform on that path, and (optionally) an abstract-domain contribution.
-///
-/// Callers carry their own path-state at the call site and apply only
-/// entries whose predicate is consistent with the caller's validated set;
-/// the remainder are skipped.  Applicable entries are joined to produce
-/// the effective transform at the call site.
-///
-/// When a callee has a single return path, `param_return_paths` stays empty
-/// and the caller falls back to `param_to_return`'s union view.
+/// One return-path entry in a per-parameter summary. Records the path
+/// predicate, the transform on that path, and optionally an abstract
+/// contribution. Callers apply only entries consistent with their
+/// caller-side path state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReturnPathTransform {
     /// Behavioural kind on this path (Identity / StripBits / AddBits).
     pub transform: TaintTransform,
-    /// Deterministic hash of the path-predicate gate at this return.
-    ///
-    /// `0` is reserved for "no predicate gate" — a return reached under
-    /// no known predicate.  Two return blocks whose path predicates are
-    /// observationally equivalent hash to the same value and are joined.
+    /// Deterministic hash of the path-predicate gate. `0` = no gate.
+    /// Equivalent predicates collide and are joined.
     pub path_predicate_hash: u64,
-    /// `PredicateSummary::known_true` bits that must hold on every path
-    /// into this return.  Encoded using [`crate::taint::domain::predicate_kind_bit`]:
-    /// bit 0 = NullCheck, 1 = EmptyCheck, 2 = ErrorCheck.
+    /// `known_true` predicate bits (bit 0 = NullCheck, 1 = EmptyCheck,
+    /// 2 = ErrorCheck) that hold on every path into this return.
     pub known_true: u8,
-    /// `PredicateSummary::known_false` bits at this return (same encoding
-    /// as [`Self::known_true`]).
+    /// `known_false` bits at this return.
     pub known_false: u8,
-    /// Abstract contribution for this return path, when non-Top.
-    ///
-    /// Callers combine this with their own abstract fact on the call
-    /// site's argument using `AbstractValue::meet` to recover bounds that
-    /// survive a specific return.
+    /// Abstract contribution when non-Top. Callers `meet` it with the
+    /// caller-side abstract fact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abstract_contribution: Option<AbstractValue>,
 }
 
 impl ReturnPathTransform {
-    /// Dedup key combining the semantic fields of a path entry.  Two entries
-    /// with the same `(path_predicate_hash, transform, known_true, known_false)`
-    /// describe the same behaviour on paths gated by the same predicate and
-    /// can collapse without losing information.  `abstract_contribution` is
-    /// deliberately ignored — the dedup path joins the two entries'
-    /// abstract facts rather than dropping one.
+    /// Dedup key. `abstract_contribution` is intentionally excluded
+    /// — colliding entries join their abstract facts.
     pub fn dedup_key(&self) -> (u64, &TaintTransform, u8, u8) {
         (
             self.path_predicate_hash,
@@ -268,7 +242,7 @@ pub struct SsaFuncSummary {
     /// each other or the return value.
     #[serde(default, skip_serializing_if = "PointsToSummary::is_empty")]
     pub points_to: PointsToSummary,
-    /// Pointer-Phase 5: field-granularity per-parameter points-to
+    /// field-granularity per-parameter points-to
     /// summary.  Records which fields the callee reads from / writes
     /// to on each parameter, so cross-file resolution can spread
     /// taint through field-level mutations the callee performs on

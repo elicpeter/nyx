@@ -595,6 +595,66 @@ fn match_config_sanitizer(callee: &str, extra: &[RuntimeLabelRule]) -> Option<Ca
     None
 }
 
+/// Resolve the `if (X)` / `if (!X)` indirect-validator pattern: the
+/// condition has exactly one bare-identifier variable whose defining
+/// CFG node is a [`StmtKind::Call`] whose `defines` is the same name
+/// and whose `callee` is recognised by
+/// [`crate::ssa::type_facts::classify_input_validator_callee`].
+///
+/// Returns the validator callee name when the pattern matches, `None`
+/// otherwise.  Conservative: bails when the condition has zero or more
+/// than one variable, when no defining call is found, or when the
+/// callee doesn't match a validator pattern.  Mirrors the SSA
+/// branch-narrowing layer
+/// ([`crate::taint::ssa_transfer::apply_input_validator_branch_narrowing`])
+/// so the structural `cfg-unguarded-sink` suppression matches the
+/// taint engine's validator recognition.
+///
+/// Driven off CFG `TaintMeta.defines` rather than the per-body SSA
+/// value-defs because nested arrow-function bodies are sometimes
+/// lowered with empty SSA in the cfg-analysis context, but the CFG
+/// nodes themselves carry `defines` in every body.
+fn cond_indirect_validator_callee(
+    info: &crate::cfg::NodeInfo,
+    ctx: &AnalysisContext,
+) -> Option<String> {
+    if info.condition_vars.len() != 1 {
+        return None;
+    }
+    let var_name = info.condition_vars[0].as_str();
+    let cond_func = info.ast.enclosing_func.as_deref();
+
+    // Walk the CFG for any node that DEFINES `var_name` via a Call
+    // expression.  Same-function only; in the rare case of multiple
+    // assignments, take the textually-last one (highest span start)
+    // — a conservative latest-def proxy without paying for full
+    // dominator analysis.
+    let mut best: Option<(usize, &str)> = None;
+    for nidx in ctx.cfg.node_indices() {
+        let n = &ctx.cfg[nidx];
+        if n.kind != crate::cfg::StmtKind::Call {
+            continue;
+        }
+        if n.taint.defines.as_deref() != Some(var_name) {
+            continue;
+        }
+        if n.ast.enclosing_func.as_deref() != cond_func {
+            continue;
+        }
+        let Some(callee) = n.call.callee.as_deref() else {
+            continue;
+        };
+        let span_start = n.ast.span.0;
+        match best {
+            Some((s, _)) if s >= span_start => {}
+            _ => best = Some((span_start, callee)),
+        }
+    }
+    let (_, callee) = best?;
+
+    crate::ssa::type_facts::classify_input_validator_callee(callee).map(|_| callee.to_string())
+}
+
 /// Find all nodes in the CFG that are calls to guard functions.
 fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
     let guard_rules = rules::guard_rules(ctx.lang);
@@ -619,6 +679,24 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
                         | PredicateKind::TypeCheck
                         | PredicateKind::ValidationCall
                 ) {
+                    result.push((idx, Cap::all()));
+                } else if cond_indirect_validator_callee(info, ctx).is_some() {
+                    // Indirect-validator pattern:
+                    //   const err = validate(x); if (err) throw …;
+                    //   const ok = isValid(x);   if (!ok) throw …;
+                    // The classifier returns Unknown / NullCheck / ErrorCheck
+                    // because the if-condition is a bare result variable, not
+                    // a direct call expression.  Resolve the variable's reaching
+                    // SSA def via `body_const_facts.ssa` and check whether the
+                    // def is a Call to an
+                    // `is_input_validator_callee`-recognised callee — the same
+                    // structural recognition the SSA branch-narrowing layer
+                    // uses.  Mirror layer to layer keeps the cfg-unguarded-sink
+                    // suppression coherent with the taint suppression: when the
+                    // taint engine clears the source, the structural pattern
+                    // shouldn't refire on the same span.
+                    //
+                    // Motivated by Novu CVE GHSA-4x48-cgf9-q33f.
                     result.push((idx, Cap::all()));
                 } else if matches!(
                     kind,

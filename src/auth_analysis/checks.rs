@@ -335,15 +335,12 @@ fn has_prior_subject_auth(
     })
 }
 
-/// Phase A4 row-fetch exemption.
+/// Row-fetch exemption.
 ///
-/// Recognises the canonical "fetch-then-authorize" idiom in row-level
-/// authz code: a route handler fetches a row by id (`let community =
-/// Community::read(pool, data.community_id)?`), then calls a named
-/// authorization function on the fetched row (`check_community_user_action(
-/// &user, &community, ...)`).  The authorization check appears
-/// textually after the fetch, so the existing `check.line <= op.line`
-/// rule cannot cover the fetch.
+/// Recognises the "fetch-then-authorize" idiom: a handler fetches a
+/// row by id then calls a named authorization function on it. The
+/// check appears textually after the fetch, so the
+/// `check.line <= op.line` rule cannot cover the fetch.
 ///
 /// The exemption fires only when:
 /// 1. `op` is the row-fetch operation itself (line == row let-line).
@@ -425,6 +422,32 @@ fn has_prior_collection_auth(
 }
 
 fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef, unit: &AnalysisUnit) -> bool {
+    // **Route-level guard short-circuit.**
+    //
+    // A check declared at the route boundary (Flask `@requires_role`,
+    // FastAPI `dependencies=[Depends(requires_access_dag(method=
+    // "POST", access_entity=DagAccessEntity.RUN))]`, Django
+    // `@permission_required`, Spring `@PreAuthorize`, Rails
+    // `before_action :authorize`, axum `RequireAuthorizationLayer`)
+    // gates the entire handler.  The decorator / dependency call is
+    // opaque to the engine — the inner `requires_access_dag` carries
+    // no per-arg `ValueRef` pointing back into the handler body — so
+    // the per-name subject coverage walk below cannot match it.  The
+    // structural shape, however, is unambiguous: every value the
+    // handler receives, every row it fetches, and every sink it
+    // calls runs after the route-level check has decided
+    // authorization.
+    //
+    // `has_prior_subject_auth` already filters out
+    // `LoginGuard` / `TokenExpiry` / `TokenRecipient` kinds before
+    // calling this helper (login alone proves identity, not
+    // authorization), so by the time we land here the kind is
+    // `Other` / `Membership` / `Ownership` / `AdminGuard` — i.e. an
+    // authorization-bearing decorator-level check.  Returning `true`
+    // unconditionally for those is the correct semantics.
+    if check.is_route_level {
+        return true;
+    }
     let subject_key = canonical_subject_name(subject);
     let subject_related_base = related_subject_base(subject);
     // A2 + B3: walk the row-binding chain from this subject so a
@@ -598,18 +621,18 @@ fn is_const_bound_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
 /// Spring `@PathVariable Long userId`, Axum `Path<i64>`, NestJS
 /// `@Param('id') id: number`, and FastAPI `user_id: int` all qualify.
 ///
-/// Phase 6: also matches member-access subjects like `dto.userId`
+/// also matches member-access subjects like `dto.userId`
 /// when `dto` is a typed-extractor parameter recognised by a Phase
 /// 1-2 matcher AND the field's declared TypeKind is Int/Bool.
 fn is_typed_bounded_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
     if subject.base.is_none() && subject.field.is_none() {
         return unit.typed_bounded_vars.contains(&subject.name);
     }
-    // Phase 6: member-access shape `base.field` whose `base` is a
+    // member-access shape `base.field` whose `base` is a
     // typed-extractor parameter and whose field is declared as an
     // Int/Bool in the same-file DTO definition.  Per Hard Rule 3,
     // only fires when the base param itself was recognised by a
-    // Phase 1-2 matcher — bare `dto.age` without a framework gate
+    // typed-extractor matcher — bare `dto.age` without a framework gate
     // never lifts.
     let Some(base) = subject.base.as_deref() else {
         return false;
@@ -851,6 +874,20 @@ fn unit_has_user_input_evidence(unit: &AnalysisUnit) -> bool {
 /// functions that, while not registered as route handlers, are
 /// clearly invoked with caller-supplied identifiers or request data.
 fn is_external_input_param_name(name: &str) -> bool {
+    // Pytest / unittest.mock convention: parameters injected by
+    // `@mock.patch(...)` decorators are universally named
+    // `mock_<thing>` (`mock_project_id`, `mock_session`,
+    // `mock_user_id`).  Their values are MagicMock instances created
+    // by the test framework, not user-supplied input — even when the
+    // suffix carries an id-shaped tail.  Refusing the entire `mock_`
+    // prefix is structural (mirrors pytest's documented convention)
+    // and closes the airflow `tests/unit/google/cloud/hooks/`
+    // cluster where every test method takes
+    // `(self, get_conn, mock_project_id)` and the suffix tripped the
+    // id-like heuristic.
+    if name.starts_with("mock_") || name.starts_with("mocked_") {
+        return false;
+    }
     if is_id_like_name(name) {
         return true;
     }
@@ -1046,7 +1083,7 @@ mod tests {
         assert!(is_relevant_target_subject(&member("req", "id"), &unit));
     }
 
-    /// Phase 5 typed-bounded subject exclusion: a parameter whose
+    /// Hierarchy: a parameter whose
     /// static type was recovered as `Int`/`Bool` (Spring `Long userId`,
     /// Axum `Path<i64>`, FastAPI `user_id: int`) has its name added to
     /// `unit.typed_bounded_vars` by `apply_typed_bounded_params`.  The
@@ -1161,9 +1198,17 @@ mod tests {
         assert!(!is_external_input_param_name("manager"));
         // `c` alone is too common as a local variable to count.
         assert!(!is_external_input_param_name("c"));
+        // Pytest / unittest.mock fixture-injected mocks: `mock_<x>` /
+        // `mocked_<x>` names are MagicMock instances, not user input,
+        // even when the suffix (`mock_project_id`) is id-shaped.
+        assert!(!is_external_input_param_name("mock_project_id"));
+        assert!(!is_external_input_param_name("mock_session"));
+        assert!(!is_external_input_param_name("mock_user_id"));
+        assert!(!is_external_input_param_name("mocked_request"));
+        assert!(!is_external_input_param_name("mocked_token"));
     }
 
-    /// Phase A4 row-fetch exemption.
+    /// Row-fetch exemption.
     ///
     /// Row var declared at line 10; auth check naming the row appears
     /// at line 20.  An operation at line 10 (the fetch) is exempted
@@ -1192,6 +1237,7 @@ mod tests {
             line: 20,
             args: Vec::new(),
             condition_text: None,
+            is_route_level: false,
         });
 
         let fetch_op = SensitiveOperation {
@@ -1265,6 +1311,7 @@ mod tests {
             line: 20,
             args: Vec::new(),
             condition_text: None,
+            is_route_level: false,
         });
 
         let fetch_op = SensitiveOperation {
@@ -1305,6 +1352,7 @@ mod tests {
             line: 20,
             args: Vec::new(),
             condition_text: None,
+            is_route_level: false,
         };
 
         // Direct member subject `data.community_id` (the original
@@ -1352,6 +1400,7 @@ mod tests {
             line: 20,
             args: Vec::new(),
             condition_text: None,
+            is_route_level: false,
         };
 
         assert!(auth_check_covers_subject(
@@ -1392,6 +1441,7 @@ mod tests {
             line: 20,
             args: Vec::new(),
             condition_text: None,
+            is_route_level: false,
         };
 
         // Sink subject is the bare alias — covered via the chain.
@@ -1411,5 +1461,70 @@ mod tests {
 
         // Plain identifier with no alias entry must NOT be covered.
         assert!(!auth_check_covers_subject(&check, &plain("post_id"), &unit));
+    }
+
+    /// Route-level guard short-circuit (FastAPI / Flask /
+    /// Django / Spring / Rails / axum decorator-level auth).
+    ///
+    /// The decorator-level `@requires_role` /
+    /// `dependencies=[Depends(requires_access_dag(...))]` /
+    /// `before_action :authorize` runs before the handler body and
+    /// authorizes every value the handler receives.  The check has
+    /// no per-arg `ValueRef` pointing back into the body, so the
+    /// per-name subject coverage walk cannot model the semantics.
+    /// `auth_check_covers_subject` short-circuits `true` for any
+    /// authorization-bearing route-level check (LoginGuard etc. are
+    /// already filtered out by `has_prior_subject_auth`).
+    #[test]
+    fn auth_check_covers_subject_route_level_short_circuits() {
+        use crate::auth_analysis::model::{AuthCheck, AuthCheckKind};
+
+        let unit = empty_unit();
+        let route_check = AuthCheck {
+            kind: AuthCheckKind::Other,
+            callee: "requires_access_dag".into(),
+            subjects: Vec::new(), // route-level checks carry no body subjects
+            span: (0, 0),
+            line: 0,
+            args: Vec::new(),
+            condition_text: None,
+            is_route_level: true,
+        };
+
+        // Any subject is covered when the check is route-level —
+        // path param, request body field, row-fetch receiver, all of
+        // them.  The per-name walk would have rejected each.
+        assert!(auth_check_covers_subject(
+            &route_check,
+            &plain("dag_id"),
+            &unit
+        ));
+        assert!(auth_check_covers_subject(
+            &route_check,
+            &member("req", "dag_run_id"),
+            &unit
+        ));
+        assert!(auth_check_covers_subject(&route_check, &plain("dag"), &unit));
+
+        // Sanity check: an in-body check with no subjects (the prior
+        // shape) does NOT cover arbitrary subjects.  Without the
+        // route-level flag, the empty subjects vec means the
+        // `check.subjects.iter().any(...)` walk fails for every
+        // candidate.
+        let in_body_check = AuthCheck {
+            kind: AuthCheckKind::Other,
+            callee: "requires_access_dag".into(),
+            subjects: Vec::new(),
+            span: (0, 0),
+            line: 0,
+            args: Vec::new(),
+            condition_text: None,
+            is_route_level: false,
+        };
+        assert!(!auth_check_covers_subject(
+            &in_body_check,
+            &plain("dag_id"),
+            &unit
+        ));
     }
 }

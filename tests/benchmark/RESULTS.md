@@ -4,13 +4,13 @@ Current baseline (2026-04-29):
 
 | Metric    | File-level | Rule-level | CI floor |
 |-----------|------------|------------|----------|
-| Precision | 0.991      | 0.991      | 0.861    |
-| Recall    | 0.995      | 0.995      | 0.944    |
-| F1        | 0.993      | 0.993      | 0.901    |
+| Precision | 0.996      | 0.996      | 0.861    |
+| Recall    | 1.000      | 1.000      | 0.944    |
+| F1        | 0.998      | 0.998      | 0.901    |
 
-Corpus: 433 cases across 10 languages, 432 evaluated (1 disabled). Per-run JSON lands in `tests/benchmark/results/` (`latest.json` plus dated snapshots). See `README.md` for what the scoring modes mean and how to run a subset.
+Corpus: 451 cases across 10 languages, 449 evaluated (no disabled). Per-run JSON lands in `tests/benchmark/results/` (`latest.json` plus dated snapshots). See `README.md` for what the scoring modes mean and how to run a subset.
 
-The corpus is mostly synthetic 8-20 line fixtures, one vulnerability or one safe pattern per file. A smaller real-CVE replay set under `cve_corpus/` covers 18 published CVEs across all 10 languages. Both contribute to the headline numbers.
+The corpus is mostly synthetic 8-20 line fixtures, one vulnerability or one safe pattern per file. A smaller real-CVE replay set under `cve_corpus/` covers 20 published CVEs across all 10 languages. Both contribute to the headline numbers.
 
 ## Real CVE coverage
 
@@ -20,14 +20,19 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 |----------------|------------|----------------------------|----------------------|-----------------|----------|
 | CVE-2023-48022 | Python     | Ray                        | Apache-2.0           | CMDI            | detected |
 | CVE-2017-18342 | Python     | PyYAML                     | MIT                  | Deserialization | detected |
+| CVE-2025-69662 | Python     | geopandas                  | BSD-3-Clause         | SQL Injection   | detected |
+| CVE-2026-33626 | Python     | LMDeploy                   | Apache-2.0           | SSRF            | detected |
 | CVE-2019-14939 | JavaScript | mongo-express              | MIT                  | code_exec       | detected |
 | CVE-2025-64430 | JavaScript | Parse Server               | Apache-2.0           | SSRF            | detected |
 | CVE-2023-26159 | TypeScript | follow-redirects           | MIT                  | SSRF            | detected |
+| GHSA-4x48-cgf9-q33f | TypeScript | Novu                       | MIT                  | SSRF            | detected |
 | CVE-2022-30323 | Go         | hashicorp/go-getter        | MPL-2.0              | CMDI            | detected |
 | CVE-2023-3188  | Go         | owncast                    | MIT                  | SSRF            | detected |
 | CVE-2024-31450 | Go         | owncast                    | MIT                  | path_traversal  | detected |
 | CVE-2015-7501  | Java       | Apache Commons Collections | Apache-2.0           | Deserialization | detected |
 | CVE-2017-12629 | Java       | Apache Solr                | Apache-2.0           | CMDI            | detected |
+| CVE-2022-1471  | Java       | SnakeYAML                  | Apache-2.0           | Deserialization | detected |
+| CVE-2022-42889 | Java       | Apache Commons Text        | Apache-2.0           | code_exec       | detected |
 | CVE-2013-0156  | Ruby       | Ruby on Rails              | MIT                  | Deserialization | detected |
 | CVE-2020-8130  | Ruby       | Rake                       | MIT                  | CMDI            | detected |
 | CVE-2017-9841  | PHP        | PHPUnit                    | BSD-3-Clause         | code_exec       | detected |
@@ -60,6 +65,9 @@ Most recent first. Metrics are rule-level on the corpus size at that point.
 
 | Date       | Change                                                                       | Corpus | P     | R     | F1    |
 |------------|------------------------------------------------------------------------------|--------|-------|-------|-------|
+| 2026-04-29 | Java SnakeYAML + Text4Shell patterns; CVE-2022-1471 and CVE-2022-42889 detected | 449 | 0.996 | 1.000 | 0.998 |
+| 2026-04-29 | Indirect-validator branch narrowing (`const err = validate(x); if (err) throw …;`) + helper-summary all_validated propagation; Novu GHSA-4x48-cgf9-q33f detected | 445 | 0.991 | 1.000 | 0.995 |
+| 2026-04-29 | Python f-string SQLi pattern + bindparams sanitizer + HttpClient SSRF rules; CVE-2025-69662 (geopandas) and CVE-2026-33626 (LMDeploy) detected | 439 | 0.991 | 1.000 | 0.995 |
 | 2026-04-29 | Phantom-Param-aware field suppression: CVE-2023-3188 detected, FP guards hold | 432    | 0.995 | 1.000 | 0.998 |
 | 2026-04-28 | Ruby bare `Kernel#open` CMDI sink, exact-match sigil on label matchers        | 428    | 0.995 | 1.000 | 0.998 |
 | 2026-04-28 | Go SSRF/FILE_IO sink expansion (`http.DefaultClient.*`, `os.Remove`/`WriteFile`) plus Decode-writeback container op | 426 | 0.995 | 1.000 | 0.998 |

@@ -337,7 +337,7 @@ mod tests {
     }
 }
 
-// ── Pointer-Phase 5: field-granularity points-to summary ──────────────
+// ── field-granularity points-to summary ──────────────
 
 /// Maximum field names retained per parameter in [`FieldPointsToSummary`].
 ///
@@ -345,7 +345,7 @@ mod tests {
 /// while leaving room for typical helpers (a handful of fields each).
 pub const MAX_FIELDS_PER_PARAM: usize = 8;
 
-/// Pointer-Phase 5: field-granularity per-parameter points-to summary.
+/// field-granularity per-parameter points-to summary.
 ///
 /// Records, for each positional parameter index, the set of field
 /// **names** read from and written to inside the callee body.  Names

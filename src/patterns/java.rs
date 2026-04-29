@@ -21,6 +21,46 @@ pub const PATTERNS: &[Pattern] = &[
         category: PatternCategory::Deserialization,
         confidence: Confidence::High,
     },
+    // ── Tier A: SnakeYAML deserialization (CVE-2022-1471) ──────────────
+    // `new Yaml()` constructed without a `SafeConstructor` argument
+    // accepts arbitrary YAML tags (`!!javax.script.ScriptEngineManager`,
+    // `!!java.net.URLClassLoader`, …) and instantiates any class via
+    // reflection. SnakeYAML 2.0 swapped the default to SafeConstructor
+    // but pre-2.0 deployments stay vulnerable until call sites are
+    // patched. We match the empty-arg form `new Yaml()` only, so the
+    // explicit-SafeConstructor remediation form
+    // `new Yaml(new SafeConstructor(new LoaderOptions()))` is silent.
+    Pattern {
+        id: "java.deser.snakeyaml_unsafe_constructor",
+        description: "new Yaml() without SafeConstructor accepts arbitrary class tags (CVE-2022-1471)",
+        query: r#"(object_creation_expression
+                     type: (type_identifier) @t (#eq? @t "Yaml")
+                     arguments: (argument_list) @args (#eq? @args "()"))
+                   @vuln"#,
+        severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::Deserialization,
+        confidence: Confidence::High,
+    },
+    // ── Tier A: Apache Commons Text Text4Shell (CVE-2022-42889) ────────
+    // `StringSubstitutor.createInterpolator()` enables `script:`,
+    // `dns:`, and `url:` lookups by default — `${script:js:…}`
+    // evaluates JavaScript via the JSR-223 ScriptEngineManager. The
+    // factory call is itself the structural bug; the recommended app-
+    // side mitigation builds a `StringSubstitutor` directly with a
+    // restricted lookup map.
+    Pattern {
+        id: "java.code_exec.text4shell_interpolator",
+        description: "StringSubstitutor.createInterpolator() enables script:/dns:/url: evaluation (CVE-2022-42889)",
+        query: r#"(method_invocation
+                     object: (identifier) @c (#eq? @c "StringSubstitutor")
+                     name: (identifier) @id (#eq? @id "createInterpolator"))
+                   @vuln"#,
+        severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
+    },
     // ── Tier A: Command execution ──────────────────────────────────────
     Pattern {
         id: "java.cmdi.runtime_exec",

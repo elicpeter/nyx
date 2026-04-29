@@ -51,6 +51,27 @@ fn collect_top_level_from_node(
             if decorated_definition_child(node)
                 .is_some_and(|definition| definition.kind() == "function_definition") =>
         {
+            // Celery / Airflow / DRF background-task decorators
+            // (`@instrumented_task`, `@shared_task`, `@app.task`,
+            // `@celery.task`, `@beat.shared_task`, `@periodic_task`,
+            // `@receiver`) mark a function as an internal scheduled
+            // job, not a user-reachable handler.  Any id-shaped
+            // parameter name (`uuid: str`, `release_id: int`,
+            // `voucher_code_ids: list[int]`) refers to an
+            // internally-generated identifier — by construction the
+            // task is invoked from `task.delay(...)` in already-auth-
+            // checked code, never from an HTTP request directly.
+            //
+            // Skipping the unit at extract time stops the ownership /
+            // token-override / partial-batch-authorization rules from
+            // examining its operations.  Real route handlers go
+            // through the framework extractors (Flask /
+            // FastAPI / Django / DRF) and re-add a `RouteHandler`
+            // unit with auth_checks injected from the route
+            // decorator, so this skip never hides a real handler.
+            if python_decorated_definition_is_background_task(node, bytes) {
+                return;
+            }
             model.units.push(build_function_unit_with_meta(
                 node,
                 AnalysisUnitKind::Function,
@@ -143,13 +164,54 @@ pub fn attach_route_handler(
     model: &mut AuthorizationModel,
 ) -> Option<ResolvedHandler> {
     let handler_node = resolve_handler_node(root, handler_expr, bytes)?;
-    let unit_idx = model.units.len();
     // `attach_route_handler` is called by route-aware extractors (express,
     // koa, fastify, axum, …) which already hold the file root.  Build
     // the FileMeta once here so the JS/TS TRPC pre-scan only walks the
     // top-level decl set per file (instead of per route).
     let file_meta = FileMeta::scan(root, bytes);
-    let unit = build_function_unit_with_meta(
+    let line = handler_node.start_position().row + 1;
+    let handler_span = span(handler_node);
+    let definition = function_definition_node(handler_node);
+    // Route-handler-aware param list: includes id-like Python typed
+    // params (`dag_id: str`, `dag_run_id: str`) that
+    // `collect_param_names`'s default branch filters out for internal
+    // helpers.  `inject_middleware_auth` clones this list into the
+    // synthetic-subject set on each middleware-injected auth check so
+    // `auth_check_covers_subject` matches the operation subjects
+    // produced by the handler body (e.g. `filter_by(dag_id=dag_id,
+    // run_id=dag_run_id)`).
+    let route_handler_params = function_params_route_handler(definition, bytes);
+
+    // **Promote-or-create.**  Most route-aware extractors invoke
+    // `collect_top_level_units` first, which already produced a
+    // [`AnalysisUnitKind::Function`] unit covering this same span.
+    // Pushing a brand-new RouteHandler unit duplicates the analysis
+    // surface — `check_ownership_gaps` then evaluates the operation
+    // twice and emits the FP from the (un-injected) Function unit even
+    // when the RouteHandler unit's middleware-derived auth check
+    // suppresses it.  Promoting the existing unit keeps the model
+    // single-tenanted per handler so downstream auth-check injection
+    // (FastAPI `dependencies=[Depends(...)]`, Express middleware, ...)
+    // lands on the unit that's evaluated.
+    if let Some((idx, existing)) = model
+        .units
+        .iter_mut()
+        .enumerate()
+        .find(|(_, u)| u.kind == AnalysisUnitKind::Function && u.span == handler_span)
+    {
+        existing.kind = AnalysisUnitKind::RouteHandler;
+        existing.name = Some(route_name);
+        existing.params = route_handler_params.clone();
+        return Some(ResolvedHandler {
+            unit_idx: idx,
+            span: handler_span,
+            params: route_handler_params,
+            line,
+        });
+    }
+
+    let unit_idx = model.units.len();
+    let mut unit = build_function_unit_with_meta(
         handler_node,
         AnalysisUnitKind::RouteHandler,
         Some(route_name),
@@ -157,14 +219,12 @@ pub fn attach_route_handler(
         rules,
         Some(&file_meta),
     );
-    let params = unit.params.clone();
-    let line = handler_node.start_position().row + 1;
-    let span = span(handler_node);
+    unit.params = route_handler_params.clone();
     model.units.push(unit);
     Some(ResolvedHandler {
         unit_idx,
-        span,
-        params,
+        span: handler_span,
+        params: route_handler_params,
         line,
     })
 }
@@ -362,6 +422,19 @@ pub fn build_function_unit_with_meta(
 ) -> AnalysisUnit {
     let definition = function_definition_node(node);
     let params = function_params(definition, bytes);
+    // Structurally-typed bounded params: walk the parameter list and
+    // mark any param whose type annotation resolves to an integer or
+    // boolean scalar (`int`, `bool`, `Optional[int]`, `list[int]`,
+    // `Iterable[int]`, …) as typed-bounded.  Mirrors the SSA-derived
+    // `apply_typed_bounded_params` lift but runs even when the SSA
+    // var_types map isn't supplied (internal helpers analysed without
+    // a CFG, ad-hoc unit lookups, …).  Without this, a Python helper
+    // signature like `get_release_project_new_group_count(environment_ids:
+    // list[int], project_ids: list[int])` would drop into the
+    // ownership rule because the param names match `is_id_like` even
+    // though the static type proves the values are bounded numerics
+    // that can't carry a SQL/file/shell payload.
+    let preseeded_bounded = python_int_bounded_typed_params(definition, bytes);
     let line = node.start_position().row + 1;
     let mut state = UnitState::default();
     // Seed Go's method-receiver name (`func (c *Cache) ...` → `c`) into
@@ -416,7 +489,7 @@ pub fn build_function_unit_with_meta(
         self_actor_id_vars: state.self_actor_id_vars,
         authorized_sql_vars: state.authorized_sql_vars,
         const_bound_vars: state.const_bound_vars,
-        typed_bounded_vars: HashSet::new(),
+        typed_bounded_vars: preseeded_bounded,
         typed_bounded_dto_fields: std::collections::HashMap::new(),
         self_scoped_session_bases: state.self_scoped_session_bases,
     }
@@ -651,6 +724,7 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
             line,
             args: string_args,
             condition_text: None,
+            is_route_level: false,
         });
     }
 
@@ -725,6 +799,7 @@ fn collect_condition(
             line,
             args: Vec::new(),
             condition_text: Some(condition_text.clone()),
+            is_route_level: false,
         });
     }
 
@@ -737,6 +812,7 @@ fn collect_condition(
             line,
             args: Vec::new(),
             condition_text: Some(condition_text),
+            is_route_level: false,
         });
     }
 }
@@ -1943,6 +2019,7 @@ fn collect_sql_authorized_binding(
         line,
         args: Vec::new(),
         condition_text: None,
+        is_route_level: false,
     });
 }
 
@@ -2465,6 +2542,7 @@ fn detect_ownership_equality_check(if_node: Node<'_>, bytes: &[u8], state: &mut 
         line: check_line,
         args: Vec::new(),
         condition_text: Some(condition_text),
+        is_route_level: false,
     });
 }
 
@@ -2657,13 +2735,212 @@ pub fn function_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
+/// True when a Python `decorated_definition` node carries a
+/// background-task / event-handler decorator.  Recognised markers
+/// (matched against the bare callee name, last segment of any
+/// dotted/qualified form):
+///
+///   * Celery: `task`, `shared_task`, `periodic_task`,
+///     `app.task`, `celery.task`, `beat.shared_task`.
+///   * Airflow: `instrumented_task`.
+///   * Django: `receiver` (signal receiver — invoked by the framework,
+///     not by an HTTP request).
+///
+/// Used by `collect_top_level_from_node` to skip pushing a
+/// `Function` unit for functions that cannot, by construction, be
+/// the entry point of a user-input flow.  Real route handlers are
+/// added by the framework-specific route extractors (Flask /
+/// Django / Spring / FastAPI / …) which re-build the unit with
+/// `RouteHandler` kind and route-decorator-derived auth checks.
+fn python_decorated_definition_is_background_task(node: Node<'_>, bytes: &[u8]) -> bool {
+    for idx in 0..node.named_child_count() {
+        let Some(child) = node.named_child(idx as u32) else {
+            continue;
+        };
+        if child.kind() != "decorator" {
+            continue;
+        }
+        let Some(inner) = child.named_child(0) else {
+            continue;
+        };
+        let callee_text = match inner.kind() {
+            "call" => {
+                let Some(function) = inner.child_by_field_name("function") else {
+                    continue;
+                };
+                text(function, bytes)
+            }
+            "identifier" | "attribute" | "scoped_identifier" => text(inner, bytes),
+            _ => continue,
+        };
+        let last = callee_text.rsplit('.').next().unwrap_or(&callee_text);
+        if matches!(
+            last,
+            "task"
+                | "shared_task"
+                | "periodic_task"
+                | "instrumented_task"
+                | "receiver"
+        ) {
+            return true;
+        }
+    }
+    false
+}
+
 fn function_params(node: Node<'_>, bytes: &[u8]) -> Vec<String> {
     let Some(params_node) = node.child_by_field_name("parameters") else {
         return Vec::new();
     };
     let mut params = Vec::new();
-    collect_param_names(params_node, bytes, &mut params);
+    collect_param_names(params_node, bytes, false, &mut params);
     params
+}
+
+/// Variant of [`function_params`] that always includes id-like typed
+/// Python params (`dag_id: str`, `dag_run_id: str`).  Used by
+/// `attach_route_handler` to populate `unit.params` for RouteHandler
+/// units so middleware-injected auth checks (FastAPI
+/// `dependencies=[Depends(...)]`, Flask `@requires_role(...)`, etc.)
+/// can synthesise subjects that cover every handler input — including
+/// the id-shaped ones that are *the* primary user-controlled data on
+/// REST routes.
+///
+/// The id-like filter in [`collect_param_names`] exists to keep
+/// internal helper signatures (`def f(release_id: int, project:
+/// Project)`) from passing `unit_has_user_input_evidence`'s param
+/// heuristic, which would over-fire `missing_ownership_check`.  Route
+/// handlers don't need that filter — they pass the precondition gate
+/// via `kind == RouteHandler`, and missing the id-like params from
+/// `unit.params` actively breaks the middleware-injection coverage
+/// path.
+pub fn function_params_route_handler(node: Node<'_>, bytes: &[u8]) -> Vec<String> {
+    let Some(params_node) = node.child_by_field_name("parameters") else {
+        return Vec::new();
+    };
+    let mut params = Vec::new();
+    collect_param_names(params_node, bytes, true, &mut params);
+    params
+}
+
+/// Walk a Python function-definition node's parameter list and
+/// collect every parameter whose static type annotation resolves to
+/// an integer or boolean scalar (or a generic-wrapped int such as
+/// `Optional[int]`, `list[int]`, `Iterable[int]`).  These names are
+/// used to seed `AnalysisUnit::typed_bounded_vars` so the ownership
+/// rule's `is_typed_bounded_subject` filter recognises the bounded
+/// type without requiring an SSA-derived `VarTypes` map.
+///
+/// No-op for non-Python `function_definition` nodes — only
+/// tree-sitter-python exposes the `typed_parameter` /
+/// `typed_default_parameter` shapes inspected here.  Conservative:
+/// only int/bool/float scalars and known integer-list wrappers
+/// qualify; bare `str`, `bytes`, `Path`, custom DTO types, and
+/// `Annotated[int, Body()]` wrappers are NOT lifted because the
+/// presence of an HTTP-binding marker indicates the value is
+/// caller-controlled (the SSA pipeline handles those).
+fn python_int_bounded_typed_params(node: Node<'_>, bytes: &[u8]) -> HashSet<String> {
+    let mut out: HashSet<String> = HashSet::new();
+    let Some(params_node) = node.child_by_field_name("parameters") else {
+        return out;
+    };
+    for idx in 0..params_node.named_child_count() {
+        let Some(child) = params_node.named_child(idx as u32) else {
+            continue;
+        };
+        if !matches!(child.kind(), "typed_parameter" | "typed_default_parameter") {
+            continue;
+        }
+        let mut name: Option<String> = None;
+        let mut type_text: Option<String> = None;
+        for inner_idx in 0..child.named_child_count() {
+            let Some(inner) = child.named_child(inner_idx as u32) else {
+                continue;
+            };
+            if inner.kind() == "identifier" && name.is_none() {
+                let n = text(inner, bytes);
+                if !n.is_empty() {
+                    name = Some(n);
+                }
+            } else if inner.kind() == "type" {
+                type_text = Some(text(inner, bytes));
+            }
+        }
+        if let (Some(n), Some(t)) = (name, type_text)
+            && python_type_text_is_integer_bounded(&t)
+        {
+            out.insert(n);
+        }
+    }
+    out
+}
+
+/// Conservative recogniser for Python type annotations that bound a
+/// value to an integer or boolean scalar.  Accepts:
+///   * Bare `int`, `bool`, `float`.
+///   * Common generic wrappers whose element type is one of those:
+///     `Optional[int]`, `Union[int, None]`, `list[int]`, `List[int]`,
+///     `tuple[int, ...]`, `Sequence[int]`, `Iterable[int]`,
+///     `set[int]`, `frozenset[int]`, `dict[int, ...]` (key only).
+///
+/// `Annotated[int, ...]` is intentionally rejected — the FastAPI /
+/// Pydantic binding marker indicates the value is caller-controlled.
+fn python_type_text_is_integer_bounded(text: &str) -> bool {
+    let trimmed = text.trim();
+    // Accept `T | None` (PEP 604) by recursing on each branch.
+    if trimmed.contains('|') {
+        return trimmed
+            .split('|')
+            .map(str::trim)
+            .all(|alt| alt == "None" || python_type_text_is_integer_bounded(alt));
+    }
+    if matches!(trimmed, "int" | "bool" | "float") {
+        return true;
+    }
+    let Some((head, rest)) = trimmed.split_once('[') else {
+        return false;
+    };
+    if !rest.ends_with(']') {
+        return false;
+    }
+    let inner = &rest[..rest.len() - 1];
+    let head_trim = head.trim();
+    // `Annotated[int, Body()]` etc. is a binding marker — refuse.
+    if matches!(head_trim, "Annotated" | "typing.Annotated") {
+        return false;
+    }
+    let inner_first = inner.split(',').next().unwrap_or(inner).trim();
+    matches!(
+        head_trim,
+        "Optional"
+            | "typing.Optional"
+            | "Union"
+            | "typing.Union"
+            | "list"
+            | "List"
+            | "typing.List"
+            | "tuple"
+            | "Tuple"
+            | "typing.Tuple"
+            | "set"
+            | "Set"
+            | "typing.Set"
+            | "frozenset"
+            | "Frozenset"
+            | "Sequence"
+            | "typing.Sequence"
+            | "Iterable"
+            | "typing.Iterable"
+            | "Iterator"
+            | "typing.Iterator"
+            | "Collection"
+            | "typing.Collection"
+            | "dict"
+            | "Dict"
+            | "typing.Dict"
+            | "Mapping"
+            | "typing.Mapping"
+    ) && python_type_text_is_integer_bounded(inner_first)
 }
 
 /// Walk the tree starting at `node` and gather TS type-alias /
@@ -2898,7 +3175,12 @@ fn extract_receiver_param_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
     None
 }
 
-fn collect_param_names(node: Node<'_>, bytes: &[u8], out: &mut Vec<String>) {
+fn collect_param_names(
+    node: Node<'_>,
+    bytes: &[u8],
+    include_id_like_typed: bool,
+    out: &mut Vec<String>,
+) {
     match node.kind() {
         "identifier" | "property_identifier" | "shorthand_property_identifier_pattern" => {
             let name = text(node, bytes);
@@ -2907,8 +3189,73 @@ fn collect_param_names(node: Node<'_>, bytes: &[u8], out: &mut Vec<String>) {
             }
         }
         "default_parameter" | "typed_parameter" | "typed_default_parameter" => {
+            // tree-sitter-python's `typed_parameter` rule does not
+            // expose a `name` field (the identifier is the wrapper's
+            // first child, with the type expression as a sibling).  We
+            // fall back to the first `identifier` child when
+            // `child_by_field_name("name")` returns None so typed
+            // Python params (`connection_id: str`,
+            // `organization_id: int`, …) actually flow into
+            // `unit.params` instead of being silently dropped.  Without
+            // this, route-aware extractors (Flask + FastAPI) couldn't
+            // see a typed handler's path params and the FastAPI
+            // dependency-injection recogniser had no subject to
+            // synthesise its auth check against.  Languages whose
+            // grammar carries a `name` field (TypeScript
+            // `required_parameter`, …) still take the explicit field
+            // path.
+            //
+            // Note: Restricting this fallback to non-id-like names
+            // (so internal helpers with `release_id: int`,
+            // `organization_id: int`, etc. don't pass
+            // `unit_has_user_input_evidence`) would avoid the helper
+            // FP regression observed on sentry.  The principled
+            // long-term fix is cross-file type-flow so subjects like
+            // `project.id` (where `project: Project`) are recognised
+            // as typed-bounded everywhere they're used.  Until that
+            // lands, we accept the cluster — handlers go through the
+            // route extractors, and route-decorator-derived auth
+            // checks suppress them.
             if let Some(name) = node.child_by_field_name("name") {
-                collect_param_names(name, bytes, out);
+                collect_param_names(name, bytes, include_id_like_typed, out);
+                return;
+            }
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if child.kind() == "identifier" {
+                    let name_text = text(child, bytes);
+                    // Conservative for non-route-handler units: only
+                    // push the name when it is NOT id-like.  This is a
+                    // stopgap until cross-file type-flow lets us
+                    // suppress `obj.id` subjects on typed-object args;
+                    // without it, exposing typed helpers like
+                    // `def f(release_id: int, project: Project) -> ...`
+                    // over-fires `missing_ownership_check` because the
+                    // engine sees `project.id` as a foreign scoped id.
+                    // Route handlers (`include_id_like_typed = true`)
+                    // bypass this filter — id-like params on a REST
+                    // route are *the* primary user input, and the
+                    // RouteHandler kind already passes
+                    // `unit_has_user_input_evidence` unconditionally,
+                    // so including them in `unit.params` doesn't
+                    // affect that gate but does let
+                    // `inject_middleware_auth` synthesise auth-check
+                    // subjects that match the operation subjects (the
+                    // FastAPI `dependencies=[Depends(...)]` coverage
+                    // path that was previously empty for handlers like
+                    // `def get_dag_run(dag_id: str, dag_run_id: str,
+                    // session)`).
+                    let is_id_like = is_python_id_like_typed_param(&name_text);
+                    if !name_text.is_empty()
+                        && !out.contains(&name_text)
+                        && (include_id_like_typed || !is_id_like)
+                    {
+                        out.push(name_text);
+                    }
+                    return;
+                }
             }
         }
         _ => {
@@ -2916,10 +3263,24 @@ fn collect_param_names(node: Node<'_>, bytes: &[u8], out: &mut Vec<String>) {
                 let Some(child) = node.named_child(idx as u32) else {
                     continue;
                 };
-                collect_param_names(child, bytes, out);
+                collect_param_names(child, bytes, include_id_like_typed, out);
             }
         }
     }
+}
+
+/// Ascii-lowered id-shape predicate used by the Python typed-param
+/// fallback in `collect_param_names`.  Mirrors
+/// `auth_analysis::checks::is_id_like_name` (cannot share that fn
+/// directly without a cross-module dep) — both must move in lockstep
+/// so the precondition gate and the param-extraction filter agree on
+/// what counts as id-like.
+fn is_python_id_like_typed_param(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "id"
+        || lower.ends_with("id")
+        || lower.ends_with("_id")
+        || lower.ends_with("ids")
 }
 
 pub fn is_function_like(node: Node<'_>) -> bool {
@@ -3028,6 +3389,7 @@ pub fn auth_check_from_call_site(
         line,
         args: call.args.clone(),
         condition_text: None,
+        is_route_level: false,
     })
 }
 
@@ -3200,20 +3562,47 @@ fn matches_request_query(chain: &[String]) -> bool {
 
 fn matches_session_context(chain: &[String]) -> bool {
     let lower = lower_segments(chain);
-    (lower.first().is_some_and(|segment| {
+    // Bare `session` is overloaded: in JS/TS it routinely means
+    // NextAuth/express-session and `session.user.id` is auth context;
+    // in Python `session.commit()`, `session.add(..)`, `session.scalar(..)`
+    // are SQLAlchemy ORM calls which have nothing to do with
+    // authentication.  When the chain starts with bare `session`,
+    // refuse to classify it as auth context if the next segment is a
+    // canonical SQLAlchemy / SQLAlchemy-style ORM method name —
+    // those are read/write verbs and never identity accessors.  Any
+    // other field-style accessor (`session.user`, `session.user_id`,
+    // `session.workspace_id`, `session.role`) stays a Session-context
+    // chain so the stale-authorization / ownership rules still see
+    // session-backed foreign ids.  Bare `session` with no following
+    // segment is ambiguous and refused.
+    // Chain length 1 (`session` alone, as the receiver of a subscript
+    // like `session[:user_id]`) stays auth context — the session
+    // ambiguity only kicks in when there's a follow-up segment that
+    // can be inspected.  Length 2 with a known ORM verb (`session.commit`,
+    // `session.add`) is denylisted; any other follow-up segment
+    // (`session.user`, `session.workspace_id`, `session.role`) keeps
+    // its Session classification.  Length 3+ chains with `session` at
+    // the root always stay auth (they describe a session-stored
+    // member or sub-member).
+    let bare_session_chain_is_auth =
+        lower.first().is_some_and(|segment| segment == "session")
+            && (lower.len() == 1 || lower.len() >= 3 || !is_orm_session_verb(&lower[1]));
+    let unambiguous_chain_root = lower.first().is_some_and(|segment| {
         matches!(
             segment.as_str(),
-            "session"
-                | "current_user"
+            "current_user"
                 | "current_account"
                 | "current_member"
                 | "securitycontext"
                 | "principal"
                 | "authentication"
         )
-    })) || (lower.len() >= 2
-        && matches!(lower[0].as_str(), "req" | "request")
-        && matches!(lower[1].as_str(), "session" | "user" | "currentuser"))
+    });
+    bare_session_chain_is_auth
+        || unambiguous_chain_root
+        || (lower.len() >= 2
+            && matches!(lower[0].as_str(), "req" | "request")
+            && matches!(lower[1].as_str(), "session" | "user" | "currentuser"))
         || (lower.len() >= 3
             && lower[0] == "self"
             && matches!(lower[1].as_str(), "request" | "session" | "current_user")
@@ -3221,6 +3610,46 @@ fn matches_session_context(chain: &[String]) -> bool {
         || (lower.len() >= 3
             && lower[0] == "ctx"
             && matches!(lower[1].as_str(), "session" | "state"))
+}
+
+/// Denylist of SQLAlchemy / generic ORM session verbs.  The Python
+/// pytest-fixture idiom (`session: Session = sqlalchemy_session()`)
+/// drives every test method through `session.commit()` /
+/// `session.add(...)` / `session.scalar(...)`; classifying any of
+/// those calls as auth Session context would falsely qualify
+/// thousands of test methods as receiving user input.  Only verbs
+/// that name a SQL/transaction operation are listed — identity-
+/// looking field accessors (`user`, `user_id`, `role`,
+/// `workspace_id`, `project_id`, ...) all pass through and remain
+/// auth Session.
+fn is_orm_session_verb(segment: &str) -> bool {
+    matches!(
+        segment,
+        "commit"
+            | "rollback"
+            | "flush"
+            | "refresh"
+            | "merge"
+            | "expunge"
+            | "expunge_all"
+            | "close"
+            | "begin"
+            | "begin_nested"
+            | "query"
+            | "scalar"
+            | "scalars"
+            | "execute"
+            | "exec"
+            | "exec_driver_sql"
+            | "add"
+            | "add_all"
+            | "delete"
+            | "bulk_save_objects"
+            | "bulk_insert_mappings"
+            | "bulk_update_mappings"
+            | "configure"
+            | "info"
+    )
 }
 
 fn subscript_value_ref(node: Node<'_>, bytes: &[u8]) -> Option<ValueRef> {
@@ -3836,5 +4265,62 @@ mod tests {
         assert!(!bt("ctx.user"));
         assert!(!bt("data.user"));
         assert!(!bt("user"));
+    }
+
+    /// Pins the bare-`session` chain narrowing: ORM session verbs
+    /// (`commit` / `add` / `scalar` / `execute` / ...) are denylisted
+    /// — they do not contribute auth Session evidence even though the
+    /// chain root is the literal name `session`.  Any other field-
+    /// shaped second segment (`user`, `user_id`, `workspace_id`,
+    /// `project_id`, `role`) keeps its Session classification so the
+    /// stale-authorization / missing-ownership rules still see
+    /// session-backed foreign ids.  Closes the airflow pytest cluster
+    /// where `session.commit()` made `unit_has_user_input_evidence`
+    /// return true on test methods with no actual user input, while
+    /// preserving the gin/rails/rocket stale-session fixtures whose
+    /// session chains use foreign-id field accessors.
+    #[test]
+    fn matches_session_context_denylists_orm_session_verbs() {
+        use super::matches_session_context as msc;
+        let v = |chain: &[&str]| chain.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // Bare `session.<identity-field>` — auth context.
+        assert!(msc(&v(&["session", "user"])));
+        assert!(msc(&v(&["session", "user_id"])));
+        assert!(msc(&v(&["session", "id"])));
+        assert!(msc(&v(&["session", "uid"])));
+        assert!(msc(&v(&["session", "email"])));
+        assert!(msc(&v(&["session", "currentUser"])));
+        // Foreign-id fields stored on the session — must remain auth
+        // Session for the stale-authorization rule (gin/rails/rocket
+        // fixtures).
+        assert!(msc(&v(&["session", "workspace_id"])));
+        assert!(msc(&v(&["session", "project_id"])));
+        assert!(msc(&v(&["session", "role"])));
+        assert!(msc(&v(&["session", "currentWorkspaceID"])));
+        // SQLAlchemy verbs — NOT auth context.
+        assert!(!msc(&v(&["session", "commit"])));
+        assert!(!msc(&v(&["session", "rollback"])));
+        assert!(!msc(&v(&["session", "scalar"])));
+        assert!(!msc(&v(&["session", "scalars"])));
+        assert!(!msc(&v(&["session", "add"])));
+        assert!(!msc(&v(&["session", "delete"])));
+        assert!(!msc(&v(&["session", "execute"])));
+        assert!(!msc(&v(&["session", "flush"])));
+        assert!(!msc(&v(&["session", "query"])));
+        assert!(!msc(&v(&["session", "merge"])));
+        assert!(!msc(&v(&["session", "refresh"])));
+        assert!(!msc(&v(&["session", "close"])));
+        // Bare `session` alone (length 1) stays auth — covers
+        // subscript shapes like `session[:workspace_id]` whose object
+        // is just the bare `session` identifier.
+        assert!(msc(&v(&["session"])));
+        // `req.session.user` — unchanged: explicit auth-session base.
+        assert!(msc(&v(&["req", "session", "user"])));
+        // `request.session` — unchanged: req/request-prefixed arm
+        // recognises `session` regardless of any subsequent segment.
+        assert!(msc(&v(&["request", "session"])));
+        // `current_user.<x>` — unambiguous chain root, fires regardless.
+        assert!(msc(&v(&["current_user", "id"])));
+        assert!(msc(&v(&["current_user", "preferences"])));
     }
 }

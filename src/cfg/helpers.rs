@@ -709,7 +709,7 @@ pub(crate) fn collect_idents(n: Node, code: &[u8], out: &mut Vec<String>) {
     }
 }
 
-/// Pointer-Phase 6 / W5: AST kind names for subscript / index expressions
+///AST kind names for subscript / index expressions
 /// across the languages whose container-element flow we model.
 ///
 /// JS/TS use `subscript_expression`; Python uses `subscript`; Go uses
@@ -724,7 +724,7 @@ pub(crate) fn is_subscript_kind(kind: &str) -> bool {
     )
 }
 
-/// Pointer-Phase 6 / W5: when the LHS of an assignment statement is a
+///when the LHS of an assignment statement is a
 /// subscript / index expression (or a single-element wrapper around
 /// one), return that node.  Returns `None` for multi-target Go
 /// `expression_list`s, identifier LHSs, member-expression LHSs, etc.
@@ -745,7 +745,7 @@ pub(crate) fn subscript_lhs_node<'a>(lhs: Node<'a>, lang: &str) -> Option<Node<'
     None
 }
 
-/// Pointer-Phase 6 / W5: extract `(array_text, index_text)` from a
+///extract `(array_text, index_text)` from a
 /// subscript / index AST node.
 ///
 /// Returns `None` when the array operand is not a plain identifier — we

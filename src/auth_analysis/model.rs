@@ -133,6 +133,33 @@ pub struct AuthCheck {
     pub line: usize,
     pub args: Vec<String>,
     pub condition_text: Option<String>,
+    /// True when the check was declared at the route boundary
+    /// (decorator / middleware / dependency-injection list) rather
+    /// than as a per-call check inside the handler body.
+    ///
+    /// Route-level non-login-guard checks authorize the *entire*
+    /// handler — they gate every value the handler receives, every
+    /// row the handler fetches, and every operation downstream.  An
+    /// in-body `auth_check_covers_subject` walk that requires a
+    /// per-name subject match cannot model that semantics: a
+    /// FastAPI `dependencies=[Depends(requires_access_dag(method=
+    /// "POST", access_entity=DagAccessEntity.RUN))]` is opaque to
+    /// the engine — the inner `requires_access_dag` call carries no
+    /// per-arg subject ref pointing to `dag_id` or `dag.id`.  The
+    /// flag tells `auth_check_covers_subject` to short-circuit
+    /// `true` for any non-login-guard route-level check, leaving
+    /// only the LoginGuard / TokenExpiry / TokenRecipient kinds
+    /// (already excluded upstream by `has_prior_subject_auth`'s
+    /// filter) to be ignored.
+    ///
+    /// Set by `inject_middleware_auth` (Django, Flask, FastAPI) at
+    /// the route-decorator entry point.  Default `false` for
+    /// in-body checks (`require_membership(user, group_id)`,
+    /// `is_admin(user)`, etc.) — those still flow through the
+    /// per-subject coverage logic so a check on
+    /// `community.creator_id` doesn't blanket-suppress every other
+    /// subject in the unit.
+    pub is_route_level: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -234,14 +261,13 @@ pub struct AnalysisUnit {
     /// passes `is_id_like` — the framework guarantees the value is a
     /// number that cannot carry a SQL/file/shell payload.
     pub typed_bounded_vars: HashSet<String>,
-    /// Phase 6: per-DTO-extractor parameter, the field names whose
+    /// per-DTO-extractor parameter, the field names whose
     /// declared type is a payload-incompatible scalar.  Map key is the
     /// parameter name (e.g. `dto`), value is the list of field names
     /// (e.g. `["age", "count"]`).  Populated by
     /// [`super::apply_typed_bounded_params`] only when the parameter
-    /// itself was recognised as a typed extractor by a Phase 1-2
-    /// matcher — bare parameters with no framework gate never lift
-    /// their fields.
+    /// itself was recognised as a typed extractor — bare parameters
+    /// with no framework gate never lift their fields.
     pub typed_bounded_dto_fields: HashMap<String, Vec<String>>,
     /// Per-unit dynamic session-base text set, supplementing the
     /// hard-coded list in `is_self_scoped_session_base`.  Populated by

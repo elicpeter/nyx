@@ -14,6 +14,7 @@ use crate::labels::{
 };
 use crate::summary::FuncSummary;
 use crate::symbol::{FuncKey, Lang};
+use crate::utils::snippet::truncate_at_char_boundary;
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -54,8 +55,9 @@ use literals::{
     extract_arg_uses, extract_const_keyword_arg, extract_const_string_arg,
     extract_destination_field_idents, extract_kwargs, extract_literal_rhs, find_call_node,
     find_call_node_deep, find_chained_inner_call, has_keyword_arg, has_only_literal_args,
-    is_parameterized_query_call, java_chain_arg0_kind_for_method, ruby_chain_arg0_for_method,
-    walk_chain_inner_call_args,
+    is_parameterized_query_call, java_chain_arg0_kind_for_method,
+    js_chain_arg0_kind_for_method, js_chain_outer_method_for_inner,
+    ruby_chain_arg0_for_method, walk_chain_inner_call_args,
 };
 use params::{
     compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
@@ -74,7 +76,7 @@ pub fn extract_param_meta_for_test<'a>(
 }
 
 /// Test-only helper to populate the per-file DTO class map without
-/// running `build_cfg`.  Used by the Phase 6 audit harness in
+/// running `build_cfg`.  Used by the DTO audit harness in
 /// `tests/typed_extractors_audit.rs` to verify that
 /// `classify_param_type_*` resolves a same-file DTO via the
 /// thread-local map.
@@ -91,28 +93,15 @@ pub fn clear_dto_classes_for_test() {
     DTO_CLASSES.with(|cell| cell.borrow_mut().clear());
 }
 
-// -------------------------------------------------------------------------
-// Structural DFS index for function bodies
-// -------------------------------------------------------------------------
-//
-// Per-file map of function-node start_byte → depth-first preorder index.
-// Populated at the start of `build_cfg`, consumed by every site that
-// previously formatted `<anon@{start_byte}>` or stored `start_byte` as
-// the disambig.  The DFS index is stable against edits elsewhere in the
-// file (inserting a line above a function does not change its index).
-//
-// Thread-local is safe because `build_cfg` is not re-entrant within a
-// single rayon worker: each file is parsed and CFG-built to completion
-// before the next one starts.
+// Per-file map of function-node start_byte → DFS preorder index. Stable
+// against unrelated edits (inserting a line above a function doesn't
+// change its index). Thread-local is safe — `build_cfg` is not
+// re-entrant within a single rayon worker.
 thread_local! {
     static FN_DFS_INDICES: RefCell<HashMap<usize, u32>> = RefCell::new(HashMap::new());
-    /// Phase 6: per-file DTO class definitions.  Populated at the top
-    /// of [`build_cfg`] by [`dto::collect_dto_classes`] so per-parameter
-    /// classifiers can resolve `@RequestBody T dto` /
-    /// `Json<CreateUser>` / `Annotated[CreateUser, Body()]` to a
-    /// [`crate::ssa::type_facts::TypeKind::Dto`] when the DTO type is
-    /// declared in the same file.  Cleared at the end of `build_cfg`
-    /// so thread-local state never leaks between files.
+    /// Per-file DTO class definitions, populated at the top of
+    /// [`build_cfg`] so per-parameter classifiers can resolve typed
+    /// extractors against same-file DTOs.
     pub(crate) static DTO_CLASSES: RefCell<HashMap<String, crate::ssa::type_facts::DtoFields>>
         = RefCell::new(HashMap::new());
 }
@@ -148,11 +137,8 @@ fn fn_dfs_index(start_byte: usize) -> Option<u32> {
     FN_DFS_INDICES.with(|cell| cell.borrow().get(&start_byte).copied())
 }
 
-/// Synthetic name for an anonymous function.  Uses the DFS index when
-/// available (`<anon#N>`), falls back to the byte offset when the map
-/// is empty (e.g. during tests that bypass `build_cfg`).  The `#`
-/// sigil is intentionally different from `@` so the two formats are
-/// distinguishable by downstream consumers.
+/// Synthetic name for an anonymous function: `<anon#N>` from the DFS
+/// index when available, `<anon@OFFSET>` as fallback.
 pub(crate) fn anon_fn_name(start_byte: usize) -> String {
     match fn_dfs_index(start_byte) {
         Some(idx) => format!("<anon#{idx}>"),
@@ -160,9 +146,7 @@ pub(crate) fn anon_fn_name(start_byte: usize) -> String {
     }
 }
 
-/// Prefix check that accepts both the new `<anon#...>` and legacy
-/// `<anon@...>` formats.  Used by code paths that classify whether a
-/// function name came from anonymous synthesis.
+/// True for any anonymous-function synthesis prefix.
 pub(crate) fn is_anon_fn_name(name: &str) -> bool {
     name.starts_with("<anon#") || name.starts_with("<anon@")
 }
@@ -236,8 +220,8 @@ pub struct CallMeta {
     /// CFG construction does NOT populate this field today (callee already
     /// carries the full path). It is the canonical place to read the original
     /// textual callee for **debug/display only** — analysis code should walk
-    /// SSA `FieldProj` receivers (Phase 4) or use the
-    /// [`crate::labels::bare_method_name`] textual fallback (Phase 5).
+    /// SSA `FieldProj` receivers or use the
+    /// [`crate::labels::bare_method_name`] textual fallback.
     #[doc(hidden)]
     #[serde(default)]
     pub callee_text: Option<String>,
@@ -419,7 +403,7 @@ pub struct NodeInfo {
     /// FILE_IO / SHELL_ESCAPE sink suppression for provably numeric
     /// payloads.
     pub is_numeric_length_access: bool,
-    /// Phase 6.3: the field name read on the RHS of an assignment whose
+    /// the field name read on the RHS of an assignment whose
     /// RHS is a single member-access expression (e.g. `let x = dto.email`).
     /// Set to `Some("email")` for that shape; left `None` otherwise.
     /// Consumed by the type-fact analysis (`ssa::type_facts`) so reads
@@ -589,7 +573,7 @@ pub struct FileCfg {
     /// Promisify wrapper aliases: local name → wrapped callee name.
     /// Only populated for JS/TS files.
     pub promisify_aliases: PromisifyAliases,
-    /// Phase 6: per-file class / trait / interface hierarchy edges.
+    /// per-file class / trait / interface hierarchy edges.
     /// Each entry is `(sub_container, super_container)` after
     /// language-specific normalisation.  See
     /// [`crate::cfg::hierarchy`] for the per-language extraction
@@ -711,14 +695,10 @@ fn extract_condition_raw<'a>(
     vars.dedup();
     vars.truncate(MAX_COND_VARS);
 
-    // 4. Extract text, truncated.
-    let text = text_of(cond, code).map(|t| {
-        if t.len() > MAX_CONDITION_TEXT_LEN {
-            t[..MAX_CONDITION_TEXT_LEN].to_string()
-        } else {
-            t
-        }
-    });
+    // 4. Extract text, truncated.  UTF-8-safe — gogs (Gurmukhi) /
+    //    discourse (Cyrillic) trip raw byte slices on regex literals.
+    let text = text_of(cond, code)
+        .map(|t| truncate_at_char_boundary(&t, MAX_CONDITION_TEXT_LEN).to_string());
 
     (text, vars, negated)
 }
@@ -1157,7 +1137,7 @@ fn is_numeric_length_property(name: &str) -> bool {
 /// Consumed by the type-fact analysis (`ssa::type_facts::analyze_types`) to
 /// infer `TypeKind::Int` on the defined value so sink-cap suppression can
 /// treat `"row " + arr.length` as a non-injectable payload.
-/// Phase 6.3: when the RHS of an assignment / declaration is a single
+/// when the RHS of an assignment / declaration is a single
 /// member-access expression (`let x = dto.email`, `x = obj.field`,
 /// `let x = obj["field"]`), return the property name.  The CFG type-fact
 /// analysis uses the recovered name to look up the field's declared
@@ -1914,6 +1894,82 @@ pub(super) fn push_node<'a>(
         }
     }
 
+    // Shape-based sanitizer synthesis for JS/TS ORM-accessor chains.
+    // The static label table marks `db.query` / `connection.query` /
+    // `pool.query` / `client.query` / `db.execute` as `Sink(SQL_QUERY)`
+    // because the bare `connection.query("SELECT ..." + name)` form is a
+    // real SQLi sink.  But the same `db.query` method on Strapi-style ORMs
+    // takes a model UID literal and returns a chainable model accessor:
+    // `strapi.db.query('admin::api-token').findOne({ where: whereParams })`.
+    // The trailing `.findOne({...})` / `.findMany({...})` / `.create(...)`
+    // calls are intrinsically parameterised — the actual SQL is generated
+    // by the ORM, and the per-call values arrive through field-keyed object
+    // literals that the ORM driver escapes.
+    //
+    // Recognition rule: when the CFG node's classified text reaches a sink
+    // with `SQL_QUERY` cap, walk the receiver chain looking for an inner
+    // `*.query(...)` / `*.execute(...)` whose arg 0 is a string literal
+    // and whose result has at least one chained method call appended whose
+    // name is in the ORM-accessor whitelist.  If both hold, synthesise a
+    // same-node `Sanitizer(SQL_QUERY)` mirroring the Java JPA fix.  Bare
+    // `connection.query("SELECT ...")` (no chained method) and
+    // `db.query("UPDATE x SET y=" + name)` (non-literal arg 0) leave the
+    // sink in place — both are genuine SQLi shapes.
+    if (lang == "javascript" || lang == "js" || lang == "typescript" || lang == "ts" || lang == "tsx")
+        && labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(Cap::SQL_QUERY)))
+        && !labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Sanitizer(c) if c.contains(Cap::SQL_QUERY)))
+    {
+        const QUERY_TARGETS: &[&str] = &["query", "execute"];
+        // ORM-accessor methods that take object-literal args and return
+        // promises of rows / row counts.  Promise methods (`then`, `catch`,
+        // `finally`) deliberately excluded — they don't prove ORM shape.
+        const ORM_CHAIN_METHODS: &[&str] = &[
+            "findOne",
+            "findMany",
+            "findFirst",
+            "findUnique",
+            "findById",
+            "find",
+            "create",
+            "createMany",
+            "update",
+            "updateMany",
+            "upsert",
+            "delete",
+            "deleteMany",
+            "count",
+            "aggregate",
+            "distinct",
+            "save",
+        ];
+        // Fall back to a deeper walk (up to 4 levels) for await/return-
+        // wrapped calls (e.g. `const x = await db.query(...).findOne(...)` —
+        // call sits at depth 3 inside lexical_declaration > variable_declarator
+        // > await_expression > call_expression).
+        let chain_call = call_ast.or_else(|| find_call_node_deep(ast, lang, 4));
+        if let Some(call_node) = chain_call {
+            // Outer method must be in the ORM whitelist *and* the chain must
+            // have a deeper inner call to a `query`/`execute` whose arg 0 is
+            // a string literal.  Both checks gate the synthesis.
+            let outer_method = js_chain_outer_method_for_inner(call_node, QUERY_TARGETS, code);
+            let outer_is_orm = outer_method
+                .as_deref()
+                .is_some_and(|m| ORM_CHAIN_METHODS.contains(&m));
+            if outer_is_orm
+                && let Some((arg0_kind, has_interp)) =
+                    js_chain_arg0_kind_for_method(call_node, QUERY_TARGETS, code)
+                && !has_interp
+                && matches!(arg0_kind.as_str(), "string" | "string_fragment" | "template_string")
+            {
+                labels.push(DataLabel::Sanitizer(Cap::SQL_QUERY));
+            }
+        }
+    }
+
     let span = (ast.start_byte(), ast.end_byte());
 
     /* ── 3.  GRAPH INSERTION + DEBUG ──────────────────────────────────── */
@@ -2311,7 +2367,7 @@ fn rhs_is_function_literal(ast: Node, lang: &str) -> bool {
     false
 }
 
-/// Pointer-Phase 6 / W5: when `ast` is (or wraps) an assignment whose
+///when `ast` is (or wraps) an assignment whose
 /// LHS is a single subscript / index expression with a plain-identifier
 /// receiver, emit a synthetic `__index_set__` Call node and return its
 /// `NodeIndex`.  Returns `None` for non-subscript LHSs, multi-target
@@ -2481,7 +2537,7 @@ fn pre_emit_arg_source_nodes(
             continue;
         }
 
-        // Pointer-Phase 6 / W5: pre-emit `__index_get__` Call nodes for
+        //pre-emit `__index_get__` Call nodes for
         // subscript / index-expression args when pointer analysis is
         // enabled.  This lets the W2/W4 container ELEM read hook fire
         // on the synth call, propagating must/may/caps from the cell
@@ -3788,7 +3844,7 @@ pub(super) fn build_sub<'a>(
                 );
             }
 
-            // Pointer-Phase 6 / W5: subscript-write lowering when the
+            //subscript-write lowering when the
             // CallWrapper's inner expression is `arr[i] = v` (JS/TS,
             // Python).  See `try_lower_subscript_write` for shape +
             // bail matrix.
@@ -4011,7 +4067,7 @@ pub(super) fn build_sub<'a>(
                 }
             }
 
-            // Pointer-Phase 6 / W5: subscript-write lowering.  See
+            //subscript-write lowering.  See
             // `try_lower_subscript_write` for the per-language shape
             // matrix and bail conditions.
             if crate::pointer::is_enabled()
@@ -4099,8 +4155,8 @@ pub(crate) fn build_cfg<'a>(
     // function so thread-local state never leaks between files.
     populate_fn_dfs_indices(tree, lang);
 
-    // Phase 6: harvest DTO class definitions before any param classifier
-    // runs.  Empty for languages without a Phase 6 collector.  Cleared
+    // harvest DTO class definitions before any param classifier
+    // runs.  Empty for languages without a collector.  Cleared
     // alongside the DFS map at end-of-build_cfg.
     DTO_CLASSES.with(|cell| {
         *cell.borrow_mut() = dto::collect_dto_classes(tree.root_node(), lang, code);
@@ -4231,10 +4287,10 @@ pub(crate) fn build_cfg<'a>(
     // Clear the per-file DFS-index map so it does not leak to the next
     // file built on this thread.
     clear_fn_dfs_indices();
-    // Phase 6: same hygiene for the DTO map.
+    // same hygiene for the DTO map.
     DTO_CLASSES.with(|cell| cell.borrow_mut().clear());
 
-    // Phase 6 (typed call-graph subtype awareness): collect every
+    // collect every
     // declared inheritance / impl / implements relationship in the
     // file.  Per-language extractor in `cfg::hierarchy`; empty for
     // Go and C.  Each `(sub, super)` pair gets duplicated onto every
@@ -4380,7 +4436,7 @@ pub(crate) fn export_summaries(
             module_path: None,
             rust_use_map: None,
             rust_wildcards: None,
-            // Phase 6 hierarchy edges live on `FileCfg`, not on the
+            // Hierarchy edges live on `FileCfg`, not on the
             // graph-local `FuncSummaries`.  `ParsedFile::export_summaries_with_root`
             // attaches them after this transform returns.
             hierarchy_edges: Vec::new(),

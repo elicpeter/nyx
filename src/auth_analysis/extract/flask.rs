@@ -67,6 +67,15 @@ fn maybe_collect_flask_route(
     for decorator in decorator_expressions(node) {
         if let Some(mut specs) = parse_flask_route_decorator(decorator, bytes) {
             route_specs.append(&mut specs);
+            // FastAPI puts route-level dependencies (auth checks +
+            // logging hooks) inside the route decorator's
+            // `dependencies=[Depends(...)]` keyword argument, instead
+            // of as separate `@decorator` lines like Flask.  Walk the
+            // route decorator's keyword args for that shape and lift
+            // each `Depends(call(...))` element into the
+            // middleware_calls list, so the same `inject_middleware_auth`
+            // path that Flask uses also picks up FastAPI auth deps.
+            middleware_calls.extend(extract_fastapi_dependencies(decorator, bytes));
         } else {
             middleware_calls.extend(expand_decorator_calls(decorator, bytes));
         }
@@ -220,6 +229,75 @@ fn expand_decorator_calls(node: Node<'_>, bytes: &[u8]) -> Vec<CallSite> {
     vec![call_site_from_node(node, bytes)]
 }
 
+/// Walk the route-decorator call's keyword args looking for the FastAPI
+/// `dependencies=[Depends(call(...)), Depends(call), ...]` shape.  For
+/// each `Depends(...)` list element, extract the inner callable as a
+/// `CallSite` so it can flow through `inject_middleware_auth` and be
+/// matched against the per-language authorization-check / login-guard
+/// name lists.  Refuses non-call elements and `Depends(...)` without a
+/// recognised inner call shape.
+///
+/// The function is decoupled from Flask semantics (Flask routes never
+/// use `dependencies=`); the lookup is purely structural and matches
+/// FastAPI's documented dependency-injection convention.  Lives in the
+/// flask module because Flask's route-decorator parser already targets
+/// the `@<router>.<method>(<path>, ...)` shape that FastAPI shares.
+fn extract_fastapi_dependencies(decorator_expr: Node<'_>, bytes: &[u8]) -> Vec<CallSite> {
+    if decorator_expr.kind() != "call" {
+        return Vec::new();
+    }
+    let Some(arguments) = decorator_expr.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let Some(value) = keyword_argument_value(arguments, bytes, "dependencies") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for element in named_children(value) {
+        if let Some(call) = unwrap_depends_call(element, bytes) {
+            out.push(call);
+        }
+    }
+    out
+}
+
+/// Unwrap one `Depends(...)` list element from a FastAPI `dependencies`
+/// list and return the inner callable as a `CallSite`.  Three shapes
+/// are accepted:
+///   * `Depends(callee(arg1, arg2))` — most common, the inner call is
+///     the callable factory invocation; record `callee` as the auth
+///     check.
+///   * `Depends(callee)` — bare reference; record `callee` itself.
+///   * `Depends()` / non-`Depends` items — skipped.
+fn unwrap_depends_call(node: Node<'_>, bytes: &[u8]) -> Option<CallSite> {
+    if node.kind() != "call" {
+        return None;
+    }
+    let function = node.child_by_field_name("function")?;
+    let function_text = text(function, bytes);
+    if !is_depends_callee(&function_text) {
+        return None;
+    }
+    let arguments = node.child_by_field_name("arguments")?;
+    let first = named_children(arguments).into_iter().next()?;
+    match first.kind() {
+        "call" => Some(call_site_from_node(first, bytes)),
+        "identifier" | "attribute" | "scoped_identifier" => Some(call_site_from_node(first, bytes)),
+        _ => None,
+    }
+}
+
+/// True for the FastAPI `Depends` marker, including the
+/// fully-qualified `fastapi.Depends` form.  Conservative: only literal
+/// matches, no canonicalisation.
+fn is_depends_callee(callee: &str) -> bool {
+    let trimmed = callee.trim();
+    matches!(
+        trimmed,
+        "Depends" | "fastapi.Depends" | "fastapi.params.Depends"
+    )
+}
+
 fn inject_middleware_auth(
     model: &mut AuthorizationModel,
     unit_idx: usize,
@@ -231,8 +309,48 @@ fn inject_middleware_auth(
         return;
     };
     for call in middleware_calls {
-        if let Some(check) = auth_check_from_call_site(call, line, rules) {
+        if let Some(mut check) = auth_check_from_call_site(call, line, rules) {
+            // Mark as route-level: the check is declared at the route
+            // boundary (Flask `@requires_role(...)` decorator, FastAPI
+            // `dependencies=[Depends(...)]`, or any custom-router
+            // equivalent) and semantically authorizes every value the
+            // handler receives — path param, body, query, downstream
+            // row fetches, the lot.  `auth_check_covers_subject` reads
+            // `is_route_level` and short-circuits `true` for any
+            // non-login-guard match, which is the correct shape for a
+            // decorator-level guard whose inner call carries no
+            // per-arg subject ref pointing back into the handler body.
+            // LoginGuard / TokenExpiry / TokenRecipient kinds are
+            // already excluded by `has_prior_subject_auth`'s filter
+            // before they reach `auth_check_covers_subject`, so the
+            // flag is safe to set unconditionally here — it has no
+            // effect on those kinds.
+            check.is_route_level = true;
             unit.auth_checks.push(check);
         }
+    }
+}
+
+#[cfg(test)]
+mod fastapi_dependencies_tests {
+    use super::is_depends_callee;
+
+    /// `is_depends_callee` only matches the FastAPI `Depends` marker.
+    /// Any other wrapper call inside `dependencies=[...]` is ignored —
+    /// extracting an inner callee from the wrong wrapper would
+    /// misclassify logging hooks or filter callables as auth checks.
+    #[test]
+    fn is_depends_callee_recognises_canonical_forms() {
+        assert!(is_depends_callee("Depends"));
+        assert!(is_depends_callee("fastapi.Depends"));
+        assert!(is_depends_callee("fastapi.params.Depends"));
+        // Whitespace tolerance.
+        assert!(is_depends_callee(" Depends "));
+        // Negatives.
+        assert!(!is_depends_callee("Annotated"));
+        assert!(!is_depends_callee("Body"));
+        assert!(!is_depends_callee("Depends.something"));
+        assert!(!is_depends_callee("RequiresAuth"));
+        assert!(!is_depends_callee(""));
     }
 }

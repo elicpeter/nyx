@@ -264,48 +264,19 @@ impl ClassMethodIndex {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Type hierarchy index — Phase 6 (subtype awareness)
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Type hierarchy index ────────────────────────────────────────────────
 
-/// Per-language `(super_type) → SmallVec<[sub_type]>` index built once
-/// per call-graph construction from every merged
-/// [`crate::summary::FuncSummary::hierarchy_edges`].  When a method
-/// call's receiver is statically typed as a super-class / trait /
-/// interface, the call-graph wedge fans out the edge to every concrete
-/// implementer's matching method — recovering the dispatch precision
-/// that would otherwise be lost to today's name-only resolution.
+/// Per-language `(super_type) → sub-types` index built from every merged
+/// [`crate::summary::FuncSummary::hierarchy_edges`]. Lets virtual
+/// dispatch fan out to every concrete implementer's matching method.
 ///
-/// Subtype semantics covered:
-/// * Java `class X extends Y` / `class X implements I` / `interface
-///   I extends J`
-/// * Rust `impl Trait for Type`
-/// * TypeScript `class X extends Y implements I` /
-///   `interface I extends J`
-/// * Python `class X(Base)` (excludes `object`)
-/// * PHP, Ruby, C++ — see [`crate::cfg::hierarchy`] for the
-///   per-language extraction rules.
+/// Covers Java `extends`/`implements`, Rust `impl Trait for Type`, TS
+/// `extends`/`implements`, Python `class X(Base)`, plus PHP/Ruby/C++
+/// (see [`crate::cfg::hierarchy`]). Go's structural interfaces are
+/// intentionally omitted — name-only resolution is used instead.
 ///
-/// Go's structural / implicit interface satisfaction is intractable to
-/// enumerate from per-file information and is **deliberately omitted**
-/// — Go callers fall back to today's name-only resolution, so
-/// precision is unchanged from the pre-Phase-6 baseline.
-///
-/// Key design notes
-/// ────────────────
-///
-/// * **Language-scoped.**  Mirrors [`ClassMethodIndex`]: a Java
-///   `Repository` and a Python `Repository` never alias.
-/// * **Bare container names.**  No namespace qualification.  When
-///   container names alias across unrelated namespaces (rare in
-///   practice, common in mono-repos) the resolver may over-fan-out;
-///   that is conservative for *correctness* (a subset of dispatch
-///   targets is unsafe — virtual dispatch may genuinely reach any
-///   implementer) and may need namespace-qualified keying as a
-///   Phase 6.5 follow-up if benchmark precision regresses.
-/// * **`SmallVec` inline capacity.**  4 implementers per super-type
-///   covers most real-world hierarchies without spillover; spillover
-///   allocates but keeps lookups O(1) amortised.
+/// Container names are bare (no namespace), so cross-namespace aliases
+/// may over-fan-out. That is conservative for correctness.
 #[derive(Debug, Default, Clone)]
 pub struct TypeHierarchyIndex {
     /// `(lang, super_type)` → distinct sub-type / impl container names.
@@ -438,15 +409,11 @@ impl TypeHierarchyIndex {
 ///   3. On ambiguity: use two-segment qualified name to narrow candidates
 ///   4. Interop edges (explicit cross-language bridges)
 ///
-/// **Phase 3 (typed call-graph devirtualisation):** when an SSA
-/// summary on the caller carries a `(call_ordinal, container_name)`
-/// entry in [`crate::summary::ssa_summary::SsaFuncSummary::typed_call_receivers`],
-/// the matching call site is first resolved via [`ClassMethodIndex`]
-/// restricted to the receiver-typed container.  An exact match (after
-/// arity filter) becomes the edge; a multi-candidate hit is fed back
-/// into the standard resolver via `CalleeQuery.receiver_type`; a
-/// zero-candidate hit falls through to today's name-only resolution
-/// so receiver-type misclassifications never silently drop edges.
+/// Typed-call devirtualisation: when the caller's SSA summary carries
+/// a typed container for a call ordinal, that site is first resolved
+/// via [`ClassMethodIndex`] restricted to the receiver type. Exact
+/// match → edge; multi-candidate → fed back through
+/// `CalleeQuery.receiver_type`; zero match → name-only fallback.
 ///
 /// Unresolved and ambiguous callees are recorded for diagnostics but
 /// do **not** create edges.
@@ -460,7 +427,7 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
         index.insert(key.clone(), idx);
     }
 
-    // Phase 3: build a single `(lang, container, name) → candidates`
+    // build a single `(lang, container, name) → candidates`
     // index from the merged summaries.  Used below to devirtualise
     // every method-call edge whose receiver has a recoverable type
     // fact.  Cost is one allocation per FuncKey across the program;
@@ -468,7 +435,7 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
     // win on codebases with many same-name methods.
     let method_index = ClassMethodIndex::build(summaries);
 
-    // Phase 6: build a sibling `(lang, super_type) → sub_types` index
+    // build a sibling `(lang, super_type) → sub_types` index
     // from every merged summary's `hierarchy_edges`.  Consumed below
     // to fan out method-call edges to all known concrete
     // implementers when a receiver's static type is a super-class /
@@ -497,7 +464,7 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
             None
         };
 
-        // Phase 3: per-caller `(call_ordinal → container_name)` map
+        // per-caller `(call_ordinal → container_name)` map
         // pulled from the caller's SSA summary, when one exists.
         // Empty when the caller has no SSA summary (zero-param trivial
         // bodies skip extraction unless they had typed receivers) or
@@ -524,19 +491,11 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
             // same-name/different-arity overloads during resolution.
             let arity_hint: Option<usize> = site.arity;
 
-            // Phase 3 devirtualisation entry point.  Only fires for
-            // method calls (sites carrying a structured receiver) when
-            // the caller's SSA summary recorded a typed container for
-            // this ordinal.  When `Some(container)` resolves to a
-            // single arity-matching target, we add the edge and skip
-            // the standard resolver.  When it resolves to multiple,
-            // we fall through with the container hinted as
-            // `receiver_type` so `resolve_callee`'s authoritative
-            // step-1 picks the right one.  When it resolves to zero,
-            // we fall through entirely so today's name-only path can
-            // still find the edge — preserving the
-            // "subset of today's targets, never a superset" rule
-            // even under type-fact misclassification.
+            // Devirtualisation: for method calls whose SSA summary
+            // recorded a typed container, resolve via ClassMethodIndex
+            // first. Single match → direct edge; multi → fall through
+            // with `receiver_type` set; zero → name-only fallback so
+            // misclassified receivers never silently drop edges.
             let typed_container: Option<&str> = if site.receiver.is_some() {
                 typed_receivers.get(&site.ordinal).copied()
             } else {
@@ -544,12 +503,10 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
             };
 
             if let Some(container) = typed_container {
-                // Phase 6: resolve the typed container *plus* every
-                // known sub-type / impl in the hierarchy index, so a
-                // receiver typed as a super-class / trait / interface
-                // fans out to every concrete implementer.  When the
-                // hierarchy has no matching super-type entry, this
-                // collapses to the Phase 3 direct-container lookup.
+                // Resolve the typed container plus every known
+                // sub-type / impl, so a super-class / trait / interface
+                // receiver fans out to every concrete implementer.
+                // No hierarchy entry → direct-container lookup.
                 let widened: Vec<FuncKey> = hierarchy.resolve_with_hierarchy(
                     &method_index,
                     caller_key.lang,
@@ -575,7 +532,7 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                     }
                     continue;
                 }
-                // Phase 6: multiple arity-filtered candidates means
+                // multiple arity-filtered candidates means
                 // genuine virtual dispatch through a super-type — fan
                 // out to *every* implementer.  This widens edges
                 // (correctly: the call genuinely may target any
@@ -2017,7 +1974,7 @@ mod tests {
         assert!(cg.unresolved_ambiguous.is_empty());
     }
 
-    // ── ClassMethodIndex (Phase 1: structural index, no behaviour wiring) ──
+    // ── ClassMethodIndex ────────────────────────────────────────────────
 
     /// Helper: `(name, container)` pairs in the same file.  Builds two
     /// summaries with the same leaf name on different containers so the
@@ -2156,7 +2113,7 @@ mod tests {
         );
     }
 
-    // ── Phase 3: devirtualised edge insertion via typed_call_receivers ──
+    // ── devirtualised edge insertion via typed_call_receivers ──
 
     /// Two `findById` definitions live on different containers in
     /// different files.  A caller whose SSA summary records the
@@ -2292,7 +2249,7 @@ mod tests {
         );
     }
 
-    // ── Phase 6: TypeHierarchyIndex ───────────────────────────────────
+    // ── TypeHierarchyIndex ───────────────────────────────────
 
     /// Helper: build a hierarchy index from a list of
     /// `(lang, sub, super)` edges by injecting them onto a single
@@ -2538,8 +2495,7 @@ mod tests {
 
     /// B-7: Empty hierarchy — when the typed container has no recorded
     /// sub-types, `resolve_with_hierarchy` collapses to the direct
-    /// `ClassMethodIndex::resolve` lookup.  Pin: Phase 6 is a no-op
-    /// when no inheritance was extracted.
+    /// `ClassMethodIndex::resolve` lookup.
     #[test]
     fn b7_empty_hierarchy_falls_back_to_single_container() {
         use crate::summary::ssa_summary::SsaFuncSummary;
@@ -2591,8 +2547,7 @@ mod tests {
 
     /// B-8: Concrete sub-type — when the receiver is typed as the
     /// concrete sub-class (not the super-type), no hierarchy
-    /// expansion fires.  Pin: Phase 6 narrows on concrete types
-    /// exactly like Phase 3.
+    /// expansion fires.
     #[test]
     fn b8_concrete_subtype_does_not_widen() {
         use crate::summary::ssa_summary::SsaFuncSummary;
@@ -2730,7 +2685,7 @@ mod tests {
         use crate::summary::ssa_summary::SsaFuncSummary;
 
         // `Base` exists; `Derived` referenced by hierarchy_edges but
-        // its `foo` is never defined.  Phase 6 must not panic and
+        // its `foo` is never defined.  Resolver must not panic and
         // must still emit the Base::foo edge.
         let base = make_method_summary("foo", "Base", "src/Base.java", "java", 0);
         let mut h = make_method_summary("__h", "X", "src/X.java", "java", 0);

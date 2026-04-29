@@ -501,6 +501,13 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "user_passes_test".into(),
                 "verify_access".into(),
                 "authorize".into(),
+                // FastAPI dependency-injection auth idiom: airflow uses
+                // `Depends(requires_access_dag(method="GET"))`,
+                // `requires_access_connection(...)`, etc.  The unwrapped
+                // inner call name is `requires_access_<resource>`; the
+                // `requires_access` prefix matches all variants via
+                // `matches_name`.
+                "requires_access".into(),
             ],
             mutation_indicator_names: vec![
                 "update".into(),
@@ -1813,10 +1820,10 @@ mod tests {
         assert!(!rules.is_authorization_check("require_owner"));
     }
 
-    /// Phase A4 — broader verb / role / context-suffix shapes seen in
-    /// real-world Rust apps.  `check_<resource>_<role>_action` is the
-    /// canonical lemmy idiom; verifying the `is_<role>` predicate
-    /// recogniser closes `is_mod_or_admin` style checks.
+    /// Broader verb / role / context-suffix shapes seen in real-world
+    /// Rust apps.  `check_<resource>_<role>_action` is the canonical
+    /// lemmy idiom; the `is_<role>` predicate recogniser closes
+    /// `is_mod_or_admin` style checks.
     #[test]
     fn is_authorization_check_recognises_check_action_and_predicate_shapes() {
         let cfg = Config::default();

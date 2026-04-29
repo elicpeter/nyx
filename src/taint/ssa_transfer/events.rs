@@ -204,7 +204,7 @@ pub(super) fn reconstruct_flow_path(
             SsaOp::FieldProj { receiver, .. } => {
                 // Treat field projection as a one-step assignment for
                 // flow-step reconstruction: taint reaching `obj.f` came
-                // from `obj`.  Phase 4 will refine the witness rendering
+                // from `obj`.  the analysis may refine the witness rendering
                 // to include the field name in the step.
                 steps.push(FlowStepRaw {
                     cfg_node: inst.cfg_node,

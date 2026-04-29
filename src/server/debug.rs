@@ -934,10 +934,10 @@ pub struct PointerView {
     pub locations: Vec<PointerLocationView>,
     pub values: Vec<PointerValueView>,
     /// Field reads attributed to params/receiver via the field-points-to
-    /// extractor (Phase 5).
+    /// extractor.
     pub field_reads: Vec<PointerFieldEntryView>,
     /// Field writes attributed to params/receiver via the field-points-to
-    /// extractor (Phase 5).
+    /// extractor.
     pub field_writes: Vec<PointerFieldEntryView>,
     /// Number of distinct interned locations beyond the reserved Top sentinel.
     pub location_count: usize,

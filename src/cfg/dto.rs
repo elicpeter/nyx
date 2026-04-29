@@ -1,4 +1,4 @@
-//! Phase 6.1: per-language DTO definition collectors.
+//! per-language DTO definition collectors.
 //!
 //! Walks a parsed file's AST and emits `(class_name, DtoFields)` pairs
 //! for class / interface / struct / Pydantic-model declarations whose
@@ -20,7 +20,7 @@ use crate::ssa::type_facts::{DtoFields, TypeKind};
 /// Collect all DTO-shaped class definitions in a parsed file.
 ///
 /// Dispatches per-language; returns an empty map for languages without
-/// a Phase 6 collector (Go, Ruby, PHP, C/C++ — DTOs in those ecosystems
+/// a collector (Go, Ruby, PHP, C/C++ — DTOs in those ecosystems
 /// either don't follow framework conventions Nyx tracks today, or are
 /// already covered by other type-inference paths).
 pub(super) fn collect_dto_classes(
@@ -418,7 +418,7 @@ mod tests {
         "#;
         let dtos = collect("rust", src);
         // Tuple structs have no named fields and must NOT produce a
-        // DtoFields entry — Phase 6 only handles named-field DTOs.
+        // DtoFields entry — This collector only handles named-field DTOs.
         assert!(!dtos.contains_key("Wrap"));
     }
 

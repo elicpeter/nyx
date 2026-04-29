@@ -32,7 +32,7 @@ use super::ir::*;
 ///   - Use the returned receiver as the implicit method receiver — do NOT
 ///     add the chain root or any intermediate field name to `args`.
 ///
-/// **Decomposition rules** (Phase 2 of the field-projections rollout):
+/// **Decomposition rules**:
 ///   - Skip when the callee contains zero `.` characters (no member access)
 ///     or only one `.` (single-dot case is handled by the existing
 ///     `info.call.receiver` channel without needing a `FieldProj` op).
@@ -945,7 +945,7 @@ fn rename_variables(
     // empty otherwise so existing per-statement Call lowering is
     // bit-for-bit unchanged.
     let mut field_interner = crate::ssa::ir::FieldInterner::new();
-    // Pointer-Phase 3 / W1: side-table mapping each synthetic base-update
+    //side-table mapping each synthetic base-update
     // [`SsaOp::Assign`]'s defined value to its `(receiver, field)` pair.
     // Populated below at the synthetic-Assign emission site.  Read by
     // the taint engine to lift the assign into a structural field WRITE.
@@ -1125,7 +1125,7 @@ fn rename_variables(
             } else if info.call.callee.is_some() {
                 let callee = info.call.callee.as_deref().unwrap_or("").to_string();
                 let (mut args, mut receiver) = build_call_args(info, var_stacks);
-                // Phase 2: try decomposing chained-receiver method calls
+                // try decomposing chained-receiver method calls
                 // (`a.b.c()`) into a FieldProj chain plus a bare-method Call
                 // so downstream consumers can read the receiver structure
                 // without re-parsing the callee text.  Bails to None on any
@@ -1250,7 +1250,7 @@ fn rename_variables(
             } else if info.call.callee.is_some() {
                 let callee = info.call.callee.as_deref().unwrap_or("").to_string();
                 let (mut args, mut receiver) = build_call_args(info, var_stacks);
-                // Phase 2: same FieldProj-chain decomposition as the primary
+                // same FieldProj-chain decomposition as the primary
                 // Call branch above — kept in sync because this fallback
                 // path also constructs SSA Call ops (used for control-flow
                 // wrapper calls that landed past the earlier match arms).
@@ -1342,7 +1342,7 @@ fn rename_variables(
             // overwrites properly kill taint: if obj.data is re-assigned to a
             // constant, the base `obj` no longer carries that field's taint.
             //
-            // Pointer-Phase 3 / W1: each synthetic Assign also records its
+            //each synthetic Assign also records its
             // structural identity into `field_writes` — `(receiver_old_value,
             // FieldId(field_name))` — so the taint engine can recognise the
             // synthetic assign as a field WRITE and mirror the rhs taint
@@ -3093,7 +3093,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // Phase 2: FieldProj chain lowering tests
+    // FieldProj chain lowering tests
     // ─────────────────────────────────────────────────────────────────
     //
     // These tests pin the contract that `try_lower_field_proj_chain`
@@ -3426,7 +3426,7 @@ mod tests {
         assert!(blocks[0].body.is_empty());
     }
 
-    // ── End-to-end Phase 2 tests via real tree-sitter parsing ──────────
+    // ── End-to-end SSA decomposition tests via real tree-sitter parsing ──────────
     //
     // These exercise the integration between CFG construction (which sets
     // `info.call.callee = "c.mu.Lock"`) and SSA lowering.  We assert that
@@ -3595,7 +3595,7 @@ mod tests {
         // Java: `obj.config.handler.run()` — 3-segment receiver chain through
         // a parameter `obj`.  We avoid `this.…` because `this` is a Java
         // keyword (not an identifier_node) so it isn't extracted as an
-        // external use — outside Phase 2's scope.
+        // external use — outside SSA decomposition.s scope.
         let src = b"class C { void f(Object obj) { obj.config.handler.run(); } }";
         let body = parse_to_first_body(
             src,
@@ -3620,7 +3620,7 @@ mod tests {
 
     #[test]
     fn phase2_e2e_simple_receiver_no_field_proj() {
-        // REGRESSION: `obj.foo()` — single-dot receiver.  Phase 2 must NOT
+        // REGRESSION: `obj.foo()` — single-dot receiver.  SSA lowering must NOT
         // decompose this into a FieldProj chain (existing receiver channel
         // already covers it).  Verify the body has zero FieldProj ops and
         // the Call's callee_text stays None.
@@ -3782,16 +3782,11 @@ mod tests {
         );
     }
 
-    /// Pointer-Phase 3 / W1 end-to-end: lowering an `obj.f = rhs`
-    /// statement populates `SsaBody.field_writes` with the synthetic
-    /// base-update Assign's `(receiver, FieldId)` mapping.
-    ///
-    /// W1.b: a SINGLE-write shape — `function f(obj) { obj.cache = 42 }`
-    /// — also populates `field_writes` because every formal gets a
-    /// Param op at block 0 regardless of whether it's read by the
-    /// body.  Pre-W1.b this required two writes (the second's prior
-    /// reaching def came from the first synth Assign); now the first
-    /// write already finds the formal's Param in `var_stacks`.
+    /// End-to-end: lowering an `obj.f = rhs` statement populates
+    /// `SsaBody.field_writes` with the synthetic base-update Assign's
+    /// `(receiver, FieldId)` mapping. A single-write shape suffices —
+    /// every formal gets a Param op at block 0 so the first write
+    /// finds the formal in `var_stacks`.
     #[test]
     fn w1_end_to_end_field_write_records_side_table_when_parent_has_prior_def() {
         // Single write to `obj.cache`: the formal `obj` provides the
@@ -3883,8 +3878,8 @@ mod tests {
     /// canonical SSA challenge — the body uses `x` then redefines it,
     /// and the join with the entry definition must produce a phi that
     /// distinguishes the entry value from the body's redefinition.
-    /// Phase 5.2 (induction var pruning) depends on this shape being
-    /// lowered correctly.
+    /// Induction-var pruning depends on this shape being lowered
+    /// correctly.
     #[test]
     fn loop_self_assignment_induction_phi_is_distinct() {
         // Entry → x=0 → Loop header → [Body: use x; x = x_new] → Loop

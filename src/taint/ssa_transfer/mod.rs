@@ -46,6 +46,7 @@ use crate::interop::InteropEdge;
 use crate::labels::{Cap, DataLabel, RuntimeLabelRule, SourceKind};
 use crate::ssa::heap::{HeapObjectId, HeapSlot, PointsToResult, PointsToSet};
 use crate::ssa::ir::*;
+use crate::ssa::type_facts::InputValidatorPolarity;
 use crate::state::lattice::Lattice;
 use crate::state::symbol::SymbolInterner;
 use crate::summary::{CalleeQuery, CalleeResolution, GlobalSummaries, SinkSite};
@@ -181,7 +182,7 @@ pub struct SsaTaintTransfer<'a> {
     /// non-cross-file behaviour for unit tests and non-cross-file
     /// construction sites.
     pub cross_file_bodies: Option<&'a HashMap<FuncKey, CalleeSsaBody>>,
-    /// Pointer-Phase 3: per-body field-sensitive points-to facts.
+    /// per-body field-sensitive points-to facts.
     /// Populated only when [`crate::pointer::is_enabled()`].  When
     /// present, [`SsaOp::FieldProj`] reads consult
     /// [`SsaTaintState::field_taint`] for each `loc ∈ pt(receiver)`,
@@ -1012,6 +1013,37 @@ fn compute_succ_states(
                     );
                 }
 
+                // Generic input-validator branch narrowing.  Recognises the
+                // two-statement idiom
+                //   `const err = validate(x); if (err) throw …;`
+                // (also `if (!isValid(x)) throw`) — kinds the predicate
+                // classifier returns Unknown / NullCheck / ErrorCheck for
+                // because the if-condition is a bare result variable, not a
+                // direct call expression.  The narrowing only fires when
+                // the condition has exactly one variable and that
+                // variable's reaching SSA def is a Call to a callee
+                // recognised by `classify_input_validator_callee`.
+                //
+                // Motivated by Novu CVE GHSA-4x48-cgf9-q33f
+                // (`const ssrfError = await validateUrlSsrf(child.webhookUrl);
+                //   if (ssrfError) throw …;`).
+                if matches!(
+                    kind,
+                    PredicateKind::Unknown
+                        | PredicateKind::NullCheck
+                        | PredicateKind::ErrorCheck
+                ) {
+                    apply_input_validator_branch_narrowing(
+                        &mut true_state,
+                        &mut false_state,
+                        cond_text,
+                        &cond_info.condition_vars,
+                        ssa,
+                        block.id,
+                        transfer.interner,
+                    );
+                }
+
                 // Constraint refinement
                 //
                 // `lower_condition` returns a ConditionExpr that represents the
@@ -1314,6 +1346,137 @@ fn apply_validation_err_check_narrowing(
     if arg_names.is_empty() {
         return;
     }
+    let success_state = if success_branch_is_true {
+        true_state
+    } else {
+        false_state
+    };
+    for name in &arg_names {
+        if let Some(sym) = interner.get(name) {
+            success_state.validated_may.insert(sym);
+            success_state.validated_must.insert(sym);
+        }
+    }
+}
+
+/// Mark the input arguments of a generic input-validator helper as
+/// validated on the success branch of a downstream truthiness check.
+///
+/// Recognised idioms:
+///
+/// ```text
+/// // ErrorReturning (Novu CVE GHSA-4x48-cgf9-q33f)
+/// const err = validateUrlSsrf(child.webhookUrl);
+/// if (err) throw …;
+/// // → child.webhookUrl is validated on the falsy (false) branch
+///
+/// // BooleanTrueIsValid
+/// const ok = isValidPath(p);
+/// if (!ok) throw …;
+/// // → p is validated on the !ok==false (true value of ok) branch
+/// ```
+///
+/// Resolves `condition_vars[0]` to its reaching SSA def, checks that
+/// the def is a [`SsaOp::Call`] to a callee classified by
+/// [`classify_input_validator_callee`], and copies the call's input
+/// argument variable names into `validated_must`/`validated_may` on
+/// the branch the validator's polarity says succeeded.
+///
+/// The branch direction starts from `cond_text` (uses the same
+/// `success_branch_is_true` heuristics as
+/// [`apply_validation_err_check_narrowing`]) and is then flipped for
+/// `BooleanTrueIsValid` validators (a truthy result means "valid", so
+/// the *true* branch carries the validation).
+///
+/// Strict-additive: when no condition var matches, the def isn't a
+/// Call, the callee isn't a recognised validator, or no arg has an
+/// SSA-level var_name, the function is a no-op.
+fn apply_input_validator_branch_narrowing(
+    true_state: &mut SsaTaintState,
+    false_state: &mut SsaTaintState,
+    cond_text: &str,
+    condition_vars: &[String],
+    ssa: &SsaBody,
+    block: BlockId,
+    interner: &SymbolInterner,
+) {
+    if condition_vars.len() != 1 {
+        return;
+    }
+
+    let result_name = condition_vars[0].as_str();
+    let result_val = match resolve_var_to_ssa_value(result_name, ssa, block) {
+        Some(v) => v,
+        None => return,
+    };
+
+    let def_inst = ssa
+        .blocks
+        .iter()
+        .flat_map(|b| b.body.iter())
+        .find(|i| i.value == result_val);
+    let Some(def_inst) = def_inst else { return };
+
+    let SsaOp::Call {
+        ref callee,
+        ref args,
+        ..
+    } = def_inst.op
+    else {
+        return;
+    };
+
+    let polarity =
+        match crate::ssa::type_facts::classify_input_validator_callee(callee.as_str()) {
+            Some(p) => p,
+            None => return,
+        };
+
+    // Determine the success branch.
+    //
+    // Default: bare `if (X)` truthy-test → success is the FALSE branch
+    // for ErrorReturning (X truthy means "error"), and the TRUE branch
+    // for BooleanTrueIsValid (X truthy means "valid").
+    //
+    // Equality checks (`X === null`, `X == null`, etc.) flip the
+    // truthiness sense — match the same set of patterns
+    // `apply_validation_err_check_narrowing` uses for the `err == nil`
+    // family.
+    let lower = cond_text.to_ascii_lowercase();
+    let cond_text_says_null_branch_is_true = lower.contains("== nil")
+        || lower.contains("== none")
+        || lower.contains("is none")
+        || lower.contains("is_ok")
+        || lower.contains("=== null")
+        || lower.contains("== null");
+
+    let success_branch_is_true = match polarity {
+        InputValidatorPolarity::ErrorReturning => cond_text_says_null_branch_is_true,
+        InputValidatorPolarity::BooleanTrueIsValid => !cond_text_says_null_branch_is_true,
+    };
+
+    // Collect candidate input-arg variable names.  Conservative — every
+    // SSA value across every positional arg group, looked up by
+    // var_name, OR'd into validated_*.  Validators usually take one
+    // primary arg so this collects ≤ 1 name in practice.
+    let mut arg_names: SmallVec<[String; 2]> = SmallVec::new();
+    for arg_group in args {
+        for &v in arg_group {
+            if let Some(name) = ssa
+                .value_defs
+                .get(v.0 as usize)
+                .and_then(|vd| vd.var_name.as_deref())
+            {
+                if !arg_names.iter().any(|s: &String| s == name) {
+                    arg_names.push(name.to_string());
+                }
+            }
+        }
+    }
+    if arg_names.is_empty() {
+        return;
+    }
+
     let success_state = if success_branch_is_true {
         true_state
     } else {
@@ -1848,8 +2011,8 @@ fn inline_analyse_callee(
         cross_file_bodies: transfer.cross_file_bodies,
         // Inline analysis re-lowers the callee in its own body-local
         // location space; pointer facts are body-relative, so we don't
-        // forward the caller's facts.  Phase 5's `PointsToSummary` is
-        // the cross-call substitute.
+        // forward the caller's facts. `PointsToSummary` is the
+        // cross-call substitute.
         pointer_facts: None,
     };
 
@@ -2560,8 +2723,8 @@ fn apply_cached_shape(
     }
 }
 
-/// Pointer-Phase 5 / W3: apply a callee's [`FieldPointsToSummary`] field
-/// writes at a caller call site.
+/// Apply a callee's [`FieldPointsToSummary`] field writes at a caller
+/// call site.
 ///
 /// For each `(param_idx, field_names)` in
 /// [`FieldPointsToSummary::param_field_writes`], substitute the callee
@@ -2864,23 +3027,15 @@ pub(super) fn transfer_inst(
                 return;
             }
 
-            // Pointer-Phase 4 / W2: container element-write hook.
+            // Container element-write hook. Runs before other Call-arm
+            // processing so `try_container_propagation`'s early-return
+            // can't bypass us. Writes only into `(loc, ELEM)` cells on
+            // `field_taint` — strictly additive.
             //
-            // Run before any other Call-arm processing so the existing
-            // `try_container_propagation` early-return path (which fires on
-            // recognised container ops and `return`s once handled) cannot
-            // bypass us.  Strict-additive: the hook only writes into the
-            // `(loc, ELEM)` cells on `SsaTaintState.field_taint`, never
-            // touches the existing per-SSA-value taint or the call result.
-            //
-            // Pointer-Phase 4 / W4: each pushed value's symbol-level
-            // `validated_must` / `validated_may` flow through to the
-            // cell.  The cell records `must = AND` over args (intersect:
-            // every writer must be must-validated), `may = OR` over
-            // args.  When an arg has no var_name (anonymous SSA temp),
-            // it contributes `false / false` and breaks the must
-            // invariant — matching the symbol-keyed lattice's "absent
-            // entry = un-validated" semantics.
+            // Each pushed value's `validated_must`/`validated_may` flow
+            // through: cell `must = AND` over args (every writer must be
+            // must-validated), `may = OR` over args. Anonymous SSA temps
+            // contribute `false/false` and break the `must` invariant.
             if let (Some(pf), Some(rcv)) = (transfer.pointer_facts, *receiver) {
                 if crate::pointer::is_container_write_callee(callee) {
                     let pt = pf.pt(rcv);
@@ -3151,25 +3306,18 @@ pub(super) fn transfer_inst(
                 resolved_container_store = resolved.param_to_container_store.clone();
                 resolved_points_to = resolved.points_to.clone();
 
-                // Pointer-Phase 5 / W3: cross-call field-points-to
-                // application.  Walk the callee's
-                // `field_points_to.param_field_writes`; for each
-                // `(param_idx, field_names)`, substitute `Param(callee, i)`
-                // with the caller's `pt(arg_i)` and union the caller's
-                // argument taint into each `(loc, field_id)` cell on the
-                // caller's `SsaTaintState.field_taint`.
+                // Cross-call field-points-to application: walk the
+                // callee's `field_points_to.param_field_writes`; for
+                // each `(param_idx, field_names)` substitute the
+                // callee's param with the caller's `pt(arg_i)` and
+                // union the caller's argument taint into each
+                // `(loc, field_id)` cell on `field_taint`.
                 //
-                // Receiver flow uses sentinel `param_idx == u32::MAX`;
-                // resolve via the call's receiver SsaValue instead of
-                // positional args.  Field names are looked up against the
-                // *caller's* `field_interner`; names the caller never
-                // referenced are skipped — no FieldProj read in the caller
-                // could observe such a cell, so writing it is wasteful.
-                //
-                // The container-element sentinel `"<elem>"` translates
-                // to [`FieldId::ELEM`] without going through interner
-                // lookup, mirroring the wire-format convention
-                // established in `summary::points_to::FieldPointsToSummary`.
+                // Receiver flow uses sentinel `param_idx == u32::MAX`.
+                // Field names are looked up in the *caller's*
+                // `field_interner` — names the caller never referenced
+                // are skipped. The `"<elem>"` sentinel translates to
+                // [`FieldId::ELEM`].
                 if let Some(pf) = transfer.pointer_facts {
                     apply_field_points_to_writes(
                         &resolved.field_points_to,
@@ -3437,17 +3585,13 @@ pub(super) fn transfer_inst(
                 }
                 return_bits &= !sanitizer_bits;
 
-                // Phase C auth-as-taint: the UNAUTHORIZED_ID cap models a
-                // caller-supplied identifier that must clear an ownership or
-                // membership guard before a state-changing sink.  Sanitizer
-                // calls for this cap (e.g. `authz::require_group_member(db,
-                // group_id, user.id)?`) do not pass their validated inputs
-                // through a return value — the ownership proof is the side
-                // effect.  So when a sanitizer carries the UNAUTHORIZED_ID
-                // bit, additionally strip it from each argument's SSA value
-                // so downstream uses see the cap cleared.  Kept isolated to
-                // UNAUTHORIZED_ID to preserve existing return-only semantics
-                // for every other cap.
+                // UNAUTHORIZED_ID models a caller-supplied id that must
+                // clear an ownership/membership guard. Sanitizers for
+                // this cap don't pass inputs through a return value —
+                // the ownership proof is the side effect. Strip the bit
+                // from each argument's SSA value so downstream uses see
+                // it cleared. Isolated to UNAUTHORIZED_ID; other caps
+                // keep return-only sanitizer semantics.
                 if sanitizer_bits.contains(Cap::UNAUTHORIZED_ID) {
                     strip_cap_from_call_args(args, receiver, state, Cap::UNAUTHORIZED_ID);
                 }
@@ -3490,14 +3634,10 @@ pub(super) fn transfer_inst(
                     }
                     // Fall through to write return_bits to inst.value if non-empty
                     if return_bits.is_empty() {
-                        // Pointer-Phase 4 / W4: container ELEM read
-                        // counterpart fires here for container_handled
-                        // calls with no source label of their own —
-                        // e.g. `cmd := arr.shift()` — whose taint and
-                        // validation come from the cell rather than
-                        // any inline source.  The post-match hook
-                        // would otherwise be skipped by this early
-                        // return.
+                        // Container ELEM read counterpart fires for
+                        // container_handled calls with no source label
+                        // (e.g. `cmd := arr.shift()`) whose taint comes
+                        // from the cell rather than an inline source.
                         apply_container_elem_read_w4(inst, ssa, transfer, state);
                         return;
                     }
@@ -4015,14 +4155,11 @@ pub(super) fn transfer_inst(
                 );
             }
 
-            // Pointer-Phase 3 / W1: synthetic base-update Assign emitted by
-            // SSA lowering for `obj.f = rhs`.  The side-table on the body
-            // maps this synth assign's value → (prior_receiver, FieldId) so
-            // we can lift the assign into a structural field WRITE: union
-            // the rhs taint into every `(loc, field)` cell for `loc ∈
-            // pt(prior_receiver)` that isn't `Top`.  Skip when the receiver
-            // pt set saturates to `Top` — over-approximating every field
-            // cell would amplify rather than localise the taint.
+            // Synthetic base-update Assign emitted by SSA lowering for
+            // `obj.f = rhs`. The side-table maps this synth assign's
+            // value → (prior_receiver, FieldId), so we lift it into a
+            // field WRITE: union rhs taint into every `(loc, field)`
+            // cell for non-Top `loc ∈ pt(prior_receiver)`.
             if let Some(pf) = transfer.pointer_facts {
                 if let Some((receiver, fid)) = ssa.field_writes.get(&inst.value).copied() {
                     let pt = pf.pt(receiver);
@@ -4223,14 +4360,9 @@ pub(super) fn transfer_inst(
         SsaOp::FieldProj {
             receiver, field, ..
         } => {
-            // Field projection: propagate the receiver's full taint
-            // record to the projected value.  Phase 1 keeps the simple
-            // pass-through behaviour — `obj.f` carries `obj`'s caps and
-            // origins; Phase 4 will introduce field-sensitive narrowing.
-            //
-            // Strict pass-through: if the receiver is untainted, the
-            // projection stays untainted (no entry inserted), preserving
-            // the existing block-state semantics.
+            // Field projection: pass the receiver's full taint record
+            // through to the projected value. Untainted receiver →
+            // untainted projection (no entry inserted).
             let mut combined: Option<VarTaint> = state.get(*receiver).cloned();
 
             // W4: collect cell validation channels alongside taint.
@@ -4241,12 +4373,9 @@ pub(super) fn transfer_inst(
             let mut cell_must_all: Option<bool> = None;
             let mut cell_may_any = false;
 
-            // Pointer-Phase 3 read: when per-body PointsToFacts are
-            // available, also union taint from each `(loc, field)` cell
-            // for `loc ∈ pt(receiver)`.  This carries cross-method field
-            // flow within a single body — method A writes `this.cache =
-            // req.body` (recorded into the field cell), method B's
-            // `this.cache` projection picks the taint up here.
+            // When per-body PointsToFacts are available, also union
+            // taint from each `(loc, field)` cell for `loc ∈ pt(receiver)`.
+            // Carries cross-method field flow within a single body.
             if let Some(pf) = transfer.pointer_facts {
                 let pt = pf.pt(*receiver);
                 if !pt.is_empty() && !pt.is_top() {
@@ -4260,9 +4389,8 @@ pub(super) fn transfer_inst(
                         // that taint every field of the destination
                         // wholesale.  The fallback is gated on
                         // specific-field absence so existing field-cell
-                        // semantics (Pointer-Phase 3 / W3) are
-                        // bit-identical when the writer used a named
-                        // field.  ANY_FIELD is intentionally distinct
+                        // semantics are bit-identical when the writer
+                        // used a named field. ANY_FIELD is distinct
                         // from `ELEM` (container-element wildcard) to
                         // avoid a struct-with-`length`-field reading
                         // taint from a sibling array's `push` writes.
@@ -4365,16 +4493,8 @@ pub(super) fn transfer_inst(
         }
     }
 
-    // Pointer-Phase 4 / W4 read counterpart for container reads.
-    //
-    // Lives outside the SsaOp::Call match arm so it fires after
-    // non-container Calls reach this point.  The container-read path
-    // can also early-return inside the match arm (when
-    // `try_container_propagation` claims the call), so the hook is
-    // *additionally* invoked from inside the arm before those early
-    // returns — see the call to `apply_container_elem_read_w4`
-    // adjacent to the container_handled branch.  This post-match
-    // invocation covers the call-fall-through cases.
+    // Container read counterpart, post-match. Also invoked inline
+    // before container-handled early-returns inside the Call arm.
     if matches!(&inst.op, SsaOp::Call { .. }) {
         apply_container_elem_read_w4(inst, ssa, transfer, state);
     }
@@ -5702,13 +5822,11 @@ fn collect_args_taint(
     (combined_caps, combined_origins)
 }
 
-/// Phase C auth-as-taint helper: strip a capability bit from every argument
-/// SSA value of a call.  Used by the [`DataLabel::Sanitizer`] arm in
-/// [`transfer_inst`] when the sanitizer covers [`Cap::UNAUTHORIZED_ID`] —
-/// ownership / membership guards model their proof as a side effect on the
-/// inputs rather than a cap stripped from the return value, so downstream
-/// uses of those SSA values should see the cap cleared.  Leaves origins and
-/// other caps untouched; purely a cap mask.
+/// Strip a capability bit from every argument SSA value of a call.
+/// Used by the [`DataLabel::Sanitizer`] arm when the sanitizer covers
+/// [`Cap::UNAUTHORIZED_ID`] — ownership/membership guards prove on
+/// inputs rather than the return value. Other caps and origins are
+/// untouched.
 fn strip_cap_from_call_args(
     args: &[SmallVec<[SsaValue; 2]>],
     receiver: &Option<SsaValue>,
@@ -6981,19 +7099,15 @@ fn resolve_type_qualified_labels(
 /// chains to collect candidate SSA values for type-fact lookup.
 ///
 /// Two motivating shapes:
-/// - Rust chained methods: `conn.execute(x).unwrap()` is one outer call whose
-///   receiver is itself a call.  The stable base identifier (`conn`) is
-///   several `Call.receiver` hops up.
-/// - Phase 2 `FieldProj` decomposition (all languages): `c.client.send(req)`
-///   lowers to `v_client = FieldProj(v_c, "client")`, `Call("send", [v_client])`.
-///   The typed root (`c`, of e.g. `RouterContext` type) sits one
-///   `FieldProj.receiver` hop above `v_client`.  Walking through FieldProj
-///   lets `resolve_type_qualified_labels` discover the typed root regardless
-///   of intermediate field accesses.
+/// - Rust chained methods: `conn.execute(x).unwrap()` is one outer call
+///   whose receiver is itself a call. The stable base identifier
+///   (`conn`) is several `Call.receiver` hops up.
+/// - `FieldProj` decomposition: `c.client.send(req)` lowers through
+///   `v_client = FieldProj(v_c, "client")`, so the typed root (`c`)
+///   sits one `FieldProj.receiver` hop above `v_client`.
 ///
-/// FieldProj walking runs for every language (it's the universal Phase 2
-/// decomposition).  Call-receiver walking remains Rust-only — other
-/// languages have method-call nesting handled at AST level.
+/// FieldProj walking runs for every language. Call-receiver walking is
+/// Rust-only — other languages handle method nesting at AST level.
 fn receiver_candidates_for_type_lookup(
     start: SsaValue,
     ssa: Option<&SsaBody>,
@@ -7012,7 +7126,7 @@ fn receiver_candidates_for_type_lookup(
             for inst in block.phis.iter().chain(block.body.iter()) {
                 if inst.value == current {
                     match &inst.op {
-                        // Phase 2: FieldProj receiver chain — universal.
+                        // FieldProj receiver chain — universal.
                         SsaOp::FieldProj { receiver, .. } => {
                             next_receiver = Some(*receiver);
                         }
@@ -7910,13 +8024,10 @@ struct ResolvedSummary {
     /// already captures" — the caller treats the call as a pure
     /// taint-through-signature edge.
     points_to: crate::summary::points_to::PointsToSummary,
-    /// Pointer-Phase 5 / W3: field-granularity per-parameter points-to
-    /// summary.  Populated only via `convert_ssa_to_resolved` when the
-    /// underlying SSA summary carries `field_points_to` records; other
-    /// resolution paths leave it empty.  Applied at the caller-side
-    /// call site by `apply_field_points_to_writes` to spread argument
-    /// taint into matching `(loc, field)` cells when
-    /// [`crate::pointer::is_enabled()`] is set.
+    /// Field-granularity per-parameter points-to summary. Populated
+    /// only via `convert_ssa_to_resolved` when the SSA summary carries
+    /// `field_points_to` records. Applied at the caller call site by
+    /// `apply_field_points_to_writes`.
     field_points_to: crate::summary::points_to::FieldPointsToSummary,
 }
 

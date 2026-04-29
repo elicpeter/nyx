@@ -2043,7 +2043,7 @@ fn numeric_length_access_ignores_method_calls_with_args() {
     );
 }
 
-// ── Pointer-Phase 6 / W5: subscript lowering tests ────────────────────────
+//── subscript lowering tests ────────────────────────
 
 /// Scope for tests that flip `NYX_POINTER_ANALYSIS=1` so the CFG-side
 /// subscript synthesis activates.  The env-var is restored afterwards

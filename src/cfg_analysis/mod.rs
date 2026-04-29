@@ -30,12 +30,10 @@ pub struct BodyConstFacts {
     pub type_facts: TypeFactResult,
     /// Field-sensitive Steensgaard points-to facts.
     ///
-    /// Computed only when [`crate::pointer::is_enabled()`] (i.e. the
-    /// `NYX_POINTER_ANALYSIS=1` env var is set).  Phase 2 of the
-    /// pointer-analysis rollout consumes this in `state::transfer.rs`
-    /// to suppress proxy-acquire mis-attribution on field-aliased
-    /// locals like `m := c.mu`.  When `None`, every consumer must fall
-    /// back to its existing pointer-unaware behaviour.
+    /// Computed only when [`crate::pointer::is_enabled()`].
+    /// `state::transfer.rs` consumes this to suppress proxy-acquire
+    /// mis-attribution on field-aliased locals like `m := c.mu`. When
+    /// `None`, consumers fall back to pointer-unaware behaviour.
     pub pointer_facts: Option<crate::pointer::PointsToFacts>,
 }
 

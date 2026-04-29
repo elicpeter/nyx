@@ -8,7 +8,7 @@ use petgraph::graph::NodeIndex;
 use smallvec::smallvec;
 use tree_sitter::Node;
 
-/// Phase 6.2 — resolve a syntactic class / struct / interface / model
+/// resolve a syntactic class / struct / interface / model
 /// name against the per-file [`DTO_CLASSES`] map populated at the top
 /// of `build_cfg`.  Returns the [`TypeKind::Dto`] carrying the
 /// per-field type map when the class is declared in the same file;
@@ -428,7 +428,7 @@ pub(super) fn inject_framework_param_sources(
 /// no recognised pattern matches, returns `None` and the engine
 /// behaves exactly as before.
 ///
-/// Recognised patterns (Phase 2):
+/// Recognised patterns:
 /// * Java (Spring) — `@PathVariable`/`@RequestParam Long X` →
 ///   [`TypeKind::Int`]; `@RequestBody T` → object (no kind today).
 /// * TypeScript (NestJS) — `@Param('id') id: number` →
@@ -473,7 +473,7 @@ fn classify_param_type_java<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeK
     if let Some(k) = java_type_to_kind(&type_text) {
         return Some(k);
     }
-    // Phase 6.2: when the static type is a class name we don't classify
+    // when the static type is a class name we don't classify
     // as a primitive (e.g. `@RequestBody CreateUser dto`), look up the
     // class in the same-file DTO map.  Strip any generics for the
     // leading type so `Foo<Bar>` still resolves on `Foo`.
@@ -527,7 +527,7 @@ fn has_java_framework_annotation(param: Node<'_>, code: &[u8]) -> bool {
 }
 
 /// Map a Java type-text fragment to a [`TypeKind`].  Public to the
-/// `cfg` module so the Phase 6 DTO collector can reuse the same
+/// `cfg` module so the DTO DTO collector can reuse the same
 /// classifier for class fields.
 pub(super) fn java_type_to_kind(t: &str) -> Option<TypeKind> {
     let bare = t.trim().trim_start_matches('@').trim();
@@ -546,7 +546,7 @@ pub(super) fn java_type_to_kind(t: &str) -> Option<TypeKind> {
 
 /// Map a TypeScript type-text fragment (already stripped of leading
 /// `:` / whitespace) to a primitive [`TypeKind`].  Used by both the
-/// per-parameter classifier and the Phase 6 DTO collector.
+/// per-parameter classifier and the DTO DTO collector.
 pub(super) fn ts_type_to_kind(t: &str) -> Option<TypeKind> {
     let head = t.split('<').next().unwrap_or(t).trim();
     match head {
@@ -593,7 +593,7 @@ fn classify_param_type_ts<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeKin
     if let Some(k) = ts_type_to_kind(stripped) {
         return Some(k);
     }
-    // Phase 6.2: NestJS `@Body() dto: CreateUser` — when the static
+    // NestJS `@Body() dto: CreateUser` — when the static
     // type is a class / interface name declared in the same file,
     // resolve via the DTO map.  Generic args dropped for the leading
     // type so `Foo<Bar>` matches on `Foo`.
@@ -696,7 +696,7 @@ fn rust_type_to_kind(t: &str) -> Option<TypeKind> {
                 if let Some(k) = rust_primitive_to_kind(inner) {
                     return Some(k);
                 }
-                // Phase 6.2: `Json<T>` / `Form<T>` / `Query<T>` /
+                // `Json<T>` / `Form<T>` / `Query<T>` /
                 // `Path<T>` with a same-file struct type — resolve via
                 // the DTO map.  Strip nested generics so `Json<Foo<i64>>`
                 // matches on `Foo`.
@@ -705,7 +705,7 @@ fn rust_type_to_kind(t: &str) -> Option<TypeKind> {
                     return Some(k);
                 }
                 // Custom struct outside the same file — leave None
-                // (cross-file resolution is Phase 6.4).
+                // (cross-file resolution is a follow-up).
                 return None;
             }
         }
@@ -714,7 +714,7 @@ fn rust_type_to_kind(t: &str) -> Option<TypeKind> {
 }
 
 /// Map a Rust primitive / `String` / `&str` to a [`TypeKind`].  Public
-/// to the `cfg` module so the Phase 6 DTO collector can reuse it for
+/// to the `cfg` module so the DTO DTO collector can reuse it for
 /// `struct` field types.
 pub(super) fn rust_primitive_to_kind(t: &str) -> Option<TypeKind> {
     let t = t.trim();
@@ -756,7 +756,7 @@ fn python_type_to_kind(t: &str) -> Option<TypeKind> {
         if let Some(k) = python_primitive_to_kind(first) {
             return Some(k);
         }
-        // Phase 6.2: `Annotated[CreateUser, Body()]` with a same-file
+        // `Annotated[CreateUser, Body()]` with a same-file
         // Pydantic model — resolve via the DTO map.  Generic args are
         // dropped via the same head-split as `python_primitive_to_kind`.
         let head = first.split('[').next().unwrap_or(first).trim();
@@ -773,7 +773,7 @@ fn contains_fastapi_marker(s: &str) -> bool {
 }
 
 /// Map a Python type expression to a primitive [`TypeKind`].  Used by
-/// both the per-parameter classifier and the Phase 6 Pydantic-model
+/// both the per-parameter classifier and the DTO Pydantic-model
 /// field collector.
 pub(super) fn python_primitive_to_kind(t: &str) -> Option<TypeKind> {
     let head = t.trim().split('[').next().unwrap_or(t).trim();
@@ -841,7 +841,7 @@ mod typed_extractor_tests {
 
     #[test]
     fn java_request_body_dto_returns_none_until_phase_six() {
-        // @RequestBody CreateUserDto dto — no kind today; Phase 6 will
+        // @RequestBody CreateUserDto dto — no kind today; future passes will
         // return DtoObject(name) once cross-file class resolution lands.
         assert_eq!(java_type_to_kind("CreateUserDto"), None);
         assert_eq!(java_type_to_kind("List<String>"), None);
@@ -877,7 +877,7 @@ mod typed_extractor_tests {
     #[test]
     fn rust_json_dto_returns_none_until_phase_six() {
         // Json<T> / Form<T> / Query<T> with a custom struct type — no
-        // primitive resolution available; Phase 6 lifts to DTO.
+        // primitive resolution available; future passes will lift to DTO.
         assert_eq!(rust_type_to_kind("Json<CreateUserDto>"), None);
         assert_eq!(rust_type_to_kind("Form<CreateUserDto>"), None);
         assert_eq!(rust_type_to_kind("Query<Filters>"), None);

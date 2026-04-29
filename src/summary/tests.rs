@@ -3210,7 +3210,7 @@ fn insert_ssa_arity_overflow_rekeys() {
 /// `close` is treated as an external capture — the synthetic Param 0
 /// then leaks into `param_to_return`/`param_to_sink`).  Without the
 /// audit-gap fix, `reconcile_ssa_summary_key` would synthesise a
-/// disambig and Phase 3's `summaries.get_ssa(caller_key)` lookup
+/// disambig and the analysis's `summaries.get_ssa(caller_key)` lookup
 /// (consuming `typed_call_receivers` at the FuncSummary-aligned key)
 /// would miss.
 #[test]
@@ -3630,7 +3630,7 @@ fn cf4_ssa_summary_fits_arity_keeps_out_of_range_path_idx_at_original_key() {
     // `project_typed_callgraph_audit_gap_ssa_disambig.md`).  When no
     // existing entry sits at the key, `insert_ssa` keeps the (untrimmed)
     // summary at the original key so the SSA FuncKey stays aligned with
-    // the matching FuncSummary FuncKey — Phase 3's
+    // the matching FuncSummary FuncKey — the analysis's
     // `summaries.get_ssa(caller_key)` lookup (consuming
     // `typed_call_receivers`) depends on this alignment.
     let bad = SsaFuncSummary {
@@ -3730,7 +3730,7 @@ fn cf6_ssa_summary_fits_arity_keeps_out_of_range_points_to_idx_at_original_key()
     assert_eq!(kept.points_to.max_param_index(), Some(7));
 }
 
-/// Phase 4 (typed call-graph devirtualisation): two `findById`
+/// two `findById`
 /// definitions on different containers must remain structurally
 /// disjoint after [`merge_summaries`] — no cap union may leak
 /// across them.  The FuncKey identity model already keys on
@@ -3821,7 +3821,7 @@ fn cross_file_devirt_does_not_union_unrelated_findbyids() {
     assert_eq!(cache_sum.tainted_sink_params, vec![0]);
 }
 
-// ── Phase 6 hierarchy fan-out at runtime resolution ────────────────────
+// ── the analysis ────────────────────
 //
 // `GlobalSummaries::resolve_callee_widened` is the runtime counterpart of
 // the call-graph builder's `TypeHierarchyIndex::resolve_with_hierarchy`.

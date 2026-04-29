@@ -130,7 +130,7 @@ fn classify_js(method: &str) -> Option<ContainerOp> {
         // map.get(key) — key at 0
         "get" => load_indexed(0),
         "values" | "keys" | "entries" => load(),
-        // Pointer-Phase 6 / W5: synthetic callees emitted by CFG
+        //synthetic callees emitted by CFG
         // lowering for subscript reads/writes (`arr[i]`, `arr[i] = v`).
         "__index_get__" => load_indexed(0),
         "__index_set__" => store_indexed(1, 0),
@@ -153,7 +153,7 @@ fn classify_python(method: &str) -> Option<ContainerOp> {
         "get" => load_indexed(0), // dict.get(key) / list index — key/index at 0
         "items" | "values" | "keys" => load(),
         "join" => load(),
-        // Pointer-Phase 6 / W5: synthetic callees emitted by CFG
+        //synthetic callees emitted by CFG
         // lowering for subscript reads/writes (`arr[i]`, `arr[i] = v`).
         "__index_get__" => load_indexed(0),
         "__index_set__" => store_indexed(1, 0),
@@ -203,7 +203,7 @@ fn classify_go(method: &str, callee: &str) -> Option<ContainerOp> {
         // method-call form has the bytes carried via the receiver, not arg 0,
         // so it lines up with the writeback contract just like `Decode`.
         "Decode" | "Unmarshal" => Some(ContainerOp::Writeback { dest_arg: 0 }),
-        // Pointer-Phase 6 / W5: synthetic callees emitted by CFG
+        //synthetic callees emitted by CFG
         // lowering for Go index_expression reads/writes (`arr[i]`,
         // `m[k] = v`).
         "__index_get__" => load_indexed(0),
@@ -394,7 +394,7 @@ mod tests {
         }
     }
 
-    // ── C++ Phase 1 additions ──────────────────────────────────────
+    // ── C++ extras ──────────────────────────────────────
 
     #[test]
     fn cpp_push_back_is_store() {

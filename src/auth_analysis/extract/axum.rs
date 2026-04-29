@@ -625,6 +625,11 @@ pub(crate) fn inject_guard_checks(
             line,
             args: call.args.clone(),
             condition_text: None,
+            // Route-level guard injected from a tower / axum layer
+            // (`RequireAuthorizationLayer`, `axum_login::login_required!`,
+            // …).  Tells `auth_check_covers_subject` to short-circuit
+            // for any non-login-guard match.
+            is_route_level: true,
         });
     }
 }

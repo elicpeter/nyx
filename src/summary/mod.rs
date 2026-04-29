@@ -11,31 +11,10 @@ use std::hash::{Hash, Hasher};
 
 // ── Sink site (primary sink-location attribution) ───────────────────────
 
-/// A single dangerous-instruction site recorded inside a function's body.
-///
-/// `SinkSite` pairs a [`Cap`] (the bits this particular site consumes) with
-/// the file-relative source location of the instruction that consumes them.
-/// Carrying this alongside a summary's `param_to_sink` map lets cross-file
-/// findings attribute the finding line to the actual dangerous call inside
-/// the callee, rather than to the caller's call-site (which is all a
-/// bare `(param_idx, Cap)` pair could support).
-///
-/// Primary sink-location attribution stores this data in the summary so
-/// `build_taint_diag()` can consume it and overwrite the caller-site
-/// `Finding.line` when the sink was resolved via summary.
-///
-/// Fields
-/// ──────
-/// * `file_rel` — the callee file's path relative to the workspace root
-///   being scanned.  Matches the `FuncKey::namespace` convention so the
-///   site's origin is addressable without additional workspace context.
-/// * `line` / `col` — 1-based source coordinates of the sink instruction.
-///   `0` indicates the extractor could not resolve coordinates (e.g. a
-///   pass-2 transient summary without tree access).
-/// * `snippet` — the trimmed source line, capped at 120 characters, empty
-///   when coordinates could not be resolved.
-/// * `cap` — the [`Cap`] bits this specific site consumes.  A parameter's
-///   total sink caps is the union across every site associated with it.
+/// A single dangerous-instruction site inside a function's body.
+/// Pairs a [`Cap`] with the source location of the consuming
+/// instruction so cross-file findings can attribute to the callee
+/// rather than the caller call-site.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SinkSite {
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -50,19 +29,14 @@ pub struct SinkSite {
 }
 
 impl SinkSite {
-    /// Dedup key comparing the full identity of a site.  Two sites with the
-    /// same `(file_rel, line, col, cap)` describe the same consumption of
-    /// the same bits at the same source location and should collapse when
-    /// summaries are merged.
+    /// Dedup key: two sites with the same `(file_rel, line, col, cap)`
+    /// describe the same consumption and collapse on merge.
     pub(crate) fn dedup_key(&self) -> (&str, u32, u32, u16) {
         (self.file_rel.as_str(), self.line, self.col, self.cap.bits())
     }
 
-    /// Build a site that only carries a [`Cap`] — no resolved source
-    /// coordinates.  Used by extraction paths that have no tree/bytes
-    /// context (e.g. pass-2 transient summaries), so downstream consumers
-    /// unioning caps across sites still see the correct bits even when
-    /// primary-location attribution is not available.
+    /// Build a cap-only site for extraction paths with no tree/bytes
+    /// context (pass-2 transient summaries).
     pub fn cap_only(cap: Cap) -> Self {
         Self {
             file_rel: String::new(),
@@ -75,13 +49,8 @@ impl SinkSite {
 }
 
 /// Tree/bytes context for resolving a CFG span to a [`SinkSite`].
-///
-/// Summary extraction runs deep inside the taint engine, far from the
-/// `ParsedFile` that owns the tree; `SinkSiteLocator` is the narrow
-/// reference bundle the extractor needs to populate `SinkSite.line`,
-/// `col`, and `snippet`.  The struct is intentionally plain references
-/// so construction is free and threading it as `Option<&Locator>` is
-/// cheap.
+/// Threaded as `Option<&Locator>` so extraction paths without tree
+/// access can pass `None` cheaply.
 pub struct SinkSiteLocator<'a> {
     pub tree: &'a tree_sitter::Tree,
     pub bytes: &'a [u8],
@@ -89,10 +58,8 @@ pub struct SinkSiteLocator<'a> {
 }
 
 impl<'a> SinkSiteLocator<'a> {
-    /// Resolve a `(start_byte, end_byte)` span to a [`SinkSite`] with the
-    /// given `cap`.  Coordinates fall back to `(0, 0)` and the snippet to
-    /// empty when the byte offset is out of range (should not happen for
-    /// spans that came from the same tree).
+    /// Resolve a span to a [`SinkSite`]. Coordinates fall back to
+    /// `(0, 0)` and the snippet to empty when out of range.
     pub fn site_for_span(&self, span: (usize, usize), cap: Cap) -> SinkSite {
         let byte = span.0;
         let point = self
@@ -394,7 +361,7 @@ pub struct FuncSummary {
     ///
     /// Empty for files with no declared inheritance / impl
     /// relationships and for Go (which uses implicit interface
-    /// satisfaction — Phase 6 does not try to compute it).
+    /// satisfaction — not computed).
     ///
     /// **Per-file duplication.**  Every `FuncSummary` produced from a
     /// given file carries the **same** `hierarchy_edges` vector so the
@@ -562,7 +529,7 @@ pub struct GlobalSummaries {
     /// pass 1 and consumed by
     /// [`crate::auth_analysis::run_auth_analysis`] during pass 2.
     auth_by_key: HashMap<FuncKey, crate::auth_analysis::model::AuthCheckSummary>,
-    /// Phase 6 type hierarchy index for runtime virtual-dispatch fan-out.
+    /// Type hierarchy index for runtime virtual-dispatch fan-out.
     ///
     /// Installed by [`Self::install_hierarchy`] after pass 1 from the
     /// merged `FuncSummary::hierarchy_edges` vectors.  Consumed by
@@ -915,14 +882,12 @@ impl GlobalSummaries {
         // unresolved method names) — see audit gap A.2.1.G1
         // (`project_typed_callgraph_audit_gap_ssa_disambig.md`).  These
         // synthetic refs are useful inside the file they were extracted
-        // in (the caller's implicit-uses argument group at the same
-        // index aligns with the synthetic Param) and stay useful when
-        // resolved cross-file by name from this map (the same
-        // implicit-uses alignment applies).  But they would trip
-        // [`ssa_summary_fits_arity`] inside [`reconcile_ssa_summary_key`],
-        // forcing a synthetic disambig that uncouples the SSA FuncKey
-        // from the matching FuncSummary FuncKey — and Phase 3's
-        // `summaries.get_ssa(caller_key)` lookup (consuming
+        // in (caller implicit-uses align with the synthetic Param) and
+        // stay useful when resolved cross-file by name. But they trip
+        // [`ssa_summary_fits_arity`] inside
+        // [`reconcile_ssa_summary_key`], forcing a synthetic disambig
+        // that uncouples the SSA FuncKey from the FuncSummary FuncKey
+        // — `summaries.get_ssa(caller_key)` (consuming
         // `typed_call_receivers` at the FuncSummary-aligned key) would
         // miss.
         //
@@ -930,11 +895,10 @@ impl GlobalSummaries {
         // arity):
         //
         // * **No existing entry, or existing entry also has out-of-range
-        //   refs** — keep the (untrimmed) summary at the original key,
-        //   bypassing the disambig synthesis.  Phase 3 finds the entry
-        //   under the FuncSummary's own disambig; cross-file resolvers
-        //   find the same entry with its full per-param signal
-        //   (closures, lambdas, captured-var sinks).  The "existing also
+        //   refs** — keep the untrimmed summary at the original key,
+        //   bypassing disambig synthesis. Resolution finds the entry
+        //   under the FuncSummary's own disambig with its full
+        //   per-param signal (closures, lambdas, captured-var sinks).  The "existing also
         //   has out-of-range refs" branch covers the iterative-rescan
         //   case where round 2's incoming summary lands on top of round
         //   1's already-installed copy of the same function.

@@ -13,13 +13,10 @@ use petgraph::graph::NodeIndex;
 /// callee isn't a clean dotted member chain (parens, brackets, `::`,
 /// arrow operators, whitespace, or other complex tokens disqualify it).
 ///
-/// Phase 3 of the field-projections rollout: this is the textual mirror
-/// of `try_lower_field_proj_chain` in `src/ssa/lower.rs`.  The state
-/// engine doesn't yet read SSA bodies (would require threading SSA
-/// through the lattice run), so the same parse rules are duplicated
-/// here.  Both helpers share the contract: a success here implies a
-/// FieldProj chain at SSA level (or a direct receiver for the 1-dot
-/// case).
+/// Textual mirror of `try_lower_field_proj_chain` in
+/// `src/ssa/lower.rs`. The state engine doesn't read SSA bodies, so
+/// the parse rules are duplicated. A success here implies a FieldProj
+/// chain at SSA level (or a direct receiver for the 1-dot case).
 ///
 /// **Returns** `Some(("c", "Close"))` for `"c.Close"` (1 dot — the
 /// receiver is a bare ident); `Some(("c.mu", "Lock"))` for
@@ -225,21 +222,12 @@ impl DefaultTransfer<'_> {
             .get_scoped(info.ast.enclosing_func.as_deref(), name)
     }
 
-    /// Pointer-Phase 2 hook.  Returns `true` when the call has been
-    /// fully handled as a field-aliased receiver proxy and the rest of
-    /// `apply_call` should bail.
-    ///
-    /// Activates only on single-dot calls (`<recv>.<method>`) whose
-    /// receiver name is recorded with [`crate::pointer::PtrProxyHint::FieldOnly`]
-    /// in the per-body hint map AND for which a matching
-    /// [`ResourceMethodSummary`] exists.  The acquire/release effect
-    /// is recorded against `state.chain_proxies` keyed by the receiver
-    /// name — chain_proxies is a tracking-only lattice today, so leak
-    /// detection (which only inspects `state.resource`) is suppressed
-    /// for the alias.  Strict-additive: when no hint map is supplied,
-    /// when the receiver isn't `FieldOnly`, or when no method summary
-    /// matches, the function returns `false` and the legacy branches
-    /// run unchanged.
+    /// Returns `true` when the call was fully handled as a
+    /// field-aliased receiver proxy and the rest of `apply_call`
+    /// should bail. Activates on single-dot calls whose receiver is
+    /// `FieldOnly` in the hint map and that match a
+    /// [`ResourceMethodSummary`]. The acquire/release effect is
+    /// recorded against `state.chain_proxies` keyed by receiver name.
     fn try_apply_field_alias_proxy(
         &self,
         info: &NodeInfo,
@@ -308,7 +296,7 @@ impl DefaultTransfer<'_> {
             None => return,
         };
 
-        // ── Pointer-Phase 2: field-aliased receiver fast-path ───────────
+        // ── field-aliased receiver fast-path ───────────
         // When the receiver name resolves through points-to to a value
         // whose abstract heap identity is purely `Field(_, _)` (e.g.
         // `m := c.mu` followed by `m.Lock()`), the receiver is a
@@ -385,7 +373,7 @@ impl DefaultTransfer<'_> {
         // When no direct resource pair matched, check if the callee is a
         // method wrapper for a known resource operation.
         //
-        // Phase 3 (field-projections rollout, 2026-04-25):  the previous
+        // the previous
         // single-dot band-aid (`callee.matches('.').count() == 1 &&
         // !callee.contains('(')`) silently dropped chained receivers
         // because the original textual extractor took the chain root as
@@ -1352,7 +1340,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // Phase 3: chain-receiver decomposition + chain_proxies tracking
+    // chain-receiver decomposition + chain_proxies tracking
     // ─────────────────────────────────────────────────────────────────
     //
     // These tests pin the contract that:
@@ -1431,7 +1419,7 @@ mod tests {
 
     #[test]
     fn chain_proxy_acquire_records_chain_text_not_root() {
-        // Phase 3 key behaviour: a chained-receiver acquire (`c.mu.Lock()`)
+        // Key behaviour: a chained-receiver acquire (`c.mu.Lock()`)
         // records `c.mu` in `state.chain_proxies` and DOES NOT touch the
         // SymbolId-keyed `receiver_class_group` for the chain root `c`.
         let mut interner = SymbolInterner::new();
@@ -1775,7 +1763,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // Pointer-analysis Phase 2: PtrProxyHint::FieldOnly routes
+    // Pointer-analysis: PtrProxyHint::FieldOnly routes
     // single-dot proxy-acquire to chain_proxies, suppressing the
     // SymbolId path that would otherwise mark the field-aliased local
     // as a leakable resource.

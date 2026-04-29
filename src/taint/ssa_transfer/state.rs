@@ -309,7 +309,7 @@ pub struct FieldTaintKey {
     pub field: FieldId,
 }
 
-/// Pointer-Phase 4 / W4: per-field-cell taint record.
+///per-field-cell taint record.
 ///
 /// Carries the union of writers' taint for the abstract field cell plus
 /// two validation channels:
@@ -365,17 +365,17 @@ pub struct SsaTaintState {
     /// interpretation is disabled (`analysis.engine.abstract_interpretation
     /// = false`).
     pub abstract_state: Option<AbstractState>,
-    /// Pointer-Phase 3: per-heap-field taint cells, keyed by
+    /// per-heap-field taint cells, keyed by
     /// `(parent_loc, field)`.  Sorted by [`FieldTaintKey`] for O(n)
     /// merge-join.  Populated only when the body's
     /// [`crate::pointer::PointsToFacts`] is available
     /// (`NYX_POINTER_ANALYSIS=1`); empty otherwise so the lattice join
     /// is a strict no-op for pointer-disabled runs.  Field reads
     /// (`SsaOp::FieldProj`) consult the cells; field writes record into
-    /// them.  Cross-call propagation lands in Phase 5 via the
+    /// them.  Cross-call propagation lands during lowering via the
     /// field-granularity `PointsToSummary`.
     ///
-    /// Cell shape (Phase 4 / W4): [`FieldCell`] carries `taint` plus
+    /// Cell shape: [`FieldCell`] carries `taint` plus
     /// `validated_must` / `validated_may` flags so validation flows
     /// through abstract field / element identity.
     pub field_taint: SmallVec<[(FieldTaintKey, FieldCell); 4]>,
@@ -403,7 +403,7 @@ impl SsaTaintState {
         }
     }
 
-    /// Pointer-Phase 3: read the field cell at `key`.  Returns `None`
+    /// read the field cell at `key`.  Returns `None`
     /// when no cell has been recorded (caller should treat as
     /// untainted).  O(log n) on the sorted [`field_taint`] list.
     pub fn get_field(&self, key: FieldTaintKey) -> Option<&FieldCell> {
@@ -413,7 +413,7 @@ impl SsaTaintState {
             .map(|idx| &self.field_taint[idx].1)
     }
 
-    /// Pointer-Phase 3 / W4: union `t` into the field cell at `key`,
+    ///union `t` into the field cell at `key`,
     /// recording per-write `validated_must` / `validated_may` channels.
     ///
     /// Maintains sorted invariant.  No-op when `t.caps` is empty (so the
@@ -563,7 +563,7 @@ impl Lattice for SsaTaintState {
     }
 }
 
-/// Pointer-Phase 3 / W4: merge-join two sorted `field_taint` lists.
+///merge-join two sorted `field_taint` lists.
 /// Same shape as [`merge_join_ssa_vars`] but keyed on [`FieldTaintKey`]:
 /// * `taint.caps`  — OR-union
 /// * `taint.origins` — merged with cap-respecting de-dup
@@ -1053,7 +1053,7 @@ mod origin_cap_tests {
 
 #[cfg(test)]
 mod field_taint_tests {
-    //! Pointer-Phase 3: tests for the heap-field taint cells on
+    //!: tests for the heap-field taint cells on
     //! [`SsaTaintState`].  Cover get/add round-trip, lattice join
     //! (cap union + origin merge), and `leq` convergence semantics.
     use super::*;
@@ -1289,7 +1289,7 @@ mod field_taint_tests {
         assert!(!a2.leq(&b2), "a.may=true is NOT ⊆ b.may=false");
     }
 
-    /// Pointer-Phase 3 / A8 audit: the field_taint lattice is monotone
+    ///the field_taint lattice is monotone
     /// and converges under a deterministic enumeration of inputs.
     /// Caps grow (OR), `uses_summary` grows (OR), origins grow modulo
     /// the cap (merge_origins is bounded).  Joins must:

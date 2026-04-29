@@ -1328,9 +1328,9 @@ mod goto_succ_propagation_tests {
     }
 }
 
-// ── Phase 4.2: receiver_candidates_for_type_lookup walks FieldProj ──────
+// ── receiver_candidates_for_type_lookup walks FieldProj ──────
 //
-// After Phase 2 SSA decomposition, `c.client.send(req)` lowers to
+// After SSA decomposition, `c.client.send(req)` lowers to
 //   v_c      = Param("c", 0)
 //   v_client = FieldProj(v_c, "client")
 //   v_call   = Call("send", receiver: v_client, args: [v_req])
@@ -1430,7 +1430,7 @@ mod receiver_candidates_field_proj_tests {
     fn field_proj_receiver_walks_to_typed_root_in_go() {
         // Go is not Rust, so pre-Phase-4 the candidate walk would have
         // returned ONLY the immediate receiver (v2 = FieldProj). With
-        // Phase 4 we walk through FieldProj.receiver to recover v0 (the
+        // We walk through FieldProj.receiver to recover v0 (the
         // typed root `c`).
         let body = body_with_field_proj_chain();
         let cands =
@@ -1516,7 +1516,7 @@ mod receiver_candidates_field_proj_tests {
     }
 }
 
-// ── Phase 6 hierarchy fan-out: ResolvedSummary union semantics ──────────
+// ── Hierarchy: ResolvedSummary union semantics ──────────
 //
 // `merge_resolved_summaries_fanout` is invoked at virtual-dispatch call
 // sites where the receiver's static type has multiple concrete
@@ -1748,7 +1748,7 @@ mod fanout_merge_tests {
     }
 }
 
-// ── Pointer-Phase 3 / W1: synthetic field-WRITE round-trip ──────────────
+//── synthetic field-WRITE round-trip ──────────────
 //
 // SSA lowering populates `SsaBody.field_writes` with entries that lift a
 // synthetic base-update Assign (`obj.f = rhs`) into a structural field
@@ -2259,7 +2259,7 @@ mod field_write_tests {
     }
 }
 
-// ── Pointer-Phase 4 / W2: container ELEM write/read round-trip ──────────
+//── container ELEM write/read round-trip ──────────
 //
 // Container methods like `arr.push(v)` / `arr.shift()` flow per-element
 // taint through the `Field(_, ELEM)` cells on `SsaTaintState`.  These
@@ -2761,7 +2761,7 @@ mod container_elem_tests {
     }
 }
 
-// ── Pointer-Phase 5 / W3: cross-call field-points-to application ────────
+//── cross-call field-points-to application ────────
 //
 // `apply_field_points_to_writes` is the resolver-side hook that turns
 // callee-summary `field_points_to.param_field_writes` into caller-side

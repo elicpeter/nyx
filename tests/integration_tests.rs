@@ -904,6 +904,20 @@ fn fp_guard_framework_express_res_json() {
     validate_expectations(&diags, &dir);
 }
 
+/// FP guard — FastAPI `dependencies=[Depends(requires_access_*)]`
+/// route-level guard short-circuits `auth_check_covers_subject` so
+/// the handler body's path-param ORM calls and row-variable method
+/// calls do not trip `py.auth.missing_ownership_check`.  Pinned by
+/// the `is_route_level` flag on `AuthCheck` plus the kind-aware
+/// `function_params_route_handler` that includes id-like Python
+/// typed params (`dag_id: str`) in `unit.params`.
+#[test]
+fn fp_guard_framework_fastapi_route_level_auth() {
+    let dir = fixture_path("fp_guards/framework_fastapi_route_level_auth");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 /// FP guard — framework-safe pattern: JDBC PreparedStatement.setString
 /// covers SQL_QUERY on the bound parameter.
 #[test]
@@ -924,6 +938,23 @@ fn fp_guard_framework_prepared_stmt_java() {
 #[test]
 fn fp_guard_framework_jpa_parameterised_execute() {
     let dir = fixture_path("fp_guards/framework_jpa_parameterised_execute");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — Strapi-style ORM accessor chain
+/// (`<obj>.db.query(MODEL_UID).<orm_method>(...)`).  Pinned from a
+/// ~98-finding `cfg-unguarded-sink` + 40-finding `taint-unsanitised-flow`
+/// cluster across strapi services (api-token, transfer/token, user,
+/// release, …).  When the chain shape `*.query(LITERAL).<orm_method>` —
+/// `findOne|findMany|findFirst|findUnique|find|create|createMany|update|
+/// updateMany|upsert|delete|deleteMany|count|aggregate|distinct|save` —
+/// is detected, a same-node `Sanitizer(SQL_QUERY)` is synthesised that
+/// reflexively dominates the sink.  Bare `connection.query(...)` and
+/// chained `.then` (Promise method) are not affected.
+#[test]
+fn fp_guard_framework_strapi_db_query_chain() {
+    let dir = fixture_path("fp_guards/framework_strapi_db_query_chain");
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }
@@ -966,6 +997,27 @@ fn fp_guard_php_unserialize_allowed_classes() {
 #[test]
 fn fp_guard_c_buffer_literal_src() {
     let dir = fixture_path("fp_guards/c_buffer_literal_src");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Panic guard — CFG condition-text truncation (and symex display
+/// truncation) must round byte cuts down to the nearest UTF-8 char
+/// boundary.  Reproduces the gogs scan crash where
+/// `public/plugins/codemirror-5.17.0/mode/gherkin/gherkin.js` ships a
+/// long localised regex (Gurmukhi `ਖ`, Devanagari, CJK, Cyrillic…) inside
+/// a boolean sub-condition; byte 256 landed inside `'ਖ'` (3-byte UTF-8)
+/// and `t[..MAX_CONDITION_TEXT_LEN].to_string()` panicked the rayon
+/// worker.  Engine fix:
+/// `src/utils/snippet.rs::truncate_at_char_boundary`, applied at three
+/// CFG sites (`src/cfg/conditions.rs::push_condition_node`,
+/// `emit_rust_match_guard_if`, `src/cfg/mod.rs::extract_condition`) and
+/// two symex display sites (`src/symex/value.rs::Display`).  Invariant:
+/// scanning this file must terminate without panicking, regardless of
+/// where byte 256 lands inside the regex literal.
+#[test]
+fn fp_guard_cfg_utf8_long_condition() {
+    let dir = fixture_path("fp_guards/cfg_utf8_long_condition");
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }

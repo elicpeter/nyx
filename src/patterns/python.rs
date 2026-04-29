@@ -121,14 +121,45 @@ pub const PATTERNS: &[Pattern] = &[
         confidence: Confidence::High,
     },
     // ── Tier B: SQL injection (format/concat heuristic) ────────────────
+    // Catches both `cursor.execute(query + user)` (binary_operator concat)
+    // and `cursor.execute(f"... {user} ...")` (f-string with interpolation).
+    // f-strings appear as a `string` node with `interpolation` children in
+    // tree-sitter-python; the alternation lets the same pattern cover both
+    // the historical % / + concat shapes and the modern f-string SQLi shape
+    // that surfaces in CVE-2025-24793 (snowflake-connector-python),
+    // CVE-2025-69662 (geopandas), and dozens of similar cursor.execute
+    // call sites across the corpus.
     Pattern {
         id: "py.sqli.execute_format",
-        description: "cursor.execute with string concatenation risks SQL injection",
+        description: "cursor.execute with string concatenation or f-string risks SQL injection",
         query: r#"(call
                      function: (attribute
                        attribute: (identifier) @fn (#eq? @fn "execute"))
                      arguments: (argument_list
-                       (binary_operator) @arg))
+                       [(binary_operator)
+                        (string (interpolation))] @arg))
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::B,
+        category: PatternCategory::SqlInjection,
+        confidence: Confidence::Medium,
+    },
+    // SQLAlchemy `text(<concat-or-fstring>)` — same Tier B heuristic
+    // applied to the SQLAlchemy raw-SQL constructor.  Catches the
+    // CVE-2025-69662 (geopandas) shape:
+    //   connection.execute(text(f"SELECT … '{geom_name}' …"))
+    // where the f-string interpolation is the injection point and the
+    // surrounding `connection.execute` would otherwise hide the unsafe
+    // construction from the simple execute_format pattern.
+    Pattern {
+        id: "py.sqli.text_format",
+        description: "sqlalchemy text() with f-string or string concat risks SQL injection",
+        query: r#"(call
+                     function: [(identifier) @fn (attribute attribute: (identifier) @fn)]
+                     (#eq? @fn "text")
+                     arguments: (argument_list
+                       [(binary_operator)
+                        (string (interpolation))] @arg))
                    @vuln"#,
         severity: Severity::Medium,
         tier: PatternTier::B,

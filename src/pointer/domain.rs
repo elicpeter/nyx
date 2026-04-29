@@ -202,7 +202,7 @@ impl LocInterner {
 }
 
 /// Coarse classification of a value's points-to set, used by consumers
-/// (Phase 2: resource lifecycle) that don't need full set membership but
+/// (Hierarchy: resource lifecycle) that don't need full set membership but
 /// do need to know "is this value's heap identity a *field* of some
 /// other value, or does it stand on its own?".
 ///

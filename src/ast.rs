@@ -361,7 +361,7 @@ fn build_taint_diag(
         })
         .fold(0u16, |acc, b| acc | b);
 
-    // Phase C: when the sink's required caps include UNAUTHORIZED_ID — and
+    // when the sink's required caps include UNAUTHORIZED_ID — and
     // the finding actually reached that sink via the taint engine — use a
     // dedicated auth rule id so the finding is namespaced alongside the
     // standalone `auth_analysis` subsystem's output instead of being folded
@@ -931,7 +931,7 @@ impl<'a> ParsedFile<'a> {
             self.source.lang_slug,
         );
 
-        // Phase 6 (typed call-graph subtype awareness): every
+        // every
         // `FuncSummary` exported from this file carries a copy of the
         // file's `hierarchy_edges` so the inheritance / impl /
         // implements relationships persist through SQLite round-trips
@@ -1263,13 +1263,11 @@ impl<'a> ParsedFile<'a> {
                 state::build_resource_method_summaries(&self.file_cfg.bodies, caller_lang);
             let mut all_state_findings = Vec::new();
             for body in &self.file_cfg.bodies {
-                // Phase 2 of the pointer-analysis rollout: when
-                // `NYX_POINTER_ANALYSIS=1` is set, derive a `var_name →
-                // PtrProxyHint` map from the body's points-to facts so
-                // the proxy-acquire transfer can suppress SymbolId
-                // attribution on field-aliased receivers (e.g. `m :=
-                // c.mu; m.Lock()`).  Strict-additive — `None` when the
-                // env-var is unset and behaviour matches today exactly.
+                // When `NYX_POINTER_ANALYSIS=1` is set, derive a
+                // `var_name → PtrProxyHint` map from the body's
+                // points-to facts so the proxy-acquire transfer can
+                // suppress SymbolId attribution on field-aliased
+                // receivers (e.g. `m := c.mu; m.Lock()`).
                 let body_pointer_hints = cfg_analysis::build_body_const_facts(body, caller_lang)
                     .as_ref()
                     .and_then(|f| {
@@ -1379,15 +1377,11 @@ impl<'a> ParsedFile<'a> {
         )
     }
 
-    /// Build a per-file `var_name → TypeKind` map by running SSA + type
-    /// facts on each body and copying type facts for SSA values whose
-    /// definition recorded a source-level variable name.  When the same
-    /// name resolves to different non-`Unknown` types across bodies the
-    /// entry is dropped — absence is safe because the auth analysis
-    /// sink gate simply falls back to its syntactic heuristics.  Returns
-    /// `None` when no body produces any typed variable (non-Rust files
-    /// currently emit few `LocalCollection` / security-typed facts, but
-    /// this path is language-agnostic).
+    /// Build a per-file `var_name → TypeKind` map from SSA + type facts.
+    /// Conflicting non-`Unknown` types across bodies drop the entry —
+    /// absence is safe because the auth sink gate falls back to
+    /// syntactic heuristics. Returns `None` when no body produces a
+    /// typed variable.
     fn collect_file_var_types(&self) -> Option<auth_analysis::VarTypes> {
         let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
         let mut merged: std::collections::HashMap<String, crate::ssa::type_facts::TypeKind> =
@@ -1780,13 +1774,20 @@ fn find_arg_list(call: tree_sitter::Node) -> Option<tree_sitter::Node> {
 fn is_literal_node(node: tree_sitter::Node, bytes: &[u8]) -> bool {
     let kind = node.kind();
     match kind {
-        // String literals (most languages)
+        // String literals — but Python's `string` node also covers
+        // f-strings, which carry `interpolation` children.  An f-string
+        // with interpolation is *not* a literal: it embeds arbitrary
+        // expressions, so a sink call like `cursor.execute(f"…{x}")`
+        // must not be suppressed under Layer A's "all-literal args"
+        // shortcut.  Same shape applies to any tree-sitter grammar
+        // that nests an `interpolation` (or `string_interpolation`)
+        // child inside a string node.
         "string"
         | "string_literal"
         | "interpreted_string_literal"
         | "raw_string_literal"
         | "string_content"
-        | "string_fragment" => true,
+        | "string_fragment" => !has_interpolation(node),
 
         // Numeric literals
         "integer" | "integer_literal" | "int_literal" | "float" | "float_literal" | "number" => {
@@ -2687,7 +2688,7 @@ impl TaintSuppressionCtx {
         // an "interproc sanitiser caller" when its body invokes any
         // helper whose own body contains a labelled Sanitizer.  This
         // handles wrappers like `def sanitize(s): return
-        // shlex.quote(s)` — the engine clears taint via Phase 11
+        // shlex.quote(s)` — the engine clears taint via
         // inline analysis, but the caller's scope has no labelled
         // Sanitizer of its own to satisfy Condition 4(b).
         let mut interproc_sanitizer_callers: HashSet<Option<String>> = HashSet::new();
@@ -2803,7 +2804,7 @@ impl TaintSuppressionCtx {
         //       contains a labelled Sanitizer (interprocedural
         //       sanitiser wrapper — covers `def sanitize(s): return
         //       shlex.quote(s)` patterns where the engine clears
-        //       taint via Phase 11 inline analysis but the caller's
+        //       taint via inline analysis but the caller's
         //       scope has no Sanitizer label of its own).
         //
         // When none hold, we can't distinguish silent engine failure
@@ -3541,5 +3542,53 @@ fn c_buffer_call_literal_safe_recognises_canonical_shapes() {
     assert!(
         !is_c_buffer_call_literal_safe("c.memory.gets", cap, code),
         "Layer D should only fire for buffer-overflow rule ids"
+    );
+}
+
+/// Regression: `is_literal_node` must NOT classify a Python f-string
+/// (a `string` node containing `interpolation` children) as literal.
+/// Layer A's "all-args-literal → suppress Security finding" shortcut
+/// otherwise hides every CVE that injects via `cursor.execute(f"…{x}…")`
+/// or `text(f"…{x}…")`.  Motivated by CVE-2025-69662 (geopandas SQLi
+/// via `text(f"SELECT … '{geom_name}' …")`) and CVE-2025-24793
+/// (snowflake-connector-python f-string-built CREATE STAGE / DROP).
+#[test]
+fn is_literal_node_rejects_python_fstring_with_interpolation() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    parser.set_language(&lang).unwrap();
+
+    // f-string with one interpolation segment — must be non-literal.
+    let code = b"x = f\"SELECT * WHERE y = '{u}'\"\n";
+    let tree = parser.parse(code, None).unwrap();
+    let assignment = tree
+        .root_node()
+        .child(0)
+        .and_then(|s| s.child(0))
+        .expect("assignment node");
+    let rhs = assignment
+        .child_by_field_name("right")
+        .expect("RHS of assignment");
+    assert_eq!(rhs.kind(), "string");
+    assert!(
+        !is_literal_node(rhs, code),
+        "f-string with interpolation must not be classified as literal"
+    );
+
+    // Plain string literal — must remain literal.
+    let code = b"x = \"plain literal\"\n";
+    let tree = parser.parse(code, None).unwrap();
+    let assignment = tree
+        .root_node()
+        .child(0)
+        .and_then(|s| s.child(0))
+        .expect("assignment node");
+    let rhs = assignment
+        .child_by_field_name("right")
+        .expect("RHS of assignment");
+    assert_eq!(rhs.kind(), "string");
+    assert!(
+        is_literal_node(rhs, code),
+        "plain string literal must be classified as literal"
     );
 }

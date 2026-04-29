@@ -209,7 +209,12 @@ fn collect_class_based_routes(
         }
         let line = method_node.start_position().row + 1;
         for call in &middleware_calls {
-            if let Some(check) = auth_check_from_call_site(call, line, rules) {
+            if let Some(mut check) = auth_check_from_call_site(call, line, rules) {
+                // Django class-based-view decorators (`@method_decorator(login_required)`,
+                // `@permission_required(...)`) and DRF `permission_classes`
+                // are declared at the route boundary; mark route-level
+                // so coverage applies to the action body's operations.
+                check.is_route_level = true;
                 unit.auth_checks.push(check);
             }
         }
@@ -443,7 +448,14 @@ fn inject_middleware_auth(
         return;
     };
     for call in middleware_calls {
-        if let Some(check) = auth_check_from_call_site(call, line, rules) {
+        if let Some(mut check) = auth_check_from_call_site(call, line, rules) {
+            // Django decorators (`@login_required`, `@permission_required`,
+            // `@user_passes_test`, etc.) and DRF `permission_classes` are
+            // declared at the route boundary; mark route-level so
+            // `auth_check_covers_subject` short-circuits `true` for any
+            // non-login-guard match.  See flask.rs / model.rs for the
+            // full rationale.
+            check.is_route_level = true;
             unit.auth_checks.push(check);
         }
     }

@@ -1,6 +1,8 @@
 import java.io.*;
 import java.util.Random;
 import java.security.MessageDigest;
+import org.yaml.snakeyaml.Yaml;
+import org.apache.commons.text.StringSubstitutor;
 
 class Positive {
     // java.deser.readobject
@@ -44,5 +46,17 @@ class Positive {
     // java.xss.getwriter_print
     void triggerGetWriterPrint(javax.servlet.http.HttpServletResponse resp) throws Exception {
         resp.getWriter().println("<html>" + "data" + "</html>");
+    }
+
+    // java.deser.snakeyaml_unsafe_constructor — CVE-2022-1471 regression guard.
+    void triggerSnakeyamlUnsafeConstructor() throws Exception {
+        Yaml yaml = new Yaml();
+        Object data = yaml.load("payload");
+    }
+
+    // java.code_exec.text4shell_interpolator — CVE-2022-42889 regression guard.
+    String triggerText4ShellInterpolator(String input) {
+        StringSubstitutor s = StringSubstitutor.createInterpolator();
+        return s.replace(input);
     }
 }

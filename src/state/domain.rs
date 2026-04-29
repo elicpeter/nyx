@@ -168,7 +168,7 @@ impl Lattice for AuthDomainState {
 /// (e.g. `"c.mu"`, `"c.writer.header"`) so distinct field projections
 /// of the same chain root are tracked independently.
 ///
-/// Chain-keyed proxy state is the Phase 3 replacement for the single-dot
+/// Chain-keyed proxy state is the DTO replacement for the single-dot
 /// band-aid that conservatively dropped chain receivers entirely — chain
 /// receivers are now first-class, semantically distinct from their root.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,18 +192,12 @@ pub struct ProductState {
     /// operation (e.g., fs.openSync at line 7) rather than the proxy call.
     pub proxy_acquire_spans: HashMap<SymbolId, (usize, usize)>,
     /// Per-chain-receiver proxy tracking, keyed by joined chain text
-    /// (`"c.mu"`, `"c.writer.header"`).  Each chain receiver has its own
-    /// lifecycle, class group, and acquire span — independent of both the
-    /// chain root and any other chain.  Phase 3 of the field-projections
-    /// rollout introduces this map; consumers that previously used
-    /// [`receiver_class_group`] for chain receivers (via the deleted
-    /// single-dot band-aid) now route through here for 2+ dot callees.
+    /// (`"c.mu"`, `"c.writer.header"`). Each chain receiver has its own
+    /// lifecycle, class group, and acquire span — independent of both
+    /// the chain root and any other chain.
     ///
-    /// Phase 3 ships chain_proxies in tracking-only mode: chain receivers
-    /// that remain OPEN at exit are NOT promoted to leak findings (so the
-    /// addition is strictly behaviour-preserving against the existing
-    /// benchmark).  Phase 4 / a follow-up adds chain-rooted leak findings
-    /// once the receiver-class detection is broad enough to avoid new FPs.
+    /// Tracking-only: chain receivers that remain OPEN at exit are NOT
+    /// promoted to leak findings.
     pub chain_proxies: HashMap<String, ChainProxyState>,
 }
 

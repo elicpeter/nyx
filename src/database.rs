@@ -3735,7 +3735,7 @@ fn metadata_table_survives_clear() {
     assert_eq!(stored.as_deref(), Some(index::ENGINE_VERSION));
 }
 
-/// Pointer-Phase 5 / A3 audit: field_points_to round-trips through
+///field_points_to round-trips through
 /// the SsaFuncSummary SQLite blob.  Pin that the new field_points_to
 /// records preserve param_field_reads, param_field_writes, the
 /// receiver sentinel (`u32::MAX`), the container-element marker

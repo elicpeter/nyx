@@ -513,9 +513,31 @@ pub fn extract_ssa_func_summary_full(
             }
         }
 
-        // Collect sink caps + primary-location sites from events + per-arg-position detail
+        // Collect sink caps + primary-location sites from events + per-arg-position detail.
+        //
+        // Skip events flagged `all_validated`: every tainted SSA value
+        // that reached the sink was already proved validated by a
+        // dominating predicate (AllowlistCheck / TypeCheck /
+        // ValidationCall, including the indirect-validator branch
+        // narrowing for `validate*` / `is_valid*` callees).  Those
+        // events would have been dropped by `ssa_events_to_findings` at
+        // the per-file finding step; carrying them into
+        // `param_to_sink` / `param_to_sink_param` re-publishes a sink
+        // attribution callers can no longer suppress, because the
+        // caller can't see the validator that lives inside the
+        // callee body.
+        //
+        // Strict-additive: `all_validated` is set only when every
+        // tainted operand at the sink has its `var_name` in
+        // `state.validated_may` — single-path single-validator helpers
+        // cleanly skip; mixed-tainted-with-some-unvalidated events
+        // still propagate.  Closes the helper-summary precision gap
+        // surfaced by Novu CVE GHSA-4x48-cgf9-q33f.
         let mut param_sites: SmallVec<[SinkSite; 1]> = SmallVec::new();
         for event in &events {
+            if event.all_validated {
+                continue;
+            }
             for pos in extract_sink_arg_positions(event, ssa) {
                 param_to_sink_param.push((idx, pos, event.sink_caps));
             }
@@ -630,7 +652,7 @@ pub fn extract_ssa_func_summary_full(
         param_return_paths,
         return_path_facts,
         points_to,
-        // Pointer-Phase 5 extension — empty until the field-granularity
+        // extension — empty until the field-granularity
         // extractor is wired (`NYX_POINTER_ANALYSIS=1` only).  Default
         // path stays bit-identical to today.
         field_points_to: crate::summary::points_to::FieldPointsToSummary::empty(),

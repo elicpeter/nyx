@@ -24,18 +24,11 @@ pub struct BlockId(pub u32);
 pub struct FieldId(pub u32);
 
 impl FieldId {
-    /// Pointer-Phase 4 sentinel for the abstract "any element of a
-    /// container" field.  Steensgaard-grade precision: every numeric
-    /// or dynamic index access (`arr[i]`, `arr.shift()`, `map[k]`)
-    /// projects through the same `Field(pt(container), ELEM)` cell so
-    /// per-element taint propagation is independent of the SSA value
-    /// referencing the container.
-    ///
-    /// `u32::MAX` is reserved by convention; the per-body
-    /// [`FieldInterner`] never assigns it because interning is
-    /// monotone-ascending from `0` and bodies don't approach 4 billion
-    /// fields.  Consumers should compare with `==` rather than reach
-    /// into the wrapped `u32`.
+    /// Sentinel for the abstract "any element of a container" field.
+    /// Every numeric or dynamic index access (`arr[i]`, `arr.shift()`,
+    /// `map[k]`) projects through the same `Field(pt(container), ELEM)`
+    /// cell. `u32::MAX` is reserved; the per-body interner never
+    /// assigns it.
     pub const ELEM: FieldId = FieldId(u32::MAX);
 
     /// "Tainted at every field" wildcard sentinel — distinct from
@@ -91,12 +84,9 @@ impl FieldInterner {
     /// Read-only lookup: returns the [`FieldId`] for `name` if it has
     /// already been interned, or `None` otherwise.
     ///
-    /// Used by cross-call resolvers (Pointer-Phase 5 / W3) to avoid
-    /// growing the caller's interner with field names introduced
-    /// solely by the callee summary — such IDs would never be referenced
-    /// by any other instruction in the caller's body, so the cells
-    /// would be write-only and consume space without contributing
-    /// to taint flow.
+    /// Used by cross-call resolvers to avoid growing the caller's
+    /// interner with field names introduced solely by callee summaries
+    /// — such cells would be write-only.
     pub fn lookup(&self, name: &str) -> Option<FieldId> {
         // Walk `names` directly so we don't require the post-deserialise
         // `ensure_lookup()` rebuild before this method is callable.
@@ -342,19 +332,17 @@ pub struct SsaBody {
     pub exception_edges: Vec<(BlockId, BlockId)>,
     /// Per-body interner for [`SsaOp::FieldProj`] field names.
     ///
-    /// Empty until the lowering phase emits FieldProj ops (Phase 2 of the
-    /// field-projections rollout).  Cross-body callers (cross-file
-    /// summaries, debug serialization) MUST resolve interned ids through
-    /// this interner before transporting field references to other bodies.
+    /// Empty until lowering emits FieldProj ops. Cross-body callers
+    /// (cross-file summaries, debug serialization) MUST resolve interned
+    /// ids through this interner before transporting field references
+    /// to other bodies.
     #[serde(default)]
     pub field_interner: FieldInterner,
-    /// Pointer-Phase 3 / W1: side-table mapping a synthetic base-update
-    /// [`SsaOp::Assign`]'s defined value back to the `(receiver, field)`
-    /// pair it represents.  Populated by SSA lowering at the
-    /// `obj.f = rhs` synthesis point so the taint engine can recognise
-    /// the synthetic assign as a structural field WRITE — the assigned
-    /// value is the new "obj" value, the use is the rhs, and the side-
-    /// table records `(prior_obj_value, FieldId("f"))`.
+    /// Side-table mapping a synthetic base-update [`SsaOp::Assign`]'s
+    /// defined value back to the `(receiver, field)` pair it
+    /// represents. Populated by lowering at the `obj.f = rhs` synthesis
+    /// point so the taint engine can treat the synthetic assign as a
+    /// structural field WRITE.
     ///
     /// Empty by default; only synthetic assigns whose enclosing source
     /// statement was a dotted-path assignment (`a.b.c = …`) appear here.
@@ -505,7 +493,7 @@ mod tests {
         assert_eq!(uses, vec![SsaValue(1)]);
     }
 
-    /// Pointer-Phase 4 / A6 audit: the [`FieldId::ELEM`] sentinel is
+    ///the [`FieldId::ELEM`] sentinel is
     /// reserved for "any element of a container".  The interner assigns
     /// IDs monotonically from `0`, so the sentinel `u32::MAX` can only
     /// collide if the body declares ~4 billion fields — a corner case

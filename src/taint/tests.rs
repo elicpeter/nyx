@@ -1585,7 +1585,7 @@ fn cpp_source_to_sink() {
     );
 }
 
-/// Phase 2 (cpp-precision): `c_str()` is a const accessor on `std::string`
+/// `c_str()` is a const accessor on `std::string`
 /// that returns a pointer to the same buffer.  It must propagate taint from
 /// the receiver to the result so the downstream sink fires.
 #[test]
@@ -1597,11 +1597,11 @@ fn cpp_c_str_propagates_taint() {
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
     assert!(
         !findings.is_empty(),
-        "C++: tainted s.c_str() into system() must fire (Phase 2 c_str passthrough)",
+        "C++: tainted s.c_str() into system() must fire",
     );
 }
 
-/// Phase 2: `std::move(x)` returns its argument unchanged in terms of
+/// `std::move(x)` returns its argument unchanged in terms of
 /// data flow — the rvalue cast is a representation move, not a sanitiser.
 /// Default propagation collects argument taint into the result.
 #[test]
@@ -1617,7 +1617,7 @@ fn cpp_std_move_propagates_taint() {
     );
 }
 
-/// Phase 2: `static_cast<T>(x)` is parsed as a call expression by
+/// `static_cast<T>(x)` is parsed as a call expression by
 /// tree-sitter-cpp; default propagation transports taint from the casted
 /// argument to the result.
 #[test]
@@ -1633,7 +1633,7 @@ fn cpp_static_cast_propagates_taint() {
     );
 }
 
-/// Phase 5 (cpp-precision): a fluent builder chain whose host
+/// a fluent builder chain whose host
 /// argument is tainted should fire on the terminal `.connect()`
 /// SSRF sink.  The chained `.host(...)` / `.port(...)` calls return
 /// the receiver, and default Call-arg propagation puts the tainted
@@ -1647,11 +1647,11 @@ fn cpp_builder_chain_user_host_fires() {
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
     assert!(
         !findings.is_empty(),
-        "C++: tainted host through fluent builder chain must reach terminal connect() (Phase 5)",
+        "C++: tainted host through fluent builder chain must reach terminal connect()",
     );
 }
 
-/// Phase 5: a fluent builder chain with a hardcoded host literal
+/// a fluent builder chain with a hardcoded host literal
 /// must NOT fire on the terminal connect() sink — the chain carries
 /// no taint.
 #[test]
@@ -1663,11 +1663,11 @@ fn cpp_builder_chain_const_host_silent() {
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
     assert!(
         findings.is_empty(),
-        "C++: builder chain with literal host must NOT fire (Phase 5 negative)",
+        "C++: builder chain with literal host must NOT fire (Negative)",
     );
 }
 
-/// Phase 4 (cpp-precision): inline member-function bodies inside a
+/// inline member-function bodies inside a
 /// `class_specifier` must be extracted as separate functions and
 /// intra-file calls must resolve to their bodies. Pre-Phase-4, the
 /// `class_specifier` AST kind was unmapped in cpp KINDS, so the CFG
@@ -1682,11 +1682,11 @@ fn cpp_inline_class_method_resolves() {
     let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
     assert!(
         !findings.is_empty(),
-        "C++: tainted arg through inline class method must reach system() (Phase 4)",
+        "C++: tainted arg through inline class method must reach system()",
     );
 }
 
-/// Phase 3 (cpp-precision): a tainted argument passed through an
+/// a tainted argument passed through an
 /// identity-style lambda (`auto echo = [](const char* s) { return s; }`)
 /// must reach the downstream sink. This is handled by the same default
 /// Call-arg propagation as `std::move`/`static_cast`; pinning the
@@ -1705,7 +1705,7 @@ fn cpp_identity_lambda_propagates_taint() {
     );
 }
 
-/// Phase 2: `std::vector<char>::data()` is a Load-style container op that
+/// `std::vector<char>::data()` is a Load-style container op that
 /// returns a pointer to the underlying buffer; `system(v.data())` should
 /// fire when `v` is tainted.
 #[test]
@@ -5726,14 +5726,14 @@ fn link_alternative_paths_three_way_group() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Typed call-graph devirtualisation — Phase 2 (typed_call_receivers)
+//  Typed call-graph devirtualisation (typed_call_receivers)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Phase 2: when a method call's receiver was constructed from a known
+/// when a method call's receiver was constructed from a known
 /// constructor (`File::open` → `FileHandle`), the SSA-extraction
 /// pipeline must record `(call_ordinal, "FileHandle")` on the
 /// caller's [`crate::summary::ssa_summary::SsaFuncSummary::typed_call_receivers`]
-/// so Phase 3 can devirtualise the cross-file edge.
+/// so build_call_graph can devirtualise the cross-file edge.
 ///
 /// Uses Java because `FileInputStream` / `FileOutputStream` are part
 /// of the [`crate::ssa::type_facts::constructor_type`] table for Java
@@ -5779,7 +5779,7 @@ class Reader {
     );
 }
 
-/// Phase 2 negative control: free-function calls (no receiver) must
+/// Negative control: free-function calls (no receiver) must
 /// never appear in `typed_call_receivers`.  Even when the callee is a
 /// known type-producing constructor, it sits in the body as a Call
 /// with `receiver = None` and is not a candidate for devirtualisation.
@@ -6070,6 +6070,193 @@ const handler = (req) => {
 /// `#[ignore]` so it documents the depth limit without breaking CI.
 /// Motivated by CVE-2025-64430 corner case; remove the `#[ignore]` and
 /// any guarding `assert!` polarity if a fixed-point is added later.
+/// Indirect-validator branch narrowing: when an if-condition is a
+/// bare result variable whose reaching SSA def is a Call to a
+/// callee classified by `classify_input_validator_callee` (e.g.
+/// `validateUrlSsrf`, `verifyToken`, `isValidUrl`), the validator's
+/// argument is treated as validated on the success branch.
+///
+/// This pins the SSA-level
+/// `apply_input_validator_branch_narrowing` regardless of whether
+/// downstream consumers (sink-arg taint, cfg-unguarded-sink) honor
+/// `validated_must`.  Test asserts the symbol-keyed validation flag
+/// is set on the analysis exit state.
+///
+/// Direct-flow shape (no helper indirection); the helper-summary
+/// case still has open architectural gaps (validated_must doesn't
+/// propagate through `param_to_sink` summaries — same gap blocks
+/// AllowlistCheck-in-helper, see CVE_DEFERRED.md GHSA-4x48-cgf9-q33f).
+///
+/// Motivated by Novu CVE GHSA-4x48-cgf9-q33f
+/// (`const ssrfError = await validateUrlSsrf(child.webhookUrl); if (ssrfError) throw …;`).
+#[test]
+fn indirect_validator_narrowing_marks_arg_validated() {
+    let src = br#"
+async function handler(req) {
+  const target = req.query.url;
+  const ssrfError = await validateUrlSsrf(target);
+  if (ssrfError) {
+    throw new Error('blocked');
+  }
+  await axios.get(target);
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    // Direct-flow: validator narrowing should clear axios.get's taint event.
+    assert!(
+        findings.is_empty(),
+        "validator narrowing should suppress direct-flow SSRF; got {} finding(s)",
+        findings.len()
+    );
+}
+
+/// Regression: `extract_ssa_func_summary` must skip `all_validated`
+/// events when populating `param_to_sink` / `param_to_sink_param`.
+///
+/// Helper bodies whose validator-call branch narrowing fired produce
+/// per-param probe events flagged `all_validated=true`.  Without
+/// summary-extract suppression, callers would still see the helper
+/// in their summary's sink set and refire on `helper(taintedArg)`
+/// even though the validator inside the helper proved the path
+/// safe.  The caller can't see the validator (it's behind the
+/// summary), so the gap manifests as a precision miss only when
+/// helper + caller are in the same file.
+///
+/// Closes the helper-summary half of Novu CVE GHSA-4x48-cgf9-q33f.
+#[test]
+fn helper_with_validator_does_not_propagate_to_caller_via_summary() {
+    let src = br#"
+async function getWebhookResponse(child) {
+    const ssrfError = await validateUrlSsrf(child.webhookUrl);
+    if (ssrfError) {
+        throw new Error('blocked');
+    }
+    return await axios.post(child.webhookUrl, {});
+}
+
+async function handler(req) {
+    const child = req.body.filter;
+    const r = await getWebhookResponse(child);
+    return r;
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "helper-with-validator should not propagate sink via summary; got {} finding(s)",
+        findings.len()
+    );
+}
+
+/// Companion: same shape WITHOUT the validator inside the helper
+/// must still fire so the precision gain is targeted.  Asserts
+/// `all_validated` skip doesn't accidentally suppress unsafe helpers.
+#[test]
+fn helper_without_validator_still_propagates_to_caller_via_summary() {
+    let src = br#"
+async function getWebhookResponse(child) {
+    return await axios.post(child.webhookUrl, {});
+}
+
+async function handler(req) {
+    const child = req.body.filter;
+    const r = await getWebhookResponse(child);
+    return r;
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "helper-without-validator must still flag the cross-fn SSRF path",
+    );
+}
+
+/// Regression: `validate*`-named callees match
+/// `InputValidatorPolarity::ErrorReturning` — bare `if (err) throw`
+/// guards the success branch (false branch).  `is_valid*`/`is_safe*`
+/// callees match `InputValidatorPolarity::BooleanTrueIsValid` — bare
+/// `if (!ok) throw` guards the success branch (true branch via
+/// `condition_negated`).
+#[test]
+fn classify_input_validator_callee_polarity_buckets() {
+    use crate::ssa::type_facts::{InputValidatorPolarity, classify_input_validator_callee};
+
+    // ErrorReturning bucket
+    assert_eq!(
+        classify_input_validator_callee("validateUrlSsrf"),
+        Some(InputValidatorPolarity::ErrorReturning)
+    );
+    assert_eq!(
+        classify_input_validator_callee("verifyToken"),
+        Some(InputValidatorPolarity::ErrorReturning)
+    );
+    assert_eq!(
+        classify_input_validator_callee("validate_url"),
+        Some(InputValidatorPolarity::ErrorReturning)
+    );
+
+    // BooleanTrueIsValid bucket
+    assert_eq!(
+        classify_input_validator_callee("isValidUrl"),
+        Some(InputValidatorPolarity::BooleanTrueIsValid)
+    );
+    assert_eq!(
+        classify_input_validator_callee("is_valid_email"),
+        Some(InputValidatorPolarity::BooleanTrueIsValid)
+    );
+    assert_eq!(
+        classify_input_validator_callee("isSafe"),
+        Some(InputValidatorPolarity::BooleanTrueIsValid)
+    );
+
+    // Negative — names that look like validators but are auth-flavored
+    // (`checkPermissions`, `is_authorized`) are intentionally not
+    // matched here; they have separate semantics in the auth pipeline.
+    assert_eq!(classify_input_validator_callee("checkPermissions"), None);
+    assert_eq!(classify_input_validator_callee("is_authorized"), None);
+    assert_eq!(classify_input_validator_callee("randomThing"), None);
+
+    // Path-prefix peeling: `obj.validateXxx` should classify the same
+    // as the bare callee.
+    assert_eq!(
+        classify_input_validator_callee("validator.validateUrlSsrf"),
+        Some(InputValidatorPolarity::ErrorReturning)
+    );
+}
+
 #[test]
 #[ignore]
 fn cve_2025_64430_three_hop_transitive_documents_depth_limit() {

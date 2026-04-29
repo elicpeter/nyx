@@ -708,12 +708,9 @@ fn analyse_body_with_seed(
             } else {
                 Some(static_map)
             };
-            // Pointer-Phase 3 / W1+W2+W3: per-body field-sensitive points-to
-            // facts.  Computed only when `NYX_POINTER_ANALYSIS=1`; the
-            // per-body `analyse_body` cost is amortised across the three
-            // hooks (W1 field-write read-back, W2 container ELEM cells,
-            // W3 cross-call resolver).  Strict-additive: `None` keeps
-            // pointer-disabled behaviour bit-identical.
+            // Per-body field-sensitive points-to facts. Cost is
+            // amortised across field-write read-back, container ELEM
+            // cells, and the cross-call resolver.
             let pointer_facts = if crate::pointer::is_enabled() {
                 Some(crate::pointer::analyse_body(&ssa_body, body.meta.id))
             } else {
@@ -1563,34 +1560,23 @@ pub(crate) fn lower_all_functions_from_bodies(
         perf_lower_record(2, _t_opt.elapsed().as_micros());
 
         let _t_typed = std::time::Instant::now();
-        // Phase 2 (typed call-graph devirtualisation): walk every SSA
-        // method call in this body, look up the receiver SSA value's
-        // [`crate::ssa::type_facts::TypeKind`] in the just-computed
-        // `opt.type_facts`, and record `(call_ordinal, container_name)`
-        // on the matching summary so Phase 3 in `build_call_graph` can
-        // narrow the indirect-method-call edge to the receiver-typed
-        // container.  Free-function calls (`receiver: None`) and
-        // unknown receiver types are silently skipped — the bare-name
-        // resolution path applies unchanged in that case.
+        // For every SSA method call, look up the receiver's TypeKind
+        // and record `(call_ordinal, container_name)` so devirtualisation
+        // in `build_call_graph` can narrow the edge to the receiver-typed
+        // container. Free-function calls and unknown types fall back to
+        // bare-name resolution.
         let typed_receivers = collect_typed_call_receivers(&func_ssa, &body.graph, &opt.type_facts);
         if !typed_receivers.is_empty() {
-            // The summary may not have been inserted above (zero-param,
-            // no-fresh-alloc bodies are skipped).  Force-insert in that
-            // case so the receiver-type info reaches Phase 3 — without
-            // it, the cross-file devirtualisation signal would be lost
-            // for any method invoked inside a parameterless caller.
+            // Zero-param/no-fresh-alloc bodies are skipped above;
+            // force-insert so receiver-type info still reaches
+            // build_call_graph.
             let entry = summaries.entry(key.clone()).or_default();
             entry.typed_call_receivers = typed_receivers;
         }
 
-        // Pointer-Phase 5 / W3: populate `field_points_to` from the
-        // body's pointer facts when the analysis is enabled.  Strict
-        // opt-in via `NYX_POINTER_ANALYSIS=1`; off-by-default keeps
-        // bit-for-bit identity with the pre-W3 behaviour.
-        //
-        // `extract_field_points_to` covers both reads (via
-        // `SsaOp::FieldProj` walks) and writes (via the W1
-        // `field_writes` side-table on the body) in a single pass.
+        // Populate `field_points_to` from the body's pointer facts.
+        // `extract_field_points_to` covers both reads (FieldProj walks)
+        // and writes (`field_writes` side-table) in one pass.
         if crate::pointer::is_enabled() {
             let facts = crate::pointer::analyse_body(&func_ssa, body.meta.id);
             let fpt = crate::pointer::extract_field_points_to(&func_ssa, &facts);

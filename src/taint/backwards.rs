@@ -276,7 +276,7 @@ pub fn backward_transfer(
         SsaOp::FieldProj { receiver, .. } => {
             // Field projection: demand for `obj.f` flows to `obj`.  Treated
             // structurally like a single-operand Assign for the backwards
-            // walk — sufficient until Phase 4 introduces field-sensitive
+            // walk — sufficient until future passes will introduce field-sensitive
             // demand discrimination.
             let mut next: SmallVec<[(SsaValue, DemandState); 4]> = SmallVec::new();
             next.push((*receiver, demand.clone()));

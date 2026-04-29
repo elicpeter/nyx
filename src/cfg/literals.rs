@@ -353,6 +353,112 @@ fn subtree_has_interpolation(n: Node) -> bool {
     n.named_children(&mut cursor).any(subtree_has_interpolation)
 }
 
+/// Walk a JS/TS method-chain receiver-side to find an inner `call_expression`
+/// whose member-property name matches one of `target_methods` (e.g. `query`,
+/// `execute`).  Returns the `(kind, has_interp)` of that inner call's arg 0.
+///
+/// Used to recognise ORM-accessor chains where a labelled SQL sink sits on
+/// the receiver side of a parameterised execute method:
+/// `strapi.db.query('admin::api-token').findOne({...})`.  The outer call
+/// (`findOne`) is the CFG node; the inner labelled `db.query` call carries
+/// the literal model UID that proves the chain is parameterised.
+///
+/// Conservative: returns `None` when no matching inner call is found, so
+/// callers fall through to the no-suppression path.
+pub(super) fn js_chain_arg0_kind_for_method(
+    expr: Node,
+    target_methods: &[&str],
+    code: &[u8],
+) -> Option<(String, bool)> {
+    let n = unwrap_parens(expr);
+    // tree-sitter-typescript / -javascript: call_expression with fields
+    // `function` (member_expression / identifier) and `arguments`.
+    if n.kind() == "call_expression" {
+        // Check this call's callee: if its property name (or full text) ends
+        // with one of `target_methods`, this is the inner labelled call.
+        if let Some(function) = n.child_by_field_name("function") {
+            // Property of a member_expression; falls back to the function
+            // text itself for bare-identifier calls.
+            let prop_text = function
+                .child_by_field_name("property")
+                .and_then(|p| text_of(p, code));
+            let full_text = text_of(function, code);
+            let leaf_text = full_text
+                .as_ref()
+                .map(|s| s.rsplit('.').next().unwrap_or(s).to_string());
+            let matched = target_methods.iter().any(|m| {
+                prop_text.as_deref() == Some(*m)
+                    || leaf_text.as_deref() == Some(*m)
+                    || full_text.as_deref() == Some(*m)
+                    || full_text.as_deref().is_some_and(|s| s.ends_with(&format!(".{m}")))
+            });
+            if matched {
+                return arg0_kind_and_interpolation(n);
+            }
+            // Drill down the receiver spine: function.object is the prior
+            // call in the chain.
+            if let Some(object) = function.child_by_field_name("object")
+                && let Some(found) = js_chain_arg0_kind_for_method(object, target_methods, code)
+            {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Walk the receiver chain of a JS/TS call to count *non-execute* method
+/// calls between the outer call and an inner labelled call to
+/// `target_inner` (e.g. `query`, `execute`).  Returns the immediate outer
+/// chain method name (e.g. `findOne`) when an inner-call to `target_inner`
+/// exists somewhere on the receiver spine, otherwise `None`.
+///
+/// Used alongside [`js_chain_arg0_kind_for_method`] to verify the chain
+/// shape `<inner>.query(LITERAL).<orm_method>(...)` — bare
+/// `connection.query("SELECT ...")` returns `None` because there is no
+/// outer chain method.
+pub(super) fn js_chain_outer_method_for_inner<'a>(
+    outer: Node<'a>,
+    target_inner: &[&str],
+    code: &'a [u8],
+) -> Option<String> {
+    let n = unwrap_parens(outer);
+    if n.kind() != "call_expression" {
+        return None;
+    }
+    let function = n.child_by_field_name("function")?;
+    let object = function.child_by_field_name("object")?;
+    // If `object` itself is a call_expression whose property matches
+    // `target_inner`, the immediate outer is `function.property`.
+    if object.kind() == "call_expression" {
+        let inner_function = object.child_by_field_name("function");
+        if let Some(inner_function) = inner_function {
+            let prop_text = inner_function
+                .child_by_field_name("property")
+                .and_then(|p| text_of(p, code));
+            let full_text = text_of(inner_function, code);
+            let leaf_text = full_text
+                .as_ref()
+                .map(|s| s.rsplit('.').next().unwrap_or(s).to_string());
+            let inner_matched = target_inner.iter().any(|m| {
+                prop_text.as_deref() == Some(*m)
+                    || leaf_text.as_deref() == Some(*m)
+                    || full_text.as_deref() == Some(*m)
+                    || full_text.as_deref().is_some_and(|s| s.ends_with(&format!(".{m}")))
+            });
+            if inner_matched {
+                return function
+                    .child_by_field_name("property")
+                    .and_then(|p| text_of(p, code).map(|s| s.to_string()));
+            }
+        }
+        // Recurse: outer chain may have more depth (`a.b().c().d()` —
+        // d is outermost, c is next, target may be at b or further in).
+        return js_chain_outer_method_for_inner(object, target_inner, code);
+    }
+    None
+}
+
 /// For a chained method call (`a.b().c().d()`), walk down the receiver
 /// chain (`function.object`) and return the innermost call_expression
 /// alongside its callee text (e.g. `"http.get"`).

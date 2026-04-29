@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 433
+    "corpus_size": 453
   },
   "cases": [
     {
@@ -8395,6 +8395,35 @@
       "notes": "Prisma $queryRawUnsafe \u2014 TS-specific ORM sink"
     },
     {
+      "case_id": "ts-sqli-003",
+      "file": "typescript/sqli/sqli_db_query_concat.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "sqli",
+        "real-repo-precision-2026-04-29",
+        "regression-guard"
+      ],
+      "disabled": false,
+      "notes": "Vulnerable counterpart for ts-safe-017 \u2014 bare `connection.query(`SELECT...`)` and chained `db.query(SQL).then(...)` (Promise method, not ORM accessor) must still fire as SQL_QUERY sinks even after the ORM-chain recogniser landed."
+    },
+    {
       "case_id": "ts-cmdi-001",
       "file": "typescript/cmdi/cmdi_exec_template.ts",
       "language": "typescript",
@@ -9561,6 +9590,72 @@
       "notes": "CVE-2023-26159 patched counterpart: URL allowlist check guards axios.get; regression guard that Nyx does not refire on the fix"
     },
     {
+      "case_id": "cve-ts-ghsa-4x48-cgf9-q33f-vulnerable",
+      "file": "cve_corpus/typescript/GHSA-4x48-cgf9-q33f/vulnerable.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          51,
+          51
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          50,
+          50
+        ]
+      ],
+      "tags": [
+        "cve",
+        "novu",
+        "ssrf",
+        "vulnerable"
+      ],
+      "disabled": false,
+      "notes": "GHSA-4x48-cgf9-q33f: Novu conditions-filter webhook bypassed validateUrlSsrf; raw axios.post(child.webhookUrl) is the cross-function SSRF sink. MIT-licensed libs/application-generic package."
+    },
+    {
+      "case_id": "cve-ts-ghsa-4x48-cgf9-q33f-patched",
+      "file": "cve_corpus/typescript/GHSA-4x48-cgf9-q33f/patched.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "novu",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "GHSA-4x48-cgf9-q33f patched: validateUrlSsrf(child.webhookUrl) followed by `if (ssrfError) throw` guards the axios.post call; regression guard for the indirect-validator branch narrowing + summary all_validated propagation."
+    },
+    {
       "case_id": "cve-py-2017-18342-vulnerable",
       "file": "cve_corpus/python/CVE-2017-18342/vulnerable.py",
       "language": "python",
@@ -9628,6 +9723,144 @@
       ],
       "disabled": false,
       "notes": "CVE-2017-18342 patched counterpart: yaml.safe_load replaces yaml.load; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-py-2025-69662-vulnerable",
+      "file": "cve_corpus/python/CVE-2025-69662/vulnerable.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "sql_injection",
+      "cwe": "CWE-89",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.sqli.text_format"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          43,
+          44
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          35,
+          35
+        ]
+      ],
+      "tags": [
+        "cve",
+        "geopandas",
+        "sql_injection",
+        "flask",
+        "sqlalchemy"
+      ],
+      "disabled": false,
+      "notes": "CVE-2025-69662: geopandas to_postgis() interpolated GeoDataFrame's geometry column name into Find_SRID probe via f-string; SQL injection on user-uploaded layer. BSD-3-Clause"
+    },
+    {
+      "case_id": "cve-py-2025-69662-patched",
+      "file": "cve_corpus/python/CVE-2025-69662/patched.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.sqli.text_format",
+        "py.sqli.execute_format",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "geopandas",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2025-69662 patched counterpart: text(...).bindparams() replaces f-string interpolation; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-py-2026-33626-vulnerable",
+      "file": "cve_corpus/python/CVE-2026-33626/vulnerable.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          49,
+          49
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          43,
+          43
+        ]
+      ],
+      "tags": [
+        "cve",
+        "lmdeploy",
+        "ssrf",
+        "flask",
+        "requests"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-33626: LMDeploy vision-language image loader fetched user-supplied URLs via requests.Session().get without private-IP guard; SSRF / cloud-metadata exfil. Apache-2.0"
+    },
+    {
+      "case_id": "cve-py-2026-33626-patched",
+      "file": "cve_corpus/python/CVE-2026-33626/patched.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "lmdeploy",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-33626 patched counterpart: _is_safe_url private-IP allowlist gate replaces scheme-only check; regression guard that Nyx does not refire on the fix"
     },
     {
       "case_id": "cve-php-2017-9841-vulnerable",
@@ -10693,6 +10926,147 @@
       ],
       "disabled": false,
       "notes": "CVE-2017-12629 patched counterpart: transformer name allowlist + in-process secure TransformerFactory removes the Runtime.exec path; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-java-2022-1471-vulnerable",
+      "file": "cve_corpus/java/CVE-2022-1471/vulnerable.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "deserialization",
+      "cwe": "CWE-502",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "java.deser.snakeyaml_unsafe_constructor"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          38,
+          38
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          34,
+          34
+        ]
+      ],
+      "tags": [
+        "cve",
+        "snakeyaml",
+        "deserialization",
+        "servlet"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-1471: SnakeYAML <2.0 default Constructor accepts arbitrary class tags (`!!javax.script.ScriptEngineManager`, `!!java.net.URLClassLoader`, ...) reaching RCE on apps that load attacker-controlled YAML. Apache-2.0"
+    },
+    {
+      "case_id": "cve-java-2022-1471-patched",
+      "file": "cve_corpus/java/CVE-2022-1471/patched.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "java.deser.snakeyaml_unsafe_constructor",
+        "java.deser.readobject",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "snakeyaml",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-1471 patched counterpart: explicit SafeConstructor argument restricts the YAML tag handler set to primitives + standard collections; regression guard that Nyx does not refire on the safe form"
+    },
+    {
+      "case_id": "cve-java-2022-42889-vulnerable",
+      "file": "cve_corpus/java/CVE-2022-42889/vulnerable.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "code_exec",
+      "cwe": "CWE-94",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "java.code_exec.text4shell_interpolator"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          40,
+          40
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          35,
+          35
+        ]
+      ],
+      "tags": [
+        "cve",
+        "commons-text",
+        "text4shell",
+        "code-exec",
+        "servlet"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-42889 (Text4Shell): Apache Commons Text 1.5..1.9 StringSubstitutor.createInterpolator() enables script:/dns:/url: lookups; ${script:js:...} reaches the JSR-223 ScriptEngineManager. Apache-2.0"
+    },
+    {
+      "case_id": "cve-java-2022-42889-patched",
+      "file": "cve_corpus/java/CVE-2022-42889/patched.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "java.code_exec.text4shell_interpolator",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "commons-text",
+        "text4shell",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-42889 patched counterpart: substitutor built directly with `new StringSubstitutor()` so the lookup map is empty; ${...} pass-through. No script/dns/url evaluation."
     },
     {
       "case_id": "rs-auth-001",
@@ -12234,6 +12608,89 @@
       "notes": "TS cross-function bool validator; deferred \u2014 same reason as js-safe-016."
     },
     {
+      "case_id": "ts-safe-017",
+      "file": "typescript/safe/safe_strapi_db_query_chain.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-89",
+      "provenance": "real-repo-distilled",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": "NONE",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "real-repo-precision-2026-04-29",
+        "strapi",
+        "orm-chain"
+      ],
+      "disabled": false,
+      "notes": "Strapi-style ORM accessor: `<obj>.db.query(MODEL_UID).<orm_method>(...)`; the `db.query` call's literal model UID + the ORM-method outer chain (findOne/findMany/create/update/delete/count) prove the chain is parameterised. Synthesised same-node Sanitizer(SQL_QUERY) suppresses cfg-unguarded-sink and taint-unsanitised-flow."
+    },
+    {
+      "case_id": "ts-safe-018",
+      "file": "typescript/safe/safe_indirect_validator.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "indirect-validator",
+        "ssrf",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "Indirect-validator branch narrowing — `const err = validateUrlSsrf(target); if (err) throw …;` should suppress the downstream axios.get sink. Pinned by tests/lib::indirect_validator_narrowing_marks_arg_validated."
+    },
+    {
+      "case_id": "ts-safe-019",
+      "file": "typescript/safe/safe_helper_with_validator.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "helper-summary",
+        "ssrf",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "Helper-summary all_validated propagation — when a helper's body validates the param via `validateXxx`, the per-param probe's all_validated event should be skipped during summary extraction so callers don't refire the cross-fn SSRF. Pinned by tests/lib::helper_with_validator_does_not_propagate_to_caller_via_summary."
+    },
+    {
       "case_id": "py-auth-decorator-001",
       "file": "python/safe/safe_login_required_decorator.py",
       "language": "python",
@@ -12898,6 +13355,31 @@
       "notes": "Happy-path `if (!data.error && Array.isArray(...))` and body-mentioning-err do not fire `cfg-error-fallthrough` (website/public/app/core/app.js)"
     },
     {
+      "case_id": "js-safe-realrepo-006",
+      "file": "javascript/safe/safe_localised_gherkin_regex.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "panic-guard",
+        "negative",
+        "real-repo-precision-2026-04-29"
+      ],
+      "disabled": false,
+      "notes": "Panic guard: CodeMirror Gherkin tokenizer ships a long localised regex inside a boolean sub-condition. Naive byte-slice truncation in CFG condition-text (`t[..MAX_CONDITION_TEXT_LEN]`) panicked when byte 256 landed inside a multi-byte UTF-8 character (Gurmukhi `ਖ`). Engine fix: src/utils/snippet.rs::truncate_at_char_boundary applied at three CFG sites + two symex display sites (gogs public/plugins/codemirror-5.17.0/mode/gherkin/gherkin.js:107)."
+    },
+    {
       "case_id": "go-safe-realrepo-001",
       "file": "go/safe/safe_error_log_only_function.go",
       "language": "go",
@@ -13125,6 +13607,33 @@
       ],
       "disabled": false,
       "notes": "`func (c *Cache) ...` with `c.foo()` / `c.Fs.Create(...)` intra-struct dispatches \u2014 Go method receivers must seed `non_sink_vars` so the verb-name fallback doesn't fire on bare-receiver internal calls.  Closes the hugo cache/filecache.go cluster (~48 hits)."
+    },
+    {
+      "case_id": "go-safe-realrepo-006",
+      "file": "go/safe/safe_test_helper_fatal.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-error-fallthrough"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cfg",
+        "negative",
+        "real-repo-precision-2026-04-29"
+      ],
+      "disabled": false,
+      "notes": "`if err != nil { c.Fatalf(...) }` / `os.Exit` / `log.Fatalf` / `panic(err)` are documented terminators (Goexit-class).  cfg-error-fallthrough must walk through them as terminating paths.  Closes the minio test-file cluster (49+34+12+11+9+7+7 hits across xl-storage_test.go, erasure-healing_test.go, format-erasure_test.go, \u2026).  Engine fix: src/cfg_analysis/error_handling.rs::call_never_returns."
     },
     {
       "case_id": "go-auth-realrepo-001",
@@ -13715,6 +14224,120 @@
       ],
       "disabled": false,
       "notes": "Concatenated SQL passed to em.createQuery(...) \u2014 receiver-chain walk sees binary_expression at arg 0, refuses to synthesise sanitizer, structural sink fires. Regression guard for the JPA parameterised-execute fix."
+    },
+    {
+      "case_id": "py-auth-realrepo-005",
+      "file": "python/safe/safe_fastapi_route_dependencies_auth.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "fastapi",
+        "real-repo-precision-2026-04-29"
+      ],
+      "disabled": false,
+      "notes": "Distilled from airflow api_fastapi/core_api/routes/public/connections.py: FastAPI route decorator carries `dependencies=[Depends(requires_access_connection(method=\"DELETE\"))]`; the Flask extractor's new `dependencies=` kwarg walker plus inject_middleware_auth subject synthesis recognises the auth gate."
+    },
+    {
+      "case_id": "py-auth-realrepo-007",
+      "file": "python/safe/safe_fastapi_route_level_row_fetch.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "fastapi",
+        "real-repo-precision-2026-04-29"
+      ],
+      "disabled": false,
+      "notes": "Distilled from airflow api_fastapi/core_api/routes/public/dag_run.py: FastAPI route decorator carries `dependencies=[Depends(requires_access_dag(method=\"GET\"))]`; the route-level guard must cover not only direct path-param subjects (filter_by(dag_id=dag_id)) but also row-variable receivers (`dag.cleanup_runs(...)` after `dag = session.scalar(select(DagModel)...)`).  Pinned by the `is_route_level` short-circuit in `auth_check_covers_subject` plus the kind-aware `function_params_route_handler` that includes id-like Python typed params (`dag_id: str`) in `unit.params`."
+    },
+    {
+      "case_id": "py-auth-realrepo-006",
+      "file": "python/safe/safe_pytest_sqlalchemy_session.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.auth.missing_ownership_check",
+        "py.auth.token_override_without_validation"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "pytest",
+        "real-repo-precision-2026-04-29"
+      ],
+      "disabled": false,
+      "notes": "Distilled from airflow tests/unit/models/test_backfill.py: pytest test methods with SQLAlchemy `session` fixture and `session.commit()` calls.  Bare `session.<sqlalchemy_verb>` no longer counts as auth Session evidence; only `session.<identity_field>` (user/user_id/...) does."
+    },
+    {
+      "case_id": "py-auth-realrepo-007",
+      "file": "python/auth/vuln_fastapi_route_no_dependencies.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          15,
+          15
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "fastapi",
+        "real-repo-precision-2026-04-29"
+      ],
+      "disabled": false,
+      "notes": "Vulnerable counterpart to py-auth-realrepo-005: same FastAPI route shape but no `dependencies=[Depends(...)]` keyword arg.  Regression guard: the dependency-injection recogniser must not blanket-suppress every FastAPI route."
     }
   ]
 }

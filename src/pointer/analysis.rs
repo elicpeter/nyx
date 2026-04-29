@@ -1,33 +1,8 @@
 //! Field-sensitive Steensgaard points-to analysis driver.
 //!
-//! Walks the SSA body once per fixpoint pass, emitting equality
-//! constraints for each instruction.  The constraints are resolved
-//! via standard union-find with path compression and union-by-rank;
-//! propagation through `FieldProj` requires a worklist because the
-//! representative of a receiver may change after the field projection
-//! is first visited.
-//!
-//! The analysis is flow-insensitive (Steensgaard) — every assignment
-//! that joins two values unifies their points-to sets across the
-//! entire body.  Field sensitivity is recovered by representing each
-//! `obj.f` access as a structural [`AbsLoc::Field`] location with a
-//! distinct identity per `(parent_loc, field)` pair.
-//!
-//! ## Phase 1 scope
-//!
-//! - Field READS via [`SsaOp::FieldProj`] — sufficient for Phase 2's
-//!   resource-lifecycle attribution fix (the gin/`context.go` proxy
-//!   acquire FP).
-//! - Param/SelfParam → fresh caller-relative locations.
-//! - Phi/Assign → Steensgaard unification.
-//! - Call results → fresh allocation-site locations (one per call
-//!   instruction, keyed by SSA value).
-//! - Source/Const/Nop/Undef → empty (scalars don't reach the heap).
-//!
-//! Field WRITES land in Phase 3 alongside the cross-method field-flow
-//! consumer; they require careful handling of the synthetic
-//! base-update `Assign` instructions emitted by SSA lowering and are
-//! not load-bearing for Phase 1's "no behaviour change" gate.
+//! Flow-insensitive union-find over SSA values; field sensitivity comes
+//! from representing each `obj.f` access as a structural
+//! [`AbsLoc::Field`] keyed by `(parent_loc, field)`.
 
 use std::collections::HashMap;
 
@@ -41,13 +16,9 @@ use super::domain::{AbsLoc, LOC_TOP, LocId, LocInterner, PointsToSet, PtrProxyHi
 /// in a small number of passes for any well-formed body.
 const MAX_FIXPOINT_ITERS: usize = 8;
 
-/// Pointer-Phase 4: container-read callees that pull a single element
-/// out of a collection without indexing through a key.  Recognised
-/// across the languages nyx supports as a cross-cut surface — exact
-/// per-language specialisation is intentionally skipped for the
-/// minimum-viable rollout.  The receiver-side projection through
-/// [`FieldId::ELEM`] is conservative: a callee not in this list still
-/// gets the existing fresh-alloc behaviour and does not lose precision.
+/// Container-read callees that pull a single element out of a
+/// collection without a key.  Cross-language; non-listed callees still
+/// get fresh-alloc behaviour, so the list is conservative.
 fn is_container_read_callee(callee: &str) -> bool {
     let bare = match callee.rsplit_once('.') {
         Some((_, m)) => m,
@@ -67,19 +38,12 @@ fn is_container_read_callee(callee: &str) -> bool {
             | "dequeue"
             | "remove"
             | "popleft"
-            // Pointer-Phase 6 / W5: synthetic callee emitted by CFG
-            // lowering for subscript / index-expression reads
-            // (`arr[i]`, `map[k]`, `cmds[0]`).
+            // synthetic callee for subscript reads (`arr[i]`, `map[k]`)
             | "__index_get__"
     )
 }
 
-/// Pointer-Phase 4: container-write callees that store an element into
-/// a collection.  Mirror of [`is_container_read_callee`].  The pointer
-/// analysis itself doesn't track stored values (the Steensgaard
-/// receiver/result aliasing already covers the common cases), but the
-/// helper is exposed so the taint engine's ELEM-cell write hook can
-/// share a single classifier with the points-to pass.
+/// Container-write callees — mirror of [`is_container_read_callee`].
 pub fn is_container_write_callee(callee: &str) -> bool {
     let bare = match callee.rsplit_once('.') {
         Some((_, m)) => m,
@@ -97,21 +61,18 @@ pub fn is_container_write_callee(callee: &str) -> bool {
             | "insert"
             | "enqueue"
             | "unshift"
-            // Pointer-Phase 6 / W5: synthetic callee emitted by CFG
-            // lowering for subscript / index-expression writes
-            // (`arr[i] = v`, `map[k] = v`).
+            // synthetic callee for subscript writes (`arr[i] = v`, `map[k] = v`)
             | "__index_set__"
     )
 }
 
-/// Pointer-Phase 4: callee-name aware container-read recognition.
-/// Public for unit tests + reuse from the taint engine.
+/// Public re-export of [`is_container_read_callee`] for the taint engine.
 pub fn is_container_read_callee_pub(callee: &str) -> bool {
     is_container_read_callee(callee)
 }
 
-/// Pointer-Phase 5: derive a [`crate::summary::points_to::FieldPointsToSummary`]
-/// from per-body points-to facts.
+/// Derive a [`crate::summary::points_to::FieldPointsToSummary`] from
+/// per-body points-to facts.
 ///
 /// Records two channels:
 ///
@@ -288,11 +249,6 @@ impl PointsToFacts {
     /// [`PtrProxyHint::FieldOnly`] iff every member is an
     /// [`AbsLoc::Field`].
     ///
-    /// Phase 2 consumer: the resource-lifecycle proxy attribution in
-    /// `state::transfer.rs` uses `FieldOnly` to recognise locals like
-    /// `m` in `m := c.mu` and route the proxy entry through
-    /// `chain_proxies` instead of marking the local as a leakable
-    /// SymbolId-keyed resource.
     pub fn proxy_hint(&self, v: SsaValue) -> PtrProxyHint {
         let set = self.pt(v);
         if set.is_empty() || set.is_top() {
@@ -494,7 +450,7 @@ impl AnalysisState {
             SsaOp::Call {
                 callee, receiver, ..
             } => {
-                // Pointer-Phase 4: container element retrieval ops
+                // container element retrieval ops
                 // (`shift`, `pop`, `peek`, `front`, …) project through
                 // the abstract `Field(pt(receiver), ELEM)` cell so
                 // per-element taint flows independently of the SSA
@@ -929,12 +885,10 @@ mod tests {
         assert!(facts.is_trivial());
         assert_eq!(facts.len(), 0);
 
-        // Suppress unused-import warning for `Cfg` — it's exposed for
-        // future Phase 1.b tests that need a real CFG.
         let _ = std::marker::PhantomData::<Cfg>;
     }
 
-    /// Pointer-Phase 2 contract pin: a value defined by a `FieldProj`
+    /// Contract pin: a value defined by a `FieldProj`
     /// classifies as [`PtrProxyHint::FieldOnly`].  Consumed by the
     /// resource-lifecycle pass to recognise field-aliased locals.
     #[test]
@@ -965,7 +919,7 @@ mod tests {
         assert_eq!(facts.proxy_hint(c), crate::pointer::PtrProxyHint::Other);
     }
 
-    /// Pointer-Phase 4: container-read callee classifier covers a
+    /// container-read callee classifier covers a
     /// representative sample across nyx's languages.  Pinned because
     /// the taint engine relies on the same classifier.
     #[test]
@@ -992,7 +946,7 @@ mod tests {
         }
     }
 
-    /// Pointer-Phase 4: container-write classifier (mirror).
+    /// container-write classifier (mirror).
     #[test]
     fn container_write_callee_classifier() {
         for c in [
@@ -1014,7 +968,7 @@ mod tests {
         }
     }
 
-    /// Pointer-Phase 4: a `Call("shift", receiver=container)` projects
+    /// a `Call("shift", receiver=container)` projects
     /// `Field(pt(container), ELEM)` into the result, alongside the
     /// fresh allocation site that fall-back paths still emit.
     #[test]
@@ -1055,7 +1009,7 @@ mod tests {
         );
     }
 
-    /// Pointer-Phase 5: `extract_field_points_to` records a field
+    /// `extract_field_points_to` records a field
     /// READ on the parameter index when a `FieldProj` traces back to
     /// an `AbsLoc::Param`.
     #[test]
@@ -1088,7 +1042,7 @@ mod tests {
         assert!(entry.1.iter().any(|s| s == "name"));
     }
 
-    /// Pointer-Phase 5 / W3: `extract_field_points_to` records field
+    /// `extract_field_points_to` records field
     /// WRITES from the body's `field_writes` side-table populated by
     /// SSA lowering.  A synth Assign whose receiver traces back to
     /// `AbsLoc::Param` produces a `param_field_writes` entry.
@@ -1124,7 +1078,7 @@ mod tests {
         );
     }
 
-    /// Pointer-Phase 5 / W3: writes through the receiver (`this.f =
+    /// writes through the receiver (`this.f =
     /// rhs`) are recorded under the same `u32::MAX` sentinel as
     /// reads.
     #[test]
@@ -1151,7 +1105,7 @@ mod tests {
         assert!(entry.1.iter().any(|s| s == "cache"));
     }
 
-    /// Pointer-Phase 5 / W3: container-element writes (`<elem>`
+    /// container-element writes (`<elem>`
     /// marker) flow through the same channel as named-field writes
     /// when the synth Assign carries `FieldId::ELEM`.
     #[test]
@@ -1180,7 +1134,7 @@ mod tests {
         );
     }
 
-    /// Pointer-Phase 5: receiver projections are recorded under the
+    /// receiver projections are recorded under the
     /// `u32::MAX` sentinel parameter index (mirror of
     /// `SsaFuncSummary::receiver_to_*`).
     #[test]
