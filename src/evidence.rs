@@ -301,7 +301,15 @@ pub fn compute_confidence(diag: &Diag) -> Confidence {
 
     let id = &diag.id;
 
-    let base = if id.starts_with("taint-") {
+    let base = if id.starts_with("taint-data-exfiltration") {
+        // DATA_EXFIL is calibrated independently from the generic taint path:
+        // the value at risk is the leak of an *already-sensitive* source, not
+        // the construction of an attacker payload, so the points-based scoring
+        // tuned for code-exec / SSRF / SQLi over-credits these findings.  Route
+        // to a narrower decision tree that asks "did we corroborate a real
+        // string body leaving the process?" instead.
+        compute_data_exfil_confidence(diag)
+    } else if id.starts_with("taint-") {
         compute_taint_confidence(diag)
     } else if id.starts_with("state-") {
         match id.as_str() {
@@ -456,6 +464,55 @@ fn compute_taint_confidence(diag: &Diag) -> Confidence {
         2..=4 => Confidence::Medium,
         _ => Confidence::Low,
     }
+}
+
+/// Confidence routing for `taint-data-exfiltration` findings.
+///
+/// The generic taint scorer ranks DATA_EXFIL too aggressively: a Sensitive
+/// source plus a sink call is enough to push it into the Medium/High band,
+/// but the leak class needs corroboration that a real string body actually
+/// leaves the process (otherwise we surface every `fetch(..., {body: x})`
+/// where `x` happens to be Sensitive-tagged).  This routing is deliberately
+/// capped at Medium and only fires Medium when the abstract / symbolic
+/// domain confirmed a string body.
+///
+/// Routing:
+///   * Source < Sensitive → Low (caller already strips DATA_EXFIL for
+///     Plain sources, but defensively floor here).
+///   * Symbolic verdict `Confirmed` → Medium (abstract domain produced a
+///     witness that a tainted string reaches the body argument).
+///   * Symbolic verdict `Inconclusive` / `NotAttempted` / no symbolic
+///     analysis → Low (instruction's "Inconclusive" tier; the `Confidence`
+///     enum has no separate Inconclusive variant so it floors to Low).
+///   * Symbolic verdict `Infeasible` → Low (path proven dead).
+fn compute_data_exfil_confidence(diag: &Diag) -> Confidence {
+    let ev = match &diag.evidence {
+        Some(e) => e,
+        None => return Confidence::Low,
+    };
+
+    let is_sensitive = ev
+        .source_kind
+        .map(|k| k.sensitivity() >= crate::labels::Sensitivity::Sensitive)
+        .unwrap_or(false);
+    if !is_sensitive {
+        return Confidence::Low;
+    }
+
+    let mut base = match ev.symbolic.as_ref().map(|s| s.verdict) {
+        Some(Verdict::Confirmed) => Confidence::Medium,
+        Some(Verdict::Infeasible) => Confidence::Low,
+        Some(Verdict::Inconclusive) | Some(Verdict::NotAttempted) | None => Confidence::Low,
+    };
+
+    // Guarded flow: drop a tier.  A validation predicate on the path means
+    // the leak may be unreachable in practice, so the corroborated witness
+    // is downgraded one step (Medium → Low; Low stays Low).
+    if diag.path_validated && base > Confidence::Low {
+        base = Confidence::Low;
+    }
+
+    apply_engine_notes_cap(diag, base)
 }
 
 /// Score a structured `SourceKind` value.

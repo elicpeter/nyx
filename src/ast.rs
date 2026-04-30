@@ -412,11 +412,13 @@ fn build_taint_diag(
         }
     }
 
+    let is_data_exfil_rule = effective_caps.contains(crate::labels::Cap::DATA_EXFIL)
+        && !effective_caps.contains(crate::labels::Cap::SSRF)
+        && !effective_caps.contains(crate::labels::Cap::UNAUTHORIZED_ID);
+
     let diag_id = if effective_caps.contains(crate::labels::Cap::UNAUTHORIZED_ID) {
         "rs.auth.missing_ownership_check.taint".to_string()
-    } else if effective_caps.contains(crate::labels::Cap::DATA_EXFIL)
-        && !effective_caps.contains(crate::labels::Cap::SSRF)
-    {
+    } else if is_data_exfil_rule {
         format!(
             "taint-data-exfiltration (source {}:{})",
             source_point.row + 1,
@@ -430,11 +432,35 @@ fn build_taint_diag(
         )
     };
 
+    // DATA_EXFIL severity calibration (Phase: detector ranking).
+    //
+    // Generic taint severity comes from `severity_for_source_kind`, which
+    // maps Cookie/Header/Env to High because those sources are spicy
+    // *as taint roots*.  For `DATA_EXFIL` we are scoring the leak class,
+    // not the source itself: not every Sensitive-tier source is a Secret.
+    // Cookies and env carry credential / session material whose leakage
+    // is an immediate disclosure (Secret-tier); request headers, file
+    // reads, db rows, and caught exceptions are Sensitive but not
+    // automatically secret, so they downgrade to Medium.  Plain user
+    // input is already stripped above by the source-sensitivity gate, so
+    // the `_` arm here is reached only by Sensitive sources that are not
+    // explicit secrets.
+    let severity = if is_data_exfil_rule {
+        match finding.source_kind {
+            crate::labels::SourceKind::Cookie | crate::labels::SourceKind::EnvironmentConfig => {
+                crate::patterns::Severity::High
+            }
+            _ => crate::patterns::Severity::Medium,
+        }
+    } else {
+        severity_for_source_kind(finding.source_kind)
+    };
+
     let mut diag = Diag {
         path: primary_path.clone(),
         line: primary_line,
         col: primary_col,
-        severity: severity_for_source_kind(finding.source_kind),
+        severity,
         id: diag_id,
         category: FindingCategory::Security,
         path_validated: finding.path_validated,
