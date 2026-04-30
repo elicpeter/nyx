@@ -320,6 +320,7 @@ static GATED_REGISTRY: Lazy<HashMap<&'static str, &'static [SinkGate]>> = Lazy::
     m.insert("ts", typescript::GATED_SINKS);
     m.insert("python", python::GATED_SINKS);
     m.insert("py", python::GATED_SINKS);
+    m.insert("go", go::GATED_SINKS);
     m
 });
 
@@ -1557,26 +1558,73 @@ mod tests {
     // CVE Hunt Session 2 (Go CVE-2023-3188 Owncast SSRF):
     // `http.DefaultClient.Get/Post/Head/Do/PostForm` is the idiomatic Go
     // SSRF sink shape (`http.DefaultClient` is the package-level shared
-    // `*http.Client`). Bare `Get`/`Post` matchers would over-match
-    // unrelated method names; the explicit `http.DefaultClient.*` matcher
-    // restricts the suffix-match to the stdlib helper while leaving
-    // user-defined `myClient.Get` alone (no false positives).
+    // `*http.Client`).  These callees migrated from a flat `Sink(SSRF)`
+    // rule to destination-aware gated sinks so that DATA_EXFIL gates can
+    // coexist on the same callee (e.g. `http.DefaultClient.Post(url, _,
+    // body)` carries SSRF on arg 0 and DATA_EXFIL on arg 2).  The
+    // assertions below check the gate registration rather than the flat
+    // classifier output.
     #[test]
-    fn classify_go_http_default_client_get_is_ssrf_sink() {
-        let result = classify("go", "http.DefaultClient.Get", None);
-        assert_eq!(result, Some(DataLabel::Sink(Cap::SSRF)));
+    fn classify_go_http_default_client_get_is_ssrf_gate() {
+        let no_kw = |_: &str| None;
+        let no_kw_present = |_: &str| false;
+        let result = classify_gated_sink(
+            "go",
+            "http.DefaultClient.Get",
+            |_| None,
+            no_kw,
+            no_kw_present,
+        );
+        assert!(
+            result
+                .iter()
+                .any(|m| m.label == DataLabel::Sink(Cap::SSRF)),
+            "expected SSRF gate match, got {result:?}"
+        );
     }
 
     #[test]
-    fn classify_go_http_default_client_post_is_ssrf_sink() {
-        let result = classify("go", "http.DefaultClient.Post", None);
-        assert_eq!(result, Some(DataLabel::Sink(Cap::SSRF)));
+    fn classify_go_http_default_client_post_is_ssrf_and_data_exfil_gate() {
+        let no_kw = |_: &str| None;
+        let no_kw_present = |_: &str| false;
+        let result = classify_gated_sink(
+            "go",
+            "http.DefaultClient.Post",
+            |_| None,
+            no_kw,
+            no_kw_present,
+        );
+        assert!(
+            result
+                .iter()
+                .any(|m| m.label == DataLabel::Sink(Cap::SSRF)),
+            "expected SSRF gate match, got {result:?}"
+        );
+        assert!(
+            result
+                .iter()
+                .any(|m| m.label == DataLabel::Sink(Cap::DATA_EXFIL)),
+            "expected DATA_EXFIL gate match, got {result:?}"
+        );
     }
 
     #[test]
-    fn classify_go_http_default_client_do_is_ssrf_sink() {
-        let result = classify("go", "http.DefaultClient.Do", None);
-        assert_eq!(result, Some(DataLabel::Sink(Cap::SSRF)));
+    fn classify_go_http_default_client_do_is_data_exfil_gate() {
+        let no_kw = |_: &str| None;
+        let no_kw_present = |_: &str| false;
+        let result = classify_gated_sink(
+            "go",
+            "http.DefaultClient.Do",
+            |_| None,
+            no_kw,
+            no_kw_present,
+        );
+        assert!(
+            result
+                .iter()
+                .any(|m| m.label == DataLabel::Sink(Cap::DATA_EXFIL)),
+            "expected DATA_EXFIL gate match, got {result:?}"
+        );
     }
 
     #[test]
