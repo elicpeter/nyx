@@ -5563,8 +5563,63 @@ fn collect_block_events(
         // loop with the legacy `(sink_caps, info.call.sink_payload_args,
         // info.call.destination_uses)` triple, preserving prior behavior
         // for every non-multi-gate site.
+        //
+        // Cross-file wrapper case: when the resolved callee summary carries
+        // [`SinkInfo::param_to_gate_filters`] (the wrapper's body contains
+        // an inner multi-gate sink whose per-position cap split was lifted
+        // at extraction time), expand one filter pass per `(param_idx,
+        // label_caps)` entry restricted to that single arg position.  This
+        // preserves SSRF-vs-DATA_EXFIL attribution across a
+        // `fn forward(url, body) { fetch(url, {body}) }` wrapper that is
+        // NOT itself a known gated sink.
+        //
+        // Params NOT covered by `param_to_gate_filters` retain coverage
+        // via their `param_to_sink` entry, expanded per-position so the
+        // emitted event's `sink_caps` reflects the param-specific cap
+        // mask rather than the aggregate union.  This matters for
+        // wrappers that mix gated sinks with label-based sinks
+        // (e.g. `fn dispatch(cmd, url) { execSync(cmd); fetch(url) }`),
+        // where param 0 reaches a non-gated SHELL_ESCAPE sink and the
+        // gate-filter list only carries the SSRF gate for param 1.
         let multi_gate = info.call.gate_filters.len() > 1;
+        let summary_per_position =
+            !multi_gate && !sink_info.param_to_gate_filters.is_empty();
         type FilterEntry<'a> = (Cap, Option<&'a [usize]>, Option<&'a [String]>);
+        // Per-position dispatch source for the summary-per-position branch.
+        // First, every entry from `param_to_gate_filters` (cap-narrowed by
+        // the inner gate); then, for any param_to_sink index NOT mentioned
+        // in `param_to_gate_filters`, an entry using that param's
+        // `param_to_sink` cap mask.
+        struct PerPosEntry {
+            idx: [usize; 1],
+            caps: Cap,
+        }
+        let per_position_entries: Vec<PerPosEntry> = if summary_per_position {
+            let mut out: Vec<PerPosEntry> =
+                Vec::with_capacity(sink_info.param_to_gate_filters.len());
+            for (idx, caps) in &sink_info.param_to_gate_filters {
+                out.push(PerPosEntry {
+                    idx: [*idx],
+                    caps: *caps,
+                });
+            }
+            for (idx, caps) in &sink_info.param_to_sink {
+                if sink_info
+                    .param_to_gate_filters
+                    .iter()
+                    .any(|(i, _)| *i == *idx)
+                {
+                    continue;
+                }
+                out.push(PerPosEntry {
+                    idx: [*idx],
+                    caps: *caps,
+                });
+            }
+            out
+        } else {
+            Vec::new()
+        };
         let filter_iter: smallvec::SmallVec<[FilterEntry<'_>; 2]> = if multi_gate {
             info.call
                 .gate_filters
@@ -5576,6 +5631,11 @@ fn collect_block_events(
                         f.destination_uses.as_deref(),
                     )
                 })
+                .collect()
+        } else if summary_per_position {
+            per_position_entries
+                .iter()
+                .map(|e| (sink_caps & e.caps, Some(e.idx.as_slice()), None))
                 .collect()
         } else {
             smallvec::smallvec![(sink_caps, None, None)]
@@ -6464,6 +6524,15 @@ struct SinkInfo {
     /// coordinates.  Used to attribute findings to the dangerous
     /// callee-internal instruction.
     param_to_sink_sites: Vec<(usize, SmallVec<[SinkSite; 1]>)>,
+    /// Per-parameter gate-filter cap masks lifted from the callee's
+    /// inner multi-gate sink call sites. Mirrors
+    /// [`crate::summary::ssa_summary::SsaFuncSummary::param_to_gate_filters`].
+    /// When non-empty, the dispatcher in [`collect_block_events`]
+    /// expands one filter pass per `(param_idx, label_caps)` entry so
+    /// a wrapper carrying multiple gate classes (e.g. SSRF on the URL
+    /// arg + DATA_EXFIL on the body arg) attributes findings per cap
+    /// instead of joining them.
+    param_to_gate_filters: Vec<(usize, Cap)>,
 }
 
 fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
@@ -6479,6 +6548,7 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
             caps: label_sink_caps,
             param_to_sink: vec![],
             param_to_sink_sites: vec![],
+            param_to_gate_filters: vec![],
         };
     }
 
@@ -6500,6 +6570,7 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
             caps: r.sink_caps,
             param_to_sink: r.param_to_sink,
             param_to_sink_sites: r.param_to_sink_sites,
+            param_to_gate_filters: r.param_to_gate_filters,
         };
     }
 
@@ -6525,6 +6596,7 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
                 caps: r.sink_caps,
                 param_to_sink: r.param_to_sink,
                 param_to_sink_sites: r.param_to_sink_sites,
+                param_to_gate_filters: r.param_to_gate_filters,
             };
         }
     }
@@ -6533,6 +6605,7 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
         caps: Cap::empty(),
         param_to_sink: vec![],
         param_to_sink_sites: vec![],
+        param_to_gate_filters: vec![],
     }
 }
 
@@ -8026,6 +8099,21 @@ struct ResolvedSummary {
     /// retained; in that case `param_to_sink` alone still drives sink
     /// detection.
     param_to_sink_sites: Vec<(usize, SmallVec<[SinkSite; 1]>)>,
+    /// Per-parameter gate-filter cap masks lifted from the callee's
+    /// inner multi-gate sink call sites.  Mirrors
+    /// [`crate::summary::ssa_summary::SsaFuncSummary::param_to_gate_filters`].
+    ///
+    /// Each `(param_idx, label_caps)` entry says "this caller-side
+    /// parameter flows to a callee-internal gated sink whose narrowed
+    /// caps are `label_caps`".  When non-empty, the multi-gate dispatch
+    /// in [`collect_block_events`] expands one filter pass per entry so
+    /// the emitted event's `sink_caps` reflect the gate-specific cap
+    /// rather than the aggregate union, preserving SSRF-vs-DATA_EXFIL
+    /// (and similar) attribution through wrapper functions.
+    ///
+    /// Empty for label, local-summary, FuncSummary, and interop paths,
+    /// these forms do not retain per-gate cap detail.
+    param_to_gate_filters: Vec<(usize, Cap)>,
     propagates_taint: bool,
     propagating_params: Vec<usize>,
     /// Parameter indices whose container identity flows to return value.
@@ -8229,6 +8317,7 @@ fn resolve_callee_full(
                     param_return_paths: vec![],
                     points_to: Default::default(),
                     field_points_to: Default::default(),
+                    param_to_gate_filters: vec![],
                 });
             }
             // Try label classification for the bound function (by leaf name)
@@ -8270,6 +8359,7 @@ fn resolve_callee_full(
                     param_return_paths: vec![],
                     points_to: Default::default(),
                     field_points_to: Default::default(),
+                    param_to_gate_filters: vec![],
                 });
             }
         }
@@ -8414,6 +8504,7 @@ fn resolve_callee_full(
                 param_return_paths: vec![],
                 points_to: Default::default(),
                 field_points_to: Default::default(),
+                param_to_gate_filters: vec![],
             });
         }
     } else {
@@ -8463,6 +8554,7 @@ fn resolve_callee_full(
             param_return_paths: vec![],
             points_to: Default::default(),
             field_points_to: Default::default(),
+            param_to_gate_filters: vec![],
         };
         match widened.len() {
             0 => {}
@@ -8533,6 +8625,7 @@ fn resolve_callee_full(
                 param_return_paths: vec![],
                 points_to: Default::default(),
                 field_points_to: Default::default(),
+                param_to_gate_filters: vec![],
             });
         }
     }
@@ -8714,6 +8807,7 @@ fn convert_ssa_to_resolved_for_caller(
         param_return_paths: ssa_sum.param_return_paths.clone(),
         points_to: ssa_sum.points_to.clone(),
         field_points_to: ssa_sum.field_points_to.clone(),
+        param_to_gate_filters: ssa_sum.param_to_gate_filters.clone(),
     }
 }
 
@@ -8807,6 +8901,20 @@ fn merge_resolved_summaries_fanout(
             slot.1 |= caps;
         } else {
             acc.source_to_callback.push((idx, caps));
+        }
+    }
+
+    // param_to_gate_filters: dedup-union (idx, caps) pairs.  Each
+    // implementer may carry its own per-position cap split; the union
+    // preserves cap attribution from any implementer reachable via
+    // virtual dispatch.
+    for (idx, caps) in r.param_to_gate_filters {
+        if !acc
+            .param_to_gate_filters
+            .iter()
+            .any(|&(i, c)| i == idx && c == caps)
+        {
+            acc.param_to_gate_filters.push((idx, caps));
         }
     }
 

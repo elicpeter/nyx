@@ -1591,6 +1591,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1659,6 +1660,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1727,6 +1729,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1790,6 +1793,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1853,6 +1857,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -2050,6 +2055,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
 
@@ -2128,6 +2134,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
 
@@ -2207,6 +2214,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
         // Second "send", in ns B, also with same arity → ambiguous bare-name
@@ -2236,6 +2244,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
         // Also register the type-qualified name so Attempt 1 can find it
@@ -2265,6 +2274,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
 
@@ -2343,6 +2353,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
 
@@ -2423,6 +2434,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
         insert_java_summary(
@@ -2451,6 +2463,7 @@ mod tests {
                 field_points_to: Default::default(),
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
+                param_to_gate_filters: vec![],
             },
         );
         // No "HttpClient.send" summary registered, disambiguation has 0 exact matches

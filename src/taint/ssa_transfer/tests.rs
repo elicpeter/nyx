@@ -1550,6 +1550,7 @@ mod fanout_merge_tests {
             param_return_paths: vec![],
             points_to: Default::default(),
             field_points_to: Default::default(),
+            param_to_gate_filters: vec![],
         }
     }
 
