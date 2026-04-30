@@ -224,6 +224,13 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
             "newHttpClient" | "newBuilder" if callee.contains("HttpClient") => {
                 Some(TypeKind::HttpClient)
             }
+            // Apache HttpClient idiomatic factory:
+            // `CloseableHttpClient client = HttpClients.createDefault();`
+            // `HttpClients` contains the substring `HttpClient` so this
+            // doesn't widen to unrelated `createDefault` calls.
+            "createDefault" | "custom" if callee.contains("HttpClient") => {
+                Some(TypeKind::HttpClient)
+            }
             "OkHttpClient" | "WebClient" | "RestTemplate" => Some(TypeKind::HttpClient),
             "getConnection" => Some(TypeKind::DatabaseConnection),
             "MongoClient" => Some(TypeKind::DatabaseConnection),

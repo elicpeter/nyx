@@ -412,9 +412,25 @@ fn build_taint_diag(
         }
     }
 
+    // DATA_EXFIL routing.
+    //
+    // Multi-gate dispatch (JS / Go) emits one event per cap, so by this
+    // point each finding's `effective_sink_caps` carries exactly one bit
+    // and the simple `DATA_EXFIL && !SSRF` test routes correctly.  Flat-
+    // rule paths (Java HTTP clients where type-qualified resolution
+    // attaches both `SSRF` and `DATA_EXFIL` Sink labels to the same call,
+    // e.g. `client.send(req)` covering both URL and body channels of the
+    // request value) produce a single dual-cap event.  In that case the
+    // source's sensitivity tier disambiguates: a Sensitive source
+    // (cookie, header, env, db, session) leaking into an outbound
+    // request is canonically DATA_EXFIL even if the sink also carries
+    // an SSRF label, because operator-bound state is not URL-shaped
+    // attacker input.  Plain user input keeps SSRF routing (the typical
+    // user-controlled-URL pattern).
     let is_data_exfil_rule = effective_caps.contains(crate::labels::Cap::DATA_EXFIL)
-        && !effective_caps.contains(crate::labels::Cap::SSRF)
-        && !effective_caps.contains(crate::labels::Cap::UNAUTHORIZED_ID);
+        && !effective_caps.contains(crate::labels::Cap::UNAUTHORIZED_ID)
+        && (!effective_caps.contains(crate::labels::Cap::SSRF)
+            || finding.source_kind.sensitivity() >= crate::labels::Sensitivity::Sensitive);
 
     let diag_id = if effective_caps.contains(crate::labels::Cap::UNAUTHORIZED_ID) {
         "rs.auth.missing_ownership_check.taint".to_string()
