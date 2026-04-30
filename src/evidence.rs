@@ -218,6 +218,14 @@ pub struct Evidence {
     /// under-budget findings and skipped during serialization in that case.
     #[serde(default, skip_serializing_if = "smallvec::SmallVec::is_empty")]
     pub engine_notes: smallvec::SmallVec<[crate::engine_notes::EngineNote; 2]>,
+
+    /// For `Cap::DATA_EXFIL` findings, the destination object-literal field
+    /// the tainted value reached (e.g. `"body"`, `"headers"`, `"json"`).
+    /// `None` for non-exfil findings, for exfil findings whose payload arg
+    /// was not an object literal, or when the sink was resolved through a
+    /// summary path that did not preserve destination metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_exfil_field: Option<String>,
 }
 
 fn is_zero_u16(v: &u16) -> bool {

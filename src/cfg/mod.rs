@@ -53,7 +53,7 @@ use literals::{
     arg0_kind_and_interpolation, call_ident_of, def_use, detect_go_replace_call_sanitizer,
     detect_rust_replace_chain_sanitizer, extract_arg_callees, extract_arg_string_literals,
     extract_arg_uses, extract_const_keyword_arg, extract_const_string_arg,
-    extract_destination_field_idents, extract_kwargs, extract_literal_rhs, find_call_node,
+    extract_destination_field_pairs, extract_kwargs, extract_literal_rhs, find_call_node,
     find_call_node_deep, find_chained_inner_call, has_keyword_arg, has_only_literal_args,
     is_parameterized_query_call, java_chain_arg0_kind_for_method, js_chain_arg0_kind_for_method,
     js_chain_outer_method_for_inner, ruby_chain_arg0_for_method, walk_chain_inner_call_args,
@@ -329,6 +329,15 @@ pub struct GateFilter {
     /// considers SSA values whose `var_name` matches one of `names` (object-
     /// literal destination fields lifted at CFG time).  `None` ⇒ whole arg.
     pub destination_uses: Option<Vec<String>>,
+    /// Parallel to [`Self::destination_uses`]: for each entry, the
+    /// destination object-literal field name (e.g. `"body"`, `"headers"`,
+    /// `"json"`) where the corresponding ident was bound.  Empty when
+    /// `destination_uses` is `None` or the gate had no
+    /// `object_destination_fields` configured.  Consumed by diag rendering
+    /// to embed the destination field in `DATA_EXFIL` messages and SARIF
+    /// `properties.data_exfil_field`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub destination_fields: Vec<String>,
 }
 
 /// Taint-classification and variable-flow metadata.
@@ -1780,16 +1789,25 @@ pub(super) fn push_node<'a>(
                     // checks to identifiers under those fields.  Non-object
                     // arg forms return `None` from the extractor and the gate
                     // falls back to whole-arg positional filtering.
+                    //
+                    // The pair form preserves which object-literal field each
+                    // ident was bound to (e.g. `body` vs `headers` vs `json`)
+                    // so diag rendering can attribute `DATA_EXFIL` findings to
+                    // a specific destination field.
                     let mut dest_uses: Option<Vec<String>> = None;
+                    let mut dest_fields: Vec<String> = Vec::new();
                     if !gm.object_destination_fields.is_empty() {
                         for &pos in gm.payload_args {
-                            if let Some(names) = extract_destination_field_idents(
+                            if let Some(pairs) = extract_destination_field_pairs(
                                 cn,
                                 pos,
                                 gm.object_destination_fields,
                                 code,
                             ) {
-                                dest_uses = Some(names);
+                                let (fields, vars): (Vec<String>, Vec<String>) =
+                                    pairs.into_iter().unzip();
+                                dest_uses = Some(vars);
+                                dest_fields = fields;
                                 break;
                             }
                         }
@@ -1809,6 +1827,7 @@ pub(super) fn push_node<'a>(
                         label_caps,
                         payload_args: payload_vec,
                         destination_uses: dest_uses,
+                        destination_fields: dest_fields,
                     });
                 }
                 if !union_payload.is_empty() {

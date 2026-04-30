@@ -38,25 +38,27 @@ pub(super) fn find_call_node<'a>(n: Node<'a>, lang: &str) -> Option<Node<'a>> {
     }
 }
 
-/// Extract identifiers from specified fields of an object-literal argument.
+/// Extract `(field_name, ident_name)` pairs from specified fields of an
+/// object-literal argument.
 ///
 /// Returns:
-/// * `Some(names)` if the positional argument at `index` IS an object literal
-///   (JS `object`, TS `object`, Python `dictionary`). `names` contains
-///   identifiers lifted from pair values whose key matches any entry in
-///   `fields` (case-sensitive; JS/TS identifiers). When no destination-field
-///   pairs are present, returns `Some(vec![])`, the sink is effectively
-///   silenced because no destination identifier exists.
+/// * `Some(pairs)` if the positional argument at `index` IS an object literal
+///   (JS `object`, TS `object`, Python `dictionary`). Each pair is
+///   `(field_name, ident_name)` where `field_name` is the matched key from
+///   `fields` and `ident_name` is an identifier lifted from that pair's
+///   value expression. When no destination-field pairs are present, returns
+///   `Some(vec![])`, the sink is effectively silenced because no destination
+///   identifier exists.
 /// * `None` if the arg is absent, is not an object literal (plain string
 ///   / ident / expression), or has splat/spread children that break static
 ///   per-field reasoning. Callers fall back to the whole-arg positional
 ///   filter in this case.
-pub(super) fn extract_destination_field_idents(
+pub(super) fn extract_destination_field_pairs(
     call_node: Node,
     arg_index: usize,
     fields: &[&str],
     code: &[u8],
-) -> Option<Vec<String>> {
+) -> Option<Vec<(String, String)>> {
     if fields.is_empty() {
         return None;
     }
@@ -71,7 +73,7 @@ pub(super) fn extract_destination_field_idents(
         return None;
     }
 
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<(String, String)> = Vec::new();
     let mut c = arg.walk();
     for child in arg.named_children(&mut c) {
         match child.kind() {
@@ -88,8 +90,10 @@ pub(super) fn extract_destination_field_idents(
                 let Some(name) = text_of(child, code) else {
                     continue;
                 };
-                if fields.iter().any(|&f| f == name) && !out.contains(&name) {
-                    out.push(name);
+                if fields.iter().any(|&f| f == name)
+                    && !out.iter().any(|(_, v)| v == &name)
+                {
+                    out.push((name.clone(), name));
                 }
             }
             "pair" => {
@@ -124,8 +128,8 @@ pub(super) fn extract_destination_field_idents(
                 let mut paths: Vec<String> = Vec::new();
                 collect_idents_with_paths(val_node, code, &mut idents, &mut paths);
                 for name in paths.into_iter().chain(idents) {
-                    if !out.contains(&name) {
-                        out.push(name);
+                    if !out.iter().any(|(_, v)| v == &name) {
+                        out.push((key.clone(), name));
                     }
                 }
             }

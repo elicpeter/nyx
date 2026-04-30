@@ -133,20 +133,35 @@ fn sarif_distinguishes_data_exfil_rule_id_from_ssrf() {
     let results = sarif["runs"][0]["results"]
         .as_array()
         .expect("SARIF results array");
-    let exfil_results = results
+    let exfil_results: Vec<&serde_json::Value> = results
         .iter()
         .filter(|r| r["ruleId"].as_str() == Some("taint-data-exfiltration"))
-        .count();
+        .collect();
     let ssrf_results = results
         .iter()
         .filter(|r| r["ruleId"].as_str() == Some("taint-unsanitised-flow"))
         .count();
     assert!(
-        exfil_results >= 1,
-        "expected >= 1 SARIF result with ruleId taint-data-exfiltration, got {exfil_results}",
+        !exfil_results.is_empty(),
+        "expected >= 1 SARIF result with ruleId taint-data-exfiltration, got {}",
+        exfil_results.len(),
     );
     assert!(
         ssrf_results >= 1,
         "expected >= 1 SARIF result with ruleId taint-unsanitised-flow, got {ssrf_results}",
+    );
+
+    // Every DATA_EXFIL finding from the fixture set targets the request body
+    // (`fetch('/endpoint', { body: payload })`), so SARIF must surface the
+    // destination field via `properties.data_exfil_field`.  At least one
+    // result has to advertise `body`, fixtures that reach `headers` /
+    // `json` are out of scope for this assertion but must not be silenced.
+    let body_field_seen = exfil_results.iter().any(|r| {
+        r["properties"]["data_exfil_field"].as_str() == Some("body")
+    });
+    assert!(
+        body_field_seen,
+        "expected at least one taint-data-exfiltration SARIF result with \
+         properties.data_exfil_field == \"body\". Results: {exfil_results:#?}",
     );
 }

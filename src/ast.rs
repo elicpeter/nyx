@@ -432,6 +432,38 @@ fn build_taint_diag(
         )
     };
 
+    // For `DATA_EXFIL` rules, look up which destination object-literal field
+    // (`body` / `headers` / `json`) the tainted value reached.  Each
+    // [`crate::cfg::GateFilter`] carries `destination_uses` (var names) in
+    // parallel with `destination_fields` (the field each var was bound to),
+    // so we walk the gate filter whose `label_caps` includes `DATA_EXFIL`
+    // and match the tainted var name from the last flow step.  Falls back
+    // to the first non-empty destination field on the matching filter when
+    // the var-name match fails (e.g. the SSA sink event is reported on a
+    // copy-propagated value whose name no longer matches the original
+    // destination ident).  `None` when the sink wasn't a destination-aware
+    // gate (no object literal, or non-fetch sink).
+    let data_exfil_field: Option<String> = if is_data_exfil_rule {
+        let last_var = finding
+            .flow_steps
+            .last()
+            .and_then(|s| s.var_name.as_deref());
+        let filters = &cfg_graph[finding.sink].call.gate_filters;
+        filters
+            .iter()
+            .find(|f| f.label_caps.contains(crate::labels::Cap::DATA_EXFIL))
+            .and_then(|f| {
+                if let (Some(uses), Some(var)) = (f.destination_uses.as_ref(), last_var) {
+                    if let Some(idx) = uses.iter().position(|u| u == var) {
+                        return f.destination_fields.get(idx).cloned();
+                    }
+                }
+                f.destination_fields.first().cloned()
+            })
+    } else {
+        None
+    };
+
     // DATA_EXFIL severity calibration (Phase: detector ranking).
     //
     // Generic taint severity comes from `severity_for_source_kind`, which
@@ -456,6 +488,22 @@ fn build_taint_diag(
         severity_for_source_kind(finding.source_kind)
     };
 
+    // DATA_EXFIL: surface the destination field in the message so analysts
+    // see at a glance whether the leak reached the request body, headers,
+    // or json payload.  Generic taint findings stay on the existing
+    // "unsanitised … flows from … → …" template.
+    let message = if is_data_exfil_rule {
+        let suffix = data_exfil_field
+            .as_deref()
+            .map(|f| format!(" ({f} field)"))
+            .unwrap_or_default();
+        format!(
+            "sensitive data flows from {short_source} \u{2192} {sink_display}{suffix}"
+        )
+    } else {
+        format!("unsanitised {kind_label} flows from {short_source} \u{2192} {sink_display}")
+    };
+
     let mut diag = Diag {
         path: primary_path.clone(),
         line: primary_line,
@@ -465,9 +513,7 @@ fn build_taint_diag(
         category: FindingCategory::Security,
         path_validated: finding.path_validated,
         guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
-        message: Some(format!(
-            "unsanitised {kind_label} flows from {short_source} \u{2192} {sink_display}"
-        )),
+        message: Some(message),
         labels,
         confidence: None,
         evidence: Some(Evidence {
@@ -508,6 +554,7 @@ fn build_taint_diag(
             symbolic: finding.symbolic.clone(),
             sink_caps: sink_caps_bits,
             engine_notes: finding.engine_notes.clone(),
+            data_exfil_field,
             ..Default::default()
         }),
         rank_score: None,
