@@ -54,7 +54,7 @@ use literals::{
     detect_rust_replace_chain_sanitizer, extract_arg_callees, extract_arg_string_literals,
     extract_arg_uses, extract_const_keyword_arg, extract_const_string_arg,
     extract_destination_field_pairs, extract_destination_kwarg_pairs, extract_kwargs,
-    extract_literal_rhs, find_call_node,
+    extract_literal_rhs, extract_shell_array_payload_idents, find_call_node,
     find_call_node_deep, find_chained_inner_call, has_keyword_arg, has_only_literal_args,
     is_parameterized_query_call, java_chain_arg0_kind_for_method, js_chain_arg0_kind_for_method,
     js_chain_outer_method_for_inner, ruby_chain_arg0_for_method, walk_chain_inner_call_args,
@@ -1908,6 +1908,65 @@ pub(super) fn push_node<'a>(
                 // consulting `gate_filters`.  When multiple gates match,
                 // per-position filters live in `gate_filters` and the legacy
                 // field is intentionally left `None`.
+                if gate_filters.len() == 1 {
+                    destination_uses = gate_filters[0].destination_uses.clone();
+                }
+            }
+        }
+    }
+
+    // ── Inline shell-array sink synthesis ────────────────────────────────
+    //
+    // Recognise `[<shell>, "-c", <payload>]` (and `cmd /c <payload>`)
+    // appearing as an argument to *any* call.  The shell-array shape itself
+    // is the gate, regardless of callee, so this fires through user-defined
+    // wrappers like `execInContainer(id, ["bash", "-c", `echo ${tainted}`])`
+    // without needing per-wrapper summary annotations.  Only fires for JS/TS
+    // because the array-literal grammar (`array` node) and shell-form usage
+    // are JS/TS conventions; other languages use different shapes for
+    // shell-exec wrappers.
+    //
+    // The inner array also covers Dockerode's
+    // `container.exec({Cmd: [shell, "-c", payload]})`: the helper looks
+    // inside object-literal args for shell-array values under any field.
+    //
+    // Existing FP carve-outs are preserved.  `["ls", "-la"]` doesn't match
+    // (element 0 is not a known shell).  `untaintedArrayVariable` doesn't
+    // match (variable, not literal).  `execSync(cmd, { env: process.env })`
+    // doesn't match (string + object args, no shell-array literal).  When
+    // the payload elements are constant strings the helper returns no
+    // match, so a literal `["bash", "-c", "ls -la"]` doesn't fire either.
+    if matches!(lang, "javascript" | "js" | "typescript" | "ts") {
+        if let Some(cn) = call_ast.or_else(|| find_call_node_deep(ast, lang, 4)) {
+            let shell_matches = extract_shell_array_payload_idents(cn, code);
+            if !shell_matches.is_empty() {
+                let shell_label = DataLabel::Sink(Cap::SHELL_ESCAPE);
+                let already_has_shell_sink = labels.iter().any(|l| match l {
+                    DataLabel::Sink(c) => c.contains(Cap::SHELL_ESCAPE),
+                    _ => false,
+                });
+                if !already_has_shell_sink {
+                    labels.push(shell_label);
+                }
+
+                let mut union_payload: Vec<usize> = sink_payload_args.clone().unwrap_or_default();
+                for sm in shell_matches {
+                    if !union_payload.contains(&sm.arg_position) {
+                        union_payload.push(sm.arg_position);
+                    }
+                    gate_filters.push(GateFilter {
+                        label_caps: Cap::SHELL_ESCAPE,
+                        payload_args: vec![sm.arg_position],
+                        destination_uses: Some(sm.payload_idents),
+                        destination_fields: Vec::new(),
+                    });
+                }
+                if !union_payload.is_empty() {
+                    sink_payload_args = Some(union_payload);
+                }
+                // Legacy single-gate path: when this is the only gate filter,
+                // populate the top-level destination_uses too so the SSA
+                // fast-path stays consistent with the multi-gate behaviour.
                 if gate_filters.len() == 1 {
                     destination_uses = gate_filters[0].destination_uses.clone();
                 }
