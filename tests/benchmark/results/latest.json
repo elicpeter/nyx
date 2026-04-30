@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-29T21:50:34Z",
+  "timestamp": "2026-04-30T16:53:11Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -2660,15 +2660,13 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
-        "taint-unsanitised-flow (source 8:9)",
         "taint-unsanitised-flow (source 8:9)"
       ],
       "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "taint-unsanitised-flow (source 8:9)",
         "taint-unsanitised-flow (source 8:9)"
       ],
-      "security_finding_count": 2,
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -3321,14 +3319,14 @@
       "vuln_class": "ssrf",
       "is_vulnerable": true,
       "outcome_file_level": "TP",
-      "outcome_rule_level": "TP",
-      "outcome_location_level": "TP",
-      "matched_rule_ids": [
-        "taint-unsanitised-flow (source 7:22)"
+      "outcome_rule_level": "FN",
+      "outcome_location_level": "FN",
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "taint-data-exfiltration (source 7:22)"
       ],
-      "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "taint-unsanitised-flow (source 7:22)"
+        "taint-data-exfiltration (source 7:22)"
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 0
@@ -3882,11 +3880,11 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
-        "taint-unsanitised-flow (source 5:5)"
+        "cfg-unguarded-sink"
       ],
       "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "taint-unsanitised-flow (source 5:5)"
+        "cfg-unguarded-sink"
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 0
@@ -8043,13 +8041,15 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "cfg-unguarded-sink",
         "cfg-unguarded-sink"
       ],
       "unexpected_rule_ids": [],
       "all_finding_ids": [
+        "cfg-unguarded-sink",
         "cfg-unguarded-sink"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -8202,13 +8202,13 @@
     "f1": 0.9977827050997783
   },
   "aggregate_rule_level": {
-    "tp": 225,
+    "tp": 224,
     "fp": 1,
-    "fn_": 0,
+    "fn_": 1,
     "tn": 231,
-    "precision": 0.995575221238938,
-    "recall": 1.0,
-    "f1": 0.9977827050997783
+    "precision": 0.9955555555555555,
+    "recall": 0.9955555555555555,
+    "f1": 0.9955555555555555
   },
   "by_language": {
     "c": {
@@ -8239,13 +8239,13 @@
       "f1": 0.9803921568627451
     },
     "java": {
-      "tp": 19,
+      "tp": 18,
       "fp": 0,
-      "fn_": 0,
+      "fn_": 1,
       "tn": 20,
       "precision": 1.0,
-      "recall": 1.0,
-      "f1": 1.0
+      "recall": 0.9473684210526315,
+      "f1": 0.972972972972973
     },
     "javascript": {
       "tp": 19,
@@ -8457,13 +8457,13 @@
       "f1": 1.0
     },
     "ssrf": {
-      "tp": 28,
+      "tp": 27,
       "fp": 0,
-      "fn_": 0,
+      "fn_": 1,
       "tn": 0,
       "precision": 1.0,
-      "recall": 1.0,
-      "f1": 1.0
+      "recall": 0.9642857142857143,
+      "f1": 0.9818181818181818
     },
     "xss": {
       "tp": 23,
@@ -8477,31 +8477,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 79,
+      "tp": 77,
       "fp": 104,
-      "fn_": 146,
+      "fn_": 148,
       "tn": 128,
-      "precision": 0.43169398907103823,
-      "recall": 0.3511111111111111,
-      "f1": 0.3872549019607843
+      "precision": 0.425414364640884,
+      "recall": 0.3422222222222222,
+      "f1": 0.3793103448275862
     },
     ">=Low": {
-      "tp": 81,
+      "tp": 79,
       "fp": 116,
-      "fn_": 144,
+      "fn_": 146,
       "tn": 116,
-      "precision": 0.41116751269035534,
-      "recall": 0.36,
-      "f1": 0.3838862559241706
+      "precision": 0.40512820512820513,
+      "recall": 0.3511111111111111,
+      "f1": 0.3761904761904762
     },
     ">=Medium": {
-      "tp": 81,
+      "tp": 79,
       "fp": 116,
-      "fn_": 144,
+      "fn_": 146,
       "tn": 116,
-      "precision": 0.41116751269035534,
-      "recall": 0.36,
-      "f1": 0.3838862559241706
+      "precision": 0.40512820512820513,
+      "recall": 0.3511111111111111,
+      "f1": 0.3761904761904762
     }
   }
 }

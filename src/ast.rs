@@ -1337,6 +1337,17 @@ impl<'a> ParsedFile<'a> {
 
         // ── CFG structural analyses (per body) ─────────────────────────
         let taint_active = global_summaries.is_some() || !taint_results.is_empty();
+        // Pre-compute, per body, the set of variable names whose
+        // release / close calls live in a NESTED closure body inside
+        // that body (e.g. `socket.on("close", () => ws.close())`).
+        // Both the structural ResourceMisuse pass and the state-model
+        // leak pass consult it to suppress findings whose cleanup is
+        // registered as a callback the per-body CFG can't follow.
+        // Only descendants count — sibling methods on the same class
+        // don't share resource ownership.
+        let closure_released_per_body =
+            state::collect_closure_released_var_names(&self.file_cfg.bodies, caller_lang);
+        let empty_set: std::collections::HashSet<String> = std::collections::HashSet::new();
         for body in &self.file_cfg.bodies {
             let body_taint: Vec<_> = taint_results
                 .iter()
@@ -1358,6 +1369,11 @@ impl<'a> ParsedFile<'a> {
                 body_const_facts: body_const_facts.as_ref(),
                 type_facts: body_const_facts.as_ref().map(|f| &f.type_facts),
                 auth_decorators: &body.meta.auth_decorators,
+                closure_released_var_names: Some(
+                    closure_released_per_body
+                        .get(&body.meta.id)
+                        .unwrap_or(&empty_set),
+                ),
             };
             for cf in cfg_analysis::run_all(&cfg_ctx) {
                 let point = byte_offset_to_point(&self.source.tree, cf.span.0);
@@ -1434,6 +1450,11 @@ impl<'a> ParsedFile<'a> {
                     &body.meta.auth_decorators,
                     &path_safe_suppressed_spans,
                     body_pointer_hints.as_ref(),
+                    Some(
+                        closure_released_per_body
+                            .get(&body.meta.id)
+                            .unwrap_or(&empty_set),
+                    ),
                 );
 
                 for sf in &state_findings {

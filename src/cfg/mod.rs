@@ -460,6 +460,13 @@ pub struct NodeInfo {
     /// up the field's declared `TypeKind`.  Strictly additive, when
     /// `None`, the legacy copy-prop semantics apply.
     pub member_field: Option<String>,
+    /// True when this assignment / declaration's RHS is a function or
+    /// lambda literal (`obj.handler = (e) => {...}`, `let f = function(){}`).
+    /// State analysis uses this to suppress resource-ownership transfer:
+    /// storing a function reference into a property does not move the
+    /// resources captured by the closure body, so the lifecycle of those
+    /// captures must remain unchanged on the assignment node.
+    pub rhs_is_function_literal: bool,
 }
 
 impl NodeInfo {
@@ -2421,6 +2428,7 @@ pub(super) fn push_node<'a>(
         is_eq_with_const: detect_eq_with_const(ast, lang),
         is_numeric_length_access: detect_numeric_length_access(ast, lang, code),
         member_field: detect_member_field_assignment(ast, code),
+        rhs_is_function_literal: rhs_is_function_literal(ast, lang),
     });
 
     debug!(
@@ -2486,7 +2494,10 @@ fn rhs_is_function_literal(ast: Node, lang: &str) -> bool {
     if candidate.is_none() {
         // Walk one level into declarations whose direct child is the
         // declarator (variable_declaration → variable_declarator →
-        // value).
+        // value), or expression-statement wrappers whose direct child is
+        // an assignment_expression / assignment with a `right` field
+        // (JS `expression_statement > assignment_expression`, Python
+        // `expression_statement > assignment`).
         let mut cursor = ast.walk();
         for c in ast.children(&mut cursor) {
             if matches!(
@@ -2496,6 +2507,11 @@ fn rhs_is_function_literal(ast: Node, lang: &str) -> bool {
                 candidate = c
                     .child_by_field_name("value")
                     .or_else(|| c.child_by_field_name("init"));
+                if candidate.is_some() {
+                    break;
+                }
+            } else if matches!(lookup(lang, c.kind()), Kind::Assignment) {
+                candidate = c.child_by_field_name("right");
                 if candidate.is_some() {
                     break;
                 }
