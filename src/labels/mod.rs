@@ -551,7 +551,13 @@ pub fn infer_source_kind(caps: Cap, callee: &str) -> SourceKind {
     // because they imply higher sensitivity (auth material, session ids).
     // The generic UserInput substrings (`request`, `header`, `cookie`)
     // would otherwise swallow these.
-    if cl.contains("cookie") {
+    //
+    // Session stores carry auth material (CSRF tokens, signed user ids) of
+    // the same sensitivity tier as raw cookies, so route them through the
+    // `Cookie` arm.  The substring is checked AFTER excluding the
+    // capitalised `Session` constructor (covered by the `request` /
+    // `requests` checks below not firing for `Session` builders).
+    if cl.contains("cookie") || cl.contains("session") {
         return SourceKind::Cookie;
     }
     if cl.contains("header") {
@@ -1055,11 +1061,20 @@ pub fn classify_gated_sink(
         None => return out,
     };
 
+    // Match against the original callee text AND a chain-normalised form
+    // that strips `()` between dots so a chained construction like
+    // `httpx.AsyncClient().post` matches a gate matcher of
+    // `httpx.AsyncClient.post`.  Mirrors the normalisation applied by
+    // `classify` for flat label rules.
     let callee_bytes = callee_text.as_bytes();
+    let normalized = normalize_chained_call(callee_text);
+    let normalized_bytes = normalized.as_bytes();
 
     for gate in *gates {
         let matcher = gate.callee_matcher.as_bytes();
-        if !match_suffix_cs(callee_bytes, matcher, gate.case_sensitive) {
+        if !match_suffix_cs(callee_bytes, matcher, gate.case_sensitive)
+            && !match_suffix_cs(normalized_bytes, matcher, gate.case_sensitive)
+        {
             continue;
         }
 

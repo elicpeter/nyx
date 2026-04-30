@@ -139,6 +139,62 @@ pub(super) fn extract_destination_field_pairs(
     Some(out)
 }
 
+/// Extract `(field_name, ident_name)` pairs from `keyword_argument` /
+/// `named_argument` children of a call whose keyword name matches one of
+/// `fields`.  Used for languages where destination-bearing fields are passed
+/// as direct kwargs rather than wrapped in a dict literal, e.g. Python
+/// `requests.post(url, data=tainted, json=safe)` where `data` and `json` are
+/// `keyword_argument` siblings of the positional URL.
+///
+/// Returns the union of matching kwargs, preserving the kwarg name in the
+/// `field` slot so callers can still attribute findings per-field.  Empty
+/// when no matching kwargs exist or the call has no `arguments` field.
+pub(super) fn extract_destination_kwarg_pairs(
+    call_node: Node,
+    fields: &[&str],
+    code: &[u8],
+) -> Vec<(String, String)> {
+    if fields.is_empty() {
+        return Vec::new();
+    }
+    let Some(args_node) = call_node.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut cursor = args_node.walk();
+    for child in args_node.named_children(&mut cursor) {
+        let kind = child.kind();
+        if kind != "keyword_argument" && kind != "named_argument" {
+            continue;
+        }
+        let named_count = child.named_child_count();
+        let name_node = child
+            .child_by_field_name("name")
+            .or_else(|| child.named_child(0));
+        let value_node = child
+            .child_by_field_name("value")
+            .or_else(|| child.named_child(named_count.saturating_sub(1) as u32));
+        let (Some(nn), Some(vn)) = (name_node, value_node) else {
+            continue;
+        };
+        let Some(name) = text_of(nn, code) else {
+            continue;
+        };
+        if !fields.iter().any(|&f| f == name) {
+            continue;
+        }
+        let mut idents = Vec::new();
+        let mut paths = Vec::new();
+        collect_idents_with_paths(vn, code, &mut idents, &mut paths);
+        for ident in paths.into_iter().chain(idents) {
+            if !out.iter().any(|(_, v)| v == &ident) {
+                out.push((name.clone(), ident));
+            }
+        }
+    }
+    out
+}
+
 /// Extract the string-literal content at argument position `index` (0-based).
 /// Returns `None` if the argument is not a string literal or the index is out of range.
 pub(super) fn extract_const_string_arg(

@@ -32,3 +32,17 @@ fn cross_file_data_exfil_split() {
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }
+
+/// Python parallel of the JS cross-file split fixture.  A wrapper
+/// `forward(url, body)` calls `requests.post(url, json=body)` so the URL
+/// flows to the SSRF gate and the body kwarg flows to the DATA_EXFIL
+/// gate.  Per-position cap attribution must hold across the file
+/// boundary: a caller that taints only the URL fires SSRF (no
+/// DATA_EXFIL), and a caller that taints only the body with a Sensitive
+/// source fires DATA_EXFIL (no SSRF).
+#[test]
+fn cross_file_python_data_exfil() {
+    let dir = fixture_path("cross_file_python_data_exfil");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}

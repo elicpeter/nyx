@@ -53,7 +53,8 @@ use literals::{
     arg0_kind_and_interpolation, call_ident_of, def_use, detect_go_replace_call_sanitizer,
     detect_rust_replace_chain_sanitizer, extract_arg_callees, extract_arg_string_literals,
     extract_arg_uses, extract_const_keyword_arg, extract_const_string_arg,
-    extract_destination_field_pairs, extract_kwargs, extract_literal_rhs, find_call_node,
+    extract_destination_field_pairs, extract_destination_kwarg_pairs, extract_kwargs,
+    extract_literal_rhs, find_call_node,
     find_call_node_deep, find_chained_inner_call, has_keyword_arg, has_only_literal_args,
     is_parameterized_query_call, java_chain_arg0_kind_for_method, js_chain_arg0_kind_for_method,
     js_chain_outer_method_for_inner, ruby_chain_arg0_for_method, walk_chain_inner_call_args,
@@ -1736,7 +1737,16 @@ pub(super) fn push_node<'a>(
     let mut sink_payload_args: Option<Vec<usize>> = None;
     let mut destination_uses: Option<Vec<String>> = None;
     let mut gate_filters: Vec<GateFilter> = Vec::new();
-    if labels.is_empty() {
+    // Gates run when no flat `Sink` label is already present.  Source /
+    // Sanitizer labels are orthogonal — a callee like Python's
+    // `requests.post` is a `Source` for its response object AND a gated
+    // `Sink` for its URL/body argument positions; both should attach.  Only
+    // suppress gate matching when a flat `Sink` already covers the call,
+    // since that would double-attribute the same outbound capability.
+    let has_sink_label = labels
+        .iter()
+        .any(|l| matches!(l, DataLabel::Sink(_)));
+    if !has_sink_label {
         let gate_call = call_ast.or_else(|| find_call_node_deep(ast, lang, 4));
         if let Some(cn) = gate_call {
             let gate_callee_text = if call_ast.is_some() {
@@ -1771,7 +1781,7 @@ pub(super) fn push_node<'a>(
                 for gm in &matches {
                     labels.push(gm.label);
 
-                    let payload_vec: Vec<usize> =
+                    let mut payload_vec: Vec<usize> =
                         if gm.payload_args == crate::labels::ALL_ARGS_PAYLOAD {
                             // Dynamic-activation sentinel: every positional arg is
                             // conservatively a payload.  Expand using the actual
@@ -1797,6 +1807,8 @@ pub(super) fn push_node<'a>(
                     let mut dest_uses: Option<Vec<String>> = None;
                     let mut dest_fields: Vec<String> = Vec::new();
                     if !gm.object_destination_fields.is_empty() {
+                        let mut all_pairs: Vec<(String, String)> = Vec::new();
+                        let mut had_object_match = false;
                         for &pos in gm.payload_args {
                             if let Some(pairs) = extract_destination_field_pairs(
                                 cn,
@@ -1804,12 +1816,42 @@ pub(super) fn push_node<'a>(
                                 gm.object_destination_fields,
                                 code,
                             ) {
-                                let (fields, vars): (Vec<String>, Vec<String>) =
-                                    pairs.into_iter().unzip();
-                                dest_uses = Some(vars);
-                                dest_fields = fields;
+                                all_pairs.extend(pairs);
+                                had_object_match = true;
                                 break;
                             }
+                        }
+
+                        // Direct kwargs: languages where destination-bearing
+                        // fields are passed as `keyword_argument` siblings of
+                        // the positional args (Python `data=`, Ruby kwargs).
+                        // SSA lowering folds kwarg idents into the implicit
+                        // args group at index `arity`, so we expand
+                        // `payload_vec` to include that position; the
+                        // `destination_filter` then narrows to the kwarg
+                        // ident's `var_name`.
+                        let kwarg_pairs = extract_destination_kwarg_pairs(
+                            cn,
+                            gm.object_destination_fields,
+                            code,
+                        );
+                        if !kwarg_pairs.is_empty() {
+                            let arity = extract_arg_uses(cn, code).len();
+                            if !payload_vec.contains(&arity) {
+                                payload_vec.push(arity);
+                            }
+                            for pair in kwarg_pairs {
+                                if !all_pairs.iter().any(|(_, v)| v == &pair.1) {
+                                    all_pairs.push(pair);
+                                }
+                            }
+                        }
+
+                        if had_object_match || !all_pairs.is_empty() {
+                            let (fields, vars): (Vec<String>, Vec<String>) =
+                                all_pairs.into_iter().unzip();
+                            dest_uses = Some(vars);
+                            dest_fields = fields;
                         }
                     }
 
