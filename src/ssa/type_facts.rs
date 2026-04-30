@@ -1083,6 +1083,8 @@ mod tests {
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
             field_writes: std::collections::HashMap::new(),
+
+            synthetic_externals: std::collections::HashSet::new(),
         };
 
         let consts = HashMap::from([
@@ -1196,6 +1198,8 @@ mod tests {
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
             field_writes: std::collections::HashMap::new(),
+
+            synthetic_externals: std::collections::HashSet::new(),
         };
 
         let consts = HashMap::new();
@@ -1494,6 +1498,8 @@ mod tests {
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
             field_writes: std::collections::HashMap::new(),
+
+            synthetic_externals: std::collections::HashSet::new(),
         };
 
         let consts = HashMap::new();

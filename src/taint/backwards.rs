@@ -752,6 +752,7 @@ mod tests {
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
             field_writes: std::collections::HashMap::new(),
+            synthetic_externals: std::collections::HashSet::new(),
         };
 
         (ssa, cfg)
@@ -800,6 +801,7 @@ mod tests {
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
             field_writes: std::collections::HashMap::new(),
+            synthetic_externals: std::collections::HashSet::new(),
         };
         let demand = DemandState::new(Cap::all());
         let (step, next) = backward_transfer(&ssa, SsaValue(0), &demand);
@@ -832,6 +834,7 @@ mod tests {
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
             field_writes: std::collections::HashMap::new(),
+            synthetic_externals: std::collections::HashSet::new(),
         };
         let demand = DemandState::new(Cap::all());
         let (step, _next) = backward_transfer(&ssa, SsaValue(0), &demand);
@@ -919,6 +922,7 @@ mod tests {
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
             field_writes: std::collections::HashMap::new(),
+            synthetic_externals: std::collections::HashSet::new(),
         };
 
         let demand = DemandState::new(Cap::all());
@@ -1007,6 +1011,7 @@ mod tests {
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
             field_writes: std::collections::HashMap::new(),
+            synthetic_externals: std::collections::HashSet::new(),
         };
 
         let ctx = BackwardsCtx::new(&ssa, &cfg, Lang::JavaScript);

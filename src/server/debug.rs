@@ -2027,6 +2027,8 @@ async function recentAuditLogs() {
             exception_edges: vec![],
             field_interner,
             field_writes: std::collections::HashMap::new(),
+
+            synthetic_externals: std::collections::HashSet::new(),
         };
 
         let facts = analyse_body(&body, BodyId(0));

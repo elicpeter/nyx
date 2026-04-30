@@ -4314,16 +4314,41 @@ pub(super) fn transfer_inst(
             // summary-extraction mode so baseline probes keep their
             // intrinsic-source contract. Gate is set by the caller, e.g.
             // always-on for JS/TS, only AnonymousFunction bodies for Java.
+            //
+            // The `Param` branch fires for both real formal parameters and
+            // synthetic externals injected by lowering for free / closure-
+            // captured variables (`SsaBody.synthetic_externals`).  Only real
+            // formals should receive the heuristic seed: a closure capturing
+            // an out-of-scope `userId` / `cmd` / `payload` is NOT a handler
+            // entry point — the variable is supplied by the enclosing scope
+            // and seeding it here produces phantom sources anchored to the
+            // function's declaration line.
             if transfer.auto_seed_handler_params
                 && !seeded_from_scope
                 && matches!(&inst.op, SsaOp::Param { .. })
+                && !ssa.synthetic_externals.contains(&inst.value)
             {
                 if let Some(var_name) = ssa
                     .value_defs
                     .get(inst.value.0 as usize)
                     .and_then(|vd| vd.var_name.as_deref())
                 {
-                    if crate::labels::is_js_ts_handler_param_name(var_name) {
+                    // Direct match: the Param's name itself is a handler
+                    // identifier (e.g. `input`, `cmd`, `userId`).
+                    //
+                    // Root-prefix match: dotted-path Params produced by
+                    // lowering for member-expression uses inside the body
+                    // (`input.cmd` — an unbacked phantom Param) inherit the
+                    // seed when their *root* is a handler-param formal.
+                    // Without this, the field-aware suppression downstream
+                    // sees `input.cmd` as a "clean field" and strips
+                    // `input`'s taint, even though `input.cmd` is just a
+                    // structural projection of the auto-seeded formal.
+                    let root_is_handler = var_name
+                        .split_once('.')
+                        .map(|(root, _)| crate::labels::is_js_ts_handler_param_name(root))
+                        .unwrap_or(false);
+                    if crate::labels::is_js_ts_handler_param_name(var_name) || root_is_handler {
                         let origin = TaintOrigin {
                             node: inst.cfg_node,
                             source_kind: SourceKind::UserInput,
@@ -5333,50 +5358,89 @@ fn collect_block_events(
                     for &(cb_idx, src_caps) in &resolved.source_to_callback {
                         let cb_name = info.arg_callees.get(cb_idx).and_then(|ac| ac.as_ref());
                         if let Some(cb_callee) = cb_name {
-                            if let Some(cb_resolved) =
-                                resolve_callee(transfer, cb_callee, caller_func, 0)
-                            {
-                                let matching_sink_caps = cb_resolved
+                            // First try the standard summary-based resolution
+                            // path (covers user-defined functions and built-ins
+                            // that landed in label-derived summaries upstream).
+                            // If that yields no matching sink caps, fall back
+                            // to gated-sink classification on the callback
+                            // callee's name — gated sinks (e.g.
+                            // `child_process.exec` post-fix) carry their
+                            // payload positions in the gate, not in any
+                            // summary, and the callback pipeline still needs
+                            // those positions to pair source caps against
+                            // param_to_sink.
+                            let cb_resolved =
+                                resolve_callee(transfer, cb_callee, caller_func, 0);
+                            let mut matching_sink_caps = Cap::empty();
+                            let cb_param_to_sink_sites: Vec<(
+                                usize,
+                                SmallVec<[SinkSite; 1]>,
+                            )> = if let Some(ref r) = cb_resolved {
+                                matching_sink_caps = r
                                     .param_to_sink
                                     .iter()
                                     .filter(|(_, caps)| !(src_caps & *caps).is_empty())
                                     .fold(Cap::empty(), |acc, (_, c)| acc | *c);
-                                if !matching_sink_caps.is_empty() {
-                                    let source_kind =
-                                        crate::labels::infer_source_kind(src_caps, callee);
-                                    let origin = TaintOrigin {
-                                        node: inst.cfg_node,
-                                        source_kind,
-                                        source_span: None,
-                                    };
-                                    // Pick callback-path sink sites.
-                                    // The callback callee's `param_to_sink_sites`
-                                    // drives attribution when available; cap-only
-                                    // fallback yields `primary_sink_site = None`.
-                                    let cb_tainted: Vec<(
-                                        SsaValue,
-                                        Cap,
-                                        SmallVec<[TaintOrigin; 2]>,
-                                    )> = vec![(
-                                        inst.value,
-                                        src_caps & matching_sink_caps,
-                                        SmallVec::from_elem(origin, 1),
-                                    )];
-                                    let cb_sites = pick_primary_sink_sites_from_resolved(
-                                        matching_sink_caps,
-                                        &cb_resolved.param_to_sink_sites,
-                                    );
-                                    emit_ssa_taint_events(
-                                        events,
-                                        inst.cfg_node,
-                                        cb_tainted,
-                                        matching_sink_caps,
-                                        false,
-                                        None,
-                                        true,
-                                        cb_sites,
-                                    );
+                                r.param_to_sink_sites.clone()
+                            } else {
+                                vec![]
+                            };
+                            if matching_sink_caps.is_empty() {
+                                // Gate-fallback: classify_gated_sink yields the
+                                // callback callee's payload positions + sink
+                                // caps directly when the name matches a gated
+                                // sink rule.
+                                let lang_str = transfer.lang.as_str();
+                                let gates = crate::labels::classify_gated_sink(
+                                    lang_str,
+                                    cb_callee,
+                                    |_| None,
+                                    |_| None,
+                                    |_| false,
+                                );
+                                for gm in gates.iter() {
+                                    if let DataLabel::Sink(bits) = gm.label {
+                                        if !(src_caps & bits).is_empty() {
+                                            matching_sink_caps |= bits;
+                                        }
+                                    }
                                 }
+                            }
+                            if !matching_sink_caps.is_empty() {
+                                let source_kind =
+                                    crate::labels::infer_source_kind(src_caps, callee);
+                                let origin = TaintOrigin {
+                                    node: inst.cfg_node,
+                                    source_kind,
+                                    source_span: None,
+                                };
+                                // Pick callback-path sink sites.
+                                // The callback callee's `param_to_sink_sites`
+                                // drives attribution when available; cap-only
+                                // fallback yields `primary_sink_site = None`.
+                                let cb_tainted: Vec<(
+                                    SsaValue,
+                                    Cap,
+                                    SmallVec<[TaintOrigin; 2]>,
+                                )> = vec![(
+                                    inst.value,
+                                    src_caps & matching_sink_caps,
+                                    SmallVec::from_elem(origin, 1),
+                                )];
+                                let cb_sites = pick_primary_sink_sites_from_resolved(
+                                    matching_sink_caps,
+                                    &cb_param_to_sink_sites,
+                                );
+                                emit_ssa_taint_events(
+                                    events,
+                                    inst.cfg_node,
+                                    cb_tainted,
+                                    matching_sink_caps,
+                                    false,
+                                    None,
+                                    true,
+                                    cb_sites,
+                                );
                             }
                         }
                     }
@@ -8485,16 +8549,31 @@ fn resolve_callee_full(
                     param_to_gate_filters: vec![],
                 });
             }
-            // Try label classification for the bound function (by leaf name)
+            // Try label classification for the bound function (by leaf name).
+            // Consult both flat rules (`classify_all`) and gated sinks: a
+            // callback bound to a gated sink (e.g. passing
+            // `child_process.exec` directly as the callback) still needs to
+            // surface its `Sink` capability so the source/callback pairing
+            // logic can match `param_to_sink` against the caller's source.
+            // The gate's `payload_args` translate directly into
+            // `param_to_sink` index entries.
             let labels = crate::labels::classify_all(
                 transfer.lang.as_str(),
                 &real_key.name,
                 transfer.extra_labels,
             );
-            if !labels.is_empty() {
+            let gate_matches = crate::labels::classify_gated_sink(
+                transfer.lang.as_str(),
+                &real_key.name,
+                |_| None,
+                |_| None,
+                |_| false,
+            );
+            if !labels.is_empty() || !gate_matches.is_empty() {
                 let mut source_caps = Cap::empty();
                 let mut sanitizer_caps = Cap::empty();
                 let mut sink_caps = Cap::empty();
+                let mut param_to_sink: Vec<(usize, Cap)> = vec![];
                 for lbl in &labels {
                     match lbl {
                         DataLabel::Source(bits) => source_caps |= *bits,
@@ -8502,11 +8581,25 @@ fn resolve_callee_full(
                         DataLabel::Sink(bits) => sink_caps |= *bits,
                     }
                 }
+                for gm in gate_matches.iter() {
+                    if let DataLabel::Sink(bits) = gm.label {
+                        sink_caps |= bits;
+                        // Map the gate's payload_args to per-param sink entries
+                        // so source-to-callback pairing can match by index.
+                        // Skip the dynamic-activation sentinel — without a
+                        // concrete arity we can't enumerate positions here.
+                        if gm.payload_args != crate::labels::ALL_ARGS_PAYLOAD {
+                            for &idx in gm.payload_args {
+                                param_to_sink.push((idx, bits));
+                            }
+                        }
+                    }
+                }
                 return Some(ResolvedSummary {
                     source_caps,
                     sanitizer_caps,
                     sink_caps,
-                    param_to_sink: vec![],
+                    param_to_sink,
                     param_to_sink_sites: vec![],
                     propagates_taint: false,
                     propagating_params: vec![],

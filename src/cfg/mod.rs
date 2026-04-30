@@ -1737,16 +1737,25 @@ pub(super) fn push_node<'a>(
     let mut sink_payload_args: Option<Vec<usize>> = None;
     let mut destination_uses: Option<Vec<String>> = None;
     let mut gate_filters: Vec<GateFilter> = Vec::new();
-    // Gates run when no flat `Sink` label is already present.  Source /
-    // Sanitizer labels are orthogonal — a callee like Python's
-    // `requests.post` is a `Source` for its response object AND a gated
-    // `Sink` for its URL/body argument positions; both should attach.  Only
-    // suppress gate matching when a flat `Sink` already covers the call,
-    // since that would double-attribute the same outbound capability.
+    // Gates run when no flat `Sink` label is already present, OR when a
+    // matching gate restricts the payload-arg set on top of an existing flat
+    // sink.  Source / Sanitizer labels are orthogonal — a callee like
+    // Python's `requests.post` is a `Source` for its response object AND a
+    // gated `Sink` for its URL/body argument positions; both should attach.
+    //
+    // Payload-arg refinement: when a flat sink matches a callee that ALSO
+    // has a gate entry restricting `payload_args`, the gate's `payload_args`
+    // are propagated to `sink_payload_args` so only those positions are
+    // taint-checked.  Example: `execSync(cmd, { env: process.env })` matches
+    // the bare `execSync` flat `Sink(SHELL_ESCAPE)` AND the gate `=execSync`
+    // with `payload_args: &[0]`; without the refinement, the flat rule's
+    // implicit "all args" would flag `process.env` flowing into the options
+    // object's `env` field.  The gate's labels themselves are deduped so a
+    // single capability never double-attributes.
     let has_sink_label = labels
         .iter()
         .any(|l| matches!(l, DataLabel::Sink(_)));
-    if !has_sink_label {
+    {
         let gate_call = call_ast.or_else(|| find_call_node_deep(ast, lang, 4));
         if let Some(cn) = gate_call {
             let gate_callee_text = if call_ast.is_some() {
@@ -1777,9 +1786,21 @@ pub(super) fn push_node<'a>(
                 //   * a `GateFilter` carrying that gate's specific
                 //     `(label_caps, payload_args, destination_uses)` so
                 //     the SSA sink scan can attribute taint per-cap.
+                //
+                // When a flat sink already matches, gate labels are deduped
+                // so the same capability isn't attributed twice (once flat,
+                // once gated).  Their `payload_args` still flow into
+                // `sink_payload_args` so the gate's arg-position restriction
+                // applies on top of the flat sink.
                 let mut union_payload: Vec<usize> = Vec::new();
                 for gm in &matches {
-                    labels.push(gm.label);
+                    if has_sink_label {
+                        if !labels.contains(&gm.label) {
+                            labels.push(gm.label);
+                        }
+                    } else {
+                        labels.push(gm.label);
+                    }
 
                     let mut payload_vec: Vec<usize> =
                         if gm.payload_args == crate::labels::ALL_ARGS_PAYLOAD {
@@ -4478,7 +4499,21 @@ fn apply_promisify_labels(
             let Some(alias) = aliases.get(&callee) else {
                 continue;
             };
-            let wrapped_labels = classify_all(lang, &alias.wrapped, extra);
+            // Inherit both flat and gated labels from the wrapped callee.
+            // Gated sinks (e.g. `child_process.exec`) carry the same
+            // capability semantics as flat sinks, just with arg-position
+            // filtering at the call site; the promisify alias should
+            // surface the wrapped function's sink class regardless of
+            // which arm originally classified it.
+            let mut wrapped_labels: Vec<crate::labels::DataLabel> =
+                classify_all(lang, &alias.wrapped, extra).into_iter().collect();
+            for gm in
+                classify_gated_sink(lang, &alias.wrapped, |_| None, |_| None, |_| false).iter()
+            {
+                if !wrapped_labels.contains(&gm.label) {
+                    wrapped_labels.push(gm.label);
+                }
+            }
             if wrapped_labels.is_empty() {
                 continue;
             }
