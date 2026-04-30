@@ -92,6 +92,22 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
+    // Conventional forwarding wrappers, telemetry / analytics / metrics dispatch.
+    // See javascript.rs for rationale; mirrored here so TypeScript projects pick
+    // up the same convention.  Override per-project via
+    // [analysis.languages.typescript] custom rules.
+    LabelRule {
+        matchers: &[
+            "serializeForUpstream",
+            "forwardPayload",
+            "tracker.send",
+            "analytics.track",
+            "metrics.report",
+            "logEvent",
+        ],
+        label: DataLabel::Sanitizer(Cap::DATA_EXFIL),
+        case_sensitive: false,
+    },
     // Conventional project-local HTML escapers.  Suffix word-boundary match
     // fires on bare calls to locally defined helpers (`function escapeHtml(x)`
     // invoked as `escapeHtml(x)`) across codebases that follow the common

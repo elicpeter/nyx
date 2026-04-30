@@ -98,6 +98,26 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
+    // Conventional forwarding wrappers, telemetry / analytics / metrics dispatch.
+    // Treating these as Sanitizer(DATA_EXFIL) encodes the project convention
+    // that a payload routed through a named forwarding boundary is an
+    // explicit, expected egress (the developer named the function), not the
+    // accidental cross-boundary leak DATA_EXFIL is meant to catch.  Users who
+    // do not follow this convention can override per-project via
+    // [analysis.languages.javascript] custom rules; the convention is
+    // documented in docs/detectors/taint.md so projects can extend it.
+    LabelRule {
+        matchers: &[
+            "serializeForUpstream",
+            "forwardPayload",
+            "tracker.send",
+            "analytics.track",
+            "metrics.report",
+            "logEvent",
+        ],
+        label: DataLabel::Sanitizer(Cap::DATA_EXFIL),
+        case_sensitive: false,
+    },
     // Conventional project-local HTML escapers.  Suffix word-boundary match
     // fires on bare calls to locally defined helpers (`function escapeHtml(x)`
     // invoked as `escapeHtml(x)`) across codebases that follow the common

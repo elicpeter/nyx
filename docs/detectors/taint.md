@@ -167,3 +167,58 @@ cap      = "data_exfil"
 ```
 
 Or re-classify the source itself with a custom Source rule whose name matches one of the Sensitive substrings (`cookie`, `header`).
+
+## DATA_EXFIL suppression layers
+
+Three knobs ship out of the box so projects can match the cap to their architecture without per-call suppressions.
+
+### 1. Forwarding-wrapper sanitizer convention
+
+A named function that exists to *forward* a payload across a known boundary is the developer's explicit decision to send the data. The default sanitizer rules treat the following identifiers as `Sanitizer(data_exfil)` in JavaScript and TypeScript:
+
+```
+serializeForUpstream
+forwardPayload
+tracker.send
+analytics.track
+metrics.report
+logEvent
+```
+
+If your codebase follows this convention, the cap stops firing on these calls automatically. Extend the convention with your own forwarding wrappers via the standard custom-rule path:
+
+```toml
+[[analysis.languages.javascript.rules]]
+matchers = ["dispatchTelemetry", "sendToBus"]
+kind     = "sanitizer"
+cap      = "data_exfil"
+```
+
+The rule of thumb: a function that *only* exists to ship a payload to a known boundary belongs in this list. A function that *might* leak (a generic HTTP wrapper, a logging helper that writes to an arbitrary destination) does not.
+
+### 2. Destination allowlist
+
+Configure a set of trusted outbound prefixes once and the cap is dropped on every site whose destination argument has a static prefix that begins with one of them:
+
+```toml
+[detectors.data_exfil]
+trusted_destinations = [
+  "https://api.internal/",
+  "https://telemetry.",
+]
+```
+
+Use full origins or origin-pinned paths so a partial-host match across unrelated origins cannot occur. `https://api.` would also match `https://api.evil.example.com/` — the entry must include the path separator (`/`) at the end of the host.
+
+The match consults the abstract string domain: a literal URL is a static prefix; a template literal `\`https://api.internal/${id}\`` exposes the prefix `https://api.internal/`; a fully dynamic URL has no prefix and the cap fires as usual.
+
+### 3. Detector-class disable
+
+Some projects forward user-bound payloads as a matter of architecture. Turn the entire detector class off when the noise is permanent:
+
+```toml
+[detectors.data_exfil]
+enabled = false
+```
+
+`enabled = false` strips `Cap::DATA_EXFIL` from sink caps before event emission, so no `taint-data-exfiltration` finding reaches the report. The decision is per-project — other projects loaded by the same `nyx serve` instance keep their own settings.

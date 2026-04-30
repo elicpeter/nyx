@@ -5245,6 +5245,15 @@ fn collect_block_events(
         let sink_info = resolve_sink_info(info, transfer);
         let mut sink_caps = sink_info.caps;
 
+        // [detectors.data_exfil] enabled toggle.  When the detector class is
+        // disabled per-project, strip Cap::DATA_EXFIL from sink_caps so no
+        // taint-data-exfiltration event is emitted regardless of which gate
+        // would have fired.  Strict-additive: defaults to enabled, no effect
+        // for projects that don't opt in.
+        if !crate::utils::detector_options::current().data_exfil.enabled {
+            sink_caps &= !Cap::DATA_EXFIL;
+        }
+
         // Type-qualified sink resolution: when normal sink resolution found nothing,
         // try using the receiver's inferred type to construct a qualified callee name.
         if sink_caps.is_empty() {
@@ -5642,6 +5651,27 @@ fn collect_block_events(
         };
 
         for (filter_caps, positions_override, destination_override) in filter_iter {
+            let mut filter_caps = filter_caps;
+
+            // Per-filter destination allowlist for DATA_EXFIL.  When this
+            // filter would emit Cap::DATA_EXFIL and the call's destination
+            // arg has a trusted static prefix (configured via
+            // [detectors.data_exfil.trusted_destinations]), drop the bit
+            // for this filter only.  Other gates on the same call site
+            // (notably SSRF) are unaffected.  Mirrors the semantics of
+            // is_call_data_exfil_destination_trusted but operates per-gate
+            // so a multi-gate fetch site keeps SSRF attribution while
+            // dropping DATA_EXFIL when the destination is trusted.
+            if filter_caps.intersects(Cap::DATA_EXFIL) {
+                if let SsaOp::Call { ref args, .. } = inst.op {
+                    if let Some(ref abs) = state.abstract_state {
+                        if is_call_data_exfil_destination_trusted(inst, args, abs, cfg) {
+                            filter_caps &= !Cap::DATA_EXFIL;
+                        }
+                    }
+                }
+            }
+
             if filter_caps.is_empty() {
                 continue;
             }
@@ -7456,6 +7486,16 @@ fn is_abstract_safe_for_sink(
         }
     }
 
+    // DATA_EXFIL, destination allowlist via configured trusted prefixes.
+    // Mirrors the SSRF prefix-lock above but consults the user-configured
+    // [detectors.data_exfil] trusted_destinations list.  Strict-additive:
+    // when no destinations are configured this is a no-op.
+    if sink_caps.intersects(Cap::DATA_EXFIL)
+        && is_inst_data_exfil_destination_trusted(inst, abs, cfg)
+    {
+        return true;
+    }
+
     // SHELL_ESCAPE, static-map finite-domain safety.  When every tainted
     // payload value is proved by the static-HashMap-lookup analysis to come
     // from a bounded set of metacharacter-free literals, the call cannot
@@ -7580,6 +7620,15 @@ fn is_call_abstract_safe(
                 return true;
             }
         }
+    }
+
+    // DATA_EXFIL, destination-allowlist match.  Mirrors the SSRF arm above
+    // for the Call path.  Strict-additive: a no-op when
+    // [detectors.data_exfil.trusted_destinations] is empty.
+    if sink_caps.intersects(Cap::DATA_EXFIL)
+        && is_call_data_exfil_destination_trusted(inst, args, abs, cfg)
+    {
+        return true;
     }
 
     // SHELL_ESCAPE, static-map finite-domain safety on every non-empty arg
@@ -7855,6 +7904,122 @@ fn is_static_map_shell_safe(
             .iter()
             .all(|s| crate::abstract_interp::string_domain::is_shell_safe_literal(s)),
         _ => false,
+    })
+}
+
+/// `DATA_EXFIL` destination-allowlist match.
+///
+/// Returns `true` when `prefix` (the proven static prefix of an outbound
+/// destination URL, sourced from either the abstract string domain or an
+/// inline literal seen by CFG) starts with one of the user-configured
+/// trusted destinations.  Used by the abstract sink-suppression code to
+/// drop the [`Cap::DATA_EXFIL`] bit on legitimate forwarding pipelines
+/// (telemetry, internal APIs, analytics) without affecting other caps on
+/// the same call.
+///
+/// Match semantics: a trusted destination entry is treated as a string
+/// prefix.  An empty entry never matches (empty prefix would match
+/// every URL, which is never a useful allowlist).  Entries should be
+/// origin-pinned (e.g. `https://api.internal/`) so partial-host
+/// collisions cannot occur.
+fn is_string_prefix_trusted_destination(prefix: &str, trusted: &[String]) -> bool {
+    if prefix.is_empty() {
+        return false;
+    }
+    trusted
+        .iter()
+        .any(|t| !t.is_empty() && prefix.starts_with(t.as_str()))
+}
+
+/// Check whether the call site's destination argument (positional arg 0) is
+/// a known trusted destination per
+/// [`crate::utils::detector_options::DataExfilDetectorOptions::trusted_destinations`].
+///
+/// Returns `true` when the URL argument has a static prefix matching one
+/// of the configured trusted entries.  Three sources are consulted in
+/// order:
+///
+/// 1. The CFG node's syntactic literal (`info.call.arg_string_literals[0]`),
+///    populated for any positional argument that is a syntactic string
+///    literal at the call site.  Catches the common case
+///    `fetch('https://api.internal/...', {...})` whose URL never enters
+///    the abstract domain because it is not bound to an identifier.
+/// 2. The inline template-literal prefix attached to the call node
+///    directly (matches the SSRF prefix-lock fallback).
+/// 3. The abstract string-domain prefix of arg 0's SSA value group.
+///    Catches identifier-bound URLs like
+///    `let url = \`https://api.internal/${id}\`; fetch(url, {...})`.
+///
+/// Returns `false` when no trusted destinations are configured.
+fn is_call_data_exfil_destination_trusted(
+    inst: &SsaInst,
+    args: &[SmallVec<[SsaValue; 2]>],
+    abs: &AbstractState,
+    cfg: &Cfg,
+) -> bool {
+    let opts = crate::utils::detector_options::current();
+    let trusted = &opts.data_exfil.trusted_destinations;
+    if trusted.is_empty() {
+        return false;
+    }
+    let node_info = &cfg[inst.cfg_node];
+    if let Some(Some(lit)) = node_info.call.arg_string_literals.first() {
+        if is_string_prefix_trusted_destination(lit, trusted) {
+            return true;
+        }
+    }
+    if let Some(prefix) = node_info.string_prefix.as_deref() {
+        if is_string_prefix_trusted_destination(prefix, trusted) {
+            return true;
+        }
+    }
+    if let Some(first_arg) = args.first() {
+        if !first_arg.is_empty()
+            && first_arg.iter().all(|v| {
+                abs.get(*v)
+                    .string
+                    .prefix
+                    .as_deref()
+                    .is_some_and(|p| is_string_prefix_trusted_destination(p, trusted))
+            })
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Non-Call variant of [`is_call_data_exfil_destination_trusted`]: used by
+/// [`is_abstract_safe_for_sink`] where the destination is read off the
+/// instruction's own used SSA values rather than a positional Call arg
+/// list.  Falls back to the node-attached `string_prefix` when no abstract
+/// fact is available.
+fn is_inst_data_exfil_destination_trusted(
+    inst: &SsaInst,
+    abs: &AbstractState,
+    cfg: &Cfg,
+) -> bool {
+    let opts = crate::utils::detector_options::current();
+    let trusted = &opts.data_exfil.trusted_destinations;
+    if trusted.is_empty() {
+        return false;
+    }
+    let node_info = &cfg[inst.cfg_node];
+    if let Some(prefix) = node_info.string_prefix.as_deref() {
+        if is_string_prefix_trusted_destination(prefix, trusted) {
+            return true;
+        }
+    }
+    let used = inst_use_values(inst);
+    if used.is_empty() {
+        return false;
+    }
+    used.iter().all(|v| {
+        abs.get(*v)
+            .string
+            .prefix
+            .as_deref()
+            .is_some_and(|p| is_string_prefix_trusted_destination(p, trusted))
     })
 }
 
