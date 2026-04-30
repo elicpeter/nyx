@@ -145,6 +145,11 @@ fn resolve_file_rel(file_rel: &str, scan_root: Option<&Path>, fallback: &Path) -
 
 /// Build a [`Diag`] from a taint [`Finding`], the CFG that produced it,
 /// the parsed tree (for byte→line/col conversion) and the file path.
+///
+/// Returns `None` when source-sensitivity gating fully suppresses the
+/// finding (the canonical case is a multi-gate `DATA_EXFIL` event whose
+/// contributing source is plain user input — see the
+/// `effective_caps` strip below).
 fn build_taint_diag(
     finding: &crate::taint::Finding,
     cfg_graph: &crate::cfg::Cfg,
@@ -152,7 +157,7 @@ fn build_taint_diag(
     path: &Path,
     src: &[u8],
     scan_root: Option<&Path>,
-) -> Diag {
+) -> Option<Diag> {
     let call_site_byte = cfg_graph[finding.sink].classification_span().0;
     let call_site_point = byte_offset_to_point(tree, call_site_byte);
     // `finding.source` should be a NodeIndex valid in this body's CFG, but
@@ -373,11 +378,40 @@ fn build_taint_diag(
     // SSA dispatch) when populated; fall back to the union of all sink-label
     // caps on the CFG node so legacy paths that build findings without
     // setting `effective_sink_caps` still pick the right rule id.
-    let effective_caps = if finding.effective_sink_caps.is_empty() {
+    let mut effective_caps = if finding.effective_sink_caps.is_empty() {
         crate::labels::Cap::from_bits_truncate(sink_caps_bits)
     } else {
         finding.effective_sink_caps
     };
+
+    // Source-sensitivity gate for `DATA_EXFIL`.  Plain attacker input echoed
+    // back into an outbound request body / headers / json is not data
+    // exfiltration, the user already controls the value, surfacing it as a
+    // leak is noise (the canonical false-positive class for API gateways
+    // and telemetry forwarders that proxy `req.body`).  A `DATA_EXFIL`
+    // finding requires the contributing source to be at least `Sensitive`
+    // (cookies, headers, env, db rows, file reads).  Plain user-input
+    // sources have the cap stripped so the finding either drops entirely
+    // or downgrades to whatever non-`DATA_EXFIL` cap also applies (e.g.
+    // SSRF on the URL position of the same `fetch` call).
+    if effective_caps.contains(crate::labels::Cap::DATA_EXFIL)
+        && finding.source_kind.sensitivity() < crate::labels::Sensitivity::Sensitive
+    {
+        effective_caps.remove(crate::labels::Cap::DATA_EXFIL);
+        // The multi-gate dispatch produces one finding per (source, sink-cap)
+        // pair, a body-flow finding's `effective_sink_caps` is exactly the
+        // cap that fired (e.g. `DATA_EXFIL`).  When that single cap is the
+        // sensitivity-stripped one, the finding has no surviving rationale
+        // and we drop it entirely rather than reroute it to the generic
+        // `taint-unsanitised-flow` bucket (which would just re-emit the same
+        // false positive under a different rule id).  Findings with a
+        // multi-cap `effective_sink_caps` keep their non-DATA_EXFIL caps and
+        // are routed normally below.
+        if finding.effective_sink_caps == crate::labels::Cap::DATA_EXFIL {
+            return None;
+        }
+    }
+
     let diag_id = if effective_caps.contains(crate::labels::Cap::UNAUTHORIZED_ID) {
         "rs.auth.missing_ownership_check.taint".to_string()
     } else if effective_caps.contains(crate::labels::Cap::DATA_EXFIL)
@@ -467,7 +501,7 @@ fn build_taint_diag(
         ev.confidence_limiters = limiters;
     }
 
-    diag
+    Some(diag)
 }
 
 /// Resolve a file extension to a language slug (e.g. `"rust"`,
@@ -622,6 +656,8 @@ fn source_kind_label(sk: crate::labels::SourceKind) -> &'static str {
     use crate::labels::SourceKind;
     match sk {
         SourceKind::UserInput => "user input",
+        SourceKind::Cookie => "cookie value",
+        SourceKind::Header => "request header",
         SourceKind::EnvironmentConfig => "environment config",
         SourceKind::FileSystem => "file system data",
         SourceKind::Database => "database result",
@@ -1198,14 +1234,16 @@ impl<'a> ParsedFile<'a> {
                 continue;
             }
 
-            out.push(build_taint_diag(
+            if let Some(diag) = build_taint_diag(
                 finding,
                 body_cfg,
                 &self.source.tree,
                 self.source.path,
                 self.source.bytes,
                 scan_root,
-            ));
+            ) {
+                out.push(diag);
+            }
         }
 
         // ── CFG structural analyses (per body) ─────────────────────────

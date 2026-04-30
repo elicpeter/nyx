@@ -473,6 +473,10 @@ pub fn lookup(lang: &str, raw: &str) -> Kind {
 pub enum SourceKind {
     /// Direct user input (request params, argv, stdin, form data)
     UserInput,
+    /// HTTP cookie value (carries session / auth material)
+    Cookie,
+    /// HTTP request header (may carry auth tokens, user-agent fingerprints)
+    Header,
     /// Environment variables and configuration
     EnvironmentConfig,
     /// File system reads
@@ -485,9 +489,74 @@ pub enum SourceKind {
     Unknown,
 }
 
+/// Sensitivity classification of a taint source.  Drives detector classes
+/// like `DATA_EXFIL` that only fire when the source carries information
+/// the operator did not intend to leak.  Plain user input echoed back into
+/// an outbound request is not data exfiltration, the user already controls
+/// it, surfacing it as a leak is noise.
+///
+/// The threshold for `DATA_EXFIL` is `>= Sensitive`, plain user input is
+/// suppressed.  Projects that legitimately classify a request body as
+/// sensitive (e.g. an API gateway forwarding pre-authenticated user tokens
+/// out of a request body) can override via custom rules in `nyx.conf`,
+/// either by re-classifying the source or by adding a Sanitizer rule for
+/// `Cap::DATA_EXFIL` on the legitimate forwarding path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Sensitivity {
+    /// Attacker-controlled but not secret in itself, request bodies, query
+    /// strings, form fields, argv.  Echoing this to an outbound request is
+    /// not data exfiltration.
+    Plain,
+    /// Carries operator state the user should not see leak out, cookies,
+    /// auth headers, env, file system reads, database rows.
+    Sensitive,
+    /// Reserved for future explicit secret classifications (API keys,
+    /// credential stores, key material).  No source currently produces
+    /// this, but the threshold check in `effective_sink_caps` already
+    /// handles it monotonically.
+    Secret,
+}
+
+impl SourceKind {
+    /// Return the sensitivity tier this source kind belongs to.  Drives the
+    /// `Cap::DATA_EXFIL` cap-suppression decision in `ast.rs`.
+    pub fn sensitivity(self) -> Sensitivity {
+        match self {
+            // Plain user-controlled input, the user already has the data,
+            // surfacing it back to them via an outbound request is not a
+            // disclosure.
+            SourceKind::UserInput => Sensitivity::Plain,
+            // Operator-bound state, leaking these via an outbound request
+            // is a real cross-boundary disclosure.
+            SourceKind::Cookie
+            | SourceKind::Header
+            | SourceKind::EnvironmentConfig
+            | SourceKind::FileSystem
+            | SourceKind::Database => Sensitivity::Sensitive,
+            // Caught exceptions can carry stack traces, db errors, internal
+            // paths, treat them as sensitive by default.
+            SourceKind::CaughtException => Sensitivity::Sensitive,
+            // Conservative default for unclassified sources, surface
+            // findings rather than silently drop them.
+            SourceKind::Unknown => Sensitivity::Sensitive,
+        }
+    }
+}
+
 /// Infer the source kind from capabilities and callee name.
 pub fn infer_source_kind(caps: Cap, callee: &str) -> SourceKind {
     let cl = callee.to_ascii_lowercase();
+
+    // Cookie / Header are checked *before* the generic user-input bucket
+    // because they imply higher sensitivity (auth material, session ids).
+    // The generic UserInput substrings (`request`, `header`, `cookie`)
+    // would otherwise swallow these.
+    if cl.contains("cookie") {
+        return SourceKind::Cookie;
+    }
+    if cl.contains("header") {
+        return SourceKind::Header;
+    }
 
     // User input patterns
     if cl.contains("argv")
@@ -498,8 +567,6 @@ pub fn infer_source_kind(caps: Cap, callee: &str) -> SourceKind {
         || cl.contains("params")
         || cl.contains("input")
         || cl.contains("body")
-        || cl.contains("header")
-        || cl.contains("cookie")
         || cl.contains("location")
         || cl.contains("document.url")
         || cl.contains("document.referrer")
@@ -542,6 +609,8 @@ pub fn infer_source_kind(caps: Cap, callee: &str) -> SourceKind {
 pub fn severity_for_source_kind(kind: SourceKind) -> crate::patterns::Severity {
     match kind {
         SourceKind::UserInput => crate::patterns::Severity::High,
+        SourceKind::Cookie => crate::patterns::Severity::High,
+        SourceKind::Header => crate::patterns::Severity::High,
         SourceKind::EnvironmentConfig => crate::patterns::Severity::High,
         SourceKind::FileSystem => crate::patterns::Severity::Medium,
         SourceKind::Database => crate::patterns::Severity::Medium,

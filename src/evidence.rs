@@ -464,7 +464,10 @@ fn compute_taint_confidence(diag: &Diag) -> Confidence {
 fn structured_source_kind_score(kind: crate::labels::SourceKind) -> i32 {
     use crate::labels::SourceKind;
     match kind {
-        SourceKind::UserInput => 3,
+        // Cookie / Header carry auth material, score them at the same
+        // ranking weight as direct user input rather than the lower
+        // FileSystem/Database tiers.
+        SourceKind::UserInput | SourceKind::Cookie | SourceKind::Header => 3,
         SourceKind::EnvironmentConfig => 2,
         SourceKind::Unknown | SourceKind::FileSystem => 1,
         SourceKind::Database | SourceKind::CaughtException => 0,
@@ -538,6 +541,8 @@ pub fn generate_explanation(diag: &Diag) -> Option<String> {
         use crate::labels::SourceKind;
         match kind {
             SourceKind::UserInput => "user input",
+            SourceKind::Cookie => "cookie",
+            SourceKind::Header => "request header",
             SourceKind::EnvironmentConfig => "environment/config",
             SourceKind::Database => "database",
             SourceKind::FileSystem => "file system",

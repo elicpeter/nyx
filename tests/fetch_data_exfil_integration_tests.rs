@@ -5,6 +5,12 @@
 //! headers / json flow), and a tainted body must not surface as SSRF and
 //! vice versa.  Also sanity-checks the SARIF output so the new finding
 //! class produces a distinct rule id.
+//!
+//! `DATA_EXFIL` is gated on source sensitivity: only `Sensitive`-tier
+//! sources (cookies, headers, env, db rows, file reads) trigger the cap.
+//! Plain user input echoed back into a body is *not* data exfiltration —
+//! the user already controls the value.  See
+//! `fetch_body_user_input_silenced.js` for the negative regression.
 
 mod common;
 
@@ -74,6 +80,27 @@ fn fetch_ssrf_url_tainted_emits_ssrf_not_data_exfil() {
         exfil,
         0,
         "tainted-URL fetch must NOT emit DATA_EXFIL, got {exfil}.\n\
+         Diags: {:#?}",
+        diags.iter().map(|d| &d.id).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn fetch_body_plain_user_input_does_not_emit_data_exfil() {
+    // Plain attacker-controlled input (`req.body.message`) flowing into a
+    // fixed-URL `fetch` body must NOT fire `Cap::DATA_EXFIL` after the
+    // source-sensitivity gate.  The user already controls the value;
+    // surfacing it back to the user via the outbound payload is not a
+    // cross-boundary disclosure.
+    let diags = diags_for("fetch_body_user_input_silenced.js");
+    let exfil = diags
+        .iter()
+        .filter(|d| d.id.starts_with("taint-data-exfiltration"))
+        .count();
+    assert_eq!(
+        exfil, 0,
+        "plain user input echoed into a fetch body must NOT emit \
+         taint-data-exfiltration, got {exfil}.\n\
          Diags: {:#?}",
         diags.iter().map(|d| &d.id).collect::<Vec<_>>(),
     );

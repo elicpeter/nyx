@@ -135,10 +135,35 @@ Sources, sanitizers, and sinks are linked by named capabilities. A sanitizer onl
 | `sql_query` | | parameterized query binders | `cursor.execute`, `db.query` with concatenation |
 | `deserialize` | | | `pickle.loads`, `yaml.load`, `Marshal.load` |
 | `ssrf` | | URL-prefix locks | `requests.get`, `fetch` URL arg, outbound HTTP destination |
-| `data_exfil` | | | `fetch` body / headers / json, `XMLHttpRequest.send` body |
+| `data_exfil` | cookies, headers, env, db rows, file reads (Sensitive-tier sources only) | | `fetch` body / headers / json, `XMLHttpRequest.send` body |
 | `code_exec` | | | `eval`, `exec`, `Function` |
 | `crypto` | | | weak-algorithm constructors |
 | `unauthorized_id` | request-bound scoped IDs (Rust auth analysis) | ownership check | row-level write |
 | `all` | Sources typically use `all` so they match any sink | | |
 
 Sources typically use `cap = "all"` so they match every sink. Sinks declare the specific cap they need. Sanitizers only clear the cap they name.
+
+## Source sensitivity
+
+Some detector classes need to know not just *that* a value is attacker-influenced but *what kind* of value it is. Each source carries a `SourceKind` (`UserInput`, `Cookie`, `Header`, `EnvironmentConfig`, `FileSystem`, `Database`, `CaughtException`, `Unknown`) and a derived sensitivity tier:
+
+| Tier | Source kinds | Meaning |
+|---|---|---|
+| `Plain` | `UserInput` (request bodies, query strings, form fields, argv, stdin) | Attacker-controlled but already in the attacker's hands. Echoing it back to them is not a disclosure. |
+| `Sensitive` | `Cookie`, `Header`, `EnvironmentConfig`, `FileSystem`, `Database`, `CaughtException`, `Unknown` | Operator-bound state that should not leak across boundaries. |
+| `Secret` | (reserved for explicit credential sources) | Highest tier; treated identically to `Sensitive` today. |
+
+`Cap::DATA_EXFIL` only fires when the contributing source is at least `Sensitive`. Plain user input flowing into an outbound `fetch` body is suppressed at finding-emission time — the canonical false-positive class for API gateways and telemetry forwarders that proxy `req.body`. SSRF and other classes are unaffected; the gate is scoped to `DATA_EXFIL`.
+
+If a project legitimately classifies a request body as sensitive (e.g. an internal forwarder where `req.body` carries a pre-authenticated user token), override via custom rules in `nyx.conf`:
+
+```toml
+# Treat the forwarder's outbound payload as already-sanitized so the
+# DATA_EXFIL gate stops firing on it.
+[[analysis.languages.javascript.rules]]
+matchers = ["sanitizeOutbound"]
+kind     = "sanitizer"
+cap      = "data_exfil"
+```
+
+Or re-classify the source itself with a custom Source rule whose name matches one of the Sensitive substrings (`cookie`, `header`).
