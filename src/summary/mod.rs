@@ -673,6 +673,20 @@ pub struct GlobalSummaries {
     /// indexed-mode parity gap on transitive cross-package IPA inside
     /// inlined frames.
     cross_package_imports_by_namespace: HashMap<String, std::sync::Arc<HashMap<String, FuncKey>>>,
+    /// Cross-file caller-scope IPA accumulator (Phase 2), keyed by
+    /// `(Lang, callee_leaf_name)`.  For each callee leaf observed in
+    /// pass 1, records whether EVERY caller across the whole index is an
+    /// authorized route handler, plus the union of route-level checks to
+    /// lift onto the callee.  Consumed by
+    /// [`crate::auth_analysis::caller_scope::apply_cross_file_caller_scope`]
+    /// at pass 2 to suppress `missing_ownership_check` /
+    /// `token_override_without_validation` on private helpers that live in
+    /// a different file from their authorized route handler (the dominant
+    /// sentry / saleor / airflow FP shape).  Folded with AND/OR/union so
+    /// it combines safely under rayon `reduce`.  See
+    /// [`crate::auth_analysis::caller_scope`] for the soundness argument.
+    caller_scope_by_callee:
+        HashMap<(Lang, String), crate::auth_analysis::caller_scope::CalleeCallerAcc>,
     /// Type hierarchy index for runtime virtual-dispatch fan-out.
     ///
     /// Installed by [`Self::install_hierarchy`] after pass 1 from the
@@ -994,6 +1008,16 @@ impl GlobalSummaries {
         for (ns, map) in other.cross_package_imports_by_namespace {
             self.cross_package_imports_by_namespace.insert(ns, map);
         }
+        // Caller-scope accumulator: NOT last-writer-wins — combine via the
+        // associative/commutative `CalleeCallerAcc::merge` (OR on
+        // has_caller, AND on all_authorized, union on lifted_checks) so a
+        // callee's caller set is the union across every file.
+        for (key, acc) in other.caller_scope_by_callee {
+            self.caller_scope_by_callee
+                .entry(key)
+                .or_default()
+                .merge(acc);
+        }
         // Hierarchy index: invalidate after a merge so the next consumer
         // sees a freshly-built view that includes `other`'s edges.  The
         // alternative, point-merging two indexes, is racy when the
@@ -1159,6 +1183,48 @@ impl GlobalSummaries {
     /// Count of cross-file auth summaries currently loaded.
     pub fn auth_len(&self) -> usize {
         self.auth_by_key.len()
+    }
+
+    /// Fold one pass-1 caller-scope edge into the accumulator.
+    ///
+    /// Accumulates per `(Lang, callee_leaf)`: OR on `has_caller`, AND on
+    /// `all_authorized`, union on `lifted_checks`.  Idempotent under the
+    /// rayon fold/reduce because the underlying accumulator's `fold_edge`
+    /// / `merge` are associative + commutative.
+    pub fn fold_caller_scope_edge(
+        &mut self,
+        edge: crate::auth_analysis::caller_scope::CallerScopeEdge,
+    ) {
+        let crate::auth_analysis::caller_scope::CallerScopeEdge {
+            lang,
+            callee_leaf,
+            caller_authorized,
+            route_checks,
+        } = edge;
+        self.caller_scope_by_callee
+            .entry((lang, callee_leaf))
+            .or_default()
+            .fold_edge(caller_authorized, &route_checks);
+    }
+
+    /// Resolve the cross-file caller-scope accumulator for a callee leaf.
+    pub fn resolve_caller_scope(
+        &self,
+        lang: Lang,
+        leaf: &str,
+    ) -> Option<&crate::auth_analysis::caller_scope::CalleeCallerAcc> {
+        // Avoid allocating a `String` key on the hot lookup path by
+        // probing with a borrowed tuple via the `Borrow` blanket impl —
+        // but `(Lang, String)` keys can't be borrowed as `(Lang, &str)`,
+        // so fall back to a cheap owned probe.  Caller-scope lookups run
+        // once per helper unit at pass 2, not per instruction.
+        self.caller_scope_by_callee
+            .get(&(lang, leaf.to_string()))
+    }
+
+    /// Count of distinct `(Lang, callee_leaf)` caller-scope entries.
+    pub fn caller_scope_len(&self) -> usize {
+        self.caller_scope_by_callee.len()
     }
 
     /// Insert a per-file `PerFileRouterFacts` snapshot.  Last-writer-wins
@@ -1332,6 +1398,7 @@ impl GlobalSummaries {
             && self.auth_by_key.is_empty()
             && self.router_facts_by_module.is_empty()
             && self.cross_package_imports_by_namespace.is_empty()
+            && self.caller_scope_by_callee.is_empty()
     }
 
     /// Iterate over all (key, summary) pairs.
@@ -1889,6 +1956,7 @@ impl std::fmt::Debug for GlobalSummaries {
                 "cross_package_imports_len",
                 &self.cross_package_imports_by_namespace.len(),
             )
+            .field("caller_scope_len", &self.caller_scope_by_callee.len())
             .finish()
     }
 }

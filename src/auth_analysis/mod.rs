@@ -57,6 +57,7 @@
 //!   SQL parser
 
 pub mod auth_markers;
+pub mod caller_scope;
 pub mod checks;
 pub mod config;
 pub mod extract;
@@ -206,6 +207,23 @@ pub fn run_auth_analysis_with_model(
     // chains are also covered; consults `global_summaries.auth_by_key`
     // (when provided) for cross-file helpers that live in other files.
     apply_helper_lifting(&mut model, lang, file_path, scan_root, global_summaries);
+
+    // Cross-file caller-scope IPA (Phase 2): lift route-handler auth
+    // checks DOWN onto helper units defined in THIS file but called only
+    // from authorized route handlers in OTHER files.  Consults the
+    // pass-1 `GlobalSummaries.caller_scope_by_callee` accumulator.  Runs
+    // BEFORE the in-file pass so a cross-file-lifted helper can itself
+    // seed the in-file fixed point onto its same-file sub-callees.  See
+    // [`caller_scope`] for the soundness argument.  Gated by
+    // `NYX_XFILE_CALLER_SCOPE` (default on; set "0"/"false" to disable).
+    if caller_scope::cross_file_enabled()
+        && let Some(lang_enum) = Lang::from_slug(lang)
+        && let Some(gs) = global_summaries
+    {
+        caller_scope::apply_cross_file_caller_scope(&mut model, lang_enum, |l, leaf| {
+            gs.resolve_caller_scope(l, leaf).cloned()
+        });
+    }
 
     // Caller-scope IPA: propagate route-handler-level auth checks DOWN
     // to callee helper units within the same file.  See

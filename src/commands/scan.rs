@@ -2375,6 +2375,16 @@ pub(crate) fn scan_filesystem_with_observer(
                                 local_gs.insert_router_facts(module_id, facts);
                             }
 
+                            // Fold per-file cross-file caller-scope edges so
+                            // pass 2 can lift route-level auth onto private
+                            // helpers reached only from authorized route
+                            // handlers in other files (the sentry / saleor /
+                            // airflow cross-file helper FP shape).  See
+                            // `auth_analysis::caller_scope`.
+                            for edge in r.caller_scope_facts {
+                                local_gs.fold_caller_scope_edge(edge);
+                            }
+
                             // Phase-09 indexed-mode parity: cache the
                             // file's cross-package import map by namespace
                             // so an inlined callee body loaded from SQLite

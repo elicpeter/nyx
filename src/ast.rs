@@ -5986,6 +5986,15 @@ pub struct FusedResult {
         String,
         std::sync::Arc<HashMap<String, crate::symbol::FuncKey>>,
     )>,
+    /// Pass-1 cross-file caller-scope edges harvested from this file's
+    /// authorization model: one entry per (caller-unit, distinct
+    /// callee-leaf) recording whether the caller is an authorized route
+    /// handler.  Pass 1 folds these into
+    /// `GlobalSummaries.caller_scope_by_callee`; pass 2's
+    /// `apply_cross_file_caller_scope` lifts route-level auth onto private
+    /// helpers whose every caller is authorized.  Empty for non-Full mode,
+    /// files with auth disabled, or files with no call sites.
+    pub caller_scope_facts: Vec<auth_analysis::caller_scope::CallerScopeEdge>,
 }
 
 /// Parse the file once, build the CFG once, and produce both function
@@ -6023,6 +6032,7 @@ pub fn analyse_file_fused(
             auth_summaries: vec![],
             router_facts: None,
             cross_package_imports: None,
+            caller_scope_facts: vec![],
         });
     };
 
@@ -6074,6 +6084,7 @@ pub fn analyse_file_fused(
         crate::symbol::FuncKey,
         auth_analysis::model::AuthCheckSummary,
     )> = Vec::new();
+    let mut caller_scope_facts: Vec<auth_analysis::caller_scope::CallerScopeEdge> = Vec::new();
 
     // Per-file router-dep facts for cross-file FastAPI propagation.
     // Extracted unconditionally for Python files so pass 1 can persist
@@ -6153,6 +6164,18 @@ pub fn analyse_file_fused(
                     parsed.source.path,
                     scan_root,
                 );
+                // Harvest cross-file caller-scope edges from the same base
+                // model so pass 1 can record, per callee leaf, whether
+                // every caller across the index is an authorized route
+                // handler.  Pass 2 lifts route-level auth onto private
+                // helpers reached only from authorized routes in other
+                // files.  See `auth_analysis::caller_scope`.
+                if let Some(lang_enum) = Lang::from_slug(parsed.source.lang_slug) {
+                    caller_scope_facts = auth_analysis::caller_scope::extract_caller_scope_facts(
+                        &auth_model,
+                        lang_enum,
+                    );
+                }
             }
             let var_types = parsed.collect_file_var_types();
             out.extend(auth_analysis::run_auth_analysis_with_model(
@@ -6201,6 +6224,7 @@ pub fn analyse_file_fused(
         auth_summaries,
         router_facts: router_facts_for_this_file,
         cross_package_imports: cross_package_imports_for_this_file,
+        caller_scope_facts,
     })
 }
 
