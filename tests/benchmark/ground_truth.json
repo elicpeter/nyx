@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 584
+    "corpus_size": 586
   },
   "cases": [
     {
@@ -18244,6 +18244,68 @@
       "notes": "recognised isValidPath validator narrows the nested-sink flow"
     },
     {
+      "case_id": "ts-safe-024",
+      "file": "typescript/safe/confine_helper_behaviour.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "safe",
+        "validator",
+        "path-confinement"
+      ],
+      "disabled": false,
+      "notes": "behaviour-based path-confinement helper (isWithinBaseDir startsWith const) narrows FILE_IO on the confined branch"
+    },
+    {
+      "case_id": "ts-path_traversal-004",
+      "file": "typescript/path_traversal/confine_helper_unguarded.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          15,
+          15
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          14,
+          14
+        ]
+      ],
+      "tags": [
+        "path-traversal",
+        "path-confinement",
+        "precision-guard"
+      ],
+      "disabled": false,
+      "notes": "confinement helper defined but not used to gate the read; FILE_IO flow must still fire"
+    },
+    {
       "case_id": "cve-ts-2026-39365-vulnerable",
       "file": "cve_corpus/typescript/CVE-2026-39365/vulnerable.ts",
       "language": "typescript",
@@ -18277,8 +18339,6 @@
         "vite",
         "path-traversal"
       ],
-      "disabled": true,
-      "disabled_reason": "Recall fix landed (vulnerable detects: nested FILE_IO sink under the JSON.parse sanitizer is now surfaced, src/cfg/helpers.rs::find_inner_sink_call + src/cfg/mod.rs::apply_gated_label_rules namespace surfacing). DEFERRED on the PATCHED side: the upstream guard `if (!isOptimizedDepFile(sourcemapPath)) return next()` uses a custom boolean path-confinement helper that nyx recognises only by NAME (is_valid*/is_safe*/has_valid* via classify_input_validator_callee), so the patched fixture false-positives. Deep fix needed: behaviour-based recognition of a boolean predicate helper whose body returns a path-containment check (x.startsWith(const) / path.relative) as a validator, propagated through the summary so `if (!helper(x)) bail` narrows x. A name-list addition would be a per-CVE bandaid. Tracked in CVE_DEFERRED.md.",
       "notes": "vite dev-server transform middleware sourcemap handler path traversal"
     },
     {
@@ -18303,9 +18363,7 @@
         "vite",
         "path-traversal"
       ],
-      "disabled": true,
-      "disabled_reason": "Recall fix landed (vulnerable detects: nested FILE_IO sink under the JSON.parse sanitizer is now surfaced, src/cfg/helpers.rs::find_inner_sink_call + src/cfg/mod.rs::apply_gated_label_rules namespace surfacing). DEFERRED on the PATCHED side: the upstream guard `if (!isOptimizedDepFile(sourcemapPath)) return next()` uses a custom boolean path-confinement helper that nyx recognises only by NAME (is_valid*/is_safe*/has_valid* via classify_input_validator_callee), so the patched fixture false-positives. Deep fix needed: behaviour-based recognition of a boolean predicate helper whose body returns a path-containment check (x.startsWith(const) / path.relative) as a validator, propagated through the summary so `if (!helper(x)) bail` narrows x. A name-list addition would be a per-CVE bandaid. Tracked in CVE_DEFERRED.md.",
-      "notes": "vite dev-server transform middleware sourcemap handler path traversal"
+      "notes": "vite dev-server transform middleware sourcemap handler path traversal; patched guard isOptimizedDepFile recognised by behaviour-based path-confinement (SsaFuncSummary.confines_path_params)"
     },
     {
       "case_id": "rs-path-007",

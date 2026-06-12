@@ -1497,6 +1497,109 @@ fn ts_source_to_sink() {
     );
 }
 
+/// Behaviour-based path-confinement (CVE-2026-39365, Vite).  A helper whose
+/// name is NOT a recognised validator (`isWithinBaseDir` — no
+/// `is_valid`/`is_safe`/`validate`/`verify` prefix) but whose body returns a
+/// constant-prefix containment check is recognised by behaviour: gating the
+/// read on `if (!isWithinBaseDir(p))` narrows the FILE_IO taint on the
+/// surviving branch so the read is safe.
+#[test]
+fn ts_behaviour_path_confinement_helper_narrows_file_io() {
+    let src = br#"import fs from 'node:fs'
+import path from 'node:path'
+const baseDir = '/srv/assets'
+const normalizePath = (id) => id.replace(/\\/g, '/')
+const isWithinBaseDir = (id) => normalizePath(id).startsWith(`${baseDir}/`)
+export function readAsset(req) {
+  const p = path.resolve(baseDir, req.query.f)
+  if (!isWithinBaseDir(p)) { return }
+  const map = JSON.parse(fs.readFileSync(p, 'utf-8'))
+  return map
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
+    let file_cfg = parse_lang(src, "typescript", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::TypeScript,
+        "test.ts",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "behaviour-based confinement helper must narrow the gated FILE_IO read; got {findings:?}"
+    );
+}
+
+/// Precision guard for behaviour-based path-confinement: the confinement
+/// helper is DEFINED but never used to gate the read, so the FILE_IO flow
+/// must still fire.  Recognition alone must not suppress an unguarded sink.
+#[test]
+fn ts_confinement_helper_unused_still_fires() {
+    let src = br#"import fs from 'node:fs'
+import path from 'node:path'
+const baseDir = '/srv/assets'
+const normalizePath = (id) => id.replace(/\\/g, '/')
+const isWithinBaseDir = (id) => normalizePath(id).startsWith(`${baseDir}/`)
+export function readAsset(req) {
+  const p = path.resolve(baseDir, req.query.f)
+  const map = JSON.parse(fs.readFileSync(p, 'utf-8'))
+  return map
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
+    let file_cfg = parse_lang(src, "typescript", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::TypeScript,
+        "test.ts",
+        &[],
+        None,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "confinement helper defined-but-unused must not suppress the read; got {findings:?}"
+    );
+}
+
+/// Pins the summary-extraction invariant: the helper's `SsaFuncSummary`
+/// records its sole parameter (index 0) in `confines_path_params`.
+#[test]
+fn ssa_summary_records_path_confining_predicate_param() {
+    let src = br#"const baseDir = '/srv/assets'
+const normalizePath = (id) => id.replace(/\\/g, '/')
+const isWithinBaseDir = (id) => normalizePath(id).startsWith(`${baseDir}/`)
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
+    let file_cfg = parse_lang(src, "typescript", lang);
+    let (ssa_summaries, _) = crate::taint::lower_all_functions_from_bodies(
+        &file_cfg,
+        Lang::TypeScript,
+        "test.ts",
+        &file_cfg.summaries,
+        None,
+        None,
+        None,
+        None,
+    );
+    let helper = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "isWithinBaseDir")
+        .map(|(_, v)| v)
+        .expect("isWithinBaseDir summary must exist");
+    assert_eq!(
+        helper.confines_path_params.as_slice(),
+        &[0],
+        "isWithinBaseDir confines its sole param (index 0)"
+    );
+}
+
 #[test]
 fn python_source_to_sink() {
     let src = b"def main():\n    x = os.getenv(\"SECRET\")\n    os.system(x)\n";

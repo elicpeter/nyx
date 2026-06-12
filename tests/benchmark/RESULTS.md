@@ -60,15 +60,20 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2022-1941  | C++        | Protocol Buffers           | BSD-3-Clause         | memory_safety   | detected |
 | CVE-2026-25544 | TypeScript | Payload (Drizzle adapter)  | MIT                  | sql_injection   | detected |
 | CVE-2026-42353 | JavaScript | i18next-http-middleware    | MIT                  | path_traversal  | detected |
-| CVE-2026-39365 | TypeScript | Vite                       | MIT                  | path_traversal  | deferred |
+| CVE-2026-39365 | TypeScript | Vite                       | MIT                  | path_traversal  | detected |
 
-CVE-2026-39365 (Vite) is deferred: the recall side landed this session (the
-`JSON.parse(await fsp.readFile(...))` nested FILE_IO sink is now surfaced past
-the `JSON.parse` sanitizer), but the patched fixture false-positives because
-its custom boolean path-confinement guard (`isOptimizedDepFile`) is recognised
-only by name, not behaviour. Both ground-truth entries are `disabled: true`;
-see `CVE_DEFERRED.md`. The recall fix is pinned by synthetic corpus fixtures
-`ts-path_traversal-002/003` + `ts-safe-023`.
+CVE-2026-39365 (Vite) is fully resolved (2026-06-12). The recall side
+(`JSON.parse(await fsp.readFile(...))` nested FILE_IO sink surfaced past the
+`JSON.parse` sanitizer) landed earlier; the patched-precision side now passes
+via behaviour-based path-confinement recognition: the custom boolean guard
+`isOptimizedDepFile` (`normalizePath(id).startsWith(`${depsCacheDir}/`)`) is
+recognised by its body (a constant-prefix containment check on a parameter),
+recorded as `SsaFuncSummary.confines_path_params`, and consumed by both the
+taint branch-narrowing (`apply_summary_confinement_narrowing`, clears
+`Cap::FILE_IO` on the confined branch) and the `cfg-unguarded-sink` guard pass
+(`cond_confinement_helper`). Both ground-truth entries are `disabled: false`;
+pinned by synthetic corpus fixtures `ts-safe-024` (helper gates read → silent)
+and `ts-path_traversal-004` (helper defined-but-unused → still fires).
 
 ### How CVEs get picked
 

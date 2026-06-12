@@ -2211,6 +2211,95 @@ fn cond_indirect_validator_callee(
     crate::ssa::type_facts::classify_input_validator_callee(callee).map(|_| callee.to_string())
 }
 
+/// Behaviour-based path-confinement guard recognition for
+/// `cfg-unguarded-sink`.
+///
+/// Returns `true` when the `if`-condition gates on a helper whose SSA
+/// summary records a constant-prefix path-confinement predicate
+/// ([`crate::summary::ssa_summary::SsaFuncSummary::confines_path_params`]),
+/// mirroring the taint engine's `apply_summary_confinement_narrowing` so the
+/// structural and taint layers agree on this validator shape.  Recognises
+/// both the inline (`if (!isOptimizedDepFile(p))`) and two-statement
+/// (`const ok = isOptimizedDepFile(p); if (!ok)`) forms.  The caller scopes
+/// the registered guard to `Cap::FILE_IO`, matching the confinement
+/// semantics.
+///
+/// Name-based confinement helpers (`isValid…` / `isSafe…`) are already
+/// recognised via [`classify_condition`] / [`cond_indirect_validator_callee`];
+/// this closes the gap for behaviour-recognised helpers whose names carry no
+/// validator marker.  Motivated by CVE-2026-39365 (Vite sourcemap traversal).
+fn cond_confinement_helper(info: &crate::cfg::NodeInfo, ctx: &AnalysisContext) -> bool {
+    let Some(ssa_summaries) = ctx.ssa_summaries else {
+        return false;
+    };
+    let confines = |name: &str| -> bool {
+        ssa_summaries.iter().any(|(k, s)| {
+            k.lang == ctx.lang && k.name == name && !s.confines_path_params.is_empty()
+        })
+    };
+
+    // Inline call form: `if (!helper(p))`.
+    if let Some(cond_text) = info.condition_text.as_deref()
+        && !cond_text.contains("&&")
+        && !cond_text.contains("||")
+    {
+        let trimmed = cond_text.trim_start_matches(['(', '!', ' ', '\t']);
+        let trimmed = trimmed.strip_prefix("not ").unwrap_or(trimmed).trim();
+        if trimmed.contains('(') {
+            let callee_part = trimmed.split('(').next().unwrap_or("");
+            let bare = callee_part
+                .rsplit(['.', ':'])
+                .next()
+                .unwrap_or(callee_part)
+                .trim();
+            if !bare.is_empty() && confines(bare) {
+                return true;
+            }
+        }
+    }
+
+    // Two-statement form: condition var is defined by a Call to the helper.
+    // Mirrors `cond_indirect_validator_callee`'s CFG scan, gated on the
+    // confinement summary instead of the validator-name classifier.
+    if info.condition_vars.len() == 1 {
+        let var_name = info.condition_vars[0].as_str();
+        let cond_func = info.ast.enclosing_func.as_deref();
+        let cond_span_start = info.ast.span.0;
+        let mut best: Option<(usize, &str)> = None;
+        for nidx in ctx.cfg.node_indices() {
+            let n = &ctx.cfg[nidx];
+            if n.kind != crate::cfg::StmtKind::Call {
+                continue;
+            }
+            if n.taint.defines.as_deref() != Some(var_name) {
+                continue;
+            }
+            if n.ast.enclosing_func.as_deref() != cond_func {
+                continue;
+            }
+            let span_start = n.ast.span.0;
+            if span_start >= cond_span_start {
+                continue;
+            }
+            let Some(callee) = n.call.callee.as_deref() else {
+                continue;
+            };
+            match best {
+                Some((s, _)) if s >= span_start => {}
+                _ => best = Some((span_start, callee)),
+            }
+        }
+        if let Some((_, callee)) = best {
+            let bare = crate::labels::bare_method_name(callee);
+            if confines(bare) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Match a guard suffix matcher against a callee, requiring the suffix to
 /// begin on a *leaf-name boundary* rather than mid-identifier.
 ///
@@ -2298,6 +2387,14 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
                     //
                     // Motivated by Novu CVE GHSA-4x48-cgf9-q33f.
                     result.push((idx, Cap::all()));
+                } else if cond_confinement_helper(info, ctx) {
+                    // Behaviour-based path-confinement helper guard:
+                    //   if (!isOptimizedDepFile(p)) return next();
+                    // The helper's name carries no validator marker, but its
+                    // SSA summary records a constant-prefix path-confinement
+                    // predicate.  Scope to FILE_IO (confinement only proves
+                    // path safety).  Motivated by CVE-2026-39365 (Vite).
+                    result.push((idx, Cap::FILE_IO));
                 } else if matches!(
                     kind,
                     PredicateKind::ShellMetaValidated | PredicateKind::BoundedLength

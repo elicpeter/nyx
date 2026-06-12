@@ -348,6 +348,34 @@ pub struct SsaFuncSummary {
     #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
     pub validated_params_to_return: SmallVec<[usize; 2]>,
 
+    /// Parameter indices that the function's boolean return value confines
+    /// to a constant path prefix.
+    ///
+    /// Recognises a behaviour-based path-confinement predicate: a helper
+    /// whose return value is a constant-prefix containment check on a
+    /// parameter (`normalizePath(id).startsWith("/safe/")`,
+    /// `strings.HasPrefix(p, "/safe")`, Python `.startswith`, Ruby
+    /// `.start_with?`), where the checked subject traces back to formal
+    /// parameter `idx` and the prefix is a fixed value (not param-derived).
+    /// The predicate is `BooleanTrueIsValid`: a `true` result proves the
+    /// argument is contained under a known-safe directory.
+    ///
+    /// At a call site, when the caller branches on this helper's result
+    /// (`if (!isOptimizedDepFile(p)) return next()`), the argument passed
+    /// to a confined position has its `Cap::FILE_IO` stripped on the
+    /// surviving (confined) branch — the same cap-aware narrowing the
+    /// inline `if (x.startsWith("/safe/"))` check performs, lifted through
+    /// the wrapper helper.  Consumed by
+    /// `apply_summary_confinement_narrowing` in the SSA taint transfer.
+    ///
+    /// Closes the precision gap behind CVE-2026-39365 (Vite dev-server
+    /// sourcemap path traversal): the patched fix gates the read on a
+    /// custom `isOptimizedDepFile` confinement helper that nyx recognised
+    /// only by name before, false-positiving on the fixed code.  Empty
+    /// (the default) for helpers that do not confine any parameter.
+    #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
+    pub confines_path_params: SmallVec<[usize; 2]>,
+
     /// Phase-10 Next.js entry-point classification.  Mirrors
     /// [`crate::summary::FuncSummary::entry_kind`] — recorded on the
     /// SSA summary so cross-file consumers don't have to consult the

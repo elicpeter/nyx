@@ -1351,6 +1351,26 @@ fn compute_succ_states(
                         block.id,
                         transfer.interner,
                     );
+
+                    // Behaviour-based path-confinement narrowing.  Recognises
+                    // a gate on a helper whose SSA summary records a
+                    // constant-prefix path-confinement predicate
+                    // (`if (!isOptimizedDepFile(p)) return next()`), and
+                    // strips `Cap::FILE_IO` from the confined argument on the
+                    // surviving branch.  Lifts the inline
+                    // `x.startsWith("/safe/")` narrowing through a wrapper
+                    // helper recognised by behaviour (not name).
+                    // Motivated by CVE-2026-39365 (Vite sourcemap traversal).
+                    apply_summary_confinement_narrowing(
+                        &mut true_state,
+                        &mut false_state,
+                        cond_text,
+                        &cond_info.condition_vars,
+                        cond_info.condition_negated,
+                        ssa,
+                        block.id,
+                        transfer,
+                    );
                 }
 
                 // Constraint refinement
@@ -1944,6 +1964,172 @@ fn apply_input_validator_branch_narrowing(
             success_state.validated_may.insert(sym);
             success_state.validated_must.insert(sym);
         }
+    }
+}
+
+/// Look up the path-confinement positions of a callee by bare name in the
+/// intra-file SSA summary map.
+///
+/// Returns the callee's [`SsaFuncSummary::confines_path_params`] when a
+/// same-language summary whose `FuncKey.name` matches `bare_name` records at
+/// least one confined parameter.  Intra-file only: confinement helpers
+/// (`isSafePath`, `isOptimizedDepFile`) overwhelmingly live in the same
+/// module as their caller, so the per-file `ssa_summaries` map carries them.
+/// A cross-file extension would index `GlobalSummaries` by `(lang, name)`.
+fn summary_confined_positions<'b>(
+    transfer: &'b SsaTaintTransfer,
+    bare_name: &str,
+) -> Option<&'b [usize]> {
+    let map = transfer.ssa_summaries?;
+    for (key, sum) in map.iter() {
+        if key.lang == transfer.lang
+            && key.name == bare_name
+            && !sum.confines_path_params.is_empty()
+        {
+            return Some(sum.confines_path_params.as_slice());
+        }
+    }
+    None
+}
+
+/// Extract the bare callee name of an inline call condition.
+///
+/// Strips leading `!` / `(` / whitespace and a Python `not ` keyword, then
+/// returns the identifier token before the first `(` (last segment after a
+/// `.`/`::` receiver path).  Returns `None` when the condition is not a call
+/// (no `(`) or no identifier precedes it.  Mirrors the callee-token peel in
+/// [`crate::taint::path_state::classify_condition`].
+fn parse_inline_call_callee(text: &str) -> Option<String> {
+    if !text.contains('(') {
+        return None;
+    }
+    let trimmed = text.trim_start_matches(['(', '!', ' ', '\t']);
+    let trimmed = trimmed.strip_prefix("not ").unwrap_or(trimmed).trim();
+    let callee_part = trimmed.split('(').next().unwrap_or("");
+    let bare = callee_part.rsplit(['.', ':']).next().unwrap_or(callee_part).trim();
+    if bare.is_empty() || !bare.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+        return None;
+    }
+    Some(bare.to_string())
+}
+
+/// Behaviour-based path-confinement branch narrowing.
+///
+/// Recognises a downstream truthiness gate on a helper whose
+/// [`SsaFuncSummary::confines_path_params`] records that its boolean return
+/// value confines an argument to a fixed path prefix, and strips
+/// `Cap::FILE_IO` from that argument on the surviving (confined) branch.
+///
+/// Two condition shapes are handled:
+///
+/// ```text
+/// // inline (Vite CVE-2026-39365)
+/// if (!isOptimizedDepFile(sourcemapPath)) return next();
+/// fsp.readFile(sourcemapPath);   // confined: FILE_IO stripped on this edge
+///
+/// // two-statement
+/// const ok = isOptimizedDepFile(p);
+/// if (!ok) return;
+/// fsp.readFile(p);
+/// ```
+///
+/// The predicate is `BooleanTrueIsValid` — a `true` result proves
+/// confinement — so the validated edge is where the helper returned `true`:
+/// the FALSE edge under a leading `!` (captured by `condition_negated`), the
+/// TRUE edge otherwise.  Cap-aware (clears only `Cap::FILE_IO`, mirroring the
+/// inline `RelativeUrlValidated`/`ShellMetaValidated` handlers), so a
+/// confined value that *also* flows to a SQL/command sink still fires.
+///
+/// Strict-additive: a no-op when the condition is not a call to a
+/// confinement helper, no summary records confinement, or no argument
+/// var_name is recoverable.
+fn apply_summary_confinement_narrowing(
+    true_state: &mut SsaTaintState,
+    false_state: &mut SsaTaintState,
+    cond_text: &str,
+    condition_vars: &[String],
+    condition_negated: bool,
+    ssa: &SsaBody,
+    block: BlockId,
+    transfer: &SsaTaintTransfer,
+) {
+    if condition_vars.is_empty() {
+        return;
+    }
+
+    let mut confined_names: SmallVec<[String; 2]> = SmallVec::new();
+
+    // Two-statement shape: `const ok = helper(p); if (!ok)`.  The single
+    // condition var resolves to the helper's Call result; the confined arg
+    // var_names are read off the recorded confined positions.
+    if condition_vars.len() == 1
+        && let Some(rv) = resolve_var_to_ssa_value(condition_vars[0].as_str(), ssa, block)
+        && let Some(def) = ssa
+            .blocks
+            .iter()
+            .flat_map(|b| b.body.iter())
+            .find(|i| i.value == rv)
+        && let SsaOp::Call { callee, args, .. } = &def.op
+    {
+        let bare = crate::labels::bare_method_name(callee);
+        if let Some(positions) = summary_confined_positions(transfer, bare) {
+            for &pos in positions {
+                if let Some(group) = args.get(pos) {
+                    for &v in group {
+                        if let Some(name) = ssa
+                            .value_defs
+                            .get(v.0 as usize)
+                            .and_then(|vd| vd.var_name.as_deref())
+                            && !confined_names.iter().any(|s: &String| s == name)
+                        {
+                            confined_names.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Inline shape: `if (!helper(p))`.  The callee is parsed from the
+    // condition text; the confined args are the condition's own variable
+    // uses (the call arguments).  Clearing FILE_IO on the condition vars is
+    // sound because the gate only confines a path arg, and the value is the
+    // one the helper inspected.  Compound conditions (`&&` / `||`) are
+    // skipped: the parsed callee is only the first call, so clearing every
+    // condition var could over-suppress a sibling clause's taint.
+    if confined_names.is_empty()
+        && !cond_text.contains("&&")
+        && !cond_text.contains("||")
+        && let Some(bare) = parse_inline_call_callee(cond_text)
+        && summary_confined_positions(transfer, &bare).is_some()
+    {
+        for name in condition_vars {
+            if !confined_names.iter().any(|s: &String| s == name) {
+                confined_names.push(name.clone());
+            }
+        }
+    }
+
+    if confined_names.is_empty() {
+        return;
+    }
+
+    // BooleanTrueIsValid polarity: the confined branch is where the helper
+    // returned `true`.  `condition_negated` captures a leading `!`, so a
+    // `!helper(x)` condition puts the confined edge on the FALSE branch.
+    let confined_state = if condition_negated {
+        false_state
+    } else {
+        true_state
+    };
+    for name in &confined_names {
+        clear_cap_alias_aware(
+            confined_state,
+            name,
+            Cap::FILE_IO,
+            ssa,
+            transfer.base_aliases,
+        );
     }
 }
 

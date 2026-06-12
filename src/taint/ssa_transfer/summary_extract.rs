@@ -73,6 +73,226 @@ fn rv_traces_to_constant(
     }
 }
 
+/// Walk the def-use closure of `v`, collecting the set of formal-parameter
+/// indices it depends on.
+///
+/// Traces through `Assign`/`Phi` operands, `Call` receiver + args (so a
+/// path-normalising wrapper like `normalizePath(id)` still reaches the
+/// underlying `id` parameter), and `FieldProj` receivers.  A value found in
+/// `param_index_of` is a leaf (its def is the `Param` op).  Bounded by a
+/// shared node `budget` and a `seen` set so a wide/cyclic SSA DAG cannot
+/// blow up.
+fn collect_reaching_params(
+    ssa: &SsaBody,
+    v: SsaValue,
+    param_index_of: &HashMap<SsaValue, usize>,
+    seen: &mut HashSet<SsaValue>,
+    out: &mut SmallVec<[usize; 2]>,
+    budget: &mut u32,
+) {
+    if *budget == 0 || !seen.insert(v) {
+        return;
+    }
+    *budget -= 1;
+    if let Some(&idx) = param_index_of.get(&v) {
+        if !out.contains(&idx) {
+            out.push(idx);
+        }
+        return;
+    }
+    match op_for_value(ssa, v) {
+        Some(SsaOp::Assign(uses)) => {
+            for &u in uses {
+                collect_reaching_params(ssa, u, param_index_of, seen, out, budget);
+            }
+        }
+        Some(SsaOp::Phi(operands)) => {
+            for &(_, u) in operands {
+                collect_reaching_params(ssa, u, param_index_of, seen, out, budget);
+            }
+        }
+        Some(SsaOp::Call { receiver, args, .. }) => {
+            if let Some(r) = receiver {
+                collect_reaching_params(ssa, *r, param_index_of, seen, out, budget);
+            }
+            for group in args {
+                for &u in group {
+                    collect_reaching_params(ssa, u, param_index_of, seen, out, budget);
+                }
+            }
+        }
+        Some(SsaOp::FieldProj { receiver, .. }) => {
+            collect_reaching_params(ssa, *receiver, param_index_of, seen, out, budget);
+        }
+        _ => {}
+    }
+}
+
+/// Detect parameters confined by a boolean path-prefix predicate.
+///
+/// Recognises the behaviour-based path-confinement helper shape: a function
+/// whose return value is a constant-prefix containment check on a parameter,
+/// e.g.
+///
+/// ```text
+/// const isOptimizedDepFile = (id: string): boolean =>
+///   normalizePath(id).startsWith(`${depsCacheDir}/`)   // JS/TS
+/// func isSafe(p string) bool { return strings.HasPrefix(p, "/safe") }  // Go
+/// def is_safe(p): return p.startswith("/safe")          // Python
+/// def safe?(p); p.start_with?("/safe"); end             // Ruby
+/// ```
+///
+/// For each `return <call>` block, follows single-operand `Assign` copies to
+/// the real defining op, requires it to be a prefix-containment call
+/// (`startsWith` / `startswith` / `start_with?` method forms, or Go's
+/// `strings.HasPrefix(subject, prefix)` function form), then:
+///
+///  * the **subject** (method receiver, or `HasPrefix` arg 0) must trace back
+///    to a formal parameter — that parameter is the one being confined;
+///  * the **prefix** (method arg 0, or `HasPrefix` arg 1) must be a *fixed*
+///    value: a string constant, or at minimum not derived from any parameter,
+///    so a caller cannot influence the safe-prefix the subject is checked
+///    against.
+///
+/// The recognised predicate is `BooleanTrueIsValid` (a `true` result proves
+/// containment).  Callers consume the returned indices in
+/// `apply_summary_confinement_narrowing` to strip `Cap::FILE_IO` from the
+/// matching argument on the surviving branch of a downstream truthiness gate.
+///
+/// Conservative by construction: a negated/rejection form (`!…startsWith` /
+/// `.contains("..")`) is *not* recognised here (opposite polarity), nor is a
+/// `path.relative(base, p)` not-`..` shape — both are documented follow-ups.
+/// Motivated by CVE-2026-39365 (Vite dev-server sourcemap path traversal).
+fn detect_path_confining_predicate_params(
+    ssa: &SsaBody,
+    consts: &HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>,
+    param_index_of: &HashMap<SsaValue, usize>,
+) -> SmallVec<[usize; 2]> {
+    use crate::ssa::const_prop::ConstLattice;
+    let mut result: SmallVec<[usize; 2]> = SmallVec::new();
+    if param_index_of.is_empty() {
+        return result;
+    }
+
+    for block in &ssa.blocks {
+        let Terminator::Return(Some(rv)) = &block.terminator else {
+            continue;
+        };
+
+        // Follow single-operand Assign copies to the real defining op
+        // (`return t; t = recv.startsWith(p)` lowers `rv` to a copy of the
+        // call value on some paths).
+        let mut cur = *rv;
+        let mut hops = 0;
+        let def = loop {
+            match op_for_value(ssa, cur) {
+                Some(SsaOp::Assign(uses)) if uses.len() == 1 && hops < 8 => {
+                    cur = uses[0];
+                    hops += 1;
+                }
+                other => break other,
+            }
+        };
+        let Some(SsaOp::Call {
+            callee,
+            callee_text,
+            args,
+            receiver,
+        }) = def
+        else {
+            continue;
+        };
+
+        let method =
+            crate::labels::bare_method_name(callee_text.as_deref().unwrap_or(callee.as_str()));
+        let mlow = method.to_ascii_lowercase();
+        if !matches!(mlow.as_str(), "startswith" | "start_with?" | "hasprefix") {
+            continue;
+        }
+
+        // Resolve (subject operands, prefix value) per call form.
+        //
+        // Method form (`receiver.startsWith(prefix)`): SSA lowering of a
+        // chained-receiver method call puts the *explicit* arguments first
+        // and *appends* the chain's implicit-use operands (the free
+        // identifiers and the real subject param) as later arg groups
+        // (`build_call_args`).  So `args[0]` is the prefix and the subject
+        // param hides in `receiver` + `args[1..]` as an implicit use — the
+        // textual receiver (`normalizePath(id)`) is itself collapsed to a
+        // free-var Param, so the real `id` param is only observable through
+        // those implicit uses.
+        //
+        // Go function form (`strings.HasPrefix(subject, prefix)`): no
+        // receiver, `args[0]` is the subject and `args[1]` the prefix.
+        let (subject_vals, prefix): (SmallVec<[SsaValue; 4]>, Option<SsaValue>) =
+            if let Some(r) = receiver {
+                let prefix = args.first().and_then(|g| g.first()).copied();
+                let mut subs: SmallVec<[SsaValue; 4]> = SmallVec::new();
+                subs.push(*r);
+                for g in args.iter().skip(1) {
+                    subs.extend(g.iter().copied());
+                }
+                (subs, prefix)
+            } else if mlow == "hasprefix" {
+                let prefix = args.get(1).and_then(|g| g.first()).copied();
+                let subs: SmallVec<[SsaValue; 4]> =
+                    args.first().map(|g| g.iter().copied().collect()).unwrap_or_default();
+                (subs, prefix)
+            } else {
+                (SmallVec::new(), None)
+            };
+        let Some(prefix) = prefix else {
+            continue;
+        };
+
+        // Prefix must be a fixed value: a string constant, or not reachable
+        // from any *formal* parameter.  Captured module-scope values
+        // (`depsCacheDir`) appear as free-var Params with no formal index,
+        // so they read as fixed; a real param-derived prefix is
+        // attacker-influenced and proves no confinement.
+        let prefix_is_const = matches!(consts.get(&prefix), Some(ConstLattice::Str(_)));
+        let mut budget = 512u32;
+        let mut prefix_params: SmallVec<[usize; 2]> = SmallVec::new();
+        if !prefix_is_const {
+            let mut pseen = HashSet::new();
+            collect_reaching_params(
+                ssa,
+                prefix,
+                param_index_of,
+                &mut pseen,
+                &mut prefix_params,
+                &mut budget,
+            );
+            if !prefix_params.is_empty() {
+                continue;
+            }
+        }
+
+        // A formal parameter flowing into the subject side of the prefix
+        // check is confined: a `true` result constrains it to start with the
+        // fixed prefix.
+        let mut subj_params: SmallVec<[usize; 2]> = SmallVec::new();
+        for sv in subject_vals {
+            let mut sseen = HashSet::new();
+            collect_reaching_params(
+                ssa,
+                sv,
+                param_index_of,
+                &mut sseen,
+                &mut subj_params,
+                &mut budget,
+            );
+        }
+        for p in subj_params {
+            if !prefix_params.contains(&p) && !result.contains(&p) {
+                result.push(p);
+            }
+        }
+    }
+
+    result
+}
+
 /// Extract a precise per-parameter `SsaFuncSummary` from an already-lowered SSA body.
 ///
 /// For each parameter (up to `MAX_PROBE_PARAMS`), runs a taint probe by seeding
@@ -919,6 +1139,15 @@ pub fn extract_ssa_func_summary_full(
     //   3. Top: default; the entry is omitted (empty transfer is meaningless).
     let abstract_transfer = derive_abstract_transfer(ssa, &param_info, return_abstract.as_ref());
 
+    // Behaviour-based path-confinement predicate detection (CVE-2026-39365).
+    // Independent of the per-param taint probes above: a structural scan of
+    // the return-block call shapes for `<param>.startsWith(const)`-style
+    // confinement, keyed by the formal-param SSA value.
+    let param_index_of: HashMap<SsaValue, usize> =
+        param_info.iter().map(|(idx, _, v)| (*v, *idx)).collect();
+    let confines_path_params =
+        detect_path_confining_predicate_params(ssa, &probe_const_values, &param_index_of);
+
     SsaFuncSummary {
         param_to_return,
         param_to_sink,
@@ -947,6 +1176,7 @@ pub fn extract_ssa_func_summary_full(
         // caller patches it in.
         typed_call_receivers: Vec::new(),
         validated_params_to_return,
+        confines_path_params,
         // Phase-10 entry-point classification is attached post-extraction
         // by `taint::lower_all_functions_from_bodies` (which has access
         // to `FileCfg::entry_kinds`).  Empty here means the extractor
