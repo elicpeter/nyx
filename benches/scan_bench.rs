@@ -501,6 +501,36 @@ fn bench_taint_branch_stress_go(c: &mut Criterion) {
     });
 }
 
+/// Branch conditions INSIDE nested loops, so the taint worklist re-visits
+/// loop-body blocks until fixpoint and (before the memo) re-classified the
+/// same condition text on every re-visit.  Isolates the per-condition
+/// classification memo added to `compute_succ_states`: with the memo each
+/// branch's `classify_condition_with_target` / `has_semantic_negation` /
+/// PathFact-classifier `str::find`/`str::contains` scans run once per branch
+/// rather than once per re-visit.  Reintroducing the per-visit
+/// re-classification (dropping `cond_class_memo`) surfaces here proportional
+/// to the loop re-visit count.
+fn bench_taint_cond_revisit_go(c: &mut Criterion) {
+    let fixture = Path::new("benches/perf_fixtures/taint_cond_revisit.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let bytes = std::fs::read(&fixture).expect("read fixture");
+    let mut cfg = Config::default();
+    cfg.scanner.mode = AnalysisMode::Full;
+    cfg.scanner.enable_state_analysis = true;
+    cfg.performance.worker_threads = Some(1);
+
+    let _ = nyx_scanner::ast::analyse_file_fused(&bytes, &fixture, &cfg, None, None)
+        .expect("warmup analyse");
+
+    c.bench_function("taint_cond_revisit_go", |b| {
+        b.iter(|| {
+            nyx_scanner::ast::analyse_file_fused(&bytes, &fixture, &cfg, None, None)
+                .expect("analyse_file_fused")
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_ast_only_scan,
@@ -517,5 +547,6 @@ criterion_group!(
     bench_global_summaries_lookup_same_lang_go,
     bench_taint_callee_resolve_stress_go,
     bench_taint_branch_stress_go,
+    bench_taint_cond_revisit_go,
 );
 criterion_main!(benches);

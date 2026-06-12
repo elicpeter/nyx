@@ -1031,7 +1031,14 @@ mod goto_succ_propagation_tests {
             },
         ));
 
-        let succ_states = compute_succ_states(&block, &cfg, &ssa, &transfer, &exit_state);
+        let succ_states = compute_succ_states(
+            &block,
+            &cfg,
+            &ssa,
+            &transfer,
+            &exit_state,
+            &mut rustc_hash::FxHashMap::default(),
+        );
 
         assert_eq!(
             succ_states.len(),
@@ -1117,7 +1124,14 @@ mod goto_succ_propagation_tests {
         };
         let exit_state = SsaTaintState::initial();
 
-        let succ_states = compute_succ_states(&block, &cfg, &ssa, &transfer, &exit_state);
+        let succ_states = compute_succ_states(
+            &block,
+            &cfg,
+            &ssa,
+            &transfer,
+            &exit_state,
+            &mut rustc_hash::FxHashMap::default(),
+        );
         assert_eq!(succ_states.len(), 1);
         assert_eq!(succ_states[0].0, BlockId(1));
     }
@@ -1265,7 +1279,7 @@ mod goto_succ_propagation_tests {
         super::super::apply_path_fact_branch_narrowing_with_interner(
             &mut true_state,
             &mut false_state,
-            "!path.contains(\"..\")",
+            &super::super::classify_path_branch("!path.contains(\"..\")"),
             &["path".to_string()],
             &ssa,
             None,
@@ -1299,7 +1313,7 @@ mod goto_succ_propagation_tests {
         super::super::apply_path_fact_branch_narrowing_with_interner(
             &mut true_state,
             &mut false_state,
-            "!filepath.IsLocal(p)",
+            &super::super::classify_path_branch("!filepath.IsLocal(p)"),
             &["p".to_string()],
             &ssa,
             None,

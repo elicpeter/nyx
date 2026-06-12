@@ -610,6 +610,13 @@ fn run_ssa_taint_internal(
     // Per-predecessor exit states for path-sensitive phi evaluation
     let mut pred_states: PredStates = HashMap::new();
 
+    // Memoized text-only branch-condition classification, keyed by condition
+    // node index.  Invariant across worklist re-visits (see [`BranchCondClass`]),
+    // so the per-condition `str::find`/`str::contains` scans run once per branch
+    // rather than once per re-visit.
+    let mut cond_class_memo: rustc_hash::FxHashMap<u32, BranchCondClass> =
+        rustc_hash::FxHashMap::default();
+
     // Fixed-point iteration
     let mut worklist: VecDeque<usize> = VecDeque::new();
     let mut in_worklist: HashSet<usize> = HashSet::new();
@@ -662,7 +669,8 @@ fn run_ssa_taint_internal(
         block_exit_states[bid] = Some(exit_state.clone());
 
         // Build per-successor states (branch-aware for Branch terminators)
-        let succ_states = compute_succ_states(block, cfg, ssa, transfer, &exit_state);
+        let succ_states =
+            compute_succ_states(block, cfg, ssa, transfer, &exit_state, &mut cond_class_memo);
 
         // Store predecessor-specific states before joining
         for &(succ_id, ref succ_state) in &succ_states {
@@ -1172,17 +1180,119 @@ pub(super) fn transfer_block(
     state
 }
 
+/// Text-only PathFact classification of a branch condition.
+///
+/// Split out of [`apply_path_fact_branch_narrowing_with_interner`] so the
+/// state-independent text classification (`classify_path_rejection_axes` /
+/// `classify_path_assertion` / `cond_has_pre_negated_islocal_clause`, all
+/// pure `&str -> _`) can be computed once per branch node and reused across
+/// worklist re-visits, while the state-dependent narrowing still runs per
+/// visit.
+#[derive(Clone)]
+struct PathBranchClass {
+    rejection_axes: SmallVec<[crate::abstract_interp::path_domain::PathRejection; 3]>,
+    assertion: crate::abstract_interp::path_domain::PathAssertion,
+    rejection_pre_negated: bool,
+}
+
+/// Classify a branch condition's text against the PathFact rejection /
+/// assertion idioms.  Pure function of `cond_text`.
+fn classify_path_branch(cond_text: &str) -> PathBranchClass {
+    use crate::abstract_interp::path_domain::{
+        classify_path_assertion, classify_path_rejection_axes, cond_has_pre_negated_islocal_clause,
+    };
+    PathBranchClass {
+        rejection_axes: classify_path_rejection_axes(cond_text),
+        assertion: classify_path_assertion(cond_text),
+        rejection_pre_negated: cond_has_pre_negated_islocal_clause(cond_text),
+    }
+}
+
+/// Text-only classification of a branch condition, memoized per condition
+/// node across worklist re-visits (stored in `cond_class_memo` inside
+/// [`run_ssa_taint_internal`]).
+///
+/// Every field is a deterministic function of the immutable condition text
+/// (the per-node `condition_negated` flag is applied by the caller), never
+/// of the mutable `SsaTaintState`.  The block-level worklist re-visits a
+/// branch block once per predecessor-state change (avg ~1.4×, more for
+/// loop-body branches); previously each visit re-ran
+/// `classify_condition_with_target`, the `has_semantic_negation` string scan,
+/// and the three PathFact text classifiers on the *same* `cond_text`.  Those
+/// `str::find` / `str::contains` scans (via `StrSearcher::new`) were ≈5% of
+/// static-engine self-time on mm/channels/app.  Memoizing the result keyed on
+/// the condition node turns every re-visit into an O(1) `FxHashMap` hit; only
+/// the state-application steps (which read taint state / SSA defs) still run
+/// per visit.
+#[derive(Clone)]
+struct BranchCondClass {
+    kind: PredicateKind,
+    target_var: Option<String>,
+    /// Semantic negation not captured by AST-level `condition_negated`
+    /// (Python `not in`, TypeCheck `!==`/`!=`, negative-polarity validator).
+    has_semantic_negation: bool,
+    path: PathBranchClass,
+}
+
+/// Compute the (state-independent) classification of a branch condition.
+/// Result is memoized per condition node — see [`BranchCondClass`].
+fn classify_branch_cond(cond_text: &str) -> BranchCondClass {
+    let (kind, target_var) = classify_condition_with_target(cond_text);
+    // `has_semantic_negation` only consults the lowercased text for the
+    // AllowlistCheck / TypeCheck kinds, so compute the (allocating) lowercase
+    // lazily — most conditions are neither and skip it entirely.  The boolean
+    // result is identical to the prior unconditional-lowercase `||` chain.
+    let has_semantic_negation = match kind {
+        PredicateKind::AllowlistCheck => cond_text.to_ascii_lowercase().contains(" not in "),
+        PredicateKind::TypeCheck => {
+            let lower = cond_text.to_ascii_lowercase();
+            lower.contains("!==") || lower.contains("!=")
+        }
+        PredicateKind::ValidationCall => {
+            crate::taint::path_state::is_negative_polarity_validation_callee(cond_text)
+        }
+        _ => false,
+    };
+    BranchCondClass {
+        kind,
+        target_var,
+        has_semantic_negation,
+        path: classify_path_branch(cond_text),
+    }
+}
+
+/// Escape hatch: `NYX_DISABLE_COND_MEMO=1` forces `compute_succ_states` to
+/// re-classify each branch condition on every worklist re-visit instead of
+/// reading the memo.  Used to A/B the memoized vs re-classifying path from a
+/// single binary (criterion baseline, differential-correctness check) and as
+/// a safety toggle.  Cached so the env read is paid once per process.  The two
+/// paths are bit-identical — the memo only caches a pure function — so this
+/// changes only performance.
+fn cond_class_memo_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("NYX_DISABLE_COND_MEMO")
+            .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false)
+    })
+}
+
 /// Compute per-successor states with branch-aware predicate handling.
 ///
 /// For `Branch` terminators, inspects the condition node for validation/predicate
 /// info and produces specialized true/false states. For other terminators,
 /// propagates the exit state uniformly.
+///
+/// `cond_class_memo` caches the text-only [`BranchCondClass`] per condition
+/// node so the per-condition string scans run once per branch, not once per
+/// worklist re-visit.
 fn compute_succ_states(
     block: &SsaBlock,
     cfg: &Cfg,
     ssa: &SsaBody,
     transfer: &SsaTaintTransfer,
     exit_state: &SsaTaintState,
+    cond_class_memo: &mut rustc_hash::FxHashMap<u32, BranchCondClass>,
 ) -> SmallVec<[(BlockId, SsaTaintState); 2]> {
     match &block.terminator {
         Terminator::Branch {
@@ -1204,12 +1314,25 @@ fn compute_succ_states(
             };
             if cond_info.condition_text.is_some() && !cond_info.condition_vars.is_empty() {
                 let cond_text = cond_info.condition_text.as_deref().unwrap_or("");
-                let (kind, target_var) = classify_condition_with_target(cond_text);
+                // Fetch-or-compute the text-only classification for this
+                // condition node.  Invariant across worklist re-visits, so the
+                // `classify_condition_with_target` + `has_semantic_negation` +
+                // PathFact-classifier string scans run once per branch.
+                let owned_class;
+                let class: &BranchCondClass = if cond_class_memo_disabled() {
+                    owned_class = classify_branch_cond(cond_text);
+                    &owned_class
+                } else {
+                    cond_class_memo
+                        .entry(cond.index() as u32)
+                        .or_insert_with(|| classify_branch_cond(cond_text))
+                };
+                let kind = class.kind;
 
                 // Determine which vars to apply validation to:
                 // If we extracted a specific target, narrow to just that var
                 // (if it's in condition_vars). Otherwise use all condition_vars.
-                let effective_vars: Vec<String> = if let Some(ref target) = target_var {
+                let effective_vars: Vec<String> = if let Some(ref target) = class.target_var {
                     if cond_info.condition_vars.iter().any(|v| v == target) {
                         vec![target.clone()]
                     } else {
@@ -1222,29 +1345,13 @@ fn compute_succ_states(
                 let mut true_state = exit_state.clone();
                 let mut false_state = exit_state.clone();
 
-                // Detect semantic negation that isn't captured by AST-level
-                // `condition_negated` (which only detects unary `!`/`not`).
-                //
-                // - Python `not in`: comparison operator, not unary negation
-                // - TypeCheck with `!==`/`!=`: "typeof x !== 'number'" means
-                //   the true branch is the REJECT path (type mismatch)
-                let cond_lower = cond_text.to_ascii_lowercase();
-                let has_semantic_negation = (kind == PredicateKind::AllowlistCheck
-                    && cond_lower.contains(" not in "))
-                    || (kind == PredicateKind::TypeCheck
-                        && (cond_lower.contains("!==") || cond_lower.contains("!=")))
-                    // Negative-polarity validator: `isInvalidUrl(x)` /
-                    // `is_not_valid(x)` classify as ValidationCall (they contain
-                    // the substring `valid`) but their truthy branch is the
-                    // REJECT path.  Flip polarity so the validated state lands
-                    // on the surviving (false) branch.  See
-                    // [`crate::taint::path_state::is_negative_polarity_validation_callee`].
-                    // Motivated by CVE-2024-39954 (Apache EventMesh SSRF).
-                    || (kind == PredicateKind::ValidationCall
-                        && crate::taint::path_state::is_negative_polarity_validation_callee(
-                            cond_text,
-                        ));
-                let effective_negated = if has_semantic_negation {
+                // Semantic negation not captured by AST-level
+                // `condition_negated` (Python `not in`, TypeCheck `!==`/`!=`,
+                // negative-polarity validator like `isInvalidUrl(x)`).  The
+                // text scan that derives this is memoized in `class` (see
+                // [`classify_branch_cond`]); only the per-node
+                // `condition_negated` combination happens here.
+                let effective_negated = if class.has_semantic_negation {
                     !cond_info.condition_negated
                 } else {
                     cond_info.condition_negated
@@ -1297,7 +1404,7 @@ fn compute_succ_states(
                 apply_path_fact_branch_narrowing_with_interner(
                     &mut true_state,
                     &mut false_state,
-                    cond_text,
+                    &class.path,
                     &effective_vars,
                     ssa,
                     Some(transfer.interner),
@@ -2305,7 +2412,7 @@ fn apply_path_fact_branch_narrowing(
     apply_path_fact_branch_narrowing_with_interner(
         true_state,
         false_state,
-        cond_text,
+        &classify_path_branch(cond_text),
         effective_vars,
         ssa,
         None,
@@ -2316,20 +2423,20 @@ fn apply_path_fact_branch_narrowing(
 fn apply_path_fact_branch_narrowing_with_interner(
     true_state: &mut SsaTaintState,
     false_state: &mut SsaTaintState,
-    cond_text: &str,
+    class: &PathBranchClass,
     effective_vars: &[String],
     ssa: &SsaBody,
     interner: Option<&SymbolInterner>,
     negated: bool,
 ) {
     use crate::abstract_interp::PathFact;
-    use crate::abstract_interp::path_domain::{
-        PathAssertion, PathRejection, classify_path_assertion, classify_path_rejection_axes,
-        cond_has_pre_negated_islocal_clause,
-    };
+    use crate::abstract_interp::path_domain::{PathAssertion, PathRejection};
 
-    let rejection_axes = classify_path_rejection_axes(cond_text);
-    let assertion = classify_path_assertion(cond_text);
+    // The (state-independent) text classification is precomputed in `class`
+    // and memoized per condition node by the caller — see [`classify_path_branch`]
+    // / [`BranchCondClass`].
+    let rejection_axes = &class.rejection_axes;
+    let assertion = &class.assertion;
 
     if rejection_axes.is_empty() && matches!(assertion, PathAssertion::None) {
         return;
@@ -2350,7 +2457,7 @@ fn apply_path_fact_branch_narrowing_with_interner(
     // arm is the TRUE branch of the whole condition.  So when
     // `negated == true` AND no clause is the pre-negated IsLocal idiom,
     // flip the narrow target.
-    let rejection_pre_negated = cond_has_pre_negated_islocal_clause(cond_text);
+    let rejection_pre_negated = class.rejection_pre_negated;
     let rejection_safe_is_true = negated && !rejection_pre_negated;
 
     // Mark validated_may on the safe arm when a path-rejection
@@ -2420,7 +2527,7 @@ fn apply_path_fact_branch_narrowing_with_interner(
 
     // Apply assertion (positive): true branch narrows prefix_lock.
     let narrow_true = |fact: &mut PathFact| {
-        if let PathAssertion::PrefixLock(ref root) = assertion {
+        if let PathAssertion::PrefixLock(root) = assertion {
             let updated = fact.clone().with_prefix_lock(root);
             *fact = updated;
         }
