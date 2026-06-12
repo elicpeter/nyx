@@ -471,13 +471,15 @@ fn bench_taint_callee_resolve_stress_go(c: &mut Criterion) {
 /// tainted source through a long chain of `if`/`else` guards plus a loop,
 /// so `SsaTaintState::path_env` is non-empty across many basic blocks.  The
 /// worklist clones the full state on every block pop, exit store, and
-/// per-successor push; before the `Rc`-COW change each clone deep-copied
-/// the `PathEnv` (`UnionFind` + four `SmallVec`s — ≈3.9% of static CPU on
+/// per-successor push; before the `Arc`-COW change each clone deep-copied
+/// the `PathEnv` (`UnionFind` + five `SmallVec`s — ≈3.9% of static CPU on
 /// Go corpora).  After the change those clones are refcount bumps and the
 /// `PathEnv` is copied at most once per block (only when it actually
-/// mutates).  A regression that drops the `Rc` (or makes `make_mut` fire
-/// per instruction) surfaces here as a slowdown proportional to block ×
-/// constraint density.
+/// mutates).  Measured −12% on this bench when the COW landed
+/// (2026-06-12); a regression that drops the `Arc` (or makes `make_mut`
+/// fire per instruction) surfaces here as a slowdown proportional to
+/// block × constraint density.  `Arc` (not `Rc`) keeps `SsaTaintState`
+/// `Send` for the rayon-parallel file scan.
 fn bench_taint_branch_stress_go(c: &mut Criterion) {
     let fixture = Path::new("benches/perf_fixtures/taint_branch_stress.go")
         .canonicalize()

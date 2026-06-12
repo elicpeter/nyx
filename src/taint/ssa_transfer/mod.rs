@@ -65,6 +65,7 @@ use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 // ── SSA Taint Transfer ──────────────────────────────────────────────────
 
@@ -541,9 +542,9 @@ fn run_ssa_taint_internal(
 
     // Seed entry block's PathEnv from optimization results
     if let Some(ref mut entry_state) = block_states[ssa.entry.0 as usize] {
-        if let Some(ref mut env) = entry_state.path_env {
+        if let Some(env) = entry_state.path_env.as_mut() {
             if let (Some(cv), Some(tf)) = (transfer.const_values, transfer.type_facts) {
-                env.seed_from_optimization(cv, tf);
+                Arc::make_mut(env).seed_from_optimization(cv, tf);
             }
         }
     }
@@ -1370,9 +1371,15 @@ fn compute_succ_states(
                         constraint::lower_condition(cond_info, ssa, block.id, transfer.const_values)
                     };
                     if !matches!(cond_expr, constraint::ConditionExpr::Unknown) {
-                        if let Some(ref mut env) = true_state.path_env {
-                            *env = constraint::refine_env(env, &cond_expr, true);
-                            if env.is_unsat() {
+                        if let Some(env) = true_state.path_env.as_mut() {
+                            // Full replacement: read the (possibly shared) env,
+                            // build the refined copy, swap the Arc pointer. This
+                            // is cheaper than `make_mut` (which would clone the
+                            // shared inner only to immediately overwrite it).
+                            let refined = constraint::refine_env(env, &cond_expr, true);
+                            let unsat = refined.is_unsat();
+                            *env = Arc::new(refined);
+                            if unsat {
                                 tracing::debug!(
                                     block = ?block.id,
                                     cond = cond_text,
@@ -1380,9 +1387,11 @@ fn compute_succ_states(
                                 );
                             }
                         }
-                        if let Some(ref mut env) = false_state.path_env {
-                            *env = constraint::refine_env(env, &cond_expr, false);
-                            if env.is_unsat() {
+                        if let Some(env) = false_state.path_env.as_mut() {
+                            let refined = constraint::refine_env(env, &cond_expr, false);
+                            let unsat = refined.is_unsat();
+                            *env = Arc::new(refined);
+                            if unsat {
                                 tracing::debug!(
                                     block = ?block.id,
                                     cond = cond_text,
@@ -4834,11 +4843,11 @@ pub(super) fn transfer_inst(
                 // type (from SSA summary), inject it into the caller's path env
                 // so downstream type-qualified resolution can use it.
                 if let Some(ref rtype) = resolved.return_type {
-                    if let Some(ref mut env) = state.path_env {
+                    if let Some(env) = state.path_env.as_mut() {
                         use crate::constraint::domain::{TypeSet, ValueFact};
                         let mut fact = ValueFact::top();
                         fact.types = TypeSet::singleton(rtype);
-                        env.refine(inst.value, &fact);
+                        Arc::make_mut(env).refine(inst.value, &fact);
                     }
                 }
 
@@ -5030,7 +5039,7 @@ pub(super) fn transfer_inst(
                             callee,
                             *rv,
                             transfer.type_facts,
-                            state.path_env.as_ref(),
+                            state.path_env.as_deref(),
                             transfer.lang,
                             transfer.extra_labels,
                             Some(ssa),
@@ -6263,16 +6272,22 @@ pub(super) fn transfer_inst(
         apply_container_read_receiver_validation(inst, ssa, transfer, state);
     }
 
-    // Constraint propagation through instructions
-    if let Some(ref mut env) = state.path_env {
+    // Constraint propagation through instructions.
+    //
+    // `path_env` is `Arc`-shared (copy-on-write). Reads (`env.get`) borrow
+    // through the `Arc` without cloning; `Arc::make_mut` is taken lazily,
+    // only once a mutation is actually about to happen. Instructions that
+    // fall through to the `_ =>` arm (the common case: calls, phis, sources,
+    // multi-use assigns) never deep-copy the env, so a block performing no
+    // constraint refinement shares its predecessor's `PathEnv` for free.
+    if let Some(env_arc) = state.path_env.as_mut() {
         match &inst.op {
             SsaOp::Assign(uses) if uses.len() == 1 => {
-                // Copy: propagate facts from source to destination
-                let src_fact = env.get(uses[0]);
-                if !src_fact.is_top() {
-                    env.refine(inst.value, &src_fact);
-                    env.assert_equal(inst.value, uses[0]);
-                }
+                // Copy: propagate facts from source to destination.
+                // Read first (immutable, no clone), decide whether any
+                // mutation is needed, then `make_mut` once.
+                let src_fact = env_arc.get(uses[0]);
+                let do_copy = !src_fact.is_top();
                 // Cast/assertion type narrowing.
                 //
                 // If this Assign's CFG node is a cast/type-assertion expression,
@@ -6286,8 +6301,17 @@ pub(super) fn transfer_inst(
                 // In ALL cases: taint is preserved. Narrowing the type does NOT
                 // erase taint, a tainted value cast to String is still tainted.
                 let node_info = &cfg[inst.cfg_node];
-                if let Some(ref cast_type) = node_info.cast_target_type {
-                    if let Some(kind) = crate::constraint::solver::parse_type_name(cast_type) {
+                let cast_kind = node_info
+                    .cast_target_type
+                    .as_ref()
+                    .and_then(|cast_type| crate::constraint::solver::parse_type_name(cast_type));
+                if do_copy || cast_kind.is_some() {
+                    let env = Arc::make_mut(env_arc);
+                    if do_copy {
+                        env.refine(inst.value, &src_fact);
+                        env.assert_equal(inst.value, uses[0]);
+                    }
+                    if let Some(kind) = cast_kind {
                         let mut fact = constraint::ValueFact::top();
                         fact.types = constraint::TypeSet::singleton(&kind);
                         fact.null = constraint::Nullability::NonNull;
@@ -6298,6 +6322,7 @@ pub(super) fn transfer_inst(
             SsaOp::Const(Some(text)) => {
                 // Constant: seed fact from literal value
                 if let Some(cv) = constraint::ConstValue::parse_literal(text) {
+                    let env = Arc::make_mut(env_arc);
                     let mut fact = constraint::ValueFact::top();
                     fact.exact = Some(cv.clone());
                     match &cv {
@@ -7209,7 +7234,7 @@ fn collect_block_events(
                         callee,
                         *rv,
                         transfer.type_facts,
-                        state.path_env.as_ref(),
+                        state.path_env.as_deref(),
                         transfer.lang,
                         transfer.extra_labels,
                         Some(ssa),

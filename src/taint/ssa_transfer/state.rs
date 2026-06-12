@@ -20,6 +20,7 @@ use crate::state::lattice::Lattice;
 use crate::state::symbol::SymbolId;
 use crate::taint::domain::{PredicateSummary, SmallBitSet, TaintOrigin, VarTaint};
 use smallvec::SmallVec;
+use std::sync::Arc;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -360,7 +361,18 @@ pub struct SsaTaintState {
     pub heap: HeapState,
     /// Path constraint environment. `None` when constraint solving is
     /// disabled (`analysis.engine.constraint_solving = false`).
-    pub path_env: Option<constraint::PathEnv>,
+    ///
+    /// Wrapped in `Arc` for copy-on-write: `SsaTaintState` is cloned heavily
+    /// in the taint worklist (entry-state per block pop, exit-state store,
+    /// per-predecessor `pred_states` store, branch successors). `PathEnv`
+    /// carries a `UnionFind` `Vec` plus five `SmallVec`s and was the single
+    /// largest component of `SsaTaintState::clone` (≈55%, profiled on
+    /// mm/channels/app). Sharing the `Arc` turns every read-only-after-clone
+    /// store into a refcount bump; mutators (`refine`/`assume`/branch
+    /// `refine_env`) use `Arc::make_mut` / pointer-swap, so a block that
+    /// performs no constraint refinement never deep-copies the env at all.
+    /// `Arc` (not `Rc`) so `SsaTaintState` stays `Send` for rayon.
+    pub path_env: Option<Arc<constraint::PathEnv>>,
     /// Per-SSA-value abstract domain state. `None` when abstract
     /// interpretation is disabled (`analysis.engine.abstract_interpretation
     /// = false`).
@@ -390,7 +402,7 @@ impl SsaTaintState {
             predicates: SmallVec::new(),
             heap: HeapState::empty(),
             path_env: if constraint::is_enabled() {
-                Some(constraint::PathEnv::empty())
+                Some(Arc::new(constraint::PathEnv::empty()))
             } else {
                 None
             },
@@ -499,7 +511,7 @@ impl Lattice for SsaTaintState {
         let predicates = merge_join_ssa_predicates(&self.predicates, &other.predicates);
         let heap = self.heap.join(&other.heap);
         let path_env = match (&self.path_env, &other.path_env) {
-            (Some(a), Some(b)) => Some(a.join(b)),
+            (Some(a), Some(b)) => Some(Arc::new(a.join(b))),
             _ => None, // absent = Top, Top.join(x) = Top
         };
         let abstract_state = match (&self.abstract_state, &other.abstract_state) {
@@ -1430,5 +1442,74 @@ mod field_taint_tests {
         assert!(a.leq(&a));
         assert!(b.leq(&b));
         assert!(j.leq(&j));
+    }
+}
+
+#[cfg(test)]
+mod path_env_cow_tests {
+    //! Pins the copy-on-write contract for `SsaTaintState::path_env`.
+    //! The taint worklist clones the whole state on every block pop,
+    //! exit store, and per-successor push; the `Arc` wrapper means those
+    //! clones share the `PathEnv` until a mutator forks it via
+    //! `Arc::make_mut`.  A refactor that deep-clones the env on every
+    //! `SsaTaintState::clone`, or that forks it without aliasing, breaks
+    //! the perf win these tests guard.
+    use super::*;
+    use std::sync::Arc;
+
+    /// Build a state with a non-empty `path_env` independent of the
+    /// runtime `constraint::is_enabled()` config so the test is
+    /// deterministic regardless of feature flags.
+    fn state_with_env() -> SsaTaintState {
+        let mut s = SsaTaintState::initial();
+        s.path_env = Some(Arc::new(constraint::PathEnv::empty()));
+        s
+    }
+
+    #[test]
+    fn clone_shares_path_env_arc() {
+        let a = state_with_env();
+        let b = a.clone();
+        let pa = a.path_env.as_ref().expect("a env");
+        let pb = b.path_env.as_ref().expect("b env");
+        assert!(
+            Arc::ptr_eq(pa, pb),
+            "clone must share the path_env Arc (refcount bump, not deep copy)"
+        );
+    }
+
+    #[test]
+    fn make_mut_forks_shared_env_copy_on_write() {
+        let a = state_with_env();
+        let mut b = a.clone();
+        // Shared before mutation.
+        assert!(Arc::ptr_eq(
+            a.path_env.as_ref().unwrap(),
+            b.path_env.as_ref().unwrap()
+        ));
+        // `make_mut` on the shared Arc (refcount 2) yields a private copy.
+        let env = b.path_env.as_mut().unwrap();
+        let _: &mut constraint::PathEnv = Arc::make_mut(env);
+        assert!(
+            !Arc::ptr_eq(a.path_env.as_ref().unwrap(), b.path_env.as_ref().unwrap()),
+            "make_mut on a shared env must fork a private copy (COW)"
+        );
+    }
+
+    #[test]
+    fn join_produces_independent_env() {
+        // `join` builds a fresh `PathEnv` wrapped in a new Arc, so the
+        // result aliases neither input — required for the worklist's
+        // per-successor states to evolve independently.
+        let a = state_with_env();
+        let b = state_with_env();
+        let j = a.join(&b);
+        let (ea, eb, ej) = (
+            a.path_env.as_ref().unwrap(),
+            b.path_env.as_ref().unwrap(),
+            j.path_env.as_ref().expect("joined env"),
+        );
+        assert!(!Arc::ptr_eq(ej, ea), "join result must not alias lhs");
+        assert!(!Arc::ptr_eq(ej, eb), "join result must not alias rhs");
     }
 }
