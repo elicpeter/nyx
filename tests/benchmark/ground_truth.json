@@ -3,7 +3,7 @@
  "metadata": {
   "description": "Nyx benchmark ground truth",
   "created": "2026-03-20",
-  "corpus_size": 598
+  "corpus_size": 600
  },
  "cases": [
   {
@@ -3157,6 +3157,38 @@
    ],
    "disabled": false,
    "notes": "Code injection via assert() with string argument (PHP < 8.0 evaluates as code)"
+  },
+  {
+   "case_id": "php-code_injection-003",
+   "file": "php/code_injection/code_injection_assert_string_literal.php",
+   "language": "php",
+   "is_vulnerable": true,
+   "vuln_class": "code_injection",
+   "cwe": "CWE-94",
+   "provenance": "synthetic",
+   "equivalence_tier": "exact",
+   "match_mode": "rule_match",
+   "expected_rule_ids": [
+    "php.code_exec.assert_string"
+   ],
+   "allowed_alternative_rule_ids": [],
+   "forbidden_rule_ids": [],
+   "expected_severity": "HIGH",
+   "expected_category": "Security",
+   "expected_sink_lines": [
+    [
+     9,
+     9
+    ]
+   ],
+   "expected_source_lines": [],
+   "tags": [
+    "assert",
+    "code-injection",
+    "real-repo-precision-2026-06-12"
+   ],
+   "disabled": false,
+   "notes": "Recall guard for the assert() first-argument anchor: a string FIRST argument is still evaluated as code and must keep firing php.code_exec.assert_string."
   },
   {
    "case_id": "php-safe-001",
@@ -13914,6 +13946,33 @@
    ],
    "disabled": false,
    "notes": "Serializable::unserialize($input) magic-method body \u2014 the legacy PHP Serializable interface contract (deprecated since PHP 8.1). PHP itself drives invocation; the body's \\unserialize($x) call is part of the deserialization machinery and cannot be removed without breaking the interface. Distilled from joomla/administrator/components/com_finder/src/Indexer/Result.php:488 + libraries/src/Input/{Cli,Input}.php."
+  },
+  {
+   "case_id": "php-safe-021",
+   "file": "php/safe/safe_assert_description_message.php",
+   "language": "php",
+   "is_vulnerable": false,
+   "vuln_class": "safe",
+   "cwe": "CWE-94",
+   "provenance": "real-repo-precision-2026-06-12",
+   "equivalence_tier": "exact",
+   "match_mode": "rule_match",
+   "expected_rule_ids": [],
+   "allowed_alternative_rule_ids": [],
+   "forbidden_rule_ids": [
+    "php.code_exec.assert_string"
+   ],
+   "expected_severity": null,
+   "expected_category": null,
+   "expected_sink_lines": null,
+   "expected_source_lines": null,
+   "tags": [
+    "real-repo-precision-2026-06-12",
+    "assert",
+    "code-injection"
+   ],
+   "disabled": false,
+   "notes": "PHP 7.2+ assert(bool_expr, \"description\") \u2014 the second argument is a diagnostic message thrown with AssertionError, never evaluated as code. The first-argument anchor must suppress php.code_exec.assert_string on the description string. Distilled from glpi tests/ (atoum/PHPUnit) e.g. tests/src/GLPITestCase.php:131, tests/functional/SLMTest.php:2217, tests/src/Glpi/Auth/HelpersTrait.php:122."
   },
   {
    "case_id": "php-deser-003",

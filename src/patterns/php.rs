@@ -48,7 +48,18 @@ pub const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         id: "php.code_exec.assert_string",
-        description: "assert() with a string argument evaluates PHP code",
+        // PHP's `assert()` evaluates a *string FIRST argument* as PHP code
+        // (legacy `assert("code")` form, dangerous under PHP < 8 /
+        // `zend.assertions`).  Since PHP 7.2 the second parameter is a
+        // *description* (`assert(bool_expr, "message")`) and is NEVER
+        // evaluated — it is a diagnostic label thrown with the
+        // `AssertionError`.  This query matches a string in any argument
+        // slot; the `is_php_assert_string_first_arg` post-filter (Layer H in
+        // `ast.rs::run_ast_queries`) restricts firing to the case where the
+        // FIRST argument is the string, so the modern two-arg
+        // `assert($a === $b, 'must match')` form (pervasive in PHPUnit/atoum
+        // test suites) does not fire on its description string.
+        description: "assert() with a string first argument evaluates PHP code",
         query: r#"(function_call_expression
                      function: (name) @n (#eq? @n "assert")
                      arguments: (arguments

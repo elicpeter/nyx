@@ -1392,6 +1392,22 @@ impl<'a> ParsedSource<'a> {
                     {
                         continue;
                     }
+                    // Layer H: PHP `assert()` flagged as string-eval code
+                    // execution, but the matched string is the *description*
+                    // (second) argument of the modern PHP 7.2+
+                    // `assert(bool_expr, "message")` form — which PHP never
+                    // evaluates.  The query matches a `(string)` in any
+                    // argument slot, so it over-fires on the two-argument
+                    // form's description string (pervasive in PHPUnit / atoum
+                    // test suites).  Suppress unless the call's FIRST argument
+                    // is itself a string literal — the genuinely dangerous
+                    // `assert("code")` shape the rule targets.
+                    if cq.meta.id == "php.code_exec.assert_string"
+                        && self.lang_slug == "php"
+                        && !is_php_assert_string_first_arg(cap.node)
+                    {
+                        continue;
+                    }
                     let point = cap.node.start_position();
                     out.push(Diag {
                         path: self.path.to_string_lossy().into_owned(),
@@ -5223,6 +5239,81 @@ fn is_php_weak_hash_non_crypto_use(cap_node: tree_sitter::Node, bytes: &[u8]) ->
     false
 }
 
+/// Layer H — PHP `assert()` first-argument string check.
+///
+/// PHP's `assert()` evaluates a *string FIRST argument* as live PHP code
+/// under PHP < 8.0 / `zend.assertions=1` (the dangerous `assert("code")`
+/// form).  Since PHP 7.2 the optional SECOND parameter is a *description*
+/// string that is thrown with the `AssertionError` and is **never**
+/// evaluated: `assert($a === $b, 'values must match')`.  The
+/// `php.code_exec.assert_string` query matches a `(string)` in any argument
+/// position, so it over-fires on the two-argument form's (typically
+/// single-quoted) description — pervasive in PHPUnit / atoum test suites
+/// (e.g. glpi `tests/src/GLPITestCase.php:131`,
+/// `tests/functional/SLMTest.php:2217`).
+///
+/// Returns `true` when the enclosing `assert(...)` call's FIRST argument is
+/// itself a string literal (`string` / `encapsed_string`) — the genuinely
+/// dangerous shape the rule targets — and `false` when the first argument is
+/// any non-string expression (comparison, instance-of test, call, …), so the
+/// caller suppresses the finding.
+fn is_php_assert_string_first_arg(cap_node: tree_sitter::Node) -> bool {
+    // Locate the enclosing assert() function_call_expression.  The capture
+    // node may be `@n` (the `assert` name), `@code` (the string argument),
+    // or `@vuln` (the call itself).
+    let call = if cap_node.kind() == "function_call_expression" {
+        cap_node
+    } else {
+        let mut cur = cap_node;
+        let mut found = None;
+        for _ in 0..4 {
+            if cur.kind() == "function_call_expression" {
+                found = Some(cur);
+                break;
+            }
+            match cur.parent() {
+                Some(p) => cur = p,
+                None => break,
+            }
+        }
+        match found {
+            Some(c) => c,
+            None => return false,
+        }
+    };
+
+    let Some(arguments) = call.child_by_field_name("arguments") else {
+        return false;
+    };
+    // First named `argument` child of the `arguments` list (the anonymous
+    // `(` / `,` tokens are skipped by `named_child`).
+    let mut first_arg = None;
+    for i in 0..arguments.named_child_count() as u32 {
+        if let Some(c) = arguments.named_child(i)
+            && c.kind() == "argument"
+        {
+            first_arg = Some(c);
+            break;
+        }
+    }
+    let Some(first_arg) = first_arg else {
+        return false;
+    };
+    // The argument's value expression.  PHP 8 named args carry a `name:`
+    // field followed by the value as the last named child; positional args
+    // have a single named child.  Take the last named child and unwrap
+    // redundant parentheses.
+    let count = first_arg.named_child_count() as u32;
+    if count == 0 {
+        return false;
+    }
+    let Some(inner) = first_arg.named_child(count - 1) else {
+        return false;
+    };
+    let inner = unwrap_php_paren(inner);
+    matches!(inner.kind(), "string" | "encapsed_string")
+}
+
 /// Resolve the final identifier of a PHP l-value expression to a string
 /// suitable for [`name_is_non_crypto`] classification.
 ///
@@ -7812,6 +7903,66 @@ fn php_weak_hash_non_crypto_use_recognises_canonical_shapes() {
     assert!(
         !is_php_weak_hash_non_crypto_use(cap, code),
         "var_dump(md5(...)) has no recognisable consumer name and must NOT be suppressed"
+    );
+}
+
+#[test]
+fn php_assert_string_first_arg_distinguishes_code_from_description() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    parser.set_language(&lang).unwrap();
+    let q = r#"(function_call_expression
+                 function: (name) @n (#eq? @n "assert")
+                 arguments: (arguments
+                   (argument (string) @code)))
+               @vuln"#;
+
+    // VULN: single-arg string literal first argument — evaluated as code,
+    // must keep firing.
+    let code = b"<?php\nassert('phpinfo()');\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_assert_string_first_arg(cap),
+        "assert('code') string first arg must keep firing"
+    );
+
+    // VULN: string first arg WITH a description second arg — first arg is
+    // still code, must keep firing.
+    let code = b"<?php\nassert('phpinfo()', 'msg');\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_assert_string_first_arg(cap),
+        "assert('code', 'msg') string first arg must keep firing"
+    );
+
+    // SAFE: comparison expression first arg, string description second —
+    // PHP 7.2+ form, must be suppressed.
+    let code = b"<?php\nassert($a === $b, 'values must be equal');\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_assert_string_first_arg(cap),
+        "assert($a === $b, 'desc') must be suppressed (bool first arg)"
+    );
+
+    // SAFE: instanceof negation first arg + string description.
+    let code = b"<?php\nassert(!$x instanceof Foo, 'wrong type');\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_assert_string_first_arg(cap),
+        "assert(!$x instanceof Foo, 'desc') must be suppressed"
+    );
+
+    // SAFE: function-call first arg (is_a(...)) + string description.
+    let code = b"<?php\nassert(is_a($t, Rule::class, true), '$t must be a Rule');\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_assert_string_first_arg(cap),
+        "assert(is_a(...), 'desc') must be suppressed (call first arg)"
     );
 }
 
