@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 569
+    "corpus_size": 571
   },
   "cases": [
     {
@@ -17803,6 +17803,68 @@
       ],
       "disabled": false,
       "notes": "Recall counterpart to py-auth-realrepo-019.  Same shape but bare `router = APIRouter()` (no Security dep at the boundary).  The helper `_create_state_update` is reached from a route handler with no authorization; `apply_caller_scope_propagation`'s soundness rule refuses to authorize the helper because no caller carries route-level non-Login auth.  Recall guard: `missing_ownership_check` must still fire on the helper's `session.add` sink."
+    },
+    {
+      "case_id": "py-auth-realrepo-021",
+      "file": "python/safe/safe_graphene_permissioned_mutation_helper.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.auth.missing_ownership_check",
+        "py.auth.token_override_without_validation"
+      ],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "graphene",
+        "caller-scope-ipa",
+        "real-repo-precision-2026-06-11"
+      ],
+      "disabled": false,
+      "notes": "Distilled from saleor `graphql/order/mutations/order_cancel.py:34` + `graphql/order/mutations/utils.py`: a graphene-django mutation `OrderCancel(graphene.Mutation)` declares class-level RBAC via `class Meta: permissions = (OrderPermissions.MANAGE_ORDERS,)` and implements the action in a `perform_mutation` classmethod that delegates the id-targeted ORM write to a private helper `_cancel_order_rows`.  graphene's metaclass enforces `Meta.permissions` before dispatching to `perform_mutation`, so the action method and every helper it calls run under an RBAC-authorized actor.  The `GrapheneExtractor` (`src/auth_analysis/extract/graphene.rs`) marks `perform_mutation` a RouteHandler with a route-level `Other` (+ `TokenExpiry`/`TokenRecipient`) check; the in-file caller-scope pass (`apply_caller_scope_propagation`) lifts those onto `_cancel_order_rows`.  Both `missing_ownership_check` and `token_override_without_validation` must be suppressed.  Soundness: fires only on a NON-EMPTY `Meta.permissions`/`permission_classes` collection literal AND a graphene action method in the class body, so ORM models with `Meta.permissions` and public (no-permission) mutations are never authorized."
+    },
+    {
+      "case_id": "py-auth-realrepo-022",
+      "file": "python/auth/vuln_graphene_public_mutation_helper.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          21,
+          21
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "graphene",
+        "caller-scope-ipa",
+        "real-repo-precision-2026-06-11"
+      ],
+      "disabled": false,
+      "notes": "Recall counterpart to py-auth-realrepo-021.  Same shape, but the mutation declares NO `Meta.permissions` — a public graphene mutation.  The `GrapheneExtractor` must NOT mark `perform_mutation` authorized (the soundness gate fires only on a non-empty `Meta.permissions`), so the in-file caller-scope pass refuses to lift onto `_cancel_order_rows` and `missing_ownership_check` still fires on its id-targeted ORM write at line 21."
     },
     {
       "case_id": "cve-ts-2026-25544-vulnerable",
