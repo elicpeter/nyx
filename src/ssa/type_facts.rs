@@ -1018,9 +1018,23 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
             } else if after_colons.starts_with("URI") && matches!(suffix, "parse" | "URI") {
                 Some(TypeKind::Url)
             } else if after_colons == "PG.connect"
+                || callee == "PG::Connection.new"
+                || callee == "PG::Connection.connect"
+                || callee == "PG::Connection.open"
+                || callee == "PGconn.new"
+                || callee == "PGconn.connect"
                 || (after_colons.starts_with("Sequel") && suffix == "connect")
                 || callee.contains("Mysql2")
             {
+                // `pg` gem low-level driver: `@@conn = PG::Connection.new(...)`
+                // (and the `PG.connect` / `PGconn.new` aliases) return a raw
+                // libpq connection whose `conn.exec(sql)` runs an unparameterised
+                // string and `conn.exec_params(sql, params)` is the safe
+                // placeholder form.  Tagging the receiver `DatabaseConnection`
+                // lets the type-qualified resolver rewrite `conn.exec(query)` to
+                // `DatabaseConnection.exec` (a SQL_QUERY sink) without widening
+                // the bare `exec` matcher (which is Kernel#exec — a shell sink).
+                // Motivated by CVE-2026-42087 (OpenC3 COSMOS QuestDB SQLi).
                 Some(TypeKind::DatabaseConnection)
             } else if after_colons.starts_with("File.") && matches!(suffix, "open" | "new") {
                 Some(TypeKind::FileHandle)
@@ -2781,6 +2795,27 @@ mod tests {
             Some(TypeKind::FileHandle)
         );
         assert_eq!(constructor_type(Lang::Php, "array_map"), None);
+    }
+
+    #[test]
+    fn constructor_type_ruby_pg() {
+        // Raw `pg` gem connection constructors → DatabaseConnection so the
+        // type-qualified `DatabaseConnection.exec` SQL sink resolves
+        // (CVE-2026-42087 regression guard).
+        assert_eq!(
+            constructor_type(Lang::Ruby, "PG::Connection.new"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            constructor_type(Lang::Ruby, "PG.connect"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            constructor_type(Lang::Ruby, "PGconn.new"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        // A plain method named `new` on an unrelated receiver is not a DB conn.
+        assert_eq!(constructor_type(Lang::Ruby, "Widget.new"), None);
     }
 
     #[test]

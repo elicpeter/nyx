@@ -2801,6 +2801,55 @@ mod tests {
     }
 
     #[test]
+    fn classify_ruby_bare_system_exec_are_shell_escape_sinks() {
+        // The receiver-less Kernel#system / Kernel#exec primitives keep the
+        // SHELL_ESCAPE classification via the `=system` / `=exec` exact-match
+        // matchers (CVE-2026-42087 regression guard).
+        assert_eq!(
+            classify("ruby", "system", None),
+            Some(DataLabel::Sink(Cap::SHELL_ESCAPE))
+        );
+        assert_eq!(
+            classify("ruby", "exec", None),
+            Some(DataLabel::Sink(Cap::SHELL_ESCAPE))
+        );
+    }
+
+    #[test]
+    fn classify_ruby_receiver_exec_is_not_shell_escape_sink() {
+        // `conn.exec(sql)` on a typed receiver must NOT pick up the bare
+        // Kernel#exec SHELL_ESCAPE label — the `=exec` exact-match sigil only
+        // fires on the receiver-less form so the type-qualified
+        // `DatabaseConnection.exec` SQL sink can take over.  Core of the
+        // CVE-2026-42087 cmdi-misclassification fix.
+        let result = classify_all("ruby", "conn.exec", None);
+        assert!(!result.contains(&DataLabel::Sink(Cap::SHELL_ESCAPE)));
+    }
+
+    #[test]
+    fn classify_ruby_database_connection_exec_is_sql_sink() {
+        // Type-qualified raw `pg` driver sink: the resolver rewrites a
+        // DatabaseConnection-typed `conn.exec(sql)` to `DatabaseConnection.exec`.
+        assert_eq!(
+            classify("ruby", "DatabaseConnection.exec", None),
+            Some(DataLabel::Sink(Cap::SQL_QUERY))
+        );
+        assert_eq!(
+            classify("ruby", "DatabaseConnection.exec_query", None),
+            Some(DataLabel::Sink(Cap::SQL_QUERY))
+        );
+    }
+
+    #[test]
+    fn classify_ruby_database_connection_exec_params_is_not_sink() {
+        // The parameterised `exec_params` / `exec_prepared` forms use libpq
+        // `$1` placeholders and are the documented safe API — they must not be
+        // SQL sinks (CVE-2026-42087 patched form).
+        let result = classify_all("ruby", "DatabaseConnection.exec_params", None);
+        assert!(!result.contains(&DataLabel::Sink(Cap::SQL_QUERY)));
+    }
+
+    #[test]
     fn classify_ruby_file_open_is_not_shell_escape_sink() {
         // The exact-match sigil on `=open` must NOT fire on `File.open`.
         // `File.open` is a separate FILE_IO sink (existing rule); the

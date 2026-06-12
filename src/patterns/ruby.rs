@@ -54,7 +54,13 @@ pub const PATTERNS: &[Pattern] = &[
     Pattern {
         id: "rb.cmdi.system_interp",
         description: "system/exec call runs a command",
+        // `!receiver` restricts the match to the receiver-less Kernel#system /
+        // Kernel#exec primitives.  A same-named method on a typed receiver
+        // (`conn.exec(sql)` on a `PG::Connection`, `obj.system(...)`) is not a
+        // shell-execution sink and must not fire this cmdi rule — it is routed
+        // by its receiver type instead.  Motivated by CVE-2026-42087.
         query: r#"(call
+                     !receiver
                      method: (identifier) @m (#match? @m "^(system|exec)$"))
                    @vuln"#,
         severity: Severity::High,

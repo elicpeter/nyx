@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 567
+    "corpus_size": 569
   },
   "cases": [
     {
@@ -4393,6 +4393,77 @@
       ],
       "disabled": false,
       "notes": "SQL injection via ActiveRecord execute() with string concatenation"
+    },
+    {
+      "case_id": "ruby-sqli-pg-raw-exec-001",
+      "file": "ruby/sqli/sqli_pg_raw_exec.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rb.cmdi.system_interp"
+      ],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "sqli",
+        "pg",
+        "raw-connection",
+        "type-aware",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "Raw pg gem: PG::Connection.new is typed DatabaseConnection so conn.exec(interpolated SQL) resolves to the DatabaseConnection.exec SQL_QUERY sink, not Kernel#exec shell. Guards against cmdi misclassification. Motivated by CVE-2026-42087 (engine fix; AGPL upstream not fixtured)."
+    },
+    {
+      "case_id": "ruby-safe-pg-exec-params-001",
+      "file": "ruby/safe/safe_pg_exec_params.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "sqli",
+        "pg",
+        "exec_params",
+        "parameterized",
+        "regression",
+        "no-source"
+      ],
+      "disabled": false,
+      "notes": "Precision guard: parameterized exec_params($1) is the safe pg API and must not fire a SQL injection finding. Pairs with ruby-sqli-pg-raw-exec-001 (CVE-2026-42087 patched form)."
     },
     {
       "case_id": "ruby-ssrf-002",

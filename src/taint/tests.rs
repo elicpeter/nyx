@@ -1948,6 +1948,53 @@ fn ruby_source_to_sink() {
     );
 }
 
+#[test]
+fn ruby_pg_raw_exec_is_sql_sink_via_operator_assignment() {
+    // CVE-2026-42087 (OpenC3 COSMOS) shape, exercised end-to-end:
+    //   * `conn ||= PG::Connection.new(...)` — `operator_assignment` (`||=`)
+    //     must bind `conn` AND carry the DatabaseConnection type.
+    //   * `conn.exec("…'#{x}…")` — resolves to the `DatabaseConnection.exec`
+    //     SQL_QUERY sink, not the bare Kernel#exec shell sink.
+    let src = b"def lookup\n  start_time = gets()\n  conn ||= PG::Connection.new(host: \"h\", dbname: \"qdb\")\n  query = \"SELECT * FROM t WHERE x < '#{start_time}'\"\n  conn.exec(query)\nend\n";
+    let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
+    let file_cfg = parse_lang(src, "ruby", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Ruby, "test.rb", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "Ruby: tainted query through ||= PG connection should reach conn.exec, got {findings:#?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.effective_sink_caps.contains(Cap::SQL_QUERY)),
+        "Ruby: conn.exec(interpolated) should fire as a SQL_QUERY sink, got {findings:#?}"
+    );
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.effective_sink_caps.contains(Cap::SHELL_ESCAPE)),
+        "Ruby: typed conn.exec must NOT be misclassified as a shell sink, got {findings:#?}"
+    );
+}
+
+#[test]
+fn ruby_pg_exec_params_is_not_sql_sink() {
+    // Precision guard: the parameterised `exec_params` form is the safe pg API
+    // and must not fire a SQL injection finding (CVE-2026-42087 patched form).
+    let src = b"def lookup\n  start_time = gets()\n  conn ||= PG::Connection.new(host: \"h\", dbname: \"qdb\")\n  query = \"SELECT * FROM t WHERE x < $1\"\n  conn.exec_params(query, [start_time])\nend\n";
+    let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
+    let file_cfg = parse_lang(src, "ruby", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Ruby, "test.rb", &[], None);
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.effective_sink_caps.contains(Cap::SQL_QUERY)),
+        "Ruby: exec_params is parameterised and must not fire a SQL sink, got {findings:#?}"
+    );
+}
+
 //  Cross-language multi-file tests
 //
 // Cross-language resolution now requires explicit InteropEdge declarations.
