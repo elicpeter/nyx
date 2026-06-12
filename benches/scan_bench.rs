@@ -465,6 +465,40 @@ fn bench_taint_callee_resolve_stress_go(c: &mut Criterion) {
     });
 }
 
+/// Stresses the SSA taint worklist's state-clone path
+/// (`run_ssa_taint_internal` in `src/taint/ssa_transfer/mod.rs`).  The
+/// fixture is branch- and constraint-dense: every function threads a
+/// tainted source through a long chain of `if`/`else` guards plus a loop,
+/// so `SsaTaintState::path_env` is non-empty across many basic blocks.  The
+/// worklist clones the full state on every block pop, exit store, and
+/// per-successor push; before the `Rc`-COW change each clone deep-copied
+/// the `PathEnv` (`UnionFind` + four `SmallVec`s — ≈3.9% of static CPU on
+/// Go corpora).  After the change those clones are refcount bumps and the
+/// `PathEnv` is copied at most once per block (only when it actually
+/// mutates).  A regression that drops the `Rc` (or makes `make_mut` fire
+/// per instruction) surfaces here as a slowdown proportional to block ×
+/// constraint density.
+fn bench_taint_branch_stress_go(c: &mut Criterion) {
+    let fixture = Path::new("benches/perf_fixtures/taint_branch_stress.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let bytes = std::fs::read(&fixture).expect("read fixture");
+    let mut cfg = Config::default();
+    cfg.scanner.mode = AnalysisMode::Full;
+    cfg.scanner.enable_state_analysis = true;
+    cfg.performance.worker_threads = Some(1);
+
+    let _ = nyx_scanner::ast::analyse_file_fused(&bytes, &fixture, &cfg, None, None)
+        .expect("warmup analyse");
+
+    c.bench_function("taint_branch_stress_go", |b| {
+        b.iter(|| {
+            nyx_scanner::ast::analyse_file_fused(&bytes, &fixture, &cfg, None, None)
+                .expect("analyse_file_fused")
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_ast_only_scan,
@@ -480,5 +514,6 @@ criterion_group!(
     bench_const_propagate_large_go,
     bench_global_summaries_lookup_same_lang_go,
     bench_taint_callee_resolve_stress_go,
+    bench_taint_branch_stress_go,
 );
 criterion_main!(benches);
