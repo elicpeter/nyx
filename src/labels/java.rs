@@ -307,6 +307,34 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
+    // Apache HttpClient request objects (`org.apache.http.client.methods.*` in
+    // 4.x, `org.apache.hc.client5.http.classic.methods.*` in 5.x).  The target
+    // URL is bound at construction — `new HttpGet(url)` / `new HttpOptions(url)`
+    // — and later dispatched via `httpClient.execute(request)`.  `execute`
+    // alone can't distinguish a tainted URL (SSRF) from a tainted request body
+    // (DATA_EXFIL), and is gated to sensitive sources for the body case, so the
+    // constructor is the correct SSRF interception point: it is exactly where
+    // the attacker-controlled URL is set on the request object (same rationale
+    // as `URL.openConnection` above).  Motivated by CVE-2024-39954 (Apache
+    // EventMesh): a subscriber-supplied webhook URL reaches
+    // `new HttpOptions(targetUrl)` → `httpClient.execute(builder)`.  The bare
+    // request type names are HttpClient-specific and do not collide with any
+    // labelled method in the supported corpus.
+    LabelRule {
+        matchers: &[
+            "HttpGet",
+            "HttpPost",
+            "HttpPut",
+            "HttpDelete",
+            "HttpHead",
+            "HttpOptions",
+            "HttpTrace",
+            "HttpPatch",
+            "HttpUriRequestBase",
+        ],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: true,
+    },
     // ── Cross-boundary data exfiltration ──────────────────────────────────
     //
     // Outbound HTTP egress points where a Sensitive source (cookie, header,

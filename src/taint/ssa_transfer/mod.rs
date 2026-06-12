@@ -1227,7 +1227,18 @@ fn compute_succ_states(
                 let has_semantic_negation = (kind == PredicateKind::AllowlistCheck
                     && cond_lower.contains(" not in "))
                     || (kind == PredicateKind::TypeCheck
-                        && (cond_lower.contains("!==") || cond_lower.contains("!=")));
+                        && (cond_lower.contains("!==") || cond_lower.contains("!=")))
+                    // Negative-polarity validator: `isInvalidUrl(x)` /
+                    // `is_not_valid(x)` classify as ValidationCall (they contain
+                    // the substring `valid`) but their truthy branch is the
+                    // REJECT path.  Flip polarity so the validated state lands
+                    // on the surviving (false) branch.  See
+                    // [`crate::taint::path_state::is_negative_polarity_validation_callee`].
+                    // Motivated by CVE-2024-39954 (Apache EventMesh SSRF).
+                    || (kind == PredicateKind::ValidationCall
+                        && crate::taint::path_state::is_negative_polarity_validation_callee(
+                            cond_text,
+                        ));
                 let effective_negated = if has_semantic_negation {
                     !cond_info.condition_negated
                 } else {

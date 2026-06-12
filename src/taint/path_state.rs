@@ -604,6 +604,41 @@ pub(crate) fn to_snake_lower(s: &str) -> String {
     out
 }
 
+/// Negative-polarity validation predicate: a call whose callee name asserts
+/// the input is *bad* (`isInvalidUrl`, `is_invalid`, `isNotValid`,
+/// `not_valid`), so the **truthy** branch is the reject/early-return path and
+/// the **false** branch is the validated path.
+///
+/// [`classify_condition`] routes these to [`PredicateKind::ValidationCall`]
+/// via the broad `bare.contains("valid")` match (every `…invalid…` name
+/// contains the substring `valid`).  ValidationCall applies non-inverted
+/// polarity (truthy ⇒ validated), which lands the validation on the *reject*
+/// branch — exactly backwards.  Callers flip `effective_negated` when this
+/// returns true, reusing the same polarity-inversion path as `not in` /
+/// `!==`.  Motivated by CVE-2024-39954 (Apache EventMesh): the patched
+/// `if (isInvalidUrl(targetUrl)) { return false; }` guard validates
+/// `targetUrl` on the surviving (false) branch.
+///
+/// Language-agnostic: matches on the bare callee name after stripping
+/// receiver / namespace qualifiers and any leading `!` / `not`.
+pub fn is_negative_polarity_validation_callee(text: &str) -> bool {
+    if !text.contains('(') {
+        return false;
+    }
+    let trimmed = text.trim_start_matches(['(', '!', ' ', '\t']);
+    let trimmed = trimmed.strip_prefix("not ").unwrap_or(trimmed).trim();
+    let callee_part = trimmed.split('(').next().unwrap_or("");
+    let bare = callee_part
+        .rsplit(['.', ':'])
+        .next()
+        .unwrap_or(callee_part)
+        .trim();
+    let snake = to_snake_lower(bare);
+    // The callee classified as ValidationCall because it contains `valid`.
+    // The negative sense is precisely the `…invalid…` / `…not_valid…` form.
+    snake.contains("invalid") || snake.contains("not_valid") || snake.contains("notvalid")
+}
+
 /// Parse a leading non-negative integer literal (decimal only).
 fn parse_leading_uint(s: &str) -> Option<u64> {
     let mut n: u64 = 0;
@@ -2652,5 +2687,28 @@ mod ghsa_h8cj_hpmg_636v_tests {
             kind != PredicateKind::ValidationCall,
             "no regex marker should not trigger validation"
         );
+    }
+
+    #[test]
+    fn negative_polarity_validation_callee_recognised() {
+        // CVE-2024-39954: `isInvalidUrl(targetUrl)` classifies as ValidationCall
+        // (it contains the substring `valid`) but its truthy branch is the
+        // reject path, so polarity must be flipped.
+        assert!(is_negative_polarity_validation_callee("isInvalidUrl(targetUrl)"));
+        assert!(is_negative_polarity_validation_callee("is_invalid(url)"));
+        assert!(is_negative_polarity_validation_callee("isNotValid(x)"));
+        assert!(is_negative_polarity_validation_callee("checker.isInvalidHost(h)"));
+        assert!(is_negative_polarity_validation_callee("!isInvalidUrl(u)"));
+    }
+
+    #[test]
+    fn positive_validation_callees_are_not_negative_polarity() {
+        // Precision guard: ordinary positive validators must NOT be flipped.
+        assert!(!is_negative_polarity_validation_callee("isValidUrl(targetUrl)"));
+        assert!(!is_negative_polarity_validation_callee("validate(x)"));
+        assert!(!is_negative_polarity_validation_callee("isSafe(x)"));
+        assert!(!is_negative_polarity_validation_callee("URL_VALIDATOR.isValid(url)"));
+        // No call → not a validation callee at all.
+        assert!(!is_negative_polarity_validation_callee("x == null"));
     }
 }

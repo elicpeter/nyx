@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 571
+    "corpus_size": 575
   },
   "cases": [
     {
@@ -17931,6 +17931,136 @@
       ],
       "disabled": false,
       "notes": "Patched form of `sanitizeValue` from `@payloadcms/drizzle@v3.73.0` (MIT).  Enabled after validated-flow propagation landed."
+    },
+    {
+      "case_id": "cve-java-2024-39954-vulnerable",
+      "file": "cve_corpus/java/CVE-2024-39954/vulnerable.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          40,
+          40
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          39,
+          39
+        ]
+      ],
+      "tags": [
+        "cve",
+        "eventmesh",
+        "ssrf",
+        "apache-httpclient"
+      ],
+      "disabled": false,
+      "notes": "CVE-2024-39954: Apache EventMesh webhook SSRF. Subscriber-supplied targetUrl reaches `new HttpOptions(targetUrl)` -> `httpClient.execute(builder)` across the `obtainDeliveryAgreement` helper with no scheme validation. Apache-2.0. Required modelling Apache HttpClient request constructors as SSRF sinks."
+    },
+    {
+      "case_id": "cve-java-2024-39954-patched",
+      "file": "cve_corpus/java/CVE-2024-39954/patched.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "eventmesh",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2024-39954 patched counterpart: `if (isInvalidUrl(targetUrl)) return false;` guard backed by Apache commons-validator `UrlValidator(http/https)`. Regression guard that Nyx recognises the negative-polarity validator and does not refire."
+    },
+    {
+      "case_id": "java-ssrf-003",
+      "file": "java/ssrf/SsrfApacheHttpClient.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "tags": [
+        "ssrf",
+        "apache-httpclient",
+        "cross-function"
+      ],
+      "disabled": false,
+      "notes": "Synthetic CVE-2024-39954 invariant: tainted URL into Apache HttpClient request constructor (`new HttpGet(url)`) dispatched via `client.execute(req)` across a helper boundary fires SSRF."
+    },
+    {
+      "case_id": "java-safe-017",
+      "file": "java/safe/SafeNegativeUrlValidator.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "ssrf",
+        "negative-validator",
+        "precision"
+      ],
+      "disabled": false,
+      "notes": "Synthetic CVE-2024-39954 precision invariant: negative-polarity validator `if (isInvalidUrl(url)) return;` validates the URL on the surviving branch so the Apache HttpClient SSRF sink does not fire."
     }
   ]
 }

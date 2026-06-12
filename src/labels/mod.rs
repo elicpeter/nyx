@@ -2888,6 +2888,43 @@ mod tests {
     }
 
     #[test]
+    fn classify_java_apache_httpclient_request_constructors_are_ssrf_sinks() {
+        // CVE-2024-39954 (Apache EventMesh): the target URL is bound on the
+        // request object at construction, so `new HttpGet(url)` /
+        // `new HttpOptions(url)` and the rest of the Apache HttpClient request
+        // family are the SSRF interception point.  Constructor calls classify
+        // with the bare type name as the callee (KINDS maps
+        // `object_creation_expression` to `Kind::CallFn`).
+        for ctor in [
+            "HttpGet",
+            "HttpPost",
+            "HttpPut",
+            "HttpDelete",
+            "HttpHead",
+            "HttpOptions",
+            "HttpTrace",
+            "HttpPatch",
+        ] {
+            let result = classify_all("java", ctor, None);
+            assert!(
+                result.iter().any(|l| *l == DataLabel::Sink(Cap::SSRF)),
+                "expected `{ctor}` to be an SSRF sink, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_java_apache_httpclient_constructors_are_case_sensitive() {
+        // The bare request-type matchers are case-sensitive so a lowercase
+        // method/var named `httpget` does not widen into an SSRF sink.
+        let result = classify_all("java", "httpget", None);
+        assert!(
+            !result.iter().any(|l| *l == DataLabel::Sink(Cap::SSRF)),
+            "lowercase `httpget` must not match the SSRF constructor rule, got {result:?}"
+        );
+    }
+
+    #[test]
     fn unpack_matcher_strips_exact_sigil() {
         let (m, exact) = unpack_matcher(b"=open");
         assert_eq!(m, b"open");
