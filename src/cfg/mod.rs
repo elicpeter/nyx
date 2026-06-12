@@ -70,7 +70,8 @@ use literals::{
     extract_arg_uses, extract_const_keyword_arg, extract_const_macro_arg, extract_const_string_arg,
     extract_destination_field_pairs, extract_destination_kwarg_pairs, extract_kwargs,
     extract_literal_rhs, extract_object_arg_property, extract_shell_array_payload_idents,
-    find_call_node, find_call_node_deep, find_chained_inner_call, has_keyword_arg,
+    find_call_node, find_call_node_deep, find_chained_gated_sink_call, find_chained_inner_call,
+    has_keyword_arg,
     has_object_arg_property, has_only_literal_args, has_string_interpolation,
     is_object_create_null_call, is_parameterized_query_call, is_rust_format_style_macro,
     java_chain_arg0_kind_for_method, js_chain_arg0_kind_for_method, js_chain_outer_method_for_inner,
@@ -3034,7 +3035,8 @@ pub(super) fn push_node<'a>(
     // Motivated by CVE-2025-64430 (Parse Server SSRF).
     if labels.is_empty()
         && let Some(outer) = call_ast
-        && let Some((inner, inner_callee_text)) = find_chained_inner_call(outer, lang, code)
+        && let Some((inner, inner_callee_text)) = find_chained_gated_sink_call(outer, lang, code)
+            .or_else(|| find_chained_inner_call(outer, lang, code))
         && !classify_gated_sink(lang, &inner_callee_text, |_| None, |_| None, |_| false).is_empty()
     {
         call_ast = Some(inner);

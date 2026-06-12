@@ -55,6 +55,7 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2024-24576 | Rust       | Rust stdlib                | MIT OR Apache-2.0    | CMDI            | detected |
 | CVE-2024-32884 | Rust       | gitoxide                   | Apache-2.0 OR MIT    | CMDI            | detected |
 | CVE-2025-53549 | Rust       | matrix-rust-sdk            | Apache-2.0           | SQL Injection   | detected |
+| RUSTSEC-2022-0072 | Rust    | hyper-staticfile           | MIT                  | Open Redirect   | detected |
 | CVE-2016-3714  | C          | ImageMagick (ImageTragick) | ImageMagick License  | CMDI            | detected |
 | CVE-2017-1000117 | C        | git (ssh:// argv injection)| GPL-2.0              | cmdi (argv-inj) | detected |
 | CVE-2019-18634 | C          | sudo (pwfeedback)          | ISC                  | memory_safety   | detected |

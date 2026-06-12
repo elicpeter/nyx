@@ -1022,6 +1022,77 @@ pub(super) fn find_chained_inner_call<'a>(
     Some((outer, inner_text))
 }
 
+/// Walk the receiver chain of `outer` (the outer call plus every chained
+/// receiver call), from outermost inward, and return the FIRST call whose
+/// callee text classifies as a gated sink for `lang`.
+///
+/// Unlike [`find_chained_inner_call`] — which descends to the
+/// structurally-innermost method regardless of what it classifies as —
+/// this selects by GATE MATCH, so a gated sink that sits in the MIDDLE of a
+/// builder chain is found rather than skipped.
+///
+/// Motivated by RUSTSEC-2022-0072 (hyper-staticfile open redirect): the
+/// redirect Location header is set via
+/// `HttpResponseBuilder::new().status(..).header(LOCATION, target).body(..)`,
+/// where the gated `header` sink is neither the outermost call (`.body`) nor
+/// the structurally-innermost (`.status`).  `find_chained_inner_call`
+/// returned `.status`, so the existing rebind dispatch saw no gate and the
+/// open-redirect flow was lost.  classify_gated_sink suffix-matches the last
+/// dotted segment, so the full member text (e.g. `…status().header`) still
+/// resolves to the `header` gate.
+pub(super) fn find_chained_gated_sink_call<'a>(
+    outer: Node<'a>,
+    lang: &str,
+    code: &[u8],
+) -> Option<(Node<'a>, String)> {
+    let mut cur = outer;
+    loop {
+        if !matches!(lookup(lang, cur.kind()), Kind::CallFn | Kind::CallMethod) {
+            return None;
+        }
+        let function = cur
+            .child_by_field_name("function")
+            .or_else(|| cur.child_by_field_name("method"))?;
+        // Only treat THIS chain level as a candidate sink when its callee is a
+        // real member/method access (has an own method-name segment). For an
+        // immediately-invoked-call form `f(..)(..)` (e.g. lodash
+        // `_.template(t)(data)`), `function` is itself a call_expression with
+        // no member segment; the whole-chain text would spuriously normalise
+        // to the inner gate, so we must NOT claim the outer application call
+        // here — skip it and let the `find_chained_inner_call` fallback bind
+        // the real inner call.
+        let has_own_method = function.child_by_field_name("property").is_some()
+            || function.child_by_field_name("field").is_some()
+            || function.child_by_field_name("attribute").is_some()
+            || function.child_by_field_name("name").is_some();
+        // Callee text of THIS chain level: the call's `function`/`method`
+        // field text, whitespace-stripped (mirrors `find_chained_inner_call`
+        // so the gate's suffix matchers hit on both single- and multi-line
+        // chains).
+        if has_own_method
+            && let Some(raw) = text_of(function, code)
+        {
+            let callee: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+            if !crate::labels::classify_gated_sink(lang, &callee, |_| None, |_| None, |_| false)
+                .is_empty()
+            {
+                return Some((cur, callee));
+            }
+        }
+        // Descend to the receiver call, if any.
+        let object = function
+            .child_by_field_name("object")
+            .or_else(|| function.child_by_field_name("value"))
+            .or_else(|| function.child_by_field_name("operand"));
+        match object {
+            Some(o) if matches!(lookup(lang, o.kind()), Kind::CallFn | Kind::CallMethod) => {
+                cur = o;
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// Recursively walk the receiver chain of `outer` (a CallFn / CallMethod
 /// node) and yield each *named argument* of every inner call along the
 /// way.  Outer's own arguments are NOT included, the caller already

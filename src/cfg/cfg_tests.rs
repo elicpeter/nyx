@@ -3298,6 +3298,42 @@ fn chained_method_call_rebinds_to_inner_gated_sink() {
     );
 }
 
+/// Regression guard for RUSTSEC-2022-0072 (hyper-staticfile open redirect).
+/// The gated `header` Location sink sits in the MIDDLE of a builder chain
+/// (`new().status(..).header(LOCATION, target).body(..)`).  The original
+/// `find_chained_inner_call` descended to the structurally-innermost
+/// `.status(..)` call, so the rebind dispatch saw no gate and the
+/// open-redirect flow was lost.  `find_chained_gated_sink_call` selects the
+/// chain level by GATE MATCH, so the chained node rebinds to `.header` and
+/// the Location gate populates `sink_payload_args` (payload arg position 1).
+#[test]
+fn chained_builder_rebinds_to_middle_gated_location_sink() {
+    let src =
+        b"fn f(target: String) { B::new().status(301).header(\"Location\", target).body(e); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "rust", ts_lang);
+
+    let mut found = false;
+    for n in cfg.node_indices() {
+        let info = &cfg[n];
+        if info.kind != StmtKind::Call {
+            continue;
+        }
+        let Some(callee) = info.call.callee.as_deref() else {
+            continue;
+        };
+        if callee.contains("header") && info.call.sink_payload_args.is_some() {
+            found = true;
+            break;
+        }
+    }
+    assert!(
+        found,
+        "expected the builder chain to rebind to the middle `.header` gated \
+         Location sink and populate sink_payload_args"
+    );
+}
+
 /// Ternary-RHS branches are lowered into a diamond CFG by
 /// `build_ternary_diamond` so the condition is control-flow and the
 /// branches are data-flow that joins at a phi.  But push_node only does

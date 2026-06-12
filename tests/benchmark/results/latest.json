@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-06-12T18:46:26Z",
+  "timestamp": "2026-06-12T21:08:15Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:474c4a72d7b5a8d19ae3886594db5551cfc6b5ac01a6a33690852ba91c7f4551",
-  "corpus_size": 598,
-  "cases_run": 596,
+  "ground_truth_hash": "sha256:74e36c9dc8aa118e475d97a91adac78ffacdeaeccf6932367a2a4042671c0b6d",
+  "corpus_size": 602,
+  "cases_run": 600,
   "cases_skipped": 2,
   "outcomes": [
     {
@@ -2339,6 +2339,43 @@
       "all_finding_ids": [
         "rs.quality.unwrap",
         "taint-unsanitised-flow (source 27:22)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "cve-rs-2022-0072-patched",
+      "file": "cve_corpus/rust/RUSTSEC-2022-0072/patched.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "cve-rs-2022-0072-vulnerable",
+      "file": "cve_corpus/rust/RUSTSEC-2022-0072/vulnerable.rs",
+      "language": "rust",
+      "vuln_class": "open_redirect",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "taint-open-redirect (source 56:16)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "taint-open-redirect (source 56:16)"
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 1
@@ -8182,6 +8219,26 @@
       "non_security_finding_count": 2
     },
     {
+      "case_id": "rs-open_redirect-001",
+      "file": "rust/open_redirect/chained_builder_location.rs",
+      "language": "rust",
+      "vuln_class": "open_redirect",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "taint-open-redirect (source 24:16)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "taint-open-redirect (source 24:16)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 1
+    },
+    {
       "case_id": "rs-path-001",
       "file": "rust/path_traversal/path_read.rs",
       "language": "rust",
@@ -8688,6 +8745,23 @@
       "all_finding_ids": [],
       "security_finding_count": 0,
       "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-safe-020",
+      "file": "rust/open_redirect/safe_sanitized_location.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 1
     },
     {
       "case_id": "rs-safe-cross-001",
@@ -10628,22 +10702,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 286,
+    "tp": 288,
     "fp": 7,
     "fn_": 7,
-    "tn": 296,
-    "precision": 0.9761092150170648,
-    "recall": 0.9761092150170648,
-    "f1": 0.9761092150170649
+    "tn": 298,
+    "precision": 0.976271186440678,
+    "recall": 0.976271186440678,
+    "f1": 0.976271186440678
   },
   "aggregate_rule_level": {
-    "tp": 286,
+    "tp": 288,
     "fp": 7,
     "fn_": 7,
-    "tn": 296,
-    "precision": 0.9761092150170648,
-    "recall": 0.9761092150170648,
-    "f1": 0.9761092150170649
+    "tn": 298,
+    "precision": 0.976271186440678,
+    "recall": 0.976271186440678,
+    "f1": 0.976271186440678
   },
   "by_language": {
     "c": {
@@ -10719,13 +10793,13 @@
       "f1": 1.0
     },
     "rust": {
-      "tp": 44,
+      "tp": 46,
       "fp": 2,
       "fn_": 0,
-      "tn": 47,
-      "precision": 0.9565217391304348,
+      "tn": 49,
+      "precision": 0.9583333333333334,
       "recall": 1.0,
-      "f1": 0.9777777777777777
+      "f1": 0.9787234042553191
     },
     "typescript": {
       "tp": 38,
@@ -10846,6 +10920,15 @@
       "recall": 1.0,
       "f1": 1.0
     },
+    "open_redirect": {
+      "tp": 2,
+      "fp": 0,
+      "fn_": 0,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
     "path_traversal": {
       "tp": 38,
       "fp": 0,
@@ -10877,7 +10960,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 291,
+      "tn": 293,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -10930,31 +11013,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 90,
-      "fp": 129,
-      "fn_": 203,
-      "tn": 174,
-      "precision": 0.410958904109589,
-      "recall": 0.30716723549488056,
-      "f1": 0.3515625
+      "tp": 89,
+      "fp": 130,
+      "fn_": 206,
+      "tn": 175,
+      "precision": 0.4063926940639269,
+      "recall": 0.3016949152542373,
+      "f1": 0.3463035019455253
     },
     ">=Low": {
-      "tp": 91,
+      "tp": 90,
       "fp": 153,
-      "fn_": 202,
-      "tn": 150,
-      "precision": 0.3729508196721312,
-      "recall": 0.310580204778157,
-      "f1": 0.3389199255121043
+      "fn_": 205,
+      "tn": 152,
+      "precision": 0.37037037037037035,
+      "recall": 0.3050847457627119,
+      "f1": 0.3345724907063197
     },
     ">=Medium": {
-      "tp": 90,
-      "fp": 131,
-      "fn_": 203,
-      "tn": 172,
-      "precision": 0.4072398190045249,
-      "recall": 0.30716723549488056,
-      "f1": 0.35019455252918286
+      "tp": 89,
+      "fp": 132,
+      "fn_": 206,
+      "tn": 173,
+      "precision": 0.40271493212669685,
+      "recall": 0.3016949152542373,
+      "f1": 0.3449612403100775
     }
   }
 }

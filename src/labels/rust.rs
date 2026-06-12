@@ -333,6 +333,14 @@ pub static RULES: &[LabelRule] = &[
             "ensure_relative_url",
             "assert_relative_path",
             "is_relative_url",
+            // RUSTSEC-2022-0072 (hyper-staticfile open redirect): the fix
+            // rebuilds the directory-redirect Location target from the
+            // *sanitized* filesystem path returned by `RequestedPath::resolve`
+            // (which normalises away traversal and the scheme-relative `//host`
+            // prefix) instead of the raw request path. Recognising the sanitiser
+            // keeps the patched form silent while the raw-path form still fires.
+            "RequestedPath::resolve",
+            "RequestedPath.resolve",
         ],
         label: DataLabel::Sanitizer(Cap::OPEN_REDIRECT),
         case_sensitive: false,
@@ -623,7 +631,7 @@ pub fn phase_c_auth_rules() -> Vec<RuntimeLabelRule> {
 #[cfg(test)]
 mod tests {
     use super::KINDS;
-    use crate::labels::Kind;
+    use crate::labels::{Cap, DataLabel, Kind, classify_all};
 
     #[test]
     fn mod_item_is_walkable_block_not_trivia() {
@@ -632,5 +640,20 @@ mod tests {
         // source, and sink inside inline modules.
         assert_eq!(KINDS.get("mod_item"), Some(&Kind::Block));
         assert_ne!(KINDS.get("mod_item"), Some(&Kind::Trivia));
+    }
+
+    /// RUSTSEC-2022-0072 (hyper-staticfile): the patched fix routes the
+    /// redirect target through `RequestedPath::resolve`, which normalises the
+    /// path so it can't become a scheme-relative redirect.  Recognise it as
+    /// an OPEN_REDIRECT sanitiser so the patched form stays silent.
+    #[test]
+    fn requested_path_resolve_is_open_redirect_sanitizer() {
+        let labels = classify_all("rust", "RequestedPath::resolve", None);
+        assert!(
+            labels
+                .iter()
+                .any(|l| matches!(l, DataLabel::Sanitizer(c) if c.contains(Cap::OPEN_REDIRECT))),
+            "expected RequestedPath::resolve to classify as Sanitizer(OPEN_REDIRECT); got {labels:?}"
+        );
     }
 }
