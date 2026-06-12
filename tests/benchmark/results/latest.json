@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-06-12T15:01:03Z",
+  "timestamp": "2026-06-12T15:39:19Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:3afa268c5c627b0be5e4ed139958114a039677f5fd462ef1abd010137384f380",
-  "corpus_size": 592,
-  "cases_run": 590,
+  "ground_truth_hash": "sha256:0fbebd23496a6fefb2c9a642e7cde7427a76f5c2748b9390e4fae144d589175d",
+  "corpus_size": 596,
+  "cases_run": 594,
   "cases_skipped": 2,
   "outcomes": [
     {
@@ -2057,6 +2057,42 @@
         "taint-unsanitised-flow (source 45:9)"
       ],
       "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-py-2024-32651-patched",
+      "file": "cve_corpus/python/CVE-2024-32651/patched.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-py-2024-32651-vulnerable",
+      "file": "cve_corpus/python/CVE-2024-32651/vulnerable.py",
+      "language": "python",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.xss.jinja_from_string",
+        "py.xss.jinja_from_string"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "py.xss.jinja_from_string",
+        "py.xss.jinja_from_string"
+      ],
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -6948,6 +6984,21 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "py-safe-jinja-sandboxed-from-string",
+      "file": "python/safe/safe_jinja_sandboxed_from_string.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "py-safe-relative-to-validator",
       "file": "python/safe/safe_relative_to_validator.py",
       "language": "python",
@@ -7060,6 +7111,25 @@
       "unexpected_rule_ids": [],
       "all_finding_ids": [],
       "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-ssti-unrestricted-from-string",
+      "file": "python/xss/ssti_unrestricted_from_string.py",
+      "language": "python",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.xss.jinja_from_string"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "py.xss.jinja_from_string"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -10524,22 +10594,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 283,
+    "tp": 285,
     "fp": 7,
     "fn_": 7,
-    "tn": 293,
-    "precision": 0.9758620689655172,
-    "recall": 0.9758620689655172,
-    "f1": 0.9758620689655172
+    "tn": 295,
+    "precision": 0.976027397260274,
+    "recall": 0.976027397260274,
+    "f1": 0.976027397260274
   },
   "aggregate_rule_level": {
-    "tp": 283,
+    "tp": 285,
     "fp": 7,
     "fn_": 7,
-    "tn": 293,
-    "precision": 0.9758620689655172,
-    "recall": 0.9758620689655172,
-    "f1": 0.9758620689655172
+    "tn": 295,
+    "precision": 0.976027397260274,
+    "recall": 0.976027397260274,
+    "f1": 0.976027397260274
   },
   "by_language": {
     "c": {
@@ -10597,10 +10667,10 @@
       "f1": 0.9166666666666666
     },
     "python": {
-      "tp": 39,
+      "tp": 41,
       "fp": 0,
       "fn_": 0,
-      "tn": 42,
+      "tn": 44,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -10773,7 +10843,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 288,
+      "tn": 290,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -10815,7 +10885,7 @@
       "f1": 1.0
     },
     "xss": {
-      "tp": 24,
+      "tp": 26,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -10826,31 +10896,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 98,
-      "fp": 122,
-      "fn_": 192,
-      "tn": 178,
-      "precision": 0.44545454545454544,
-      "recall": 0.33793103448275863,
-      "f1": 0.38431372549019605
+      "tp": 95,
+      "fp": 126,
+      "fn_": 197,
+      "tn": 176,
+      "precision": 0.4298642533936652,
+      "recall": 0.3253424657534247,
+      "f1": 0.37037037037037035
     },
     ">=Low": {
-      "tp": 100,
-      "fp": 147,
-      "fn_": 190,
-      "tn": 153,
-      "precision": 0.4048582995951417,
-      "recall": 0.3448275862068966,
-      "f1": 0.37243947858473
+      "tp": 96,
+      "fp": 151,
+      "fn_": 196,
+      "tn": 151,
+      "precision": 0.38866396761133604,
+      "recall": 0.3287671232876712,
+      "f1": 0.3562152133580705
     },
     ">=Medium": {
-      "tp": 98,
-      "fp": 125,
-      "fn_": 192,
-      "tn": 175,
-      "precision": 0.43946188340807174,
-      "recall": 0.33793103448275863,
-      "f1": 0.38206627680311894
+      "tp": 95,
+      "fp": 128,
+      "fn_": 197,
+      "tn": 174,
+      "precision": 0.4260089686098655,
+      "recall": 0.3253424657534247,
+      "f1": 0.36893203883495146
     }
   }
 }

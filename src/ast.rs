@@ -1372,6 +1372,26 @@ impl<'a> ParsedSource<'a> {
                     {
                         continue;
                     }
+                    // Layer G: Python `<env>.from_string(...)` where `<env>` is a
+                    // Jinja2 *sandboxed* environment
+                    // (`jinja2.sandbox.SandboxedEnvironment` /
+                    // `ImmutableSandboxedEnvironment`).  The `py.xss.jinja_from_string`
+                    // pattern fires syntactically on every `.from_string(...)` call,
+                    // but the sandbox blocks the attribute-traversal payloads
+                    // (`{{ ...__globals__.__builtins__... }}`) that make an
+                    // *unrestricted* `Environment` a template-injection-to-RCE sink.
+                    // Rendering untrusted input through a sandbox is the canonical
+                    // remediation (CVE-2024-32651 changedetection.io fix routes
+                    // notification bodies through
+                    // `ImmutableSandboxedEnvironment(...).from_string(...)`), so a
+                    // sandboxed receiver here is a false positive.  Plain
+                    // `Environment(loader=BaseLoader).from_string(x)` keeps firing.
+                    if cq.meta.id == "py.xss.jinja_from_string"
+                        && self.lang_slug == "python"
+                        && is_python_sandboxed_jinja_from_string(cap.node, self.bytes)
+                    {
+                        continue;
+                    }
                     let point = cap.node.start_position();
                     out.push(Diag {
                         path: self.path.to_string_lossy().into_owned(),
@@ -2828,6 +2848,142 @@ fn is_php_include_param_passthrough(include_node: tree_sitter::Node, bytes: &[u8
         cur = parent;
     }
     false
+}
+
+/// Layer G recogniser: the matched `<recv>.from_string(...)` call (captured by
+/// the `py.xss.jinja_from_string` pattern) has a receiver that is a Jinja2
+/// *sandboxed* environment, so the template-injection finding is a false
+/// positive.  Recognises two shapes:
+///   * inline — `ImmutableSandboxedEnvironment(...).from_string(x)`
+///     (receiver is itself a sandboxed-env constructor call), and
+///   * the two-statement form
+///     `env = jinja2.sandbox.ImmutableSandboxedEnvironment(...); env.from_string(x)`
+///     (receiver is a local whose only environment-constructor assignment in
+///     the enclosing function is a sandboxed env).
+/// Conservative: an unresolved receiver (field access, subscript, parameter,
+/// or a name also assigned an unrestricted `Environment` / `Template`) keeps
+/// the finding firing.
+fn is_python_sandboxed_jinja_from_string(captured: tree_sitter::Node, bytes: &[u8]) -> bool {
+    // The pattern's index-0 capture is the `from_string` identifier; walk up to
+    // the enclosing `<recv>.from_string(...)` call.
+    let Some(call_node) = find_enclosing_call(captured) else {
+        return false;
+    };
+    // call_node = (call function: (attribute object: <recv> attribute: "from_string"))
+    let Some(func) = call_node.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "attribute" {
+        return false;
+    }
+    let Some(recv) = func.child_by_field_name("object") else {
+        return false;
+    };
+    match recv.kind() {
+        // Inline: `ImmutableSandboxedEnvironment(...).from_string(x)`.
+        "call" => is_sandboxed_env_ctor_call(recv, bytes),
+        // Local variable: resolve its environment-constructor assignment in the
+        // enclosing function / module body.
+        "identifier" => {
+            let Ok(name) = std::str::from_utf8(&bytes[recv.byte_range()]) else {
+                return false;
+            };
+            python_local_is_sandboxed_env(call_node, name, bytes)
+        }
+        _ => false,
+    }
+}
+
+/// True when `call_node` is a constructor call for a Jinja2 sandboxed
+/// environment (`SandboxedEnvironment` or `ImmutableSandboxedEnvironment`,
+/// dotted-qualified or bare).
+fn is_sandboxed_env_ctor_call(call_node: tree_sitter::Node, bytes: &[u8]) -> bool {
+    if call_node.kind() != "call" {
+        return false;
+    }
+    match python_call_ctor_name(call_node, bytes) {
+        Some(name) => is_sandboxed_env_name(name),
+        None => false,
+    }
+}
+
+/// The final identifier of a Python call's `function` (the constructor / method
+/// name): `jinja2.sandbox.ImmutableSandboxedEnvironment(...)` -> `"ImmutableSandboxedEnvironment"`,
+/// `Environment(...)` -> `"Environment"`.
+fn python_call_ctor_name<'a>(call_node: tree_sitter::Node, bytes: &'a [u8]) -> Option<&'a str> {
+    let func = call_node.child_by_field_name("function")?;
+    let ident = match func.kind() {
+        "identifier" => func,
+        "attribute" => func.child_by_field_name("attribute")?,
+        _ => return None,
+    };
+    std::str::from_utf8(&bytes[ident.byte_range()]).ok()
+}
+
+fn is_sandboxed_env_name(name: &str) -> bool {
+    // `ImmutableSandboxedEnvironment` ends with `SandboxedEnvironment`, so a
+    // single suffix test covers both sandbox classes.
+    name.ends_with("SandboxedEnvironment")
+}
+
+/// An unrestricted Jinja2 environment / template constructor — assigning one of
+/// these to the receiver name means the receiver is NOT guaranteed sandboxed,
+/// so the finding must keep firing.
+fn is_unrestricted_jinja_env_name(name: &str) -> bool {
+    matches!(name, "Environment" | "NativeEnvironment" | "Template")
+}
+
+/// Resolve a local receiver name to whether it holds a Jinja2 sandboxed
+/// environment at the `from_string` use site.  Scans the enclosing
+/// `function_definition` (or module) body for assignments `name = <ctor>(...)`:
+/// returns true iff at least one assignment constructs a sandboxed environment
+/// and none constructs an unrestricted `Environment` / `Template`.
+fn python_local_is_sandboxed_env(use_node: tree_sitter::Node, name: &str, bytes: &[u8]) -> bool {
+    // Find the enclosing scope to bound the assignment search.
+    let mut scope = use_node;
+    loop {
+        match scope.kind() {
+            "function_definition" | "lambda" | "module" => break,
+            _ => match scope.parent() {
+                Some(p) => scope = p,
+                None => break,
+            },
+        }
+    }
+    let mut saw_sandboxed = false;
+    let mut saw_unrestricted = false;
+    scan_python_env_assignments(scope, name, bytes, &mut saw_sandboxed, &mut saw_unrestricted);
+    saw_sandboxed && !saw_unrestricted
+}
+
+/// Recursively walk `node`'s subtree collecting environment-constructor
+/// assignments to `name` (`name = <ctor>(...)`), classifying each as sandboxed
+/// or unrestricted.
+fn scan_python_env_assignments(
+    node: tree_sitter::Node,
+    name: &str,
+    bytes: &[u8],
+    saw_sandboxed: &mut bool,
+    saw_unrestricted: &mut bool,
+) {
+    if node.kind() == "assignment"
+        && let Some(lhs) = node.child_by_field_name("left")
+        && lhs.kind() == "identifier"
+        && std::str::from_utf8(&bytes[lhs.byte_range()]).ok() == Some(name)
+        && let Some(rhs) = node.child_by_field_name("right")
+        && rhs.kind() == "call"
+        && let Some(ctor) = python_call_ctor_name(rhs, bytes)
+    {
+        if is_sandboxed_env_name(ctor) {
+            *saw_sandboxed = true;
+        } else if is_unrestricted_jinja_env_name(ctor) {
+            *saw_unrestricted = true;
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        scan_python_env_assignments(child, name, bytes, saw_sandboxed, saw_unrestricted);
+    }
 }
 
 fn find_named_child_of_kind<'a>(
@@ -7151,6 +7307,74 @@ fn python_deser_inside_unittest_assertion_recognises_roundtrip_shapes() {
     assert!(
         !is_python_deser_inside_unittest_assertion(cap, code),
         "f-string expected (interpolation) should NOT be suppressed"
+    );
+}
+
+/// Layer G: `<env>.from_string(...)` is suppressed only when the receiver is a
+/// Jinja2 *sandboxed* environment.  Motivated by CVE-2024-32651
+/// (changedetection.io) whose fix routes notification bodies through
+/// `ImmutableSandboxedEnvironment(...).from_string(...)`.
+#[test]
+fn python_sandboxed_jinja_from_string_only_suppresses_sandbox() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    parser.set_language(&lang).unwrap();
+    // Exactly the production `py.xss.jinja_from_string` query — index-0 capture
+    // is the `from_string` identifier, mirroring `run_ast_queries`.
+    let q = r#"(call function: (attribute attribute: (identifier) @fn (#eq? @fn "from_string"))) @vuln"#;
+
+    // Two-statement sandboxed env (the patched-CVE shape) → suppressed.
+    let code = b"import jinja2.sandbox\ndef render(t):\n    env = jinja2.sandbox.ImmutableSandboxedEnvironment(extensions=[])\n    return env.from_string(t).render({})\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_python_capture(&tree, code, q);
+    assert!(
+        is_python_sandboxed_jinja_from_string(cap, code),
+        "ImmutableSandboxedEnvironment local receiver should be suppressed"
+    );
+
+    // Bare `SandboxedEnvironment` local receiver → suppressed.
+    let code = b"from jinja2.sandbox import SandboxedEnvironment\ndef render(t):\n    env = SandboxedEnvironment()\n    return env.from_string(t).render()\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_python_capture(&tree, code, q);
+    assert!(
+        is_python_sandboxed_jinja_from_string(cap, code),
+        "SandboxedEnvironment local receiver should be suppressed"
+    );
+
+    // Inline sandboxed constructor receiver → suppressed.
+    let code = b"import jinja2.sandbox\ndef render(t):\n    return jinja2.sandbox.ImmutableSandboxedEnvironment().from_string(t).render()\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_python_capture(&tree, code, q);
+    assert!(
+        is_python_sandboxed_jinja_from_string(cap, code),
+        "inline ImmutableSandboxedEnvironment receiver should be suppressed"
+    );
+
+    // Unrestricted `Environment(loader=BaseLoader)` (the vulnerable shape) → fires.
+    let code = b"from jinja2 import Environment, BaseLoader\ndef render(t):\n    env = Environment(loader=BaseLoader)\n    return env.from_string(t).render()\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_python_capture(&tree, code, q);
+    assert!(
+        !is_python_sandboxed_jinja_from_string(cap, code),
+        "unrestricted Environment receiver must keep firing"
+    );
+
+    // Receiver later downgraded from sandbox to unrestricted Environment → fires.
+    let code = b"from jinja2 import Environment\nfrom jinja2.sandbox import SandboxedEnvironment\ndef render(t):\n    env = SandboxedEnvironment()\n    env = Environment()\n    return env.from_string(t).render()\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_python_capture(&tree, code, q);
+    assert!(
+        !is_python_sandboxed_jinja_from_string(cap, code),
+        "receiver reassigned to unrestricted Environment must keep firing"
+    );
+
+    // Unresolved receiver (field access) → conservatively fires.
+    let code = b"def render(self, t):\n    return self.env.from_string(t).render()\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_python_capture(&tree, code, q);
+    assert!(
+        !is_python_sandboxed_jinja_from_string(cap, code),
+        "unresolved field receiver must keep firing (conservative)"
     );
 }
 

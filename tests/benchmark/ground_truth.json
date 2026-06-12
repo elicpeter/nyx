@@ -3,7 +3,7 @@
  "metadata": {
   "description": "Nyx benchmark ground truth",
   "created": "2026-03-20",
-  "corpus_size": 594
+  "corpus_size": 598
  },
  "cases": [
   {
@@ -18706,6 +18706,134 @@
    ],
    "disabled": false,
    "notes": "CVE-2024-37896 precision pair: parameterised `db.Where(\"name = ?\", name)` must NOT fire \u2014 the payload-arg-0 gate keeps the tainted bind value (arg 1) out of the SQL sink scan."
+  },
+  {
+   "case_id": "cve-py-2024-32651-vulnerable",
+   "file": "cve_corpus/python/CVE-2024-32651/vulnerable.py",
+   "language": "python",
+   "is_vulnerable": true,
+   "vuln_class": "xss",
+   "cwe": "CWE-1336",
+   "provenance": "real_cve",
+   "equivalence_tier": "exact",
+   "match_mode": "rule_match",
+   "expected_rule_ids": [
+    "py.xss.jinja_from_string"
+   ],
+   "allowed_alternative_rule_ids": [
+    "taint-unsanitised-flow",
+    "taint-template-injection"
+   ],
+   "forbidden_rule_ids": [],
+   "expected_severity": "MEDIUM",
+   "expected_category": "Security",
+   "expected_sink_lines": [
+    [
+     36,
+     36
+    ]
+   ],
+   "expected_source_lines": [],
+   "tags": [
+    "cve",
+    "changedetection",
+    "ssti",
+    "jinja2",
+    "positive"
+   ],
+   "disabled": false,
+   "notes": "CVE-2024-32651: changedetection.io notification SSTI-to-RCE \u2014 user-controlled notification body rendered through Environment(loader=BaseLoader).from_string(...).render(...). Apache-2.0"
+  },
+  {
+   "case_id": "cve-py-2024-32651-patched",
+   "file": "cve_corpus/python/CVE-2024-32651/patched.py",
+   "language": "python",
+   "is_vulnerable": false,
+   "vuln_class": "safe",
+   "cwe": "N/A",
+   "provenance": "real_cve",
+   "equivalence_tier": "exact",
+   "match_mode": "file_presence",
+   "expected_rule_ids": [],
+   "allowed_alternative_rule_ids": [],
+   "forbidden_rule_ids": [
+    "py.xss.jinja_from_string"
+   ],
+   "expected_severity": null,
+   "expected_category": "Security",
+   "expected_sink_lines": [],
+   "expected_source_lines": [],
+   "tags": [
+    "cve",
+    "changedetection",
+    "patched",
+    "negative"
+   ],
+   "disabled": false,
+   "notes": "CVE-2024-32651 patched counterpart: notification bodies rendered through jinja2.sandbox.ImmutableSandboxedEnvironment.from_string \u2014 Layer G recognises the sandboxed receiver and does not refire py.xss.jinja_from_string."
+  },
+  {
+   "case_id": "py-safe-jinja-sandboxed-from-string",
+   "file": "python/safe/safe_jinja_sandboxed_from_string.py",
+   "language": "python",
+   "is_vulnerable": false,
+   "vuln_class": "safe",
+   "cwe": "CWE-1336",
+   "provenance": "synthetic",
+   "equivalence_tier": "exact",
+   "match_mode": "rule_match",
+   "expected_rule_ids": [],
+   "allowed_alternative_rule_ids": [],
+   "forbidden_rule_ids": [
+    "py.xss.jinja_from_string"
+   ],
+   "expected_severity": null,
+   "expected_category": null,
+   "expected_sink_lines": null,
+   "expected_source_lines": null,
+   "tags": [
+    "ssti",
+    "jinja2",
+    "sandbox",
+    "receiver-type"
+   ],
+   "disabled": false,
+   "notes": "Jinja2 ImmutableSandboxedEnvironment.from_string neutralises SSTI; Layer G suppresses py.xss.jinja_from_string for sandboxed receivers (CVE-2024-32651 fix shape)."
+  },
+  {
+   "case_id": "py-ssti-unrestricted-from-string",
+   "file": "python/xss/ssti_unrestricted_from_string.py",
+   "language": "python",
+   "is_vulnerable": true,
+   "vuln_class": "xss",
+   "cwe": "CWE-1336",
+   "provenance": "synthetic",
+   "equivalence_tier": "exact",
+   "match_mode": "rule_match",
+   "expected_rule_ids": [
+    "py.xss.jinja_from_string"
+   ],
+   "allowed_alternative_rule_ids": [
+    "taint-unsanitised-flow",
+    "taint-template-injection"
+   ],
+   "forbidden_rule_ids": [],
+   "expected_severity": "MEDIUM",
+   "expected_category": "Security",
+   "expected_sink_lines": [
+    [
+     14,
+     14
+    ]
+   ],
+   "expected_source_lines": null,
+   "tags": [
+    "ssti",
+    "jinja2",
+    "positive"
+   ],
+   "disabled": false,
+   "notes": "Unrestricted Environment(loader=BaseLoader).from_string positive: Layer G must NOT suppress \u2014 only sandboxed receivers are safe."
   }
  ]
 }

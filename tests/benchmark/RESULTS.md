@@ -25,6 +25,7 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2024-23334 | Python     | aiohttp                    | Apache-2.0           | path_traversal  | detected |
 | CVE-2023-6568  | Python     | MLflow                     | Apache-2.0           | XSS             | detected |
 | CVE-2024-21513 | Python     | LangChain Experimental     | MIT                  | code_exec       | detected |
+| CVE-2024-32651 | Python     | changedetection.io         | Apache-2.0           | SSTI            | detected |
 | CVE-2019-14939 | JavaScript | mongo-express              | MIT                  | code_exec       | detected |
 | CVE-2025-64430 | JavaScript | Parse Server               | Apache-2.0           | SSRF            | detected |
 | CVE-2023-22621 | JavaScript | Strapi                     | MIT                  | code_exec (SSTI)| detected |
@@ -97,6 +98,7 @@ Most recent first. Metrics are rule-level on the corpus size at that point.
 
 | Date       | Change                                                                       | Corpus | P     | R     | F1    |
 |------------|------------------------------------------------------------------------------|--------|-------|-------|-------|
+| 2026-06-12 | Python SSTI sandbox precision (`ast.rs` Layer G): `<env>.from_string(...)` suppresses `py.xss.jinja_from_string` only when the receiver is a Jinja2 `SandboxedEnvironment` / `ImmutableSandboxedEnvironment` (inline ctor or resolved local), the canonical SSTI mitigation; unrestricted `Environment(loader=BaseLoader)` keeps firing. CVE-2024-32651 (changedetection.io notification SSTI-to-RCE, Apache-2.0) added — vulnerable detects, patched (sandboxed fix) now silent. Pinned by `python_sandboxed_jinja_from_string_only_suppresses_sandbox` + synthetics `safe_jinja_sandboxed_from_string.py` (TN) / `ssti_unrestricted_from_string.py` (TP). | 596 | 0.976 | 0.976 | 0.976 |
 | 2026-06-11 | Ruby raw `pg`-gem SQLi: `PG::Connection.new`/`PG.connect` typed `DatabaseConnection`; new `DatabaseConnection.exec`/`exec_query`/`query` SQL_QUERY sinks (`exec_params` left safe); Kernel `system`/`exec` shell sinks tightened to receiver-less via `=system`/`=exec` exact-match + `!receiver` on `rb.cmdi.system_interp` (so `conn.exec(sql)` is SQL, not cmdi); Ruby `operator_assignment` (`||=`/`+=`) now lowered as Assignment. Motivated by CVE-2026-42087 (OpenC3 COSMOS QuestDB SQLi) — AGPL upstream not fixtured; pinned by synthetic `sqli_pg_raw_exec.rb` (TP) + `safe_pg_exec_params.rb` (TN). | 567 | 0.975 | 0.975 | 0.975 |
 | 2026-05-26 | C argv-injection taint now propagates through execvp argv arrays while recognising the upstream `ssh_host[0] == '-'` dash-prefix rejection and ignoring env-derived executable-path argv elements; CVE-2017-1000117 re-enabled and detected, patched counterpart stays clean | 565 | 1.000 | 0.996 | 0.998 |
 | 2026-05-26 | Benchmark docs corrected for CVE-2026-25544: the Payload Drizzle SQL injection fixture is enabled and detected in `ground_truth.json` | 565 | 1.000 | 1.000 | 1.000 |
