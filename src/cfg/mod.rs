@@ -42,7 +42,8 @@ pub mod safe_fields;
 use blocks::{build_begin_rescue, build_switch, build_try};
 use helpers::{
     collect_nested_function_nodes, derive_anon_fn_name_from_context, find_classifiable_inner_call,
-    first_call_ident_with_span, first_member_label, first_member_text, is_raii_factory,
+    find_inner_sink_call, first_call_ident_with_span, first_member_label, first_member_text,
+    is_raii_factory,
     is_subscript_kind, root_member_receiver, subscript_components, subscript_lhs_node,
 };
 // Re-exports so sibling submodules can keep using `super::name` for
@@ -2760,7 +2761,22 @@ pub(super) fn push_node<'a>(
                 }
             })
             .is_some_and(|leaf| crate::labels::is_promise_callback_method(lang, &leaf));
-    if labels.is_empty()
+    // Surface a classifiable nested call when the outer call carries no
+    // SINK label of its own.  Two cases:
+    //   (a) the outer call is unclassified (`labels.is_empty()`) — surface
+    //       any classifiable inner call (`str(eval(expr))` → `eval`).
+    //   (b) the outer call is a non-Sink (Sanitizer / Source) label — surface
+    //       the inner call ONLY when it is itself a SINK, so an outer
+    //       Sanitizer / Source cannot shadow a dangerous nested sink.
+    //       e.g. `JSON.parse(await fsp.readFile(tainted))` (FILE_IO sink
+    //       hidden under the JSON_PARSE sanitizer, vite CVE-2026-39365),
+    //       `escapeHtml(db.query(tainted))`, `String(execSync(tainted))`.
+    //       Additive: the existing Sanitizer / Source label is retained
+    //       (a JSON_PARSE / HTML_ESCAPE cap on the parsed *result* is
+    //       unrelated to the inner sink's path/query/command argument),
+    //       and only fires when no Sink label is present yet.
+    let outer_has_sink_label = labels.iter().any(|l| matches!(l, DataLabel::Sink(_)));
+    if !outer_has_sink_label
         && matches!(
             lookup(lang, ast.kind()),
             Kind::CallWrapper
@@ -2770,14 +2786,31 @@ pub(super) fn push_node<'a>(
                 | Kind::CallMethod
                 | Kind::CallMacro
         )
-        && let Some((inner_text, inner_label, inner_span)) =
-            find_classifiable_inner_call(ast, lang, code, extra)
     {
-        labels.push(inner_label);
-        if !outer_is_promise_callback {
-            outer_callee = Some(text.clone());
-            text = inner_text;
-            inner_callee_span = Some(inner_span);
+        // `labels.is_empty()`: outer call is unclassified — surface ANY
+        // classifiable nested call (`str(eval(x))` → `eval`).
+        //
+        // outer is a non-Sink label (Sanitizer / Source): surface only a
+        // nested SINK, recursing PAST the non-sink outer call.  An outer
+        // Sanitizer / Source sanitizes the parsed *result* (an unrelated cap
+        // on a downstream value), it cannot neutralise the inner sink's
+        // path / query / command argument, so the inner sink must still fire.
+        // e.g. `JSON.parse(await fsp.readFile(tainted))` (vite CVE-2026-39365
+        // FILE_IO path traversal hidden under the JSON_PARSE sanitizer),
+        // `escapeHtml(db.query(tainted))`.  `require_sink` makes the search
+        // skip the non-sink outer match and keep walking into its arguments.
+        let inner = if labels.is_empty() {
+            find_classifiable_inner_call(ast, lang, code, extra)
+        } else {
+            find_inner_sink_call(ast, lang, code, extra)
+        };
+        if let Some((inner_text, inner_label, inner_span)) = inner {
+            labels.push(inner_label);
+            if !outer_is_promise_callback {
+                outer_callee = Some(text.clone());
+                text = inner_text;
+                inner_callee_span = Some(inner_span);
+            }
         }
     }
 
@@ -7231,7 +7264,7 @@ pub(crate) fn build_cfg<'a>(
     let local_imports = if matches!(lang, "javascript" | "typescript" | "tsx") {
         let local_imports = extract_local_import_view(tree, code);
         if !local_imports.is_empty() {
-            apply_gated_label_rules(&mut bodies, lang, extra, &local_imports);
+            apply_gated_label_rules(&mut bodies, lang, extra, &local_imports, tree, code);
         }
         local_imports
     } else {
@@ -7353,10 +7386,13 @@ fn apply_gated_label_rules(
     lang: &str,
     _extra: Option<&[crate::labels::RuntimeLabelRule]>,
     local_imports: &std::collections::HashMap<String, String>,
+    tree: &Tree,
+    code: &[u8],
 ) {
     let ctx = crate::labels::ClassificationContext {
         local_imports: Some(local_imports),
     };
+    let root = tree.root_node();
     for body in bodies.iter_mut() {
         let indices: Vec<NodeIndex> = body.graph.node_indices().collect();
         for idx in indices {
@@ -7364,13 +7400,45 @@ fn apply_gated_label_rules(
                 continue;
             };
             let labels = crate::labels::classify_gated_only(lang, &callee, Some(&ctx));
-            if labels.is_empty() {
+            if !labels.is_empty() {
+                let info = &mut body.graph[idx];
+                for lbl in labels {
+                    if !info.taint.labels.contains(&lbl) {
+                        info.taint.labels.push(lbl);
+                    }
+                }
                 continue;
             }
-            let info = &mut body.graph[idx];
-            for lbl in labels {
-                if !info.taint.labels.contains(&lbl) {
-                    info.taint.labels.push(lbl);
+
+            // The node's own callee is not an import-gated sink.  When the node
+            // carries no `Sink` label of its own (a non-sink wrapper such as the
+            // `JSON.parse` sanitizer or an unknown helper), re-walk its AST for a
+            // nested import-gated sink that `push_node`'s CFG-time `classify`
+            // could not resolve (the import view did not exist yet).  Surface it
+            // the same way `find_inner_sink_call` does: rewrite the node's callee
+            // to the inner sink and remember the outer callee.  vite CVE-2026-39365
+            // (`JSON.parse(await fsp.readFile(tainted))`).
+            if body.graph[idx]
+                .taint
+                .labels
+                .iter()
+                .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
+            {
+                continue;
+            }
+            let (start, end) = body.graph[idx].ast.span;
+            let Some(node) = root.descendant_for_byte_range(start, end) else {
+                continue;
+            };
+            if let Some((inner_text, inner_label, inner_span)) =
+                helpers::find_inner_gated_sink_call(node, lang, code, &ctx)
+            {
+                let info = &mut body.graph[idx];
+                info.taint.labels.push(inner_label);
+                if info.call.outer_callee.is_none() {
+                    info.call.outer_callee = Some(callee);
+                    info.call.callee = Some(inner_text);
+                    info.call.callee_span = Some(inner_span);
                 }
             }
         }

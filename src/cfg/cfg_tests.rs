@@ -156,6 +156,66 @@ fn ruby_inner_call_fallback_classifies_bare_outer_around_file_read() {
     );
 }
 
+/// A FILE_IO sink nested as an argument to a *Sanitizer*-labelled outer call
+/// (`JSON.parse(fs.readFileSync(x))`) must still be surfaced: the outer
+/// sanitizer label fills `labels`, so the legacy `labels.is_empty()` gate
+/// skipped it and the inner sink was shadowed.  `find_inner_sink_call`
+/// recurses PAST the non-sink outer call.  Motivated by vite CVE-2026-39365.
+#[test]
+fn js_sanitizer_shadow_surfaces_inner_file_io_sink() {
+    let src = b"function f(x) {\n  const m = JSON.parse(fs.readFileSync(x, 'utf-8'));\n  return m;\n}\n";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let sink = cfg
+        .node_indices()
+        .find(|&i| cfg[i].call.callee.as_deref() == Some("fs.readFileSync"))
+        .expect("inner FILE_IO sink must be surfaced past the JSON.parse sanitizer");
+    let info = &cfg[sink];
+    assert!(
+        info.taint
+            .labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(crate::labels::Cap::FILE_IO))),
+        "nested fs.readFileSync under JSON.parse must carry the FILE_IO sink label"
+    );
+    assert_eq!(
+        info.call.outer_callee.as_deref(),
+        Some("JSON.parse"),
+        "outer_callee must preserve the wrapping JSON.parse sanitizer callee"
+    );
+}
+
+/// Same Sanitizer-shadow shape, but the inner sink is the `node:fs/promises`
+/// import-alias form (`fsp.readFile`) whose label is only resolvable once the
+/// per-file import view is built (the gated post-pass).
+/// `apply_gated_label_rules` must walk into the JSON.parse argument and surface
+/// the import-gated FILE_IO sink.  Verbatim vite CVE-2026-39365 sink shape.
+#[test]
+fn js_sanitizer_shadow_surfaces_inner_fsp_readfile_via_import_view() {
+    let src = b"import fsp from 'node:fs/promises';\nasync function f(x) {\n  const m = JSON.parse(await fsp.readFile(x, 'utf-8'));\n  return m;\n}\n";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let sink = cfg
+        .node_indices()
+        .find(|&i| cfg[i].call.callee.as_deref() == Some("fsp.readFile"))
+        .expect("import-gated fsp.readFile must be surfaced past the JSON.parse sanitizer");
+    let info = &cfg[sink];
+    assert!(
+        info.taint
+            .labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(crate::labels::Cap::FILE_IO))),
+        "nested fsp.readFile under JSON.parse must carry the FILE_IO sink label"
+    );
+    assert_eq!(
+        info.call.outer_callee.as_deref(),
+        Some("JSON.parse"),
+        "outer_callee must preserve the wrapping JSON.parse sanitizer callee"
+    );
+}
+
 /// `classification_span()` must fall back to `ast.span` when no narrower
 /// sub-expression was recorded, so existing structural code paths keep
 /// working unchanged for nodes whose classification applies to the whole

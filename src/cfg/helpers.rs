@@ -258,6 +258,39 @@ pub(crate) fn find_classifiable_inner_call<'a>(
     code: &'a [u8],
     extra: Option<&[crate::labels::RuntimeLabelRule]>,
 ) -> Option<(String, DataLabel, (usize, usize))> {
+    find_inner_call_impl(n, lang, code, extra, false)
+}
+
+/// Like [`find_classifiable_inner_call`], but ONLY returns a nested call that
+/// classifies as a `Sink`, recursing PAST nested calls that classify as a
+/// Source / Sanitizer.  Used when the outer call already carries a non-Sink
+/// label (Sanitizer / Source) and a dangerous inner sink would otherwise be
+/// shadowed — e.g. `JSON.parse(await fsp.readFile(tainted))` (the FILE_IO
+/// path-traversal sink hidden under the `JSON.parse` sanitizer in vite
+/// CVE-2026-39365).  An outer sanitizer neutralises the *result* it returns,
+/// never the inner sink's path / query / command argument, so the inner sink
+/// must still be surfaced.
+pub(crate) fn find_inner_sink_call<'a>(
+    n: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+    extra: Option<&[crate::labels::RuntimeLabelRule]>,
+) -> Option<(String, DataLabel, (usize, usize))> {
+    find_inner_call_impl(n, lang, code, extra, true)
+}
+
+/// Shared walker for [`find_classifiable_inner_call`] /
+/// [`find_inner_sink_call`].  When `require_sink` is set, a non-`Sink`
+/// classification does not terminate the search: the walk continues into the
+/// call's arguments so a deeper sink is still found.
+fn find_inner_call_impl<'a>(
+    n: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+    extra: Option<&[crate::labels::RuntimeLabelRule]>,
+    require_sink: bool,
+) -> Option<(String, DataLabel, (usize, usize))> {
+    let accept = |lbl: &DataLabel| !require_sink || matches!(lbl, DataLabel::Sink(_));
     let mut cursor = n.walk();
     for c in n.children(&mut cursor) {
         // Do not descend into Kind::Function nodes, they will be extracted
@@ -305,6 +338,7 @@ pub(crate) fn find_classifiable_inner_call<'a>(
                 };
                 if let Some(ref id) = ident
                     && let Some(lbl) = classify(lang, id, extra)
+                    && accept(&lbl)
                 {
                     return Some((id.clone(), lbl, (c.start_byte(), c.end_byte())));
                 }
@@ -334,20 +368,85 @@ pub(crate) fn find_classifiable_inner_call<'a>(
                     && let Some(prefix) = crate::cfg::local_receiver_type_prefix(c, &recv, lang)
                 {
                     let alt = format!("{prefix}.{method}");
-                    if let Some(lbl) = classify(lang, &alt, extra) {
+                    if let Some(lbl) = classify(lang, &alt, extra)
+                        && accept(&lbl)
+                    {
                         return Some((alt, lbl, (c.start_byte(), c.end_byte())));
                     }
                 }
                 // Recurse into arguments of this call
-                if let Some(found) = find_classifiable_inner_call(c, lang, code, extra) {
+                if let Some(found) = find_inner_call_impl(c, lang, code, extra, require_sink) {
                     return Some(found);
                 }
             }
             _ => {
-                if let Some(found) = find_classifiable_inner_call(c, lang, code, extra) {
+                if let Some(found) = find_inner_call_impl(c, lang, code, extra, require_sink) {
                     return Some(found);
                 }
             }
+        }
+    }
+    None
+}
+
+/// Walk `n`'s descendants for a nested call whose callee classifies — via the
+/// *import-gated* registry with `ctx` (so the `fs/promises` import alias is
+/// resolved) — as a `Sink`, recursing past calls that do not.  Mirror of
+/// [`find_inner_sink_call`] for the gated post-pass: the CFG-time `classify`
+/// in `push_node` cannot see the per-file import view, so an import-gated sink
+/// (`fsp.readFile`) shadowed under a non-sink outer call
+/// (`JSON.parse(await fsp.readFile(tainted))`, vite CVE-2026-39365) is invisible
+/// until the import view is built.  Returns `(callee_text, label, span)`.
+pub(crate) fn find_inner_gated_sink_call<'a>(
+    n: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+    ctx: &crate::labels::ClassificationContext<'_>,
+) -> Option<(String, DataLabel, (usize, usize))> {
+    let mut cursor = n.walk();
+    for c in n.children(&mut cursor) {
+        if lookup(lang, c.kind()) == Kind::Function {
+            continue;
+        }
+        if matches!(
+            lookup(lang, c.kind()),
+            Kind::CallFn | Kind::CallMethod | Kind::CallMacro
+        ) {
+            let ident = match lookup(lang, c.kind()) {
+                Kind::CallMethod => {
+                    let func = c
+                        .child_by_field_name("method")
+                        .or_else(|| c.child_by_field_name("name"))
+                        .and_then(|f| text_of(f, code));
+                    let recv = c
+                        .child_by_field_name("object")
+                        .or_else(|| c.child_by_field_name("receiver"))
+                        .or_else(|| c.child_by_field_name("scope"))
+                        .and_then(|f| root_receiver_text(f, lang, code));
+                    match (recv, func) {
+                        (Some(r), Some(f)) => Some(format!("{r}.{f}")),
+                        (_, Some(f)) => Some(f),
+                        _ => None,
+                    }
+                }
+                _ => c
+                    .child_by_field_name("function")
+                    .or_else(|| c.child_by_field_name("method"))
+                    .or_else(|| c.child_by_field_name("name"))
+                    .and_then(|f| text_of(f, code)),
+            };
+            if let Some(id) = ident {
+                if let Some(lbl) = crate::labels::classify_gated_only(lang, &id, Some(ctx))
+                    .iter()
+                    .find(|l| matches!(l, DataLabel::Sink(_)))
+                    .copied()
+                {
+                    return Some((id, lbl, (c.start_byte(), c.end_byte())));
+                }
+            }
+        }
+        if let Some(found) = find_inner_gated_sink_call(c, lang, code, ctx) {
+            return Some(found);
         }
     }
     None

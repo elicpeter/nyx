@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 577
+    "corpus_size": 582
   },
   "cases": [
     {
@@ -18143,6 +18143,169 @@
       ],
       "disabled": false,
       "notes": "Precision counterpart to java-ssrf-004: the SAME multi-sink helper is called with a CONSTANT url, never attacker input. The per-cap de-masking split must not manufacture findings from an untainted argument \u2014 neither taint-unsanitised-flow nor taint-header-injection may fire."
+    },
+    {
+      "case_id": "ts-path_traversal-002",
+      "file": "typescript/path_traversal/nested_readfile_under_json_parse.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "path-traversal",
+        "nested-sink",
+        "json-parse-shadow"
+      ],
+      "disabled": false,
+      "notes": "FILE_IO sink fs.readFileSync nested under JSON.parse sanitizer still fires"
+    },
+    {
+      "case_id": "ts-path_traversal-003",
+      "file": "typescript/path_traversal/nested_fsp_readfile_under_json_parse.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "path-traversal",
+        "nested-sink",
+        "fs-promises-namespace"
+      ],
+      "disabled": false,
+      "notes": "fsp.readFile (node:fs/promises alias) nested under JSON.parse still fires"
+    },
+    {
+      "case_id": "ts-safe-023",
+      "file": "typescript/safe/nested_readfile_validated.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "safe",
+        "validator",
+        "nested-sink"
+      ],
+      "disabled": false,
+      "notes": "recognised isValidPath validator narrows the nested-sink flow"
+    },
+    {
+      "case_id": "cve-ts-2026-39365-vulnerable",
+      "file": "cve_corpus/typescript/CVE-2026-39365/vulnerable.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          41,
+          41
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          36,
+          36
+        ]
+      ],
+      "tags": [
+        "cve",
+        "vite",
+        "path-traversal"
+      ],
+      "disabled": true,
+      "disabled_reason": "Recall fix landed (vulnerable detects: nested FILE_IO sink under the JSON.parse sanitizer is now surfaced, src/cfg/helpers.rs::find_inner_sink_call + src/cfg/mod.rs::apply_gated_label_rules namespace surfacing). DEFERRED on the PATCHED side: the upstream guard `if (!isOptimizedDepFile(sourcemapPath)) return next()` uses a custom boolean path-confinement helper that nyx recognises only by NAME (is_valid*/is_safe*/has_valid* via classify_input_validator_callee), so the patched fixture false-positives. Deep fix needed: behaviour-based recognition of a boolean predicate helper whose body returns a path-containment check (x.startsWith(const) / path.relative) as a validator, propagated through the summary so `if (!helper(x)) bail` narrows x. A name-list addition would be a per-CVE bandaid. Tracked in CVE_DEFERRED.md.",
+      "notes": "vite dev-server transform middleware sourcemap handler path traversal"
+    },
+    {
+      "case_id": "cve-ts-2026-39365-patched",
+      "file": "cve_corpus/typescript/CVE-2026-39365/patched.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "vite",
+        "path-traversal"
+      ],
+      "disabled": true,
+      "disabled_reason": "Recall fix landed (vulnerable detects: nested FILE_IO sink under the JSON.parse sanitizer is now surfaced, src/cfg/helpers.rs::find_inner_sink_call + src/cfg/mod.rs::apply_gated_label_rules namespace surfacing). DEFERRED on the PATCHED side: the upstream guard `if (!isOptimizedDepFile(sourcemapPath)) return next()` uses a custom boolean path-confinement helper that nyx recognises only by NAME (is_valid*/is_safe*/has_valid* via classify_input_validator_callee), so the patched fixture false-positives. Deep fix needed: behaviour-based recognition of a boolean predicate helper whose body returns a path-containment check (x.startsWith(const) / path.relative) as a validator, propagated through the summary so `if (!helper(x)) bail` narrows x. A name-list addition would be a per-CVE bandaid. Tracked in CVE_DEFERRED.md.",
+      "notes": "vite dev-server transform middleware sourcemap handler path traversal"
     }
   ]
 }

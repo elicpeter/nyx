@@ -60,8 +60,15 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2022-1941  | C++        | Protocol Buffers           | BSD-3-Clause         | memory_safety   | detected |
 | CVE-2026-25544 | TypeScript | Payload (Drizzle adapter)  | MIT                  | sql_injection   | detected |
 | CVE-2026-42353 | JavaScript | i18next-http-middleware    | MIT                  | path_traversal  | detected |
+| CVE-2026-39365 | TypeScript | Vite                       | MIT                  | path_traversal  | deferred |
 
-No real-CVE entries are currently deferred. If a future real-CVE fixture exposes a detector gap, keep it committed with `disabled: true` in ground truth so the gap remains visible.
+CVE-2026-39365 (Vite) is deferred: the recall side landed this session (the
+`JSON.parse(await fsp.readFile(...))` nested FILE_IO sink is now surfaced past
+the `JSON.parse` sanitizer), but the patched fixture false-positives because
+its custom boolean path-confinement guard (`isOptimizedDepFile`) is recognised
+only by name, not behaviour. Both ground-truth entries are `disabled: true`;
+see `CVE_DEFERRED.md`. The recall fix is pinned by synthetic corpus fixtures
+`ts-path_traversal-002/003` + `ts-safe-023`.
 
 ### How CVEs get picked
 
