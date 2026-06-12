@@ -4139,3 +4139,84 @@ class C {
     let r = |name: &str| if name == "num" { Some(86) } else { None };
     assert_eq!(arith[0].eval_bool(&r), Some(true));
 }
+
+// ── numeric_confined_uses (inline numeric-chain confinement) ──────────────
+
+/// Find the sink node carrying a non-empty `numeric_confined_uses`, plus the
+/// node whose callee contains `needle` (the collapsed sink chain text).
+fn confined_uses_of<'a>(cfg: &'a Cfg, needle: &str) -> Option<&'a Vec<String>> {
+    cfg.node_indices()
+        .map(|i| &cfg[i])
+        .find(|n| {
+            n.call
+                .callee
+                .as_deref()
+                .is_some_and(|c| c.contains(needle))
+        })
+        .map(|n| &n.numeric_confined_uses)
+}
+
+#[test]
+fn numeric_confined_inline_parse_chain_into_shell_arg() {
+    // `Command::new("nc").arg(e.parse::<u16>().unwrap().to_string())` — the
+    // tainted leaf `e` is consumed only by a numeric parse, so it must be
+    // recorded as numeric-confined on the sink node.
+    let src = b"fn f() { let e = std::env::var(\"P\").unwrap_or_default(); \
+                let _ = std::process::Command::new(\"nc\").arg(e.parse::<u16>().unwrap().to_string()).output(); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "Command").expect("sink node present");
+    assert!(
+        confined.iter().any(|u| u == "e"),
+        "expected `e` numeric-confined; got {confined:?}"
+    );
+}
+
+#[test]
+fn numeric_confined_skips_string_tostring_receiver() {
+    // `Command::new("nc").arg(e.to_string())` where `e` is a String — the
+    // receiver of `.to_string()` is not numeric, so `e` must NOT be confined
+    // (the command injection must still fire).
+    let src = b"fn f() { let e = std::env::var(\"P\").unwrap_or_default(); \
+                let _ = std::process::Command::new(\"nc\").arg(e.to_string()).output(); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "Command").expect("sink node present");
+    assert!(
+        !confined.iter().any(|u| u == "e"),
+        "`e.to_string()` on a String must not be numeric-confined; got {confined:?}"
+    );
+}
+
+#[test]
+fn numeric_confined_blocked_by_raw_occurrence() {
+    // Same leaf used raw AND parsed: `Command::new(e.clone()).arg(e.parse::<u16>()…)`
+    // — the raw `e.clone()` occurrence (receiver of a non-numeric call) must
+    // block confinement so the real injection still fires.  Soundness guard.
+    let src = b"fn f() { let e = std::env::var(\"P\").unwrap_or_default(); \
+                let _ = std::process::Command::new(e.clone()).arg(e.parse::<u16>().unwrap().to_string()).output(); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "Command").expect("sink node present");
+    assert!(
+        !confined.iter().any(|u| u == "e"),
+        "raw `e.clone()` occurrence must block confinement of `e`; got {confined:?}"
+    );
+}
+
+#[test]
+fn numeric_confined_only_on_sink_nodes() {
+    // A non-sink node (`let n = e.parse::<u16>()` with no sink label) must not
+    // carry confinement entries — the field is gated to Sink nodes.
+    let src = b"fn f() { let e = std::env::var(\"P\").unwrap_or_default(); \
+                let n = e.parse::<u16>().unwrap(); let _ = n; }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    for i in cfg.node_indices() {
+        assert!(
+            cfg[i].numeric_confined_uses.is_empty(),
+            "non-sink node carried confinement entries: {:?}",
+            cfg[i].numeric_confined_uses
+        );
+    }
+}

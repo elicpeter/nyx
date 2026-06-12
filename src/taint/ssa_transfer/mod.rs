@@ -9575,6 +9575,7 @@ fn collect_tainted_sink_values(
                 transfer.type_facts,
                 inst,
                 info,
+                ssa,
             );
             return result;
         }
@@ -9611,6 +9612,7 @@ fn collect_tainted_sink_values(
                 transfer.type_facts,
                 inst,
                 info,
+                ssa,
             );
             return result;
         }
@@ -9627,7 +9629,7 @@ fn collect_tainted_sink_values(
     }
 
     apply_field_aware_suppression(&mut result, inst, info, state, sink_caps, ssa);
-    apply_arg_type_safe_suppression(&mut result, sink_caps, transfer.type_facts, inst, info);
+    apply_arg_type_safe_suppression(&mut result, sink_caps, transfer.type_facts, inst, info, ssa);
     result
 }
 
@@ -9653,8 +9655,9 @@ fn apply_arg_type_safe_suppression(
     _type_facts: Option<&crate::ssa::type_facts::TypeFactResult>,
     inst: &SsaInst,
     info: &NodeInfo,
+    ssa: &SsaBody,
 ) {
-    use crate::ssa::type_facts::is_safe_string_producing_callee;
+    use crate::ssa::type_facts::{is_int_producing_callee, is_safe_string_producing_callee};
     if result.is_empty() {
         return;
     }
@@ -9679,6 +9682,26 @@ fn apply_arg_type_safe_suppression(
     if !sink_fully_type_suppressible {
         return;
     }
+    // Numeric-confinement drop: an inline numeric call-chain argument
+    // (`sink(s.parse::<u16>().unwrap().to_string())`) never lowers to its own
+    // SSA value, so the tainted source leaf `s` is flattened directly into the
+    // sink's use set with its original (string) taint.  `NodeInfo.numeric_
+    // confined_uses` records, from an AST walk at CFG construction, the
+    // value-use identifiers whose *every* occurrence in this node is consumed
+    // by a numeric / safe-string producer — i.e. the leaf reaches the sink
+    // only as a number.  Drop those tainted leaves here, the arg-level
+    // analogue of the value-level `TypeKind::Int` suppression.  Confinement is
+    // soundness-gated at extraction time (a single raw occurrence blocks it),
+    // so this never masks an injection through the same variable.
+    if !info.numeric_confined_uses.is_empty() {
+        result.retain(|(v, _, _)| match ssa.def_of(*v).var_name.as_deref() {
+            Some(name) => !info.numeric_confined_uses.iter().any(|n| n == name),
+            None => true,
+        });
+        if result.is_empty() {
+            return;
+        }
+    }
     // Identify SSA values whose enclosing arg position has an inner
     // call to a safe-string producer
     // ([`is_safe_string_producing_callee`]).  The CFG/SSA pipeline does
@@ -9698,11 +9721,27 @@ fn apply_arg_type_safe_suppression(
     let mut safe_string_values: std::collections::HashSet<SsaValue> =
         std::collections::HashSet::new();
     for (pos, arg_vals) in args.iter().enumerate() {
-        let safe = info
-            .arg_callees
-            .get(pos)
-            .and_then(|c| c.as_deref())
-            .map(is_safe_string_producing_callee)
+        let arg_callee = info.arg_callees.get(pos).and_then(|c| c.as_deref());
+        // Two arg shapes are provably non-payload-bearing:
+        //   1. A "safe-string" producer — numeric/boolean to-string conversion
+        //      or a class-name accessor (`Integer.toString`, `Class.getName`).
+        //   2. A numeric-producing call chain — `Atoi(s)` / `parseInt(s)` /
+        //      `int(s)` / `s.parse::<u16>().unwrap().to_string()`.  When the
+        //      ENTIRE arg expression is such a chain its value is numeric (or a
+        //      numeric stringified by an identity/to-string tail), which cannot
+        //      encode CRLF, `..`, quote, or shell metacharacters.  This is the
+        //      arg-level analogue of the value-level `TypeKind::Int` suppression
+        //      in `is_type_safe_for_sink`: the inline shape
+        //      `sink(s.parse::<u16>().unwrap().to_string())` never lowers the
+        //      inner chain to its own SSA value (the outer call's arg list
+        //      captures the tainted source leaf `s` directly), so there is no
+        //      intermediate value to carry the `Int` fact — the only place to
+        //      recover "this arg is a numeric producer" is the `arg_callees`
+        //      text.  The let-bound form `let n = s.parse()…; sink(n)` is
+        //      already suppressed because `n` materialises as an `Int`-typed
+        //      SSA value.
+        let safe = arg_callee
+            .map(|c| is_safe_string_producing_callee(c) || is_int_producing_callee(c))
             .unwrap_or(false);
         if safe {
             for &v in arg_vals {

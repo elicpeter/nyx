@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-06-12T10:08:21Z",
+  "timestamp": "2026-06-12T11:57:55Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:a5f1b50c12c55c1e6c53a9a2cea6ad1dae18b3c10f0d8918330f25e2cf146fb2",
-  "corpus_size": 584,
-  "cases_run": 583,
+  "ground_truth_hash": "sha256:a4af0040e0208b5a0e81e0fef2341af517e3b0d1d8ff0ceab0059a94bf91053d",
+  "corpus_size": 586,
+  "cases_run": 585,
   "cases_skipped": 1,
   "outcomes": [
     {
@@ -7941,6 +7941,25 @@
       "non_security_finding_count": 4
     },
     {
+      "case_id": "rs-cmdi-010",
+      "file": "rust/cmdi/cmdi_string_tostring_shell_arg.rs",
+      "language": "rust",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 11:20)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 11:20)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "rs-cmdi-cross-001",
       "file": "rust/cmdi/cross_propagation/",
       "language": "rust",
@@ -8456,6 +8475,23 @@
       ],
       "security_finding_count": 0,
       "non_security_finding_count": 3
+    },
+    {
+      "case_id": "rs-safe-018",
+      "file": "rust/safe/safe_numeric_parse_shell_arg.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 1
     },
     {
       "case_id": "rs-safe-cross-001",
@@ -10396,22 +10432,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 279,
+    "tp": 280,
     "fp": 7,
     "fn_": 7,
-    "tn": 290,
-    "precision": 0.9755244755244755,
-    "recall": 0.9755244755244755,
-    "f1": 0.9755244755244755
+    "tn": 291,
+    "precision": 0.975609756097561,
+    "recall": 0.975609756097561,
+    "f1": 0.975609756097561
   },
   "aggregate_rule_level": {
-    "tp": 279,
+    "tp": 280,
     "fp": 7,
     "fn_": 7,
-    "tn": 290,
-    "precision": 0.9755244755244755,
-    "recall": 0.9755244755244755,
-    "f1": 0.9755244755244755
+    "tn": 291,
+    "precision": 0.975609756097561,
+    "recall": 0.975609756097561,
+    "f1": 0.975609756097561
   },
   "by_language": {
     "c": {
@@ -10487,13 +10523,13 @@
       "f1": 1.0
     },
     "rust": {
-      "tp": 42,
+      "tp": 43,
       "fp": 2,
       "fn_": 0,
-      "tn": 45,
-      "precision": 0.9545454545454546,
+      "tn": 46,
+      "precision": 0.9555555555555556,
       "recall": 1.0,
-      "f1": 0.9767441860465117
+      "f1": 0.9772727272727273
     },
     "typescript": {
       "tp": 38,
@@ -10525,13 +10561,13 @@
       "f1": 1.0
     },
     "cmdi": {
-      "tp": 57,
+      "tp": 58,
       "fp": 0,
       "fn_": 2,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.9661016949152542,
-      "f1": 0.9827586206896551
+      "recall": 0.9666666666666667,
+      "f1": 0.983050847457627
     },
     "code_exec": {
       "tp": 5,
@@ -10645,7 +10681,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 285,
+      "tn": 286,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -10698,31 +10734,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 94,
-      "fp": 116,
-      "fn_": 192,
-      "tn": 181,
-      "precision": 0.44761904761904764,
-      "recall": 0.32867132867132864,
-      "f1": 0.37903225806451607
+      "tp": 96,
+      "fp": 114,
+      "fn_": 191,
+      "tn": 184,
+      "precision": 0.45714285714285713,
+      "recall": 0.3344947735191638,
+      "f1": 0.386317907444668
     },
     ">=Low": {
-      "tp": 96,
-      "fp": 146,
-      "fn_": 190,
-      "tn": 151,
-      "precision": 0.39669421487603307,
-      "recall": 0.3356643356643357,
-      "f1": 0.3636363636363637
+      "tp": 98,
+      "fp": 144,
+      "fn_": 189,
+      "tn": 154,
+      "precision": 0.4049586776859504,
+      "recall": 0.34146341463414637,
+      "f1": 0.37051039697542526
     },
     ">=Medium": {
-      "tp": 94,
-      "fp": 122,
-      "fn_": 192,
-      "tn": 175,
-      "precision": 0.4351851851851852,
-      "recall": 0.32867132867132864,
-      "f1": 0.37450199203187245
+      "tp": 96,
+      "fp": 120,
+      "fn_": 191,
+      "tn": 178,
+      "precision": 0.4444444444444444,
+      "recall": 0.3344947735191638,
+      "f1": 0.3817097415506958
     }
   }
 }

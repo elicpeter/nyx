@@ -906,6 +906,29 @@ pub struct NodeInfo {
     /// types, so the conservative bare-`parse` → `Int` default is preserved.
     #[serde(default)]
     pub decl_type: Option<crate::ssa::type_facts::TypeKind>,
+    /// Value-use identifiers in this (sink) node whose **every** syntactic
+    /// occurrence is consumed by a numeric- or safe-string-producing call
+    /// (`x.parse::<u16>()`, `parseInt(x)`, `Atoi(x)`, `Integer.toString(x)`,
+    /// …).  Such an identifier reaches the node only as a number (or a
+    /// number stringified by an injection-free converter), so it cannot
+    /// carry CRLF / `..` / quote / shell metacharacters at a
+    /// type-suppressible sink.
+    ///
+    /// This is the inline-chain analogue of the value-level
+    /// [`crate::ssa::type_facts::TypeKind::Int`] suppression: an expression
+    /// like `sink(s.parse::<u16>().unwrap().to_string())` /
+    /// `read(format!("/d/{}", s.parse::<u32>()))` never lowers its inner
+    /// numeric chain to a dedicated SSA value (the outer call/macro flattens
+    /// the tainted source leaf `s` directly into its use set), so there is no
+    /// intermediate value to carry the `Int` fact.  Recovered here at CFG
+    /// construction by an AST walk (`collect_numeric_confined_value_idents`)
+    /// and consumed by the SSA taint sink-event collector to drop the
+    /// confined leaf.  Soundness: an identifier that *also* appears raw
+    /// anywhere in the node is **not** listed (a single un-wrapped occurrence
+    /// blocks confinement), so a real injection through the same variable
+    /// still fires.
+    #[serde(default)]
+    pub numeric_confined_uses: Vec<String>,
 }
 
 impl NodeInfo {
@@ -3842,6 +3865,8 @@ pub(super) fn push_node<'a>(
     let produces_null_proto = matches!(lang, "javascript" | "typescript")
         && call_ast.is_some_and(|cn| is_object_create_null_call(cn, code));
 
+    let numeric_confined_uses = collect_numeric_confined_value_idents(ast, lang, code, &labels);
+
     let idx = g.add_node(NodeInfo {
         kind,
         call: CallMeta {
@@ -3893,6 +3918,7 @@ pub(super) fn push_node<'a>(
         rhs_is_function_literal: rhs_is_function_literal(ast, lang),
         is_await_forward: lookup(lang, ast.kind()) == Kind::AwaitForward,
         decl_type: extract_decl_type(ast, lang, code),
+        numeric_confined_uses,
     });
 
     debug!(
@@ -3976,6 +4002,97 @@ fn extract_decl_type(
     let type_node = decl.child_by_field_name("type")?;
     let type_text = text_of(type_node, code)?;
     crate::ssa::type_facts::rust_annotation_type_kind(&type_text)
+}
+
+/// Nearest ancestor of `n` that is a call/method-call expression, or `None`
+/// when `n` is not nested inside any call.  Used to find the call that
+/// *consumes* a value-use identifier (its receiver or argument).
+fn nearest_enclosing_call<'a>(n: Node<'a>, lang: &str) -> Option<Node<'a>> {
+    let mut cur = n.parent()?;
+    loop {
+        if matches!(lookup(lang, cur.kind()), Kind::CallFn | Kind::CallMethod) {
+            return Some(cur);
+        }
+        cur = cur.parent()?;
+    }
+}
+
+/// Collect value-use identifiers in the sink `ast` whose **every** occurrence
+/// is consumed by a numeric- or safe-string-producing call
+/// (`x.parse::<u16>()`, `parseInt(x)`, `Atoi(x)`, `Integer.toString(x)`, …).
+///
+/// Populates [`NodeInfo::numeric_confined_uses`].  Motivated by inline
+/// numeric chains flowing into type-suppressible sinks —
+/// `Command::arg(s.parse::<u16>().unwrap().to_string())`,
+/// `fs::read(format!("/d/{}", s.parse::<u32>()))` — where the inner chain
+/// never lowers to its own SSA value, so the value-level
+/// [`crate::ssa::type_facts::TypeKind::Int`] suppression cannot reach it; the
+/// tainted source leaf is flattened directly into the sink's use set.
+///
+/// Soundness: an identifier whose count of numeric-confined occurrences is
+/// less than its total value-use count (i.e. it also appears raw somewhere in
+/// the node) is **not** returned, so a real injection through the same
+/// variable still fires.  Bare-callee-name identifiers (`parseInt` in
+/// `parseInt(x)`) are excluded from the value-use count.  Gated to Sink nodes;
+/// returns empty otherwise.
+fn collect_numeric_confined_value_idents(
+    ast: Node,
+    lang: &str,
+    code: &[u8],
+    labels: &[DataLabel],
+) -> Vec<String> {
+    use crate::ssa::type_facts::{is_int_producing_callee, is_safe_string_producing_callee};
+    if !labels.iter().any(|l| matches!(l, DataLabel::Sink(_))) {
+        return Vec::new();
+    }
+    // text -> (total value-use occurrences, numeric-confined occurrences)
+    let mut counts: std::collections::HashMap<String, (u32, u32)> =
+        std::collections::HashMap::new();
+    let mut stack = vec![ast];
+    while let Some(n) = stack.pop() {
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+        // Variable references across the supported grammars: `identifier`
+        // (Rust/Go/Python/JS/TS/Java/Ruby/C/C++) plus PHP `variable_name`.
+        if !matches!(n.kind(), "identifier" | "variable_name") {
+            continue;
+        }
+        // Skip bare callee-name identifiers (`parseInt` in `parseInt(x)`):
+        // they are the `function`/`name` field of a call, not a consumed
+        // value.  Method-name identifiers (`.parse`, `.unwrap`) already carry
+        // distinct node kinds (`field_identifier` / `property_identifier`) and
+        // are excluded by the kind filter above.
+        if let Some(p) = n.parent()
+            && matches!(lookup(lang, p.kind()), Kind::CallFn | Kind::CallMethod)
+        {
+            let callee_field = p
+                .child_by_field_name("function")
+                .or_else(|| p.child_by_field_name("name"));
+            if callee_field == Some(n) {
+                continue;
+            }
+        }
+        let Some(text) = text_of(n, code) else {
+            continue;
+        };
+        let confined = nearest_enclosing_call(n, lang).is_some_and(|c| {
+            call_ident_of(c, lang, code).is_some_and(|ci| {
+                is_int_producing_callee(&ci) || is_safe_string_producing_callee(&ci)
+            })
+        });
+        let entry = counts.entry(text).or_insert((0, 0));
+        entry.0 += 1;
+        if confined {
+            entry.1 += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, (total, conf))| *total > 0 && total == conf)
+        .map(|(k, _)| k)
+        .collect()
 }
 
 fn rhs_is_function_literal(ast: Node, lang: &str) -> bool {

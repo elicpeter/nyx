@@ -603,6 +603,97 @@ fn sink_args_typed_safe(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) 
     type_facts_suppress(&values, sink_caps, type_facts)
 }
 
+/// Suppress a `cfg-unguarded-sink` finding when every real argument to the
+/// sink is a value-use identifier proven *numeric-confined* by the CFG-level
+/// AST walk ([`crate::cfg::NodeInfo::numeric_confined_uses`]): each occurrence
+/// of the identifier in the sink node is consumed by a numeric / safe-string
+/// producer (`x.parse::<u16>().unwrap().to_string()`, `parseInt(x)`, …), so it
+/// reaches the sink only as a number.  The structural analogue of the SSA
+/// taint engine's `numeric_confined_uses` drop, kept in lock-step so both
+/// findings paths agree (an inline numeric chain never lowers to its own SSA
+/// value, so the value-level `type_facts_suppress` above cannot reach it).
+///
+/// Gated to fully-type-suppressible sinks (a number can still be an IDOR /
+/// `UNAUTHORIZED_ID` payload, so confinement must not silence those).
+fn sink_args_numeric_confined(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) -> bool {
+    let type_suppressible = Cap::SQL_QUERY
+        | Cap::FILE_IO
+        | Cap::SHELL_ESCAPE
+        | Cap::HTML_ESCAPE
+        | Cap::SSRF
+        | Cap::DATA_EXFIL
+        | Cap::HEADER_INJECTION
+        | Cap::OPEN_REDIRECT;
+    if sink_caps.is_empty() || !(sink_caps & !type_suppressible).is_empty() {
+        return false;
+    }
+    let sink_info = &ctx.cfg[sink];
+    if sink_info.numeric_confined_uses.is_empty() {
+        return false;
+    }
+    let Some(facts) = ctx.body_const_facts else {
+        return false;
+    };
+    let Some(&sink_val) = facts.ssa.cfg_node_map.get(&sink) else {
+        return false;
+    };
+    let Some(inst) = find_inst(&facts.ssa, sink_val) else {
+        return false;
+    };
+    let SsaOp::Call { args, receiver, .. } = &inst.op else {
+        return false;
+    };
+
+    let callee_desc = sink_info.call.callee.as_deref().unwrap_or("");
+    let callee_parts: Vec<&str> = callee_desc
+        .split(['.', ':'])
+        .map(|p| p.split('(').next().unwrap_or(p))
+        .collect();
+    let outer_parts: Vec<&str> = sink_info
+        .call
+        .outer_callee
+        .as_deref()
+        .map(|oc| {
+            oc.split(['.', ':'])
+                .map(|p| p.split('(').next().unwrap_or(p))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // A "real" arg is a non-constant, non-callee-fragment SSA value.  Its
+    // var_name must be listed in `numeric_confined_uses`; otherwise the sink
+    // carries an un-confined operand and the finding is preserved.
+    let mut saw_real = false;
+    let mut all_confined = true;
+    let mut check = |v: SsaValue| {
+        let Some(def) = find_inst(&facts.ssa, v) else {
+            return;
+        };
+        if matches!(def.op, SsaOp::Const(_)) {
+            return;
+        }
+        let name = def.var_name.as_deref().unwrap_or("");
+        if matches!(def.op, SsaOp::Param { .. })
+            && is_callee_fragment(name, callee_desc, &callee_parts, &outer_parts)
+        {
+            return;
+        }
+        saw_real = true;
+        if !sink_info.numeric_confined_uses.iter().any(|n| n == name) {
+            all_confined = false;
+        }
+    };
+    if let Some(r) = receiver {
+        check(*r);
+    }
+    for group in args {
+        for v in group.iter() {
+            check(*v);
+        }
+    }
+    saw_real && all_confined
+}
+
 /// Suppress a `cfg-unguarded-sink` SQL_QUERY finding when any positional
 /// argument to the sink Call is provably a JPA / Hibernate Criteria query
 /// object ([`crate::ssa::type_facts::TypeKind::JpaCriteriaQuery`]).
@@ -3200,6 +3291,16 @@ impl CfgAnalysis for UnguardedSink {
             // placeholders ($1, ?, %s, :name) and a params argument exists.
             // These are safe by construction, the driver handles escaping.
             if sink_info.parameterized_query {
+                continue;
+            }
+
+            // Numeric-confinement: every real argument to the sink is an
+            // inline numeric call-chain (`Command::arg(s.parse::<u16>()
+            // .unwrap().to_string())`) whose source leaf reaches the sink only
+            // as a number.  Fires regardless of `has_taint` — the SSA taint
+            // engine drops the same flow via `numeric_confined_uses`, so the
+            // structural finding must clear in lock-step.
+            if sink_args_numeric_confined(ctx, *sink, sink_caps) {
                 continue;
             }
 
