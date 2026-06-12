@@ -2683,6 +2683,62 @@ mod tests {
         assert_eq!(result, None);
     }
 
+    // CVE-2024-37896 (gin-vue-admin ORDER BY injection):
+    // GORM query-builder methods take a raw SQL fragment at arg 0.  The
+    // terminal / assigned form (`db = db.Order(x)`) resolves by suffix on a
+    // `db`-named receiver; the `GormDb.<verb>` variant covers `gorm.Open`-typed
+    // receivers with other names.  Each is also a payload-arg-0 gate so the
+    // parameterised `db.Where("col = ?", val)` form stays silent.
+    #[test]
+    fn classify_go_gorm_order_is_sql_query_sink() {
+        assert_eq!(
+            classify("go", "db.Order", None),
+            Some(DataLabel::Sink(Cap::SQL_QUERY))
+        );
+    }
+
+    #[test]
+    fn classify_go_gorm_where_and_group_are_sql_query_sinks() {
+        assert_eq!(
+            classify("go", "db.Where", None),
+            Some(DataLabel::Sink(Cap::SQL_QUERY))
+        );
+        assert_eq!(
+            classify("go", "db.Group", None),
+            Some(DataLabel::Sink(Cap::SQL_QUERY))
+        );
+    }
+
+    #[test]
+    fn classify_go_gorm_typed_order_is_sql_query_sink() {
+        assert_eq!(
+            classify("go", "GormDb.Order", None),
+            Some(DataLabel::Sink(Cap::SQL_QUERY))
+        );
+    }
+
+    #[test]
+    fn classify_go_gorm_where_gate_targets_payload_arg_zero() {
+        let no_kw = |_: &str| None;
+        let no_kw_present = |_: &str| false;
+        let result = classify_gated_sink("go", "db.Where", |_| None, no_kw, no_kw_present);
+        let m = result
+            .iter()
+            .find(|m| m.label == DataLabel::Sink(Cap::SQL_QUERY))
+            .expect("expected SQL_QUERY gate for db.Where");
+        // SQL string at arg 0; bind values at arg 1+ travel the parameterised
+        // path and must not be scanned for taint.
+        assert_eq!(m.payload_args, &[0]);
+    }
+
+    #[test]
+    fn classify_go_non_gorm_db_method_is_not_sink() {
+        // A non-GORM builder method must not become a SQL sink just because the
+        // receiver ends in `db`.
+        assert_eq!(classify("go", "db.Limit", None), None);
+        assert_eq!(classify("go", "db.Offset", None), None);
+    }
+
     // CVE Hunt Session 2 (Go CVE-2023-3188 Owncast SSRF):
     // `http.DefaultClient.Get/Post/Head/Do/PostForm` is the idiomatic Go
     // SSRF sink shape (`http.DefaultClient` is the package-level shared

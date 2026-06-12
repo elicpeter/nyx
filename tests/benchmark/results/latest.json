@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-06-12T11:57:55Z",
+  "timestamp": "2026-06-12T12:43:47Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,10 +9,10 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:a4af0040e0208b5a0e81e0fef2341af517e3b0d1d8ff0ceab0059a94bf91053d",
-  "corpus_size": 586,
-  "cases_run": 585,
-  "cases_skipped": 1,
+  "ground_truth_hash": "sha256:ce91808760e702bb2b6421b3d5377602b8968f3975fe2018126ab6ed54bfb351",
+  "corpus_size": 590,
+  "cases_run": 588,
+  "cases_skipped": 2,
   "outcomes": [
     {
       "case_id": "c-buf-001",
@@ -1355,6 +1355,28 @@
         "taint-unsanitised-flow (source 62:11)"
       ],
       "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-go-2024-37896-vulnerable",
+      "file": "cve_corpus/go/CVE-2024-37896/vulnerable.go",
+      "language": "go",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 42:17)"
+      ],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 42:17)",
+        "cfg-unguarded-sink"
+      ],
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -3464,8 +3486,42 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "go-sqli-005",
+      "file": "go/sqli/sqli_gorm_order.go",
+      "language": "go",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 16:11)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 16:11)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "go-sqli-safe-001",
       "file": "go/safe/safe_sqli_for_range_allowlist.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-sqli-safe-002",
+      "file": "go/safe/safe_gorm_where_param.go",
       "language": "go",
       "vuln_class": "safe",
       "is_vulnerable": false,
@@ -10432,22 +10488,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 280,
+    "tp": 282,
     "fp": 7,
     "fn_": 7,
-    "tn": 291,
-    "precision": 0.975609756097561,
-    "recall": 0.975609756097561,
-    "f1": 0.975609756097561
+    "tn": 292,
+    "precision": 0.9757785467128027,
+    "recall": 0.9757785467128027,
+    "f1": 0.9757785467128027
   },
   "aggregate_rule_level": {
-    "tp": 280,
+    "tp": 282,
     "fp": 7,
     "fn_": 7,
-    "tn": 291,
-    "precision": 0.975609756097561,
-    "recall": 0.975609756097561,
-    "f1": 0.975609756097561
+    "tn": 292,
+    "precision": 0.9757785467128027,
+    "recall": 0.9757785467128027,
+    "f1": 0.9757785467128027
   },
   "by_language": {
     "c": {
@@ -10469,13 +10525,13 @@
       "f1": 0.972972972972973
     },
     "go": {
-      "tp": 29,
+      "tp": 31,
       "fp": 0,
       "fn_": 1,
-      "tn": 36,
+      "tn": 37,
       "precision": 1.0,
-      "recall": 0.9666666666666667,
-      "f1": 0.983050847457627
+      "recall": 0.96875,
+      "f1": 0.9841269841269841
     },
     "java": {
       "tp": 25,
@@ -10681,7 +10737,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 286,
+      "tn": 287,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -10705,13 +10761,13 @@
       "f1": 1.0
     },
     "sqli": {
-      "tp": 37,
+      "tp": 39,
       "fp": 0,
       "fn_": 1,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.9736842105263158,
-      "f1": 0.9866666666666666
+      "recall": 0.975,
+      "f1": 0.9873417721518987
     },
     "ssrf": {
       "tp": 35,
@@ -10734,31 +10790,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 96,
-      "fp": 114,
-      "fn_": 191,
-      "tn": 184,
-      "precision": 0.45714285714285713,
-      "recall": 0.3344947735191638,
-      "f1": 0.386317907444668
+      "tp": 97,
+      "fp": 120,
+      "fn_": 192,
+      "tn": 179,
+      "precision": 0.4470046082949309,
+      "recall": 0.3356401384083045,
+      "f1": 0.38339920948616596
     },
     ">=Low": {
-      "tp": 98,
-      "fp": 144,
-      "fn_": 189,
-      "tn": 154,
-      "precision": 0.4049586776859504,
-      "recall": 0.34146341463414637,
-      "f1": 0.37051039697542526
+      "tp": 99,
+      "fp": 148,
+      "fn_": 190,
+      "tn": 151,
+      "precision": 0.4008097165991903,
+      "recall": 0.34256055363321797,
+      "f1": 0.3694029850746268
     },
     ">=Medium": {
-      "tp": 96,
-      "fp": 120,
-      "fn_": 191,
-      "tn": 178,
-      "precision": 0.4444444444444444,
-      "recall": 0.3344947735191638,
-      "f1": 0.3817097415506958
+      "tp": 97,
+      "fp": 124,
+      "fn_": 192,
+      "tn": 175,
+      "precision": 0.43891402714932126,
+      "recall": 0.3356401384083045,
+      "f1": 0.3803921568627451
     }
   }
 }

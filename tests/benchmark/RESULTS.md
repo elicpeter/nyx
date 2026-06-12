@@ -34,6 +34,7 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2023-3188  | Go         | owncast                    | MIT                  | SSRF            | detected |
 | CVE-2024-31450 | Go         | owncast                    | MIT                  | path_traversal  | detected |
 | CVE-2026-41422 | Go         | daptin                     | LGPL-3.0             | sql_injection   | detected |
+| CVE-2024-37896 | Go         | gin-vue-admin              | Apache-2.0           | sql_injection   | detected (patched precision deferred) |
 | CVE-2015-7501  | Java       | Apache Commons Collections | Apache-2.0           | Deserialization | detected |
 | CVE-2017-12629 | Java       | Apache Solr                | Apache-2.0           | CMDI            | detected |
 | CVE-2022-1471  | Java       | SnakeYAML                  | Apache-2.0           | Deserialization | detected |
