@@ -3,7 +3,7 @@
  "metadata": {
   "description": "Nyx benchmark ground truth",
   "created": "2026-03-20",
-  "corpus_size": 592
+  "corpus_size": 594
  },
  "cases": [
   {
@@ -18406,6 +18406,45 @@
    "notes": "let p: PathBuf = env::var().parse() flows into fs::read. The PathBuf let-annotation lowers to TypeKind::Object, overriding the bare-parse->Int heuristic that previously suppressed the FILE_IO flow (deep_engine_fixes #4-deep)."
   },
   {
+   "case_id": "rs-path-008",
+   "file": "rust/path_traversal/format_raw_interp.rs",
+   "language": "rust",
+   "is_vulnerable": true,
+   "vuln_class": "path_traversal",
+   "cwe": "CWE-22",
+   "provenance": "synthetic",
+   "equivalence_tier": "exact",
+   "match_mode": "rule_match",
+   "expected_rule_ids": [
+    "taint-unsanitised-flow"
+   ],
+   "allowed_alternative_rule_ids": [
+    "rust.file_io.read_to_string"
+   ],
+   "forbidden_rule_ids": [],
+   "expected_severity": "HIGH",
+   "expected_category": "Security",
+   "expected_sink_lines": [
+    [
+     13,
+     13
+    ]
+   ],
+   "expected_source_lines": [
+    [
+     12,
+     12
+    ]
+   ],
+   "tags": [
+    "format-macro",
+    "raw-interp",
+    "real-repo-precision-2026-06-12"
+   ],
+   "disabled": false,
+   "notes": "fs::read(format!(\"/var/data/{}\", name)) with a raw String env value \u2014 NOT numeric-confined, the path-traversal flow must still fire. Over-suppression guard for the format!-macro numeric-confinement fix."
+  },
+  {
    "case_id": "rs-safe-017",
    "file": "rust/safe/safe_parse_numeric_port.rs",
    "language": "rust",
@@ -18462,6 +18501,35 @@
    ],
    "disabled": false,
    "notes": "Inline raw_port.parse::<u16>().unwrap().to_string() into Command::arg \u2014 numeric-confined leaf, must not fire cmdi or cfg-unguarded-sink"
+  },
+  {
+   "case_id": "rs-safe-019",
+   "file": "rust/safe/safe_format_numeric_interp.rs",
+   "language": "rust",
+   "is_vulnerable": false,
+   "vuln_class": "safe",
+   "cwe": "CWE-22",
+   "provenance": "synthetic",
+   "equivalence_tier": "exact",
+   "match_mode": "rule_match",
+   "expected_rule_ids": [],
+   "allowed_alternative_rule_ids": [],
+   "forbidden_rule_ids": [
+    "taint-unsanitised-flow",
+    "cfg-unguarded-sink",
+    "rust.file_io.read"
+   ],
+   "expected_severity": null,
+   "expected_category": null,
+   "expected_sink_lines": null,
+   "expected_source_lines": null,
+   "tags": [
+    "numeric-confinement",
+    "format-macro",
+    "real-repo-precision-2026-06-12"
+   ],
+   "disabled": false,
+   "notes": "fs::read(format!(\"/var/data/{}\", id.parse::<u32>().unwrap())) \u2014 numeric interpolation inside a format! macro. tree-sitter flattens the chain into the token_tree, so the confinement recogniser re-parses the interpolation argument to clear taint + cfg-unguarded-sink (deep_engine_fixes format!-macro form)."
   },
   {
    "case_id": "rs-cmdi-010",

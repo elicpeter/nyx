@@ -72,9 +72,9 @@ use literals::{
     extract_literal_rhs, extract_object_arg_property, extract_shell_array_payload_idents,
     find_call_node, find_call_node_deep, find_chained_inner_call, has_keyword_arg,
     has_object_arg_property, has_only_literal_args, has_string_interpolation,
-    is_object_create_null_call, is_parameterized_query_call, java_chain_arg0_kind_for_method,
-    js_chain_arg0_kind_for_method, js_chain_outer_method_for_inner, ruby_chain_arg0_for_method,
-    walk_chain_inner_call_args,
+    is_object_create_null_call, is_parameterized_query_call, is_rust_format_style_macro,
+    java_chain_arg0_kind_for_method, js_chain_arg0_kind_for_method, js_chain_outer_method_for_inner,
+    ruby_chain_arg0_for_method, walk_chain_inner_call_args,
 };
 use params::{
     compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
@@ -929,6 +929,20 @@ pub struct NodeInfo {
     /// still fires.
     #[serde(default)]
     pub numeric_confined_uses: Vec<String>,
+
+    /// Syntactic phantom identifiers lifted from a Rust `format!`-family
+    /// macro's flattened `token_tree` — the macro name (`format`) and the
+    /// method-name tokens (`parse`, `unwrap`, …) of a *numeric-confined*
+    /// interpolation argument.  tree-sitter-rust models macro arguments as a
+    /// flat token run, so `g.parse::<u32>().unwrap()` contributes `g`, `parse`,
+    /// and `unwrap` as bare-identifier uses; only `g` is a real value.  Recorded
+    /// here so the structural `cfg-unguarded-sink` confinement check
+    /// ([`crate::cfg_analysis`]) can skip these non-value SSA `Param`
+    /// operands (the SSA-taint side ignores them automatically — they are never
+    /// tainted).  Empty unless [`Self::numeric_confined_uses`] is non-empty for
+    /// a Rust format-macro sink, so non-format nodes are unperturbed.
+    #[serde(default)]
+    pub format_macro_method_idents: Vec<String>,
 }
 
 impl NodeInfo {
@@ -3866,6 +3880,13 @@ pub(super) fn push_node<'a>(
         && call_ast.is_some_and(|cn| is_object_create_null_call(cn, code));
 
     let numeric_confined_uses = collect_numeric_confined_value_idents(ast, lang, code, &labels);
+    // Only Rust format-macro confined sinks need the phantom-ident skip list
+    // (see [`NodeInfo::format_macro_method_idents`]); skip the walk otherwise.
+    let format_macro_method_idents = if lang == "rust" && !numeric_confined_uses.is_empty() {
+        collect_format_macro_method_idents(ast, code)
+    } else {
+        Vec::new()
+    };
 
     let idx = g.add_node(NodeInfo {
         kind,
@@ -3919,6 +3940,7 @@ pub(super) fn push_node<'a>(
         is_await_forward: lookup(lang, ast.kind()) == Kind::AwaitForward,
         decl_type: extract_decl_type(ast, lang, code),
         numeric_confined_uses,
+        format_macro_method_idents,
     });
 
     debug!(
@@ -4041,15 +4063,48 @@ fn collect_numeric_confined_value_idents(
     code: &[u8],
     labels: &[DataLabel],
 ) -> Vec<String> {
-    use crate::ssa::type_facts::{is_int_producing_callee, is_safe_string_producing_callee};
     if !labels.iter().any(|l| matches!(l, DataLabel::Sink(_))) {
         return Vec::new();
     }
     // text -> (total value-use occurrences, numeric-confined occurrences)
     let mut counts: std::collections::HashMap<String, (u32, u32)> =
         std::collections::HashMap::new();
-    let mut stack = vec![ast];
+    count_confined_idents_into(ast, lang, code, &mut counts);
+    counts
+        .into_iter()
+        .filter(|(_, (total, conf))| *total > 0 && total == conf)
+        .map(|(k, _)| k)
+        .collect()
+}
+
+/// Per-identifier numeric-confinement tally for the confinement walk:
+/// `text -> (total value-use occurrences, numeric-confined occurrences)`.
+type ConfinedCounts = std::collections::HashMap<String, (u32, u32)>;
+
+/// Walk `root` accumulating, per value-use identifier, how many of its
+/// occurrences are numeric-confined (consumed by a numeric / safe-string
+/// producer) versus its total occurrences.  Factored out of
+/// [`collect_numeric_confined_value_idents`] so the Rust `format!`-family
+/// handler can re-run the same structured tally on a re-parsed argument
+/// subtree and merge into the shared `counts` (preserving the
+/// single-raw-occurrence-blocks soundness across the whole sink node).
+fn count_confined_idents_into(root: Node, lang: &str, code: &[u8], counts: &mut ConfinedCounts) {
+    use crate::ssa::type_facts::{is_int_producing_callee, is_safe_string_producing_callee};
+    let mut stack = vec![root];
     while let Some(n) = stack.pop() {
+        // Rust `format!`/`write!`/… macros model their arguments as a flat
+        // `token_tree` of raw tokens, so the inner `g.parse::<u32>()` chain is
+        // NOT a `call_expression` subtree and `nearest_enclosing_call` below
+        // can't see it (the leaf `g` would be counted raw).  Re-parse each
+        // interpolated argument expression and tally it structurally, then
+        // skip descending into the flat tokens so the phantom method-name
+        // tokens (`parse`, `unwrap`) are not miscounted as raw value-uses.
+        if lang == "rust"
+            && n.kind() == "macro_invocation"
+            && count_rust_format_macro_confined(n, lang, code, counts)
+        {
+            continue;
+        }
         let mut cursor = n.walk();
         for child in n.children(&mut cursor) {
             stack.push(child);
@@ -4088,11 +4143,208 @@ fn collect_numeric_confined_value_idents(
             entry.1 += 1;
         }
     }
-    counts
-        .into_iter()
-        .filter(|(_, (total, conf))| *total > 0 && total == conf)
-        .map(|(k, _)| k)
-        .collect()
+}
+
+/// When `macro_node` is a Rust format-style `macro_invocation`
+/// (`format!` / `write!` / `println!` / `panic!` / a `log` severity macro,
+/// …), tally numeric-confinement for the value-use identifiers in each of its
+/// interpolated argument expressions and merge into `counts`; returns `true`
+/// so the caller skips descending into the flat `token_tree`.
+///
+/// tree-sitter-rust parses a macro's body as an unstructured `token_tree`, so
+/// `g.parse::<u32>().unwrap()` inside `fs::read(format!("/d/{}", g.parse::<u32>()
+/// .unwrap()))` is a flat token run rather than a `call_expression`.  We split
+/// the token_tree into top-level (`,`-separated) argument segments, drop the
+/// format-template string literal, and re-parse the remaining segments as Rust
+/// expressions so the shared structured tally
+/// ([`count_confined_idents_into`]) recovers the receiver→`parse::<u32>()`
+/// relationship.  Multi-identifier arguments stay sound: `format!("{}", a +
+/// b.parse::<u32>())` confines only `b` (its nearest enclosing call is the
+/// numeric `parse`), leaving `a` un-confined.
+///
+/// Returns `false` for any non-format macro so the caller descends normally
+/// (an unrecognised macro's tokens are then counted raw → never confined,
+/// the conservative default).  The format-string literal's own constant
+/// content is intentionally not vetted: a digits-only interpolation cannot
+/// inject `..` / quotes / shell metacharacters, and any constant traversal in
+/// the template is developer-authored, not an attacker-controlled taint
+/// vector.
+fn count_rust_format_macro_confined(
+    macro_node: Node,
+    lang: &str,
+    code: &[u8],
+    counts: &mut ConfinedCounts,
+) -> bool {
+    let Some(name_node) = macro_node.child_by_field_name("macro") else {
+        return false;
+    };
+    let Some(macro_text) = text_of(name_node, code) else {
+        return false;
+    };
+    let leaf = macro_text.rsplit("::").next().unwrap_or(macro_text.as_str());
+    if !is_rust_format_style_macro(leaf) {
+        return false;
+    }
+    let tt = match macro_node.child_by_field_name("token_tree") {
+        Some(t) => t,
+        None => {
+            let mut cursor = macro_node.walk();
+            match macro_node
+                .children(&mut cursor)
+                .find(|c| c.kind() == "token_tree")
+            {
+                Some(t) => t,
+                None => return false,
+            }
+        }
+    };
+    let segments = split_format_macro_segments(tt);
+    if segments.is_empty() {
+        // Recognised format macro with no parseable arguments — still claim
+        // it so the caller does not re-descend (nothing to confine).
+        return true;
+    }
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .is_err()
+    {
+        return true;
+    }
+    for seg in segments {
+        // Drop the format-template literal segment (`"/data/{}"`): it carries
+        // no interpolated value-use and named captures (`{n}`) live in its
+        // bytes, not as tokens, so they are deliberately left un-confined.
+        if seg.len() == 1 && matches!(seg[0].kind(), "string_literal" | "raw_string_literal") {
+            continue;
+        }
+        let (Some(first), Some(last)) = (seg.first(), seg.last()) else {
+            continue;
+        };
+        let (start, end) = (first.start_byte(), last.end_byte());
+        if start >= end || end > code.len() {
+            continue;
+        }
+        // Re-parse the argument expression in a minimal function/`let` context
+        // so tree-sitter-rust yields a structured expression tree, then tally
+        // only that expression's value (the synthetic `_nyx_fmt_arg` /
+        // wrapper names are never numeric-confined, so they cannot leak into
+        // the result).
+        let mut wrapped = Vec::with_capacity(end - start + 24);
+        wrapped.extend_from_slice(b"fn _nyx_fmt_arg(){let _=");
+        wrapped.extend_from_slice(&code[start..end]);
+        wrapped.extend_from_slice(b";}");
+        let Some(tree) = parser.parse(&wrapped, None) else {
+            continue;
+        };
+        if let Some(value) = format_arg_value_node(tree.root_node()) {
+            count_confined_idents_into(value, lang, &wrapped, counts);
+        }
+    }
+    true
+}
+
+/// Split a Rust macro `token_tree` into top-level argument segments.  Children
+/// alternate between expression tokens and `,` separators; nested
+/// parenthesised groups are their own `token_tree` children (so their inner
+/// commas are invisible here), while turbofish `::<…>` angle brackets are flat
+/// tokens — track angle-bracket depth so a generic `parse::<HashMap<K, V>>`
+/// comma does not split an argument.  The surrounding `(`/`)` are dropped.
+fn split_format_macro_segments(tt: Node) -> Vec<Vec<Node>> {
+    let mut segments: Vec<Vec<Node>> = vec![Vec::new()];
+    let mut angle_depth: i32 = 0;
+    let mut cursor = tt.walk();
+    for child in tt.children(&mut cursor) {
+        if !child.is_named() {
+            match child.kind() {
+                "(" | ")" => continue,
+                "<" => angle_depth += 1,
+                ">" => angle_depth = (angle_depth - 1).max(0),
+                "," if angle_depth == 0 => {
+                    segments.push(Vec::new());
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        segments.last_mut().unwrap().push(child);
+    }
+    segments.retain(|s| !s.is_empty());
+    segments
+}
+
+/// Locate the wrapped argument expression inside a re-parsed
+/// `fn _nyx_fmt_arg(){let _=<expr>;}` tree: the `value` field of the first
+/// `let_declaration`.  Falls back to the whole root (harmless — the synthetic
+/// wrapper identifiers are never numeric-confined).
+fn format_arg_value_node(root: Node) -> Option<Node> {
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "let_declaration"
+            && let Some(v) = n.child_by_field_name("value")
+        {
+            return Some(v);
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    None
+}
+
+/// Collect the syntactic phantom identifiers a Rust `format!`-family macro
+/// flattens into a sink's use set — the macro name plus every method-name
+/// token (an `identifier` whose immediately-preceding sibling is `.`) inside
+/// its `token_tree`.  These lower to bare-identifier SSA `Param` operands that
+/// are not real arguments, so the structural confinement check skips them.
+/// See [`NodeInfo::format_macro_method_idents`].
+fn collect_format_macro_method_idents(ast: Node, code: &[u8]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut stack = vec![ast];
+    while let Some(n) = stack.pop() {
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+        if n.kind() != "macro_invocation" {
+            continue;
+        }
+        let Some(name_node) = n.child_by_field_name("macro") else {
+            continue;
+        };
+        let Some(macro_text) = text_of(name_node, code) else {
+            continue;
+        };
+        let leaf = macro_text.rsplit("::").next().unwrap_or(macro_text.as_str());
+        if !is_rust_format_style_macro(leaf) {
+            continue;
+        }
+        // Macro name token (`format` / `write` / …).
+        if let Some(t) = text_of(name_node, code) {
+            out.push(t);
+        }
+        // Method-name tokens: `identifier` preceded by a `.` separator, at any
+        // nesting depth within the macro's token_tree.
+        let mut inner = vec![n];
+        while let Some(m) = inner.pop() {
+            let mut c = m.walk();
+            let children: Vec<Node> = m.children(&mut c).collect();
+            for (i, ch) in children.iter().enumerate() {
+                inner.push(*ch);
+                if ch.kind() == "identifier"
+                    && i > 0
+                    && children[i - 1].kind() == "."
+                    && let Some(t) = text_of(*ch, code)
+                {
+                    out.push(t);
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn rhs_is_function_literal(ast: Node, lang: &str) -> bool {

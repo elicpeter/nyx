@@ -1516,7 +1516,7 @@ fn collect_format_macro_idents_recursive(n: Node, code: &[u8], out: &mut Vec<Str
     }
 }
 
-fn is_rust_format_style_macro(name: &str) -> bool {
+pub(super) fn is_rust_format_style_macro(name: &str) -> bool {
     matches!(
         name,
         "format"

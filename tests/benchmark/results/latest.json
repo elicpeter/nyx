@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-06-12T14:05:42Z",
+  "timestamp": "2026-06-12T15:01:03Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:ce91808760e702bb2b6421b3d5377602b8968f3975fe2018126ab6ed54bfb351",
-  "corpus_size": 590,
-  "cases_run": 588,
+  "ground_truth_hash": "sha256:3afa268c5c627b0be5e4ed139958114a039677f5fd462ef1abd010137384f380",
+  "corpus_size": 592,
+  "cases_run": 590,
   "cases_skipped": 2,
   "outcomes": [
     {
@@ -8225,6 +8225,27 @@
       "non_security_finding_count": 3
     },
     {
+      "case_id": "rs-path-008",
+      "file": "rust/path_traversal/format_raw_interp.rs",
+      "language": "rust",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 12:16)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 12:16)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 2
+    },
+    {
       "case_id": "rs-safe-001",
       "file": "rust/safe/safe_constant.rs",
       "language": "rust",
@@ -8548,6 +8569,21 @@
       ],
       "security_finding_count": 0,
       "non_security_finding_count": 1
+    },
+    {
+      "case_id": "rs-safe-019",
+      "file": "rust/safe/safe_format_numeric_interp.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
     },
     {
       "case_id": "rs-safe-cross-001",
@@ -10488,22 +10524,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 282,
+    "tp": 283,
     "fp": 7,
     "fn_": 7,
-    "tn": 292,
-    "precision": 0.9757785467128027,
-    "recall": 0.9757785467128027,
-    "f1": 0.9757785467128027
+    "tn": 293,
+    "precision": 0.9758620689655172,
+    "recall": 0.9758620689655172,
+    "f1": 0.9758620689655172
   },
   "aggregate_rule_level": {
-    "tp": 282,
+    "tp": 283,
     "fp": 7,
     "fn_": 7,
-    "tn": 292,
-    "precision": 0.9757785467128027,
-    "recall": 0.9757785467128027,
-    "f1": 0.9757785467128027
+    "tn": 293,
+    "precision": 0.9758620689655172,
+    "recall": 0.9758620689655172,
+    "f1": 0.9758620689655172
   },
   "by_language": {
     "c": {
@@ -10579,13 +10615,13 @@
       "f1": 1.0
     },
     "rust": {
-      "tp": 43,
+      "tp": 44,
       "fp": 2,
       "fn_": 0,
-      "tn": 46,
-      "precision": 0.9555555555555556,
+      "tn": 47,
+      "precision": 0.9565217391304348,
       "recall": 1.0,
-      "f1": 0.9772727272727273
+      "f1": 0.9777777777777777
     },
     "typescript": {
       "tp": 38,
@@ -10707,7 +10743,7 @@
       "f1": 1.0
     },
     "path_traversal": {
-      "tp": 37,
+      "tp": 38,
       "fp": 0,
       "fn_": 0,
       "tn": 1,
@@ -10737,7 +10773,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 287,
+      "tn": 288,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -10790,31 +10826,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 97,
-      "fp": 120,
+      "tp": 98,
+      "fp": 122,
       "fn_": 192,
-      "tn": 179,
-      "precision": 0.4470046082949309,
-      "recall": 0.3356401384083045,
-      "f1": 0.38339920948616596
+      "tn": 178,
+      "precision": 0.44545454545454544,
+      "recall": 0.33793103448275863,
+      "f1": 0.38431372549019605
     },
     ">=Low": {
-      "tp": 99,
-      "fp": 148,
+      "tp": 100,
+      "fp": 147,
       "fn_": 190,
-      "tn": 151,
-      "precision": 0.4008097165991903,
-      "recall": 0.34256055363321797,
-      "f1": 0.3694029850746268
+      "tn": 153,
+      "precision": 0.4048582995951417,
+      "recall": 0.3448275862068966,
+      "f1": 0.37243947858473
     },
     ">=Medium": {
-      "tp": 97,
-      "fp": 124,
+      "tp": 98,
+      "fp": 125,
       "fn_": 192,
       "tn": 175,
-      "precision": 0.43891402714932126,
-      "recall": 0.3356401384083045,
-      "f1": 0.3803921568627451
+      "precision": 0.43946188340807174,
+      "recall": 0.33793103448275863,
+      "f1": 0.38206627680311894
     }
   }
 }

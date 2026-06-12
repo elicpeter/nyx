@@ -4220,3 +4220,100 @@ fn numeric_confined_only_on_sink_nodes() {
         );
     }
 }
+
+#[test]
+fn numeric_confined_format_macro_parse_chain() {
+    // `fs::read(format!("/d/{}", g.parse::<u32>().unwrap()))` — tree-sitter
+    // flattens the macro body to a token_tree, so `g` is recovered as confined
+    // only by re-parsing the interpolated argument expression.
+    let src = b"fn f() { let g = std::env::var(\"ID\").unwrap(); \
+                let _ = std::fs::read(format!(\"/d/{}\", g.parse::<u32>().unwrap())); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "fs::read").expect("sink node present");
+    assert!(
+        confined.iter().any(|u| u == "g"),
+        "expected `g` numeric-confined inside format!; got {confined:?}"
+    );
+}
+
+#[test]
+fn numeric_confined_format_macro_mixed_idents() {
+    // `format!("/d/{}/{}", h, g.parse::<u32>())` — `g` is numeric-confined but
+    // the raw `h` interpolation must NOT be, so the path traversal via `h`
+    // still fires.
+    let src = b"fn f() { let h = std::env::var(\"A\").unwrap(); \
+                let g = std::env::var(\"B\").unwrap(); \
+                let _ = std::fs::read(format!(\"/d/{}/{}\", h, g.parse::<u32>().unwrap())); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "fs::read").expect("sink node present");
+    assert!(
+        confined.iter().any(|u| u == "g"),
+        "expected `g` confined; got {confined:?}"
+    );
+    assert!(
+        !confined.iter().any(|u| u == "h"),
+        "raw `h` interpolation must not be confined; got {confined:?}"
+    );
+}
+
+#[test]
+fn numeric_confined_format_macro_pathbuf_turbofish_not_confined() {
+    // `format!("/d/{}", p.parse::<PathBuf>())` — a non-numeric explicit
+    // turbofish target proves the value is NOT an integer, so `p` must stay
+    // un-confined and the FILE_IO flow fires.
+    let src = b"fn f() { let p = std::env::var(\"C\").unwrap(); \
+                let _ = std::fs::read(format!(\"/d/{}\", p.parse::<std::path::PathBuf>().unwrap())); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "fs::read").expect("sink node present");
+    assert!(
+        !confined.iter().any(|u| u == "p"),
+        "`parse::<PathBuf>()` must not be numeric-confined; got {confined:?}"
+    );
+}
+
+#[test]
+fn numeric_confined_format_macro_blocked_by_raw_occurrence() {
+    // Same leaf raw AND parsed inside one format!: `format!("/d/{}/{}", v,
+    // v.parse::<u32>())` — the raw `v` occurrence blocks confinement.
+    let src = b"fn f() { let v = std::env::var(\"E\").unwrap(); \
+                let _ = std::fs::read(format!(\"/d/{}/{}\", v, v.parse::<u32>().unwrap())); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "fs::read").expect("sink node present");
+    assert!(
+        !confined.iter().any(|u| u == "v"),
+        "raw `v` occurrence must block confinement; got {confined:?}"
+    );
+}
+
+#[test]
+fn format_macro_method_idents_records_machinery() {
+    // The phantom method/macro-name tokens (`format`, `parse`, `unwrap`) of a
+    // confined format! interpolation are recorded so the structural confinement
+    // check can skip the SSA Param operands they lower to.
+    let src = b"fn f() { let g = std::env::var(\"ID\").unwrap(); \
+                let _ = std::fs::read(format!(\"/d/{}\", g.parse::<u32>().unwrap())); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let sink = cfg
+        .node_indices()
+        .map(|i| &cfg[i])
+        .find(|n| n.call.callee.as_deref().is_some_and(|c| c.contains("fs::read")))
+        .expect("sink node present");
+    for name in ["format", "parse", "unwrap"] {
+        assert!(
+            sink.format_macro_method_idents.iter().any(|m| m == name),
+            "expected `{name}` in format_macro_method_idents; got {:?}",
+            sink.format_macro_method_idents
+        );
+    }
+    // The confined value leaf `g` is a real value, not machinery.
+    assert!(
+        !sink.format_macro_method_idents.iter().any(|m| m == "g"),
+        "value leaf `g` must not be machinery; got {:?}",
+        sink.format_macro_method_idents
+    );
+}
