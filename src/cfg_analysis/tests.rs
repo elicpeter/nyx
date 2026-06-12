@@ -2169,3 +2169,39 @@ fn type_facts_preserve_untyped_string_shell_arg() {
         "Untyped String shell argument must still produce cfg-unguarded-sink"
     );
 }
+
+#[test]
+fn type_facts_pathbuf_let_annotation_not_suppressed() {
+    // Recall counterpart to `type_facts_suppress_int_typed_shell_arg`
+    // (deep_engine_fixes #4-deep): a `let p: PathBuf = raw.parse()` binding
+    // lowers its annotation to `TypeKind::Object` (non-Int), which OVERRIDES
+    // the conservative bare-`parse` -> Int heuristic.  A parsed path is
+    // attacker-controlled and can carry `..` traversal, so the structural
+    // cfg-unguarded-sink must NOT be suppressed.
+    let src = br#"
+        use std::env;
+        use std::process::Command;
+        use std::path::PathBuf;
+        fn main() {
+            let raw = env::var("USER_PATH").unwrap();
+            let p: PathBuf = raw.parse().expect("invalid path");
+            Command::new("listener").arg(p.to_string()).status().unwrap();
+        }"#;
+
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "rust",
+        Language::from(tree_sitter_rust::LANGUAGE),
+    );
+
+    let guard_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !guard_findings.is_empty(),
+        "PathBuf-typed (non-numeric) sink argument must NOT be suppressed, got: {:?}",
+        findings
+    );
+}

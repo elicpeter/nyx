@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-06-12T07:16:51Z",
+  "timestamp": "2026-06-12T08:24:14Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:f16b861a175e5875a5bd9c058c87b0e5cabb986eb67fb3289a9dfbc23497047d",
-  "corpus_size": 580,
-  "cases_run": 577,
+  "ground_truth_hash": "sha256:cdf40a89778e6659c41e76f6da3461cc7f6ab5fab03cc98b8c79389701e81a45",
+  "corpus_size": 582,
+  "cases_run": 579,
   "cases_skipped": 3,
   "outcomes": [
     {
@@ -8089,6 +8089,28 @@
       "non_security_finding_count": 1
     },
     {
+      "case_id": "rs-path-007",
+      "file": "rust/path_traversal/parse_pathbuf_read.rs",
+      "language": "rust",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 10:15)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 10:15)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 3
+    },
+    {
       "case_id": "rs-safe-001",
       "file": "rust/safe/safe_constant.rs",
       "language": "rust",
@@ -8376,6 +8398,25 @@
       ],
       "security_finding_count": 0,
       "non_security_finding_count": 1
+    },
+    {
+      "case_id": "rs-safe-017",
+      "file": "rust/safe/safe_parse_numeric_port.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 3
     },
     {
       "case_id": "rs-safe-cross-001",
@@ -10279,22 +10320,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 276,
+    "tp": 277,
     "fp": 7,
     "fn_": 7,
-    "tn": 287,
-    "precision": 0.9752650176678446,
-    "recall": 0.9752650176678446,
-    "f1": 0.9752650176678445
+    "tn": 288,
+    "precision": 0.9753521126760564,
+    "recall": 0.9753521126760564,
+    "f1": 0.9753521126760565
   },
   "aggregate_rule_level": {
-    "tp": 276,
+    "tp": 277,
     "fp": 7,
     "fn_": 7,
-    "tn": 287,
-    "precision": 0.9752650176678446,
-    "recall": 0.9752650176678446,
-    "f1": 0.9752650176678445
+    "tn": 288,
+    "precision": 0.9753521126760564,
+    "recall": 0.9753521126760564,
+    "f1": 0.9753521126760565
   },
   "by_language": {
     "c": {
@@ -10370,13 +10411,13 @@
       "f1": 1.0
     },
     "rust": {
-      "tp": 41,
+      "tp": 42,
       "fp": 2,
       "fn_": 0,
-      "tn": 44,
-      "precision": 0.9534883720930233,
+      "tn": 45,
+      "precision": 0.9545454545454546,
       "recall": 1.0,
-      "f1": 0.9761904761904763
+      "f1": 0.9767441860465117
     },
     "typescript": {
       "tp": 36,
@@ -10498,7 +10539,7 @@
       "f1": 1.0
     },
     "path_traversal": {
-      "tp": 34,
+      "tp": 35,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -10528,7 +10569,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 283,
+      "tn": 284,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -10581,31 +10622,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 88,
-      "fp": 117,
-      "fn_": 195,
-      "tn": 177,
-      "precision": 0.4292682926829268,
-      "recall": 0.31095406360424027,
-      "f1": 0.36065573770491804
+      "tp": 90,
+      "fp": 116,
+      "fn_": 194,
+      "tn": 179,
+      "precision": 0.4368932038834951,
+      "recall": 0.31690140845070425,
+      "f1": 0.36734693877551017
     },
     ">=Low": {
-      "tp": 88,
-      "fp": 149,
-      "fn_": 195,
-      "tn": 145,
-      "precision": 0.37130801687763715,
-      "recall": 0.31095406360424027,
-      "f1": 0.3384615384615385
+      "tp": 91,
+      "fp": 146,
+      "fn_": 193,
+      "tn": 149,
+      "precision": 0.38396624472573837,
+      "recall": 0.3204225352112676,
+      "f1": 0.3493282149712092
     },
     ">=Medium": {
-      "tp": 88,
-      "fp": 123,
-      "fn_": 195,
-      "tn": 171,
-      "precision": 0.41706161137440756,
-      "recall": 0.31095406360424027,
-      "f1": 0.3562753036437247
+      "tp": 90,
+      "fp": 122,
+      "fn_": 194,
+      "tn": 173,
+      "precision": 0.42452830188679247,
+      "recall": 0.31690140845070425,
+      "f1": 0.3629032258064517
     }
   }
 }

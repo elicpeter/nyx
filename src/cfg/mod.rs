@@ -894,6 +894,18 @@ pub struct NodeInfo {
     /// Strictly additive: when `false`, legacy lowering applies.
     #[serde(default)]
     pub is_await_forward: bool,
+    /// Declared type annotation of a `let x: T = <rhs>` binding, lowered to
+    /// the lattice [`crate::ssa::type_facts::TypeKind`] it denotes.  Rust
+    /// only (the sole language whose binding RHS — `str::parse` — is
+    /// ambiguous between numeric and non-numeric `FromStr` targets).
+    /// Consumed by [`crate::ssa::type_facts`] as a high-priority override on
+    /// the bound value's type: `let p: PathBuf = s.parse()?` → `Object`
+    /// (recall — FILE_IO fires) while `let port: u16 = s.parse()?` → `Int`
+    /// (precision — numeric shell arg stays suppressed).  `None` for
+    /// un-annotated bindings, non-`let` nodes, and unrecognised annotation
+    /// types, so the conservative bare-`parse` → `Int` default is preserved.
+    #[serde(default)]
+    pub decl_type: Option<crate::ssa::type_facts::TypeKind>,
 }
 
 impl NodeInfo {
@@ -3880,6 +3892,7 @@ pub(super) fn push_node<'a>(
         member_field: detect_member_field_assignment(ast, code),
         rhs_is_function_literal: rhs_is_function_literal(ast, lang),
         is_await_forward: lookup(lang, ast.kind()) == Kind::AwaitForward,
+        decl_type: extract_decl_type(ast, lang, code),
     });
 
     debug!(
@@ -3932,6 +3945,39 @@ pub(super) fn connect_all(g: &mut Cfg, froms: &[NodeIndex], to: NodeIndex, kind:
 /// label propagation from inside the literal's body up onto the outer
 /// wrapper assignment.  The literal is processed as its own scope by
 /// `collect_nested_function_nodes`.
+/// Extract the declared type annotation of a Rust `let x: T = <rhs>` binding
+/// and lower it to the lattice [`crate::ssa::type_facts::TypeKind`] for the
+/// bound value.  Returns `None` for any non-Rust language, any node that is
+/// not (or does not directly wrap) a `let_declaration` carrying a `type`
+/// field, and any annotation the lattice does not recognise (see
+/// [`crate::ssa::type_facts::rust_annotation_type_kind`]).
+///
+/// `ast` may be the `let_declaration` itself or a statement wrapper whose
+/// direct child is the declaration (mirrors the RHS-locating walk in
+/// [`rhs_is_function_literal`]).  Rust is the only language wired here: its
+/// idiomatic binding RHS `str::parse` is the one verb whose return type is
+/// ambiguous between numeric and non-numeric `FromStr` targets, so the
+/// annotation is the only ground truth.
+fn extract_decl_type(
+    ast: Node,
+    lang: &str,
+    code: &[u8],
+) -> Option<crate::ssa::type_facts::TypeKind> {
+    if lang != "rust" {
+        return None;
+    }
+    let decl = if ast.kind() == "let_declaration" {
+        ast
+    } else {
+        let mut cursor = ast.walk();
+        ast.children(&mut cursor)
+            .find(|c| c.kind() == "let_declaration")?
+    };
+    let type_node = decl.child_by_field_name("type")?;
+    let type_text = text_of(type_node, code)?;
+    crate::ssa::type_facts::rust_annotation_type_kind(&type_text)
+}
+
 fn rhs_is_function_literal(ast: Node, lang: &str) -> bool {
     use conditions::unwrap_parens;
 

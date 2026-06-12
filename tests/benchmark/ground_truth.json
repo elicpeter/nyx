@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 582
+    "corpus_size": 584
   },
   "cases": [
     {
@@ -18306,6 +18306,75 @@
       "disabled": true,
       "disabled_reason": "Recall fix landed (vulnerable detects: nested FILE_IO sink under the JSON.parse sanitizer is now surfaced, src/cfg/helpers.rs::find_inner_sink_call + src/cfg/mod.rs::apply_gated_label_rules namespace surfacing). DEFERRED on the PATCHED side: the upstream guard `if (!isOptimizedDepFile(sourcemapPath)) return next()` uses a custom boolean path-confinement helper that nyx recognises only by NAME (is_valid*/is_safe*/has_valid* via classify_input_validator_callee), so the patched fixture false-positives. Deep fix needed: behaviour-based recognition of a boolean predicate helper whose body returns a path-containment check (x.startsWith(const) / path.relative) as a validator, propagated through the summary so `if (!helper(x)) bail` narrows x. A name-list addition would be a per-CVE bandaid. Tracked in CVE_DEFERRED.md.",
       "notes": "vite dev-server transform middleware sourcemap handler path traversal"
+    },
+    {
+      "case_id": "rs-path-007",
+      "file": "rust/path_traversal/parse_pathbuf_read.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.file_io.read_to_string"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-06-12",
+        "parse",
+        "pathbuf",
+        "let-annotation"
+      ],
+      "disabled": false,
+      "notes": "let p: PathBuf = env::var().parse() flows into fs::read. The PathBuf let-annotation lowers to TypeKind::Object, overriding the bare-parse->Int heuristic that previously suppressed the FILE_IO flow (deep_engine_fixes #4-deep)."
+    },
+    {
+      "case_id": "rs-safe-017",
+      "file": "rust/safe/safe_parse_numeric_port.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "real-repo-precision-2026-06-12",
+        "parse",
+        "numeric",
+        "let-annotation"
+      ],
+      "disabled": false,
+      "notes": "let port: u16 = env::var().parse() into a shell arg. The u16 let-annotation lowers to TypeKind::Int, keeping the numeric suppression (precision counterpart to rs-path-007)."
     }
   ]
 }
