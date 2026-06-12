@@ -553,6 +553,10 @@ fn run_ssa_taint_internal(
     if let Some(ref mut entry_state) = block_states[ssa.entry.0 as usize] {
         if let Some(ref mut abs) = entry_state.abstract_state {
             if let Some(cv) = transfer.const_values {
+                // COW fork: only deep-copy the shared AbstractState when there
+                // are const values to seed (an entry block with no const-prop
+                // facts keeps sharing its `initial()` Arc).
+                let abs = Arc::make_mut(abs);
                 use crate::abstract_interp::{
                     AbstractValue, BitFact, IntervalFact, PathFact, StringFact,
                 };
@@ -679,7 +683,7 @@ fn run_ssa_taint_internal(
                             (&joined.abstract_state, &existing.abstract_state)
                         {
                             let widened = old_abs.widen(new_abs);
-                            joined.abstract_state = Some(widened);
+                            joined.abstract_state = Some(Arc::new(widened));
                         }
                     }
                     joined
@@ -1153,7 +1157,7 @@ pub(super) fn transfer_block(
 
                 if any_operand {
                     if let Some(ref mut abs) = state.abstract_state {
-                        abs.set(phi.value, joined);
+                        Arc::make_mut(abs).set(phi.value, joined);
                     }
                 }
             }
@@ -2443,7 +2447,7 @@ fn apply_path_fact_branch_narrowing_with_interner(
             let mut av = abs.get(*v);
             narrow_false(&mut av.path);
             if !av.is_top() {
-                abs.set(*v, av);
+                Arc::make_mut(abs).set(*v, av);
             }
         }
     }
@@ -2466,7 +2470,7 @@ fn apply_path_fact_branch_narrowing_with_interner(
             let mut av = abs.get(*v);
             narrow_true(&mut av.path);
             if !av.is_top() {
-                abs.set(*v, av);
+                Arc::make_mut(abs).set(*v, av);
             }
         }
     }
@@ -4865,7 +4869,7 @@ pub(super) fn transfer_inst(
                                 &result.return_path_fact,
                             );
                             if !av.is_top() {
-                                abs.set(inst.value, av);
+                                Arc::make_mut(abs).set(inst.value, av);
                             }
                         }
                     }
@@ -6553,9 +6557,13 @@ pub(super) fn transfer_inst(
         }
     }
 
-    // Forward abstract value transfer
+    // Forward abstract value transfer. `Arc::make_mut` forks the shared
+    // AbstractState lazily, the first mutating instruction in a block pays
+    // the single deep copy; all later instructions mutate the now-unique Arc
+    // in place. Stored snapshots (exit-state, pred_states) keep sharing the
+    // pre-fork Arc as refcount bumps.
     if let Some(ref mut abs) = state.abstract_state {
-        transfer_abstract(inst, cfg, abs, Some(transfer.lang));
+        transfer_abstract(inst, cfg, Arc::make_mut(abs), Some(transfer.lang));
     }
 
     // Cross-file abstract return injection.
@@ -6563,7 +6571,7 @@ pub(super) fn transfer_inst(
     // default Top that transfer_abstract assigns to unknown callees.
     if let Some(ref abs_val) = callee_return_abstract {
         if let Some(ref mut abs) = state.abstract_state {
-            abs.set(inst.value, abs_val.clone());
+            Arc::make_mut(abs).set(inst.value, abs_val.clone());
         }
     }
 }
@@ -7340,7 +7348,7 @@ fn collect_block_events(
 
                 if any_operand {
                     if let Some(ref mut abs) = state.abstract_state {
-                        abs.set(phi.value, joined);
+                        Arc::make_mut(abs).set(phi.value, joined);
                     }
                 }
             }

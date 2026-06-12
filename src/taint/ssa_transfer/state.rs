@@ -376,7 +376,24 @@ pub struct SsaTaintState {
     /// Per-SSA-value abstract domain state. `None` when abstract
     /// interpretation is disabled (`analysis.engine.abstract_interpretation
     /// = false`).
-    pub abstract_state: Option<AbstractState>,
+    ///
+    /// Wrapped in `Arc` for copy-on-write, the same recipe as `path_env`
+    /// above and for the same reason: `SsaTaintState` is cloned heavily in
+    /// the taint worklist (entry-state per block pop, exit-state store,
+    /// per-predecessor `pred_states` store, branch successors). After the
+    /// `path_env` Arc-COW landed, `AbstractState` was the next-largest
+    /// structurally-reducible clone component — it is a sorted
+    /// `SmallVec<[(SsaValue, AbstractValue); 8]>` and each `AbstractValue`
+    /// composes interval + string (two heap `String` axes) + bits + path
+    /// subdomains, so a deep clone allocates the string axes for every
+    /// entry. Sharing the `Arc` turns every read-only-after-clone store
+    /// (exit-state, `pred_states`, exception-edge snapshot) into a refcount
+    /// bump; mutators (`transfer_abstract`, the entry seed, branch
+    /// narrowing, phi join, cross-file return injection) use
+    /// `Arc::make_mut`, so the deep copy happens at most once per block
+    /// visit (at the first mutating instruction) instead of once per clone.
+    /// `Arc` (not `Rc`) so `SsaTaintState` stays `Send` for rayon.
+    pub abstract_state: Option<Arc<AbstractState>>,
     /// per-heap-field taint cells, keyed by
     /// `(parent_loc, field)`.  Sorted by `FieldTaintKey` for O(n)
     /// merge-join.  Populated only when the body's
@@ -407,7 +424,7 @@ impl SsaTaintState {
                 None
             },
             abstract_state: if abstract_interp::is_enabled() {
-                Some(AbstractState::empty())
+                Some(Arc::new(AbstractState::empty()))
             } else {
                 None
             },
@@ -515,7 +532,7 @@ impl Lattice for SsaTaintState {
             _ => None, // absent = Top, Top.join(x) = Top
         };
         let abstract_state = match (&self.abstract_state, &other.abstract_state) {
-            (Some(a), Some(b)) => Some(a.join(b)),
+            (Some(a), Some(b)) => Some(Arc::new(a.join(b))),
             _ => None,
         };
         let field_taint = merge_join_field_taint(&self.field_taint, &other.field_taint);
@@ -1508,6 +1525,91 @@ mod path_env_cow_tests {
             a.path_env.as_ref().unwrap(),
             b.path_env.as_ref().unwrap(),
             j.path_env.as_ref().expect("joined env"),
+        );
+        assert!(!Arc::ptr_eq(ej, ea), "join result must not alias lhs");
+        assert!(!Arc::ptr_eq(ej, eb), "join result must not alias rhs");
+    }
+}
+
+#[cfg(test)]
+mod abstract_state_cow_tests {
+    //! Pins the copy-on-write contract for `SsaTaintState::abstract_state`.
+    //! Same invariant as [`super::path_env_cow_tests`]: the worklist clones
+    //! the whole state on every block pop, exit store, and per-successor
+    //! push; the `Arc` wrapper keeps those clones sharing the
+    //! `AbstractState` until a mutator (`transfer_abstract`, branch
+    //! narrowing, phi join, the entry seed) forks it via `Arc::make_mut`.
+    //! A refactor that deep-clones the abstract domain on every
+    //! `SsaTaintState::clone`, or that forks it without aliasing on join,
+    //! reintroduces the per-clone string-axis allocation these guard.
+    use super::*;
+    use crate::abstract_interp::{AbstractState, AbstractValue, IntervalFact};
+    use crate::ssa::ir::SsaValue;
+    use std::sync::Arc;
+
+    /// Build a state with a non-empty `abstract_state` independent of the
+    /// runtime `abstract_interp::is_enabled()` config so the test is
+    /// deterministic regardless of feature flags.
+    fn state_with_abstract() -> SsaTaintState {
+        let mut s = SsaTaintState::initial();
+        let mut a = AbstractState::empty();
+        a.set(
+            SsaValue(0),
+            AbstractValue {
+                interval: IntervalFact::exact(7),
+                ..AbstractValue::top()
+            },
+        );
+        s.abstract_state = Some(Arc::new(a));
+        s
+    }
+
+    #[test]
+    fn clone_shares_abstract_state_arc() {
+        let a = state_with_abstract();
+        let b = a.clone();
+        let pa = a.abstract_state.as_ref().expect("a abs");
+        let pb = b.abstract_state.as_ref().expect("b abs");
+        assert!(
+            Arc::ptr_eq(pa, pb),
+            "clone must share the abstract_state Arc (refcount bump, not deep copy)"
+        );
+    }
+
+    #[test]
+    fn make_mut_forks_shared_abstract_state_copy_on_write() {
+        let a = state_with_abstract();
+        let mut b = a.clone();
+        assert!(Arc::ptr_eq(
+            a.abstract_state.as_ref().unwrap(),
+            b.abstract_state.as_ref().unwrap()
+        ));
+        // `make_mut` on the shared Arc (refcount 2) yields a private copy;
+        // mutating it must not perturb the aliased snapshot `a`.
+        let abs = b.abstract_state.as_mut().unwrap();
+        Arc::make_mut(abs).set(SsaValue(1), AbstractValue::bottom());
+        assert!(
+            !Arc::ptr_eq(
+                a.abstract_state.as_ref().unwrap(),
+                b.abstract_state.as_ref().unwrap()
+            ),
+            "make_mut on a shared abstract_state must fork a private copy (COW)"
+        );
+        // `a` still sees only the original entry.
+        assert!(a.abstract_state.as_ref().unwrap().get(SsaValue(1)).is_top());
+    }
+
+    #[test]
+    fn join_produces_independent_abstract_state() {
+        // `join` builds a fresh `AbstractState` wrapped in a new Arc, so the
+        // result aliases neither input.
+        let a = state_with_abstract();
+        let b = state_with_abstract();
+        let j = a.join(&b);
+        let (ea, eb, ej) = (
+            a.abstract_state.as_ref().unwrap(),
+            b.abstract_state.as_ref().unwrap(),
+            j.abstract_state.as_ref().expect("joined abs"),
         );
         assert!(!Arc::ptr_eq(ej, ea), "join result must not alias lhs");
         assert!(!Arc::ptr_eq(ej, eb), "join result must not alias rhs");

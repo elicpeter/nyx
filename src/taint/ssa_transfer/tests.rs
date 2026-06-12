@@ -1147,7 +1147,9 @@ mod goto_succ_propagation_tests {
 
     fn initial_state_with_abstract() -> SsaTaintState {
         let mut s = SsaTaintState::initial();
-        s.abstract_state = Some(crate::abstract_interp::AbstractState::empty());
+        s.abstract_state = Some(std::sync::Arc::new(
+            crate::abstract_interp::AbstractState::empty(),
+        ));
         s
     }
 
