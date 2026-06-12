@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 575
+    "corpus_size": 577
   },
   "cases": [
     {
@@ -10586,7 +10586,7 @@
         "positive"
       ],
       "disabled": false,
-      "notes": "CVE-2024-23334: aiohttp StaticResource symlink-bypass — relative_to(self._directory) check gated to the non-follow_symlinks arm; FileResponse(filepath) reachable from request.match_info on follow_symlinks=True. Apache-2.0"
+      "notes": "CVE-2024-23334: aiohttp StaticResource symlink-bypass \u2014 relative_to(self._directory) check gated to the non-follow_symlinks arm; FileResponse(filepath) reachable from request.match_info on follow_symlinks=True. Apache-2.0"
     },
     {
       "case_id": "cve-py-2024-23334-patched",
@@ -10654,7 +10654,7 @@
         "positive"
       ],
       "disabled": false,
-      "notes": "CVE-2023-6568: mlflow auth create_user reflected attacker-controlled Content-Type request header into make_response f-string — reflected XSS. Apache-2.0"
+      "notes": "CVE-2023-6568: mlflow auth create_user reflected attacker-controlled Content-Type request header into make_response f-string \u2014 reflected XSS. Apache-2.0"
     },
     {
       "case_id": "cve-py-2023-6568-patched",
@@ -13913,7 +13913,7 @@
         "magic-method"
       ],
       "disabled": false,
-      "notes": "Serializable::unserialize($input) magic-method body — the legacy PHP Serializable interface contract (deprecated since PHP 8.1). PHP itself drives invocation; the body's \\unserialize($x) call is part of the deserialization machinery and cannot be removed without breaking the interface. Distilled from joomla/administrator/components/com_finder/src/Indexer/Result.php:488 + libraries/src/Input/{Cli,Input}.php."
+      "notes": "Serializable::unserialize($input) magic-method body \u2014 the legacy PHP Serializable interface contract (deprecated since PHP 8.1). PHP itself drives invocation; the body's \\unserialize($x) call is part of the deserialization machinery and cannot be removed without breaking the interface. Distilled from joomla/administrator/components/com_finder/src/Indexer/Result.php:488 + libraries/src/Input/{Cli,Input}.php."
     },
     {
       "case_id": "php-deser-003",
@@ -14546,7 +14546,7 @@
         "real-repo-precision-2026-05-03"
       ],
       "disabled": false,
-      "notes": "Jest-style nested arrow callbacks (`describe('…', () => { it('…', async () => { const body = await res.json(); … }) })`) bubble inner-scope free vars (`body`, `userId`, `server.post`) up to the outer arrow as synthetic Params.  Before the fix, JS/TS auto-seed treated every Param whose var_name matched a handler-name (`userId`) as a real formal of the outer arrow and seeded it as `Source(UserInput)`, producing 934 phantom `taint-unsanitised-flow` findings on outline alone.  Engine fix: `lower_to_ssa_with_params` now signals `with_params=true` to `lower_to_ssa_inner`, which makes the synthetic-externals classifier always exclude formals (even when the formal list is empty, e.g. arrow `() => {…}`) — bubbled-up free vars become synthetic and the auto-seed pass skips them.  Distilled from /Users/elipeter/oss/outline/server/routes/api/comments/comments.test.ts."
+      "notes": "Jest-style nested arrow callbacks (`describe('\u2026', () => { it('\u2026', async () => { const body = await res.json(); \u2026 }) })`) bubble inner-scope free vars (`body`, `userId`, `server.post`) up to the outer arrow as synthetic Params.  Before the fix, JS/TS auto-seed treated every Param whose var_name matched a handler-name (`userId`) as a real formal of the outer arrow and seeded it as `Source(UserInput)`, producing 934 phantom `taint-unsanitised-flow` findings on outline alone.  Engine fix: `lower_to_ssa_with_params` now signals `with_params=true` to `lower_to_ssa_inner`, which makes the synthetic-externals classifier always exclude formals (even when the formal list is empty, e.g. arrow `() => {\u2026}`) \u2014 bubbled-up free vars become synthetic and the auto-seed pass skips them.  Distilled from /Users/elipeter/oss/outline/server/routes/api/comments/comments.test.ts."
     },
     {
       "case_id": "ts-sqli-realrepo-arrow-002",
@@ -14567,8 +14567,18 @@
       "forbidden_rule_ids": [],
       "expected_severity": null,
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
-      "expected_source_lines": [[7, 7]],
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
       "tags": [
         "sqli",
         "arrow-handler",
@@ -14576,7 +14586,7 @@
         "real-repo-precision-2026-05-03"
       ],
       "disabled": false,
-      "notes": "Arrow with REAL handler-named formal (`userId`) MUST still auto-seed and trigger taint flow into `db.exec(\"… ${userId}\")`.  Pins the auto-seed positive path so the FP fix in ts-safe-022 does not over-suppress real handlers."
+      "notes": "Arrow with REAL handler-named formal (`userId`) MUST still auto-seed and trigger taint flow into `db.exec(\"\u2026 ${userId}\")`.  Pins the auto-seed positive path so the FP fix in ts-safe-022 does not over-suppress real handlers."
     },
     {
       "case_id": "js-safe-jest-callback-001",
@@ -16754,7 +16764,7 @@
         "real-repo-precision-2026-04-29"
       ],
       "disabled": false,
-      "notes": "Vulnerable counterpart to py-auth-realrepo-005: same FastAPI route shape but no `dependencies=[Depends(...)]` keyword arg.  Regression guard: the dependency-injection recogniser must not blanket-suppress every FastAPI route.  Updated 2026-05-03: pre-fix recall came from a member_chain quirk where `select(Connection).filter_by(...)` reduced to bare callee `filter_by` and prefix-matched the `filter` read indicator.  Post `receiver_is_simple_chain` gating, the fixture uses a qualified `Connection.objects.filter(id=connection_id).delete()` shape — SQLAlchemy `select().filter_by(...)` chained-call detection is a deferred deep fix."
+      "notes": "Vulnerable counterpart to py-auth-realrepo-005: same FastAPI route shape but no `dependencies=[Depends(...)]` keyword arg.  Regression guard: the dependency-injection recogniser must not blanket-suppress every FastAPI route.  Updated 2026-05-03: pre-fix recall came from a member_chain quirk where `select(Connection).filter_by(...)` reduced to bare callee `filter_by` and prefix-matched the `filter` read indicator.  Post `receiver_is_simple_chain` gating, the fixture uses a qualified `Connection.objects.filter(id=connection_id).delete()` shape \u2014 SQLAlchemy `select().filter_by(...)` chained-call detection is a deferred deep fix."
     },
     {
       "case_id": "js-data_exfil-001",
@@ -17583,7 +17593,7 @@
         "real-repo-precision-2026-05-04"
       ],
       "disabled": false,
-      "notes": "Vulnerable counterpart to py-auth-realrepo-012: same bare-`set()` / `dict()` local container shape, but the helper *also* runs an id-targeted ORM `Project.objects.filter(id=team_id)` query whose filter param is a user-supplied id (no caller-scope-entity exemption applies).  Recall guard: bare-callee constructor recogniser must only suppress the InMemoryLocal `.add` / `.update` calls — the id-targeted ORM filter must still fire `py.auth.missing_ownership_check`."
+      "notes": "Vulnerable counterpart to py-auth-realrepo-012: same bare-`set()` / `dict()` local container shape, but the helper *also* runs an id-targeted ORM `Project.objects.filter(id=team_id)` query whose filter param is a user-supplied id (no caller-scope-entity exemption applies).  Recall guard: bare-callee constructor recogniser must only suppress the InMemoryLocal `.add` / `.update` calls \u2014 the id-targeted ORM filter must still fire `py.auth.missing_ownership_check`."
     },
     {
       "case_id": "py-auth-realrepo-014",
@@ -17678,7 +17688,7 @@
         "real-repo-precision-2026-05-04"
       ],
       "disabled": false,
-      "notes": "Recall counterpart to py-auth-realrepo-015.  `Security(require_auth, scopes=[])` with an empty scope list is NOT promoted to `Other` — the OAuth2 scope semantic only fires when scopes is non-empty, so the wrapper falls back to bare login classification.  Recall guard: `missing_ownership_check` must still fire on this id-targeted ORM filter; without conservative scope-emptiness gating, every empty-scopes route would over-suppress."
+      "notes": "Recall counterpart to py-auth-realrepo-015.  `Security(require_auth, scopes=[])` with an empty scope list is NOT promoted to `Other` \u2014 the OAuth2 scope semantic only fires when scopes is non-empty, so the wrapper falls back to bare login classification.  Recall guard: `missing_ownership_check` must still fire on this id-targeted ORM filter; without conservative scope-emptiness gating, every empty-scopes route would over-suppress."
     },
     {
       "case_id": "py-auth-realrepo-017",
@@ -17707,7 +17717,7 @@
         "real-repo-precision-2026-05-04"
       ],
       "disabled": false,
-      "notes": "Distilled from airflow `airflow-core/src/airflow/api_fastapi/execution_api/routes/task_instances.py:89-318`: `ti_id_router = VersionedAPIRouter(dependencies=[Security(require_auth, scopes=[\"ti:self\"])])` declares the auth dep once at the router constructor; every `@ti_id_router.<verb>(...)` route inherits it at runtime.  Pre-fix the FastAPI dep extractor only walked the per-route decorator's `dependencies=[...]` kwarg; router-constructor `dependencies=` was dropped, so every attached route without inline deps fired `missing_ownership_check` + `token_override_without_validation` despite being authorized.  Fix: `collect_router_level_dependencies` walks module-level `<router> = APIRouter(...)` / `VersionedAPIRouter(...)` / `FastAPI(...)` assignments and captures `dependencies=[...]` keyed by the router var name; `router_prefix_from_decorator` extracts the receiver from `@<router>.<verb>(...)` and merges router-level deps into the per-route middleware list.  A scoped Security wrapper additionally synthesises matching `TokenExpiry` + `TokenRecipient` checks (the JWT-validation semantics — JWT signature includes expiry, scopes encode recipient binding) so the token-override rule recognises the route too.  Precision guard: route must NOT fire ownership / token-override findings."
+      "notes": "Distilled from airflow `airflow-core/src/airflow/api_fastapi/execution_api/routes/task_instances.py:89-318`: `ti_id_router = VersionedAPIRouter(dependencies=[Security(require_auth, scopes=[\"ti:self\"])])` declares the auth dep once at the router constructor; every `@ti_id_router.<verb>(...)` route inherits it at runtime.  Pre-fix the FastAPI dep extractor only walked the per-route decorator's `dependencies=[...]` kwarg; router-constructor `dependencies=` was dropped, so every attached route without inline deps fired `missing_ownership_check` + `token_override_without_validation` despite being authorized.  Fix: `collect_router_level_dependencies` walks module-level `<router> = APIRouter(...)` / `VersionedAPIRouter(...)` / `FastAPI(...)` assignments and captures `dependencies=[...]` keyed by the router var name; `router_prefix_from_decorator` extracts the receiver from `@<router>.<verb>(...)` and merges router-level deps into the per-route middleware list.  A scoped Security wrapper additionally synthesises matching `TokenExpiry` + `TokenRecipient` checks (the JWT-validation semantics \u2014 JWT signature includes expiry, scopes encode recipient binding) so the token-override rule recognises the route too.  Precision guard: route must NOT fire ownership / token-override findings."
     },
     {
       "case_id": "py-auth-realrepo-018",
@@ -17740,7 +17750,7 @@
         "real-repo-precision-2026-05-04"
       ],
       "disabled": false,
-      "notes": "Recall counterpart to py-auth-realrepo-017.  Bare `router = VersionedAPIRouter()` with no `dependencies=` kwarg — attached routes that do not supply inline deps are genuinely unauthorized.  The router-level extractor must NOT enter a fake key for routers without router-level deps; the gate (`if deps.is_empty() { continue; }` in `collect_router_level_dependencies`) ensures absence is preserved.  Recall guard: `missing_ownership_check` must still fire on the id-targeted write."
+      "notes": "Recall counterpart to py-auth-realrepo-017.  Bare `router = VersionedAPIRouter()` with no `dependencies=` kwarg \u2014 attached routes that do not supply inline deps are genuinely unauthorized.  The router-level extractor must NOT enter a fake key for routers without router-level deps; the gate (`if deps.is_empty() { continue; }` in `collect_router_level_dependencies`) ensures absence is preserved.  Recall guard: `missing_ownership_check` must still fire on the id-targeted write."
     },
     {
       "case_id": "py-auth-realrepo-019",
@@ -17769,7 +17779,7 @@
         "real-repo-precision-2026-05-04"
       ],
       "disabled": false,
-      "notes": "Distilled from airflow `airflow-core/src/airflow/api_fastapi/execution_api/routes/task_instances.py:516-628`: the route handler `ti_update_state` is route-level authorized via the `ti_id_router = APIRouter(dependencies=[Security(require_auth, scopes=[\"ti:self\"])])` declaration (closed by session-0010), then delegates the `session.add(...)` sink to a private helper `_create_state_update`.  Pre-fix the helper fired both `missing_ownership_check` and `token_override_without_validation` because `check_ownership_gaps` is scoped per AnalysisUnit — the caller's route-level auth check did not propagate to the callee.  Phase 1 caller-scope IPA fix (`apply_caller_scope_propagation` in `src/auth_analysis/mod.rs`) walks the call graph DOWN: when every in-file caller of a helper carries route-level non-Login auth, the helper inherits those checks via synthetic `is_route_level=true` AuthChecks anchored at the callee's start line.  Soundness: requires every caller authorized; refuses on dead helpers, mixed-caller helpers, login-only routes."
+      "notes": "Distilled from airflow `airflow-core/src/airflow/api_fastapi/execution_api/routes/task_instances.py:516-628`: the route handler `ti_update_state` is route-level authorized via the `ti_id_router = APIRouter(dependencies=[Security(require_auth, scopes=[\"ti:self\"])])` declaration (closed by session-0010), then delegates the `session.add(...)` sink to a private helper `_create_state_update`.  Pre-fix the helper fired both `missing_ownership_check` and `token_override_without_validation` because `check_ownership_gaps` is scoped per AnalysisUnit \u2014 the caller's route-level auth check did not propagate to the callee.  Phase 1 caller-scope IPA fix (`apply_caller_scope_propagation` in `src/auth_analysis/mod.rs`) walks the call graph DOWN: when every in-file caller of a helper carries route-level non-Login auth, the helper inherits those checks via synthetic `is_route_level=true` AuthChecks anchored at the callee's start line.  Soundness: requires every caller authorized; refuses on dead helpers, mixed-caller helpers, login-only routes."
     },
     {
       "case_id": "py-auth-realrepo-020",
@@ -17864,7 +17874,7 @@
         "real-repo-precision-2026-06-11"
       ],
       "disabled": false,
-      "notes": "Recall counterpart to py-auth-realrepo-021.  Same shape, but the mutation declares NO `Meta.permissions` — a public graphene mutation.  The `GrapheneExtractor` must NOT mark `perform_mutation` authorized (the soundness gate fires only on a non-empty `Meta.permissions`), so the in-file caller-scope pass refuses to lift onto `_cancel_order_rows` and `missing_ownership_check` still fires on its id-targeted ORM write at line 21."
+      "notes": "Recall counterpart to py-auth-realrepo-021.  Same shape, but the mutation declares NO `Meta.permissions` \u2014 a public graphene mutation.  The `GrapheneExtractor` must NOT mark `perform_mutation` authorized (the soundness gate fires only on a non-empty `Meta.permissions`), so the in-file caller-scope pass refuses to lift onto `_cancel_order_rows` and `missing_ownership_check` still fires on its id-targeted ORM write at line 21."
     },
     {
       "case_id": "cve-ts-2026-25544-vulnerable",
@@ -18036,6 +18046,48 @@
       "notes": "Synthetic CVE-2024-39954 invariant: tainted URL into Apache HttpClient request constructor (`new HttpGet(url)`) dispatched via `client.execute(req)` across a helper boundary fires SSRF."
     },
     {
+      "case_id": "java-ssrf-004",
+      "file": "java/ssrf/SsrfMultiSinkParam.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-header-injection"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          18,
+          18
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          17,
+          17
+        ]
+      ],
+      "tags": [
+        "ssrf",
+        "header-injection",
+        "multi-sink-param",
+        "de-masking",
+        "cross-function",
+        "real-repo-precision-2026-06-11"
+      ],
+      "disabled": false,
+      "notes": "Multi-sink-per-param de-masking invariant: a helper param flowing to BOTH an SSRF sink (`new HttpGet(url)`) and a HEADER_INJECTION sink (`req.addHeader(name, url)`) must surface the SSRF flow (taint-unsanitised-flow). Pre-fix the summary unioned both caps and the cap->rule routing collapsed to taint-header-injection, masking the SSRF. Header-injection is a legitimate co-finding (allowed alternative)."
+    },
+    {
       "case_id": "java-safe-017",
       "file": "java/safe/SafeNegativeUrlValidator.java",
       "language": "java",
@@ -18061,6 +18113,36 @@
       ],
       "disabled": false,
       "notes": "Synthetic CVE-2024-39954 precision invariant: negative-polarity validator `if (isInvalidUrl(url)) return;` validates the URL on the surviving branch so the Apache HttpClient SSRF sink does not fire."
+    },
+    {
+      "case_id": "java-safe-018",
+      "file": "java/safe/SafeMultiSinkParamConst.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "taint-header-injection"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "ssrf",
+        "header-injection",
+        "multi-sink-param",
+        "precision",
+        "real-repo-precision-2026-06-11"
+      ],
+      "disabled": false,
+      "notes": "Precision counterpart to java-ssrf-004: the SAME multi-sink helper is called with a CONSTANT url, never attacker input. The per-cap de-masking split must not manufacture findings from an untainted argument \u2014 neither taint-unsanitised-flow nor taint-header-injection may fire."
     }
   ]
 }

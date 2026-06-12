@@ -7862,6 +7862,33 @@ fn collect_block_events(
         } else {
             Vec::new()
         };
+        // Multi-sink-per-param de-masking.  When a *summary-resolved* sink's
+        // `param_to_sink_sites` records consumptions in DISTINCT capability
+        // classes (e.g. a helper param flows to SSRF at `new HttpGet(url)`
+        // co-located with HEADER_INJECTION at `req.addHeader("X", url)`), the
+        // legacy single-union pass collapses every site's cap into one
+        // `sink_caps` mask and emits a single event.  The cap→rule routing in
+        // `ast.rs` then resolves the union to the single most-specific rule id
+        // (`taint-header-injection`), MASKING the generic-routed flow
+        // (`SSRF` → `taint-unsanitised-flow`).  Split into one filter pass per
+        // distinct site cap so each event carries exactly the cap consumed at
+        // its attributed location.  `collect_tainted_sink_values` (Priority 2,
+        // keyed on `param_to_sink` ∩ `sink_caps`) and `pick_primary_sink_sites`
+        // both re-filter per pass, so a cap with no actual tainted flow yields
+        // an empty `tainted` set and is skipped — no spurious zero-cap events.
+        //
+        // Naturally scoped to summary-resolved sinks: `resolve_sink_info`
+        // returns an empty `param_to_sink_sites` for direct label / gated
+        // sinks (the early `label_sink_caps` return) and for the type-qualified
+        // ORM raw-SQL path, so those single-pass behaviors are byte-identical.
+        // The explicit `tq_payload_args.is_none()` guard keeps the ORM
+        // payload-restriction path single-pass even if it ever co-occurs.
+        let multi_sink_caps: smallvec::SmallVec<[Cap; 4]> =
+            if !multi_gate && !summary_per_position && tq_payload_args.is_none() {
+                distinct_summary_sink_caps(&sink_info.param_to_sink_sites, sink_caps)
+            } else {
+                smallvec::SmallVec::new()
+            };
         let filter_iter: smallvec::SmallVec<[FilterEntry<'_>; 2]> = if multi_gate {
             info.call
                 .gate_filters
@@ -7879,6 +7906,8 @@ fn collect_block_events(
                 .iter()
                 .map(|e| (sink_caps & e.caps, Some(e.idx.as_slice()), None))
                 .collect()
+        } else if multi_sink_caps.len() > 1 {
+            multi_sink_caps.iter().map(|&c| (c, None, None)).collect()
         } else {
             smallvec::smallvec![(sink_caps, tq_payload_args, None)]
         };
@@ -8183,6 +8212,46 @@ fn pick_primary_sink_sites(
         }
     }
     out
+}
+
+/// Distinct per-site capability masks for the multi-sink-per-param
+/// de-masking split in [`collect_block_events`].
+///
+/// A summary-resolved sink records one [`SinkSite`] per distinct
+/// consumption capability of a helper parameter (e.g. SSRF at
+/// `new HttpGet(url)` co-located with HEADER_INJECTION at
+/// `req.addHeader(name, url)`).  Without splitting, the caller-side
+/// emission unions every site's cap into a single mask and the cap->rule
+/// routing in `ast.rs` collapses the union to the single most-specific
+/// rule id, masking the generically-routed flow (e.g. SSRF, which surfaces
+/// as `taint-unsanitised-flow`).
+///
+/// Returns the deduped list of `site.cap & sink_caps` masks across all
+/// resolved sites (cap-only sites with `line == 0` are skipped, since they
+/// carry no attribution and would split off a phantom event).  A result of
+/// length > 1 drives one per-cap filter pass; length 0 or 1 keeps the
+/// single-pass union behavior byte-identical.  Order follows
+/// `param_to_sink_sites` iteration (deterministic for a fixed summary).
+fn distinct_summary_sink_caps(
+    param_to_sink_sites: &[(usize, SmallVec<[SinkSite; 1]>)],
+    sink_caps: Cap,
+) -> smallvec::SmallVec<[Cap; 4]> {
+    let mut distinct: smallvec::SmallVec<[Cap; 4]> = smallvec::SmallVec::new();
+    for (_, sites) in param_to_sink_sites {
+        for site in sites {
+            if site.line == 0 {
+                continue;
+            }
+            let c = site.cap & sink_caps;
+            if c.is_empty() {
+                continue;
+            }
+            if !distinct.contains(&c) {
+                distinct.push(c);
+            }
+        }
+    }
+    distinct
 }
 
 /// Pick primary [`SinkSite`]s for the callback-pattern path, where the

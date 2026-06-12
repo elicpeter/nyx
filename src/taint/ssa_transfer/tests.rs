@@ -3886,3 +3886,95 @@ mod pointer_lattice_worklist_tests {
         assert!(cell.taint.caps.contains(Cap::ENV_VAR));
     }
 }
+
+// ── distinct_summary_sink_caps (multi-sink-per-param de-masking) ─────────
+#[cfg(test)]
+mod distinct_summary_sink_caps_tests {
+    use super::super::distinct_summary_sink_caps;
+    use crate::labels::Cap;
+    use crate::summary::SinkSite;
+    use smallvec::{smallvec, SmallVec};
+
+    fn site(line: u32, cap: Cap) -> SinkSite {
+        SinkSite {
+            file_rel: "Fetcher.java".to_string(),
+            line,
+            col: 9,
+            snippet: String::new(),
+            cap,
+            from_chain: true,
+        }
+    }
+
+    /// One param flowing to two distinct-cap sinks yields two split masks
+    /// (the masking case: SSRF co-located with HEADER_INJECTION).
+    #[test]
+    fn distinct_caps_split_into_per_cap_masks() {
+        let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> = vec![(
+            1usize,
+            smallvec![site(12, Cap::SSRF), site(13, Cap::HEADER_INJECTION)],
+        )];
+        let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF | Cap::HEADER_INJECTION);
+        assert_eq!(out.len(), 2, "two distinct caps => two split passes");
+        assert!(out.contains(&Cap::SSRF));
+        assert!(out.contains(&Cap::HEADER_INJECTION));
+    }
+
+    /// A single-cap summary sink produces one mask, preserving the legacy
+    /// single-pass union behavior (`len() <= 1` keeps the else-branch).
+    #[test]
+    fn single_cap_no_split() {
+        let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> =
+            vec![(0usize, smallvec![site(12, Cap::SSRF)])];
+        let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], Cap::SSRF);
+    }
+
+    /// Repeated identical caps across sites/params dedup to one mask, so a
+    /// param reaching the same cap twice does not over-split.
+    #[test]
+    fn duplicate_caps_dedup() {
+        let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> = vec![
+            (0usize, smallvec![site(12, Cap::SSRF)]),
+            (1usize, smallvec![site(20, Cap::SSRF)]),
+        ];
+        let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF);
+        assert_eq!(out.len(), 1, "same cap at two sites => one mask");
+    }
+
+    /// Each split mask is narrowed to the propagated `sink_caps`: a site
+    /// cap that does not intersect the propagated mask is dropped entirely.
+    #[test]
+    fn caps_narrowed_to_propagated_sink_caps() {
+        let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> = vec![(
+            0usize,
+            smallvec![site(12, Cap::SSRF), site(13, Cap::HEADER_INJECTION)],
+        )];
+        // HEADER_INJECTION was stripped upstream (e.g. type-safe arg) —
+        // only SSRF remains in the propagated mask, so only it splits out.
+        let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF);
+        assert_eq!(out, smallvec![Cap::SSRF] as SmallVec<[Cap; 4]>);
+    }
+
+    /// Cap-only sites (`line == 0`, no resolved coordinates) are skipped:
+    /// they carry no attributable location and must not split off a phantom
+    /// per-cap event.
+    #[test]
+    fn cap_only_sites_skipped() {
+        let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> = vec![(
+            0usize,
+            smallvec![site(12, Cap::SSRF), SinkSite::cap_only(Cap::HEADER_INJECTION)],
+        )];
+        let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF | Cap::HEADER_INJECTION);
+        assert_eq!(out, smallvec![Cap::SSRF] as SmallVec<[Cap; 4]>);
+    }
+
+    /// No sites => empty (single-pass union path retained).
+    #[test]
+    fn empty_sites_empty_result() {
+        let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> = vec![];
+        let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF | Cap::HEADER_INJECTION);
+        assert!(out.is_empty());
+    }
+}
