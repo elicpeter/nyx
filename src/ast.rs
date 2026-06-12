@@ -1170,11 +1170,48 @@ impl<'a> ParsedSource<'a> {
     /// Run AST pattern queries and return diagnostics.
     fn run_ast_queries(&self, cfg: &Config) -> Vec<Diag> {
         let root = self.tree.root_node();
-        let compiled = query_cache::for_lang(self.lang_slug, self.ts_lang.clone());
         let mut cursor = QueryCursor::new();
         let mut out = Vec::new();
         let in_test_file = is_test_file(self.path);
 
+        // Fast path: one combined multi-pattern query walks the AST ONCE for
+        // all rules, instead of the legacy loop's one full tree walk per rule
+        // (`O(rules × nodes)` traversal collapses to `O(nodes)`, and
+        // tree-sitter tests every rule in a single matcher pass). The output is
+        // re-sorted/deduped by `finalize_diags`, so the combined query's
+        // different match emission order is irrelevant — only the diag *set*
+        // matters, and a combined query yields the exact union of the per-rule
+        // matches. `NYX_DISABLE_QUERY_COMBINE=1` forces the legacy loop
+        // (single-binary A/B + fallback when the combined query fails to build).
+        if let Some(cq) = query_cache::combined_for_lang(self.lang_slug, self.ts_lang.clone())
+            .as_ref()
+            .as_ref()
+            .filter(|_| !query_combine_disabled())
+        {
+            let mut matches = cursor.matches(&cq.query, root, self.bytes);
+            while let Some(m) = matches.next() {
+                let slot = &cq.slots[m.pattern_index];
+                if slot.meta.severity > cfg.scanner.min_severity {
+                    continue;
+                }
+                if in_test_file && is_test_suppressible_pattern(slot.meta.id) {
+                    continue;
+                }
+                if let Some(cap) = m
+                    .captures
+                    .iter()
+                    .find(|c| c.index == slot.primary_capture_index)
+                    && let Some(diag) = self.ast_query_diag(&slot.meta, cap.node)
+                {
+                    out.push(diag);
+                }
+            }
+            return out;
+        }
+
+        // Legacy fallback: one `QueryCursor::matches` (one full tree walk) per
+        // rule. Kept as the combined-query fallback and the bit-identity oracle.
+        let compiled = query_cache::for_lang(self.lang_slug, self.ts_lang.clone());
         for cq in compiled.iter() {
             if cq.meta.severity > cfg.scanner.min_severity {
                 continue;
@@ -1185,273 +1222,286 @@ impl<'a> ParsedSource<'a> {
             }
             let mut matches = cursor.matches(&cq.query, root, self.bytes);
             while let Some(m) = matches.next() {
-                if let Some(cap) = m.captures.iter().find(|c| c.index == 0) {
-                    // Layer A: suppress Security findings on calls with all-literal args.
-                    //
-                    // Carve-outs for categories where the literal argument IS
-                    // the bug (algorithm choice, hardcoded secret, insecure
-                    // protocol scheme, unsafe config flag): suppression would
-                    // silence the actual signal.  Hash algorithms picked from
-                    // string literals (`MessageDigest.getInstance("MD5")`,
-                    // `hashlib.md5(b"…")`) are weak regardless of caller-side
-                    // data flow.
-                    if cq.meta.category.finding_category() == FindingCategory::Security
-                        && !matches!(
-                            cq.meta.category,
-                            PatternCategory::Crypto
-                                | PatternCategory::Secrets
-                                | PatternCategory::InsecureConfig
-                                | PatternCategory::InsecureTransport
-                        )
-                        && is_call_all_args_literal(cap.node, self.bytes, self.lang_slug)
-                    {
-                        continue;
-                    }
-                    // Layer B: PHP `include $var` where $var is a formal parameter
-                    // of the immediately enclosing function/method/closure and is
-                    // not reassigned before the include.  This is the canonical
-                    // PHP autoloader / scope-isolated-include shape (composer's
-                    // ClassLoader, PSR-4 loaders, route-file loaders); the
-                    // pattern rule is heuristic without taint and over-fires
-                    // here.  A taint-aware sink check (the engine's
-                    // taint-unsanitised-flow rule) still catches the case where
-                    // a tainted value reaches the parameter at the call site.
-                    if cq.meta.id == "php.path.include_variable"
-                        && self.lang_slug == "php"
-                        && is_php_include_param_passthrough(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer C: PHP `unserialize($x, ['allowed_classes' => [...]])`
-                    // or `unserialize($x, ['allowed_classes' => false])` ,
-                    // PHP 7+ structural mitigation against object injection.
-                    // When the call passes an `allowed_classes` option set to
-                    // either `false` (no class instantiation) or an array
-                    // literal of explicit class names, the deserialised data
-                    // cannot construct arbitrary user classes.  Skip
-                    // `allowed_classes => true` (the unsafe default) and
-                    // dynamic / variable values (let those fire).
-                    if cq.meta.id == "php.deser.unserialize"
-                        && self.lang_slug == "php"
-                        && is_php_unserialize_allowed_classes_restricted(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer C2: PHP `Serializable::unserialize($input)` magic
-                    // method body — `public function unserialize($x) { ...
-                    // unserialize($x) ... }`.  This is the legacy
-                    // `Serializable` interface contract (deprecated since PHP
-                    // 8.1).  PHP itself invokes the method when restoring an
-                    // instance, so the body's `\unserialize($x)` call cannot
-                    // be removed without breaking the interface.  The
-                    // actionable signal is at the class level (the class
-                    // implements Serializable — fix is to migrate to
-                    // `__serialize` / `__unserialize`), not at this call
-                    // site.  Genuine deserialization sinks (free-function
-                    // `unserialize($_GET[..])`, helpers reading from session
-                    // / cache, etc.) keep firing because they are not inside
-                    // a method declaration named `unserialize` with a single
-                    // formal parameter passed straight to the call.
-                    if cq.meta.id == "php.deser.unserialize"
-                        && self.lang_slug == "php"
-                        && is_php_unserialize_magic_method_passthrough(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer C3: PHP `unserialize($x)` inside a PHPUnit
-                    // assertion of the form
-                    // `$this->assertSame(LITERAL, unserialize($x))`
-                    // (or `assertEquals` / `assertNull` / static / self
-                    // / parent dispatch variants).  The literal expected
-                    // value bounds the unserialize result so the
-                    // call-site cannot release attacker-controlled
-                    // object graphs into the test process — failed
-                    // assertions abort the test rather than leak side
-                    // effects.  Drupal / Joomla / Nextcloud each carry
-                    // tens of these `Serializable` round-trip
-                    // assertions in their test trees and every firing
-                    // is noise.
-                    if cq.meta.id == "php.deser.unserialize"
-                        && self.lang_slug == "php"
-                        && is_php_unserialize_inside_phpunit_assertion(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer C4: Python `pickle.loads` / `yaml.load` /
-                    // `shelve.open` / kindred deserialization sinks
-                    // wrapped in a `unittest.TestCase` assertion whose
-                    // other argument is a literal expected value (or
-                    // whose verb itself constrains the result, e.g.
-                    // `assertIsNone(pickle.loads(blob))`).  The
-                    // assertion bounds the deser result so attacker-
-                    // controlled blobs would fail loudly rather than
-                    // leak side effects out of the test boundary.
-                    // Mirrors the PHP Layer C3 recogniser; deferred
-                    // note in `project_realrepo_*.md` flagged the same
-                    // FP shape on Python test trees.
-                    if matches!(
-                        cq.meta.id,
-                        "py.deser.pickle_loads" | "py.deser.yaml_load" | "py.deser.shelve_open"
-                    ) && self.lang_slug == "python"
-                        && is_python_deser_inside_unittest_assertion(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer C5: Ruby `Marshal.load` / `YAML.load` /
-                    // `Psych.load` wrapped in a Minitest assertion
-                    // (`assert_equal LIT, deser`, `assert_nil deser`,
-                    // `assert deser`, `refute_equal LIT, deser`, ...) or
-                    // an RSpec matcher chain (`expect(deser).to eq(LIT)`,
-                    // `expect(deser).to be_nil`, `be_a(TYPE)`, ...).
-                    // Same bounding semantics as the PHP / Python paths:
-                    // a poisoned blob fails the assertion loudly rather
-                    // than leak object-injection side effects out of
-                    // the test boundary.
-                    if matches!(cq.meta.id, "rb.deser.marshal_load" | "rb.deser.yaml_load")
-                        && self.lang_slug == "ruby"
-                        && is_ruby_deser_inside_test_assertion(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer D: C/C++ buffer-overflow pattern rules
-                    // (`{c,cpp}.memory.strcpy`, `strcat`, `sprintf`) fire
-                    // syntactically on every call regardless of argument
-                    // bounds.  The pattern's stated danger ("no bounds
-                    // checking on destination buffer" / "no length limit on
-                    // output buffer") is only realisable when the source /
-                    // format-string contributes attacker-controlled length.
-                    // When the source argument is a string literal (or a
-                    // ternary of two string literals), the contributed length
-                    // is statically bounded, there is no overflow vector
-                    // for an attacker even if the destination buffer is
-                    // mis-sized.  Same principle for `sprintf` when the
-                    // format string is a literal containing no bare `%s`
-                    // (only width-bounded numeric / char specifiers, or
-                    // precision-bounded `%.<N>s` / `%.*s`).
-                    if (self.lang_slug == "c" || self.lang_slug == "cpp")
-                        && is_c_buffer_call_literal_safe(cq.meta.id, cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer E: C++ `reinterpret_cast<T>(x)` when T is a
-                    // type explicitly defined as safe by the C++ aliasing
-                    // rules — byte-pointer family (`char*`, `unsigned
-                    // char*`, `uint8_t*`, `std::byte*`, etc., per
-                    // [basic.lval]/11), `void*`, the integer round-trip
-                    // types `uintptr_t` / `intptr_t`, and the BSD-socket
-                    // `sockaddr` family (POSIX intentionally type-puns
-                    // `sockaddr*` <-> `sockaddr_in*` etc.).  A pattern
-                    // rule cannot tell these from genuinely dangerous
-                    // strict-aliasing UB casts, so it over-fires
-                    // dramatically on serialization, hashing, and
-                    // socket-API code where the cast is the canonical
-                    // (and standard-blessed) idiom.
-                    if self.lang_slug == "cpp"
-                        && is_cpp_cast_target_type_safe(cq.meta.id, cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer F: PHP `md5()` / `sha1()` flagged as weak hash
-                    // functions, but used in a non-cryptographic context
-                    // (ETag generation, cache-key / array-index hashing,
-                    // identifier fingerprinting, deduplication).  The
-                    // pattern rule cannot distinguish weak-hash crypto
-                    // misuse from these idiomatic uses, so it over-fires
-                    // on every `md5(...)` callsite regardless of the
-                    // surrounding consuming context.  Suppress when the
-                    // call's *consuming context* yields a name that
-                    // matches a recognised non-cryptographic identifier
-                    // pattern (variable / field / array-key / method
-                    // suffix).  Genuine weak-hash crypto misuse —
-                    // `$password_hash = md5(...)`, `$signature = md5(...)`,
-                    // `$tokenHash = md5(...)` — keeps firing because the
-                    // name contains an excluded crypto-keyword substring.
-                    if (cq.meta.id == "php.crypto.md5" || cq.meta.id == "php.crypto.sha1")
-                        && self.lang_slug == "php"
-                        && is_php_weak_hash_non_crypto_use(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer G: Python `<env>.from_string(...)` where `<env>` is a
-                    // Jinja2 *sandboxed* environment
-                    // (`jinja2.sandbox.SandboxedEnvironment` /
-                    // `ImmutableSandboxedEnvironment`).  The `py.xss.jinja_from_string`
-                    // pattern fires syntactically on every `.from_string(...)` call,
-                    // but the sandbox blocks the attribute-traversal payloads
-                    // (`{{ ...__globals__.__builtins__... }}`) that make an
-                    // *unrestricted* `Environment` a template-injection-to-RCE sink.
-                    // Rendering untrusted input through a sandbox is the canonical
-                    // remediation (CVE-2024-32651 changedetection.io fix routes
-                    // notification bodies through
-                    // `ImmutableSandboxedEnvironment(...).from_string(...)`), so a
-                    // sandboxed receiver here is a false positive.  Plain
-                    // `Environment(loader=BaseLoader).from_string(x)` keeps firing.
-                    if cq.meta.id == "py.xss.jinja_from_string"
-                        && self.lang_slug == "python"
-                        && is_python_sandboxed_jinja_from_string(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer H: PHP `assert()` flagged as string-eval code
-                    // execution, but the matched string is the *description*
-                    // (second) argument of the modern PHP 7.2+
-                    // `assert(bool_expr, "message")` form — which PHP never
-                    // evaluates.  The query matches a `(string)` in any
-                    // argument slot, so it over-fires on the two-argument
-                    // form's description string (pervasive in PHPUnit / atoum
-                    // test suites).  Suppress unless the call's FIRST argument
-                    // is itself a string literal — the genuinely dangerous
-                    // `assert("code")` shape the rule targets.
-                    if cq.meta.id == "php.code_exec.assert_string"
-                        && self.lang_slug == "php"
-                        && !is_php_assert_string_first_arg(cap.node)
-                    {
-                        continue;
-                    }
-                    let point = cap.node.start_position();
-                    out.push(Diag {
-                        path: self.path.to_string_lossy().into_owned(),
-                        line: point.row + 1,
-                        col: point.column + 1,
-                        severity: cq.meta.severity,
-                        id: cq.meta.id.to_owned(),
-                        category: cq.meta.category.finding_category(),
-                        path_validated: false,
-                        guard_kind: None,
-                        message: Some(cq.meta.description.to_owned()),
-                        labels: vec![],
-                        confidence: Some(cq.meta.confidence),
-                        evidence: Some(Evidence {
-                            source: None,
-                            sink: Some(SpanEvidence {
-                                path: self.path.to_string_lossy().into_owned(),
-                                line: (point.row + 1) as u32,
-                                col: (point.column + 1) as u32,
-                                kind: "sink".into(),
-                                snippet: None,
-                            }),
-                            guards: vec![],
-                            sanitizers: vec![],
-                            state: None,
-                            notes: vec![],
-                            ..Default::default()
-                        }),
-                        rank_score: None,
-                        rank_reason: None,
-                        exposure: None,
-                        suppressed: false,
-                        suppression: None,
-                        triage_state: "open".to_string(),
-                        triage_note: String::new(),
-                        rollup: None,
-                        finding_id: String::new(),
-                        alternative_finding_ids: Vec::new(),
-                        stable_hash: 0,
-                    });
+                if let Some(cap) = m.captures.iter().find(|c| c.index == 0)
+                    && let Some(diag) = self.ast_query_diag(&cq.meta, cap.node)
+                {
+                    out.push(diag);
                 }
             }
         }
         out
+    }
+
+    /// Apply the Layer A–H suppression recognisers to one pattern match and,
+    /// when it survives, build the [`Diag`]. `meta` is the matched rule's
+    /// metadata; `cap_node` is the rule's primary capture node — the legacy
+    /// `c.index == 0` anchor — used both by the recognisers (which walk up to
+    /// the enclosing call) and as the finding span position. Returns `None`
+    /// when a recogniser suppresses the match. Shared verbatim by the
+    /// combined-query fast path and the legacy per-rule loop so they cannot drift.
+    fn ast_query_diag(&self, meta: &crate::patterns::Pattern, cap_node: tree_sitter::Node) -> Option<Diag> {
+        // Layer A: suppress Security findings on calls with all-literal args.
+        //
+        // Carve-outs for categories where the literal argument IS
+        // the bug (algorithm choice, hardcoded secret, insecure
+        // protocol scheme, unsafe config flag): suppression would
+        // silence the actual signal.  Hash algorithms picked from
+        // string literals (`MessageDigest.getInstance("MD5")`,
+        // `hashlib.md5(b"…")`) are weak regardless of caller-side
+        // data flow.
+        if meta.category.finding_category() == FindingCategory::Security
+            && !matches!(
+                meta.category,
+                PatternCategory::Crypto
+                    | PatternCategory::Secrets
+                    | PatternCategory::InsecureConfig
+                    | PatternCategory::InsecureTransport
+            )
+            && is_call_all_args_literal(cap_node, self.bytes, self.lang_slug)
+        {
+            return None;
+        }
+        // Layer B: PHP `include $var` where $var is a formal parameter
+        // of the immediately enclosing function/method/closure and is
+        // not reassigned before the include.  This is the canonical
+        // PHP autoloader / scope-isolated-include shape (composer's
+        // ClassLoader, PSR-4 loaders, route-file loaders); the
+        // pattern rule is heuristic without taint and over-fires
+        // here.  A taint-aware sink check (the engine's
+        // taint-unsanitised-flow rule) still catches the case where
+        // a tainted value reaches the parameter at the call site.
+        if meta.id == "php.path.include_variable"
+            && self.lang_slug == "php"
+            && is_php_include_param_passthrough(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer C: PHP `unserialize($x, ['allowed_classes' => [...]])`
+        // or `unserialize($x, ['allowed_classes' => false])` ,
+        // PHP 7+ structural mitigation against object injection.
+        // When the call passes an `allowed_classes` option set to
+        // either `false` (no class instantiation) or an array
+        // literal of explicit class names, the deserialised data
+        // cannot construct arbitrary user classes.  Skip
+        // `allowed_classes => true` (the unsafe default) and
+        // dynamic / variable values (let those fire).
+        if meta.id == "php.deser.unserialize"
+            && self.lang_slug == "php"
+            && is_php_unserialize_allowed_classes_restricted(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer C2: PHP `Serializable::unserialize($input)` magic
+        // method body — `public function unserialize($x) { ...
+        // unserialize($x) ... }`.  This is the legacy
+        // `Serializable` interface contract (deprecated since PHP
+        // 8.1).  PHP itself invokes the method when restoring an
+        // instance, so the body's `\unserialize($x)` call cannot
+        // be removed without breaking the interface.  The
+        // actionable signal is at the class level (the class
+        // implements Serializable — fix is to migrate to
+        // `__serialize` / `__unserialize`), not at this call
+        // site.  Genuine deserialization sinks (free-function
+        // `unserialize($_GET[..])`, helpers reading from session
+        // / cache, etc.) keep firing because they are not inside
+        // a method declaration named `unserialize` with a single
+        // formal parameter passed straight to the call.
+        if meta.id == "php.deser.unserialize"
+            && self.lang_slug == "php"
+            && is_php_unserialize_magic_method_passthrough(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer C3: PHP `unserialize($x)` inside a PHPUnit
+        // assertion of the form
+        // `$this->assertSame(LITERAL, unserialize($x))`
+        // (or `assertEquals` / `assertNull` / static / self
+        // / parent dispatch variants).  The literal expected
+        // value bounds the unserialize result so the
+        // call-site cannot release attacker-controlled
+        // object graphs into the test process — failed
+        // assertions abort the test rather than leak side
+        // effects.  Drupal / Joomla / Nextcloud each carry
+        // tens of these `Serializable` round-trip
+        // assertions in their test trees and every firing
+        // is noise.
+        if meta.id == "php.deser.unserialize"
+            && self.lang_slug == "php"
+            && is_php_unserialize_inside_phpunit_assertion(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer C4: Python `pickle.loads` / `yaml.load` /
+        // `shelve.open` / kindred deserialization sinks
+        // wrapped in a `unittest.TestCase` assertion whose
+        // other argument is a literal expected value (or
+        // whose verb itself constrains the result, e.g.
+        // `assertIsNone(pickle.loads(blob))`).  The
+        // assertion bounds the deser result so attacker-
+        // controlled blobs would fail loudly rather than
+        // leak side effects out of the test boundary.
+        // Mirrors the PHP Layer C3 recogniser; deferred
+        // note in `project_realrepo_*.md` flagged the same
+        // FP shape on Python test trees.
+        if matches!(
+            meta.id,
+            "py.deser.pickle_loads" | "py.deser.yaml_load" | "py.deser.shelve_open"
+        ) && self.lang_slug == "python"
+            && is_python_deser_inside_unittest_assertion(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer C5: Ruby `Marshal.load` / `YAML.load` /
+        // `Psych.load` wrapped in a Minitest assertion
+        // (`assert_equal LIT, deser`, `assert_nil deser`,
+        // `assert deser`, `refute_equal LIT, deser`, ...) or
+        // an RSpec matcher chain (`expect(deser).to eq(LIT)`,
+        // `expect(deser).to be_nil`, `be_a(TYPE)`, ...).
+        // Same bounding semantics as the PHP / Python paths:
+        // a poisoned blob fails the assertion loudly rather
+        // than leak object-injection side effects out of
+        // the test boundary.
+        if matches!(meta.id, "rb.deser.marshal_load" | "rb.deser.yaml_load")
+            && self.lang_slug == "ruby"
+            && is_ruby_deser_inside_test_assertion(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer D: C/C++ buffer-overflow pattern rules
+        // (`{c,cpp}.memory.strcpy`, `strcat`, `sprintf`) fire
+        // syntactically on every call regardless of argument
+        // bounds.  The pattern's stated danger ("no bounds
+        // checking on destination buffer" / "no length limit on
+        // output buffer") is only realisable when the source /
+        // format-string contributes attacker-controlled length.
+        // When the source argument is a string literal (or a
+        // ternary of two string literals), the contributed length
+        // is statically bounded, there is no overflow vector
+        // for an attacker even if the destination buffer is
+        // mis-sized.  Same principle for `sprintf` when the
+        // format string is a literal containing no bare `%s`
+        // (only width-bounded numeric / char specifiers, or
+        // precision-bounded `%.<N>s` / `%.*s`).
+        if (self.lang_slug == "c" || self.lang_slug == "cpp")
+            && is_c_buffer_call_literal_safe(meta.id, cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer E: C++ `reinterpret_cast<T>(x)` when T is a
+        // type explicitly defined as safe by the C++ aliasing
+        // rules — byte-pointer family (`char*`, `unsigned
+        // char*`, `uint8_t*`, `std::byte*`, etc., per
+        // [basic.lval]/11), `void*`, the integer round-trip
+        // types `uintptr_t` / `intptr_t`, and the BSD-socket
+        // `sockaddr` family (POSIX intentionally type-puns
+        // `sockaddr*` <-> `sockaddr_in*` etc.).  A pattern
+        // rule cannot tell these from genuinely dangerous
+        // strict-aliasing UB casts, so it over-fires
+        // dramatically on serialization, hashing, and
+        // socket-API code where the cast is the canonical
+        // (and standard-blessed) idiom.
+        if self.lang_slug == "cpp"
+            && is_cpp_cast_target_type_safe(meta.id, cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer F: PHP `md5()` / `sha1()` flagged as weak hash
+        // functions, but used in a non-cryptographic context
+        // (ETag generation, cache-key / array-index hashing,
+        // identifier fingerprinting, deduplication).  The
+        // pattern rule cannot distinguish weak-hash crypto
+        // misuse from these idiomatic uses, so it over-fires
+        // on every `md5(...)` callsite regardless of the
+        // surrounding consuming context.  Suppress when the
+        // call's *consuming context* yields a name that
+        // matches a recognised non-cryptographic identifier
+        // pattern (variable / field / array-key / method
+        // suffix).  Genuine weak-hash crypto misuse —
+        // `$password_hash = md5(...)`, `$signature = md5(...)`,
+        // `$tokenHash = md5(...)` — keeps firing because the
+        // name contains an excluded crypto-keyword substring.
+        if (meta.id == "php.crypto.md5" || meta.id == "php.crypto.sha1")
+            && self.lang_slug == "php"
+            && is_php_weak_hash_non_crypto_use(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer G: Python `<env>.from_string(...)` where `<env>` is a
+        // Jinja2 *sandboxed* environment
+        // (`jinja2.sandbox.SandboxedEnvironment` /
+        // `ImmutableSandboxedEnvironment`).  The `py.xss.jinja_from_string`
+        // pattern fires syntactically on every `.from_string(...)` call,
+        // but the sandbox blocks the attribute-traversal payloads
+        // (`{{ ...__globals__.__builtins__... }}`) that make an
+        // *unrestricted* `Environment` a template-injection-to-RCE sink.
+        // Rendering untrusted input through a sandbox is the canonical
+        // remediation (CVE-2024-32651 changedetection.io fix routes
+        // notification bodies through
+        // `ImmutableSandboxedEnvironment(...).from_string(...)`), so a
+        // sandboxed receiver here is a false positive.  Plain
+        // `Environment(loader=BaseLoader).from_string(x)` keeps firing.
+        if meta.id == "py.xss.jinja_from_string"
+            && self.lang_slug == "python"
+            && is_python_sandboxed_jinja_from_string(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer H: PHP `assert()` flagged as string-eval code
+        // execution, but the matched string is the *description*
+        // (second) argument of the modern PHP 7.2+
+        // `assert(bool_expr, "message")` form — which PHP never
+        // evaluates.  The query matches a `(string)` in any
+        // argument slot, so it over-fires on the two-argument
+        // form's description string (pervasive in PHPUnit / atoum
+        // test suites).  Suppress unless the call's FIRST argument
+        // is itself a string literal — the genuinely dangerous
+        // `assert("code")` shape the rule targets.
+        if meta.id == "php.code_exec.assert_string"
+            && self.lang_slug == "php"
+            && !is_php_assert_string_first_arg(cap_node)
+        {
+            return None;
+        }
+        let point = cap_node.start_position();
+        Some(Diag {
+            path: self.path.to_string_lossy().into_owned(),
+            line: point.row + 1,
+            col: point.column + 1,
+            severity: meta.severity,
+            id: meta.id.to_owned(),
+            category: meta.category.finding_category(),
+            path_validated: false,
+            guard_kind: None,
+            message: Some(meta.description.to_owned()),
+            labels: vec![],
+            confidence: Some(meta.confidence),
+            evidence: Some(Evidence {
+                source: None,
+                sink: Some(SpanEvidence {
+                    path: self.path.to_string_lossy().into_owned(),
+                    line: (point.row + 1) as u32,
+                    col: (point.column + 1) as u32,
+                    kind: "sink".into(),
+                    snippet: None,
+                }),
+                guards: vec![],
+                sanitizers: vec![],
+                state: None,
+                notes: vec![],
+                ..Default::default()
+            }),
+            rank_score: None,
+            rank_reason: None,
+            exposure: None,
+            suppressed: false,
+            suppression: None,
+            triage_state: "open".to_string(),
+            triage_note: String::new(),
+            rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
+            stable_hash: 0,
+        })
     }
 
     /// Sort, dedup, and optionally downgrade severity for non-production paths.
@@ -2329,6 +2379,21 @@ pub fn build_cfg_for_file(path: &Path, cfg: &Config) -> NyxResult<Option<(FileCf
     Ok(Some((parsed.file_cfg, lang)))
 }
 
+/// Benchmark/test hook: parse `bytes` and run **only** the AST pattern-query
+/// pass ([`ParsedSource::run_ast_queries`]), returning the produced diags.
+///
+/// Isolates the query pass — the combined-vs-legacy traversal switchable via
+/// `NYX_DISABLE_QUERY_COMBINE` — from the rest of the per-file pipeline so a
+/// criterion bench can measure it directly. Returns an empty vec for binary
+/// files / unsupported languages.
+#[doc(hidden)]
+pub fn bench_run_ast_queries(bytes: &[u8], path: &Path, cfg: &Config) -> Vec<Diag> {
+    match ParsedSource::try_new(bytes, path) {
+        Ok(Some(source)) => source.run_ast_queries(cfg),
+        _ => Vec::new(),
+    }
+}
+
 /// Parse a file and return its `AuthorizationModel` for debug inspection.
 ///
 /// Runs only the auth-extraction pipeline, no taint, no CFG construction.
@@ -2565,6 +2630,19 @@ pub fn extract_all_summaries_from_bytes(
 }
 
 //  Constant-argument suppression helper
+
+/// `NYX_DISABLE_QUERY_COMBINE=1` (or `true`) forces `run_ast_queries` onto the
+/// legacy one-query-per-rule loop, for single-binary A/B of the combined-query
+/// fast path. Cached: the env is read once per process.
+fn query_combine_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("NYX_DISABLE_QUERY_COMBINE")
+            .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "on"))
+            .unwrap_or(false)
+    })
+}
 
 /// Returns `true` when the captured call node has only literal arguments
 /// (string, number, boolean, null/nil/none), or identifier arguments that

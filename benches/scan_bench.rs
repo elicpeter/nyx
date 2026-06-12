@@ -536,6 +536,34 @@ fn bench_taint_cond_revisit_go(c: &mut Criterion) {
     });
 }
 
+/// AST pattern-query pass throughput on the large gin Go module.
+///
+/// Targets `ParsedSource::run_ast_queries` (via the `bench_run_ast_queries`
+/// hook), isolating it from the rest of the per-file pipeline. Pre-fix the
+/// pass issued one `QueryCursor::matches` — i.e. one full tree walk — per rule
+/// (Go: 8 rules, JS/TS: 23), so traversal cost was `O(rules × nodes)`. The
+/// combined multi-pattern query walks the AST once and tests every rule in a
+/// single matcher pass (`O(nodes)`); on the mm/channels/app profile
+/// `run_ast_queries` was the single biggest active nyx self-time bucket
+/// (tree-sitter-cursor work). A/B the two paths on one binary via
+/// `NYX_DISABLE_QUERY_COMBINE=1 … --save-baseline legacy` then `… --baseline
+/// legacy`. A regression that reverts to per-rule walks surfaces here
+/// proportional to the rule count.
+fn bench_ast_queries_large_go(c: &mut Criterion) {
+    let fixture = Path::new("benches/perf_fixtures/large_go_module.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let bytes = std::fs::read(&fixture).expect("read fixture");
+    let cfg = Config::default();
+
+    // Warm the per-language combined-query cache before timing.
+    let _ = nyx_scanner::ast::bench_run_ast_queries(&bytes, &fixture, &cfg);
+
+    c.bench_function("ast_queries_large_go", |b| {
+        b.iter(|| nyx_scanner::ast::bench_run_ast_queries(&bytes, &fixture, &cfg).len());
+    });
+}
+
 criterion_group!(
     benches,
     bench_ast_only_scan,
@@ -553,5 +581,6 @@ criterion_group!(
     bench_taint_callee_resolve_stress_go,
     bench_taint_branch_stress_go,
     bench_taint_cond_revisit_go,
+    bench_ast_queries_large_go,
 );
 criterion_main!(benches);
