@@ -11143,6 +11143,124 @@ fn split_qualifier(raw: &str) -> (Option<&str>, Option<&str>) {
     (None, None)
 }
 
+/// Per-file index of `local_summaries` keyed by function leaf name.
+///
+/// `resolve_callee_full` resolves the callee string of *every* `Call`
+/// instruction against `local_summaries` (the file's
+/// [`FuncSummaries`]).  The historical resolvers
+/// ([`caller_container_for`], [`resolve_local_func_key_query`],
+/// [`resolve_local_func_key`], and the ambiguity probe in
+/// [`resolve_callee_full`]) each did a *full linear scan* over
+/// `local_summaries.keys()` filtering by `(name, lang)`.  With `C`
+/// call-sites and `F` functions per file that is `O(C·F)` ≈ `O(F²)`
+/// per file, and it runs once for *every* taint pass (summary
+/// extraction, the main analysis, child-sink augmentation — ~5×/body).
+/// On large source files (hundreds of methods per class) the quadratic
+/// dominates callee resolution.
+///
+/// This index is built once per file from the same `local_summaries`
+/// and turns each lookup into an `O(1)` hash probe returning the
+/// handful of same-leaf-name candidates.  The single biggest payoff is
+/// the *no-match* case (the common one — most callees are external /
+/// stdlib functions with no local definition): the linear scan visited
+/// all `F` keys to discover "no candidate", whereas the index answers
+/// in `O(1)`.
+///
+/// Keyed by owned name `String` (not a borrow) so the index is a plain
+/// owned value with no lifetime, published for the duration of a file's
+/// taint passes via the [`with_local_name_index`] scoped guard (mirrors
+/// the [`crate::ssa::type_facts::with_file_imports`] /
+/// [`crate::cfg::safe_fields::with_safe_lookup_fields`] idiom).  When no
+/// index is published the resolvers fall back to the original linear
+/// scan, so behaviour is identical for unit tests / probes that analyse
+/// a synthetic body without a published index.
+pub(crate) struct FuncNameIndex {
+    by_name: rustc_hash::FxHashMap<String, SmallVec<[FuncKey; 2]>>,
+}
+
+impl FuncNameIndex {
+    /// Build the index from a file's `local_summaries`.  `O(F)` clones of
+    /// `FuncKey` (3 `String`s each), paid once per file in exchange for
+    /// removing the per-call-site `O(F)` scan.
+    pub(crate) fn build(local_summaries: &FuncSummaries) -> Self {
+        let mut by_name: rustc_hash::FxHashMap<String, SmallVec<[FuncKey; 2]>> =
+            rustc_hash::FxHashMap::default();
+        for k in local_summaries.keys() {
+            by_name.entry(k.name.clone()).or_default().push(k.clone());
+        }
+        FuncNameIndex { by_name }
+    }
+}
+
+thread_local! {
+    /// Per-file `local_summaries` name index published by
+    /// [`with_local_name_index`] around the taint passes that drive
+    /// callee resolution.  `None` outside a published scope, in which
+    /// case the resolvers use their linear-scan fallback.
+    static LOCAL_NAME_INDEX_TLS: RefCell<Option<FuncNameIndex>> = const { RefCell::new(None) };
+}
+
+/// RAII guard that publishes a [`FuncNameIndex`] as the per-thread
+/// callee-resolution view for the lifetime of the guard, restoring the
+/// prior value on drop so nested publications compose (e.g.
+/// `lower_all_functions_from_bodies` then `analyse_file_with_lowered`
+/// both publish their own index over the same file).
+///
+/// Use at the top of a file-scoped taint entry point:
+/// `let _idx = LocalNameIndexGuard::publish(FuncNameIndex::build(local_summaries));`
+pub(crate) struct LocalNameIndexGuard(Option<FuncNameIndex>);
+
+impl LocalNameIndexGuard {
+    pub(crate) fn publish(index: FuncNameIndex) -> Self {
+        // Escape hatch: `NYX_DISABLE_NAME_INDEX=1` suppresses publication so
+        // the resolvers fall back to the linear `local_summaries.keys()`
+        // scan.  Used to A/B the indexed vs linear path from a single binary
+        // (criterion baseline, differential-correctness check) and as a
+        // safety toggle.  Cached so the env read is paid once per process.
+        static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let disabled = *DISABLED.get_or_init(|| {
+            std::env::var("NYX_DISABLE_NAME_INDEX")
+                .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(false)
+        });
+        if disabled {
+            return LocalNameIndexGuard(None);
+        }
+        let prev = LOCAL_NAME_INDEX_TLS.with(|cell| cell.borrow_mut().replace(index));
+        LocalNameIndexGuard(prev)
+    }
+}
+
+impl Drop for LocalNameIndexGuard {
+    fn drop(&mut self) {
+        LOCAL_NAME_INDEX_TLS.with(|cell| *cell.borrow_mut() = self.0.take());
+    }
+}
+
+/// Lang-matched local `FuncKey` candidates for `name` when a per-file
+/// index is published.
+///
+/// * `Some(keys)` — an index is active; `keys` is the (possibly empty)
+///   exact candidate set the linear scan would have produced.  An empty
+///   result is authoritative: there is no local definition of `name`.
+/// * `None` — no index is published; the caller must fall back to its
+///   own `local_summaries.keys().filter(...)` scan to preserve behaviour.
+fn indexed_local_candidates(name: &str, lang: Lang) -> Option<SmallVec<[FuncKey; 2]>> {
+    LOCAL_NAME_INDEX_TLS.with(|cell| {
+        let borrowed = cell.borrow();
+        let index = borrowed.as_ref()?;
+        let mut out: SmallVec<[FuncKey; 2]> = SmallVec::new();
+        if let Some(keys) = index.by_name.get(name) {
+            for k in keys {
+                if k.lang == lang {
+                    out.push(k.clone());
+                }
+            }
+        }
+        Some(out)
+    })
+}
+
 /// Look up the caller's own container by matching its name in
 /// `local_summaries`.  Used so bare self-calls (`foo()` inside a class
 /// method) prefer same-class candidates over free functions.
@@ -11150,13 +11268,21 @@ fn caller_container_for(transfer: &SsaTaintTransfer, caller_func: &str) -> Optio
     if caller_func.is_empty() {
         return None;
     }
-    let mut containers: Vec<&str> = transfer
-        .local_summaries
-        .keys()
-        .filter(|k| k.lang == transfer.lang && k.name == caller_func)
-        .map(|k| k.container.as_str())
-        .filter(|c| !c.is_empty())
-        .collect();
+    let indexed = indexed_local_candidates(caller_func, transfer.lang);
+    let mut containers: Vec<&str> = match &indexed {
+        Some(keys) => keys
+            .iter()
+            .map(|k| k.container.as_str())
+            .filter(|c| !c.is_empty())
+            .collect(),
+        None => transfer
+            .local_summaries
+            .keys()
+            .filter(|k| k.lang == transfer.lang && k.name == caller_func)
+            .map(|k| k.container.as_str())
+            .filter(|c| !c.is_empty())
+            .collect(),
+    };
     containers.sort();
     containers.dedup();
     if containers.len() == 1 {
@@ -11176,10 +11302,16 @@ pub(crate) fn resolve_local_func_key_query(
     local_summaries: &FuncSummaries,
     q: &CalleeQuery<'_>,
 ) -> Option<FuncKey> {
-    let all: Vec<&FuncKey> = local_summaries
-        .keys()
-        .filter(|k| k.name == q.name && k.lang == q.caller_lang)
-        .collect();
+    // Prefer the per-file name index (O(1) probe); fall back to the
+    // linear scan when no index is published (unit-test / probe paths).
+    let indexed = indexed_local_candidates(q.name, q.caller_lang);
+    let all: Vec<&FuncKey> = match &indexed {
+        Some(keys) => keys.iter().collect(),
+        None => local_summaries
+            .keys()
+            .filter(|k| k.name == q.name && k.lang == q.caller_lang)
+            .collect(),
+    };
     if all.is_empty() {
         return None;
     }
@@ -11269,10 +11401,14 @@ pub(crate) fn resolve_local_func_key(
     // `local_summaries` is file-local; every entry shares the same namespace
     // (raw file path from `build_cfg`). We do not filter by namespace here so
     // callers can pass whichever form they have (raw or normalized).
-    let mut candidates: Vec<&FuncKey> = local_summaries
-        .keys()
-        .filter(|k| k.name == leaf_name && k.lang == lang)
-        .collect();
+    let indexed = indexed_local_candidates(leaf_name, lang);
+    let mut candidates: Vec<&FuncKey> = match &indexed {
+        Some(keys) => keys.iter().collect(),
+        None => local_summaries
+            .keys()
+            .filter(|k| k.name == leaf_name && k.lang == lang)
+            .collect(),
+    };
     if candidates.is_empty() {
         return None;
     }
@@ -11839,12 +11975,15 @@ fn resolve_callee_full(
         // Multiple same-name local candidates with no disambiguating
         // container hint: refuse to pick one rather than fall through to a
         // less precise global summary that might be the wrong definition.
-        let ambiguous_local = transfer
-            .local_summaries
-            .keys()
-            .filter(|k| k.name == normalized && k.lang == transfer.lang)
-            .count()
-            > 1;
+        let ambiguous_local = match indexed_local_candidates(normalized, transfer.lang) {
+            Some(keys) => keys.len() > 1,
+            None => transfer
+                .local_summaries
+                .keys()
+                .filter(|k| k.name == normalized && k.lang == transfer.lang)
+                .count()
+                > 1,
+        };
         if ambiguous_local {
             return None;
         }

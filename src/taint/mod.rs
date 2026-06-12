@@ -614,6 +614,13 @@ fn analyse_file_with_lowered_inner(
     // `analyse_file_fused` (which lowers up-front) reset the set before
     // their lowering call.
 
+    // Publish the per-file callee-resolution name index for the main
+    // pass-2 analysis (mirrors the one published during the lowering
+    // pre-pass).  O(F) scans in `resolve_callee_full` → O(1) probes.
+    let _name_index = ssa_transfer::LocalNameIndexGuard::publish(
+        ssa_transfer::FuncNameIndex::build(local_summaries),
+    );
+
     let ssa_sums_ref = if ssa_summaries.is_empty() {
         None
     } else {
@@ -2156,6 +2163,14 @@ fn lower_all_functions_from_bodies_inner(
     std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
     std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
 ) {
+    // Publish the per-file callee-resolution name index for the duration
+    // of every per-function summary-extraction + child-augmentation taint
+    // pass below.  Turns the O(F) `local_summaries.keys()` scans inside
+    // `resolve_callee_full` into O(1) probes (see [`ssa_transfer::FuncNameIndex`]).
+    let _name_index = ssa_transfer::LocalNameIndexGuard::publish(
+        ssa_transfer::FuncNameIndex::build(local_summaries),
+    );
+
     let mut summaries = std::collections::HashMap::new();
     let mut bodies = std::collections::HashMap::new();
 

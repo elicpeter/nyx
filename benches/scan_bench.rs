@@ -433,6 +433,38 @@ fn bench_global_summaries_lookup_same_lang_go(c: &mut Criterion) {
     });
 }
 
+/// Callee-resolution throughput on a high-function-count, high-call-density
+/// Go file (`callee_resolve_stress.go`: ~400 functions, ~1680 intra-file
+/// call sites).  Guards the per-file [`FuncNameIndex`] that replaced the
+/// linear `local_summaries.keys()` scans inside `resolve_callee_full`
+/// (`caller_container_for`, `resolve_local_func_key_query`,
+/// `resolve_local_func_key`, and the ambiguity probe).  Before the index
+/// each of the ~1680 call-site resolutions scanned all ~400 functions
+/// (`O(C·F)` ≈ `O(F²)` per file, run once per taint pass — summary
+/// extraction, the main analysis, child-sink augmentation).  A regression
+/// that reintroduces the linear scan surfaces here as a large slowdown
+/// that grows quadratically with the fixture's function count.
+fn bench_taint_callee_resolve_stress_go(c: &mut Criterion) {
+    let fixture = Path::new("benches/perf_fixtures/callee_resolve_stress.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let bytes = std::fs::read(&fixture).expect("read fixture");
+    let mut cfg = Config::default();
+    cfg.scanner.mode = AnalysisMode::Full;
+    cfg.scanner.enable_state_analysis = true;
+    cfg.performance.worker_threads = Some(1);
+
+    let _ = nyx_scanner::ast::analyse_file_fused(&bytes, &fixture, &cfg, None, None)
+        .expect("warmup analyse");
+
+    c.bench_function("taint_callee_resolve_stress_go", |b| {
+        b.iter(|| {
+            nyx_scanner::ast::analyse_file_fused(&bytes, &fixture, &cfg, None, None)
+                .expect("analyse_file_fused")
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_ast_only_scan,
@@ -447,5 +479,6 @@ criterion_group!(
     bench_collect_top_level_units_go,
     bench_const_propagate_large_go,
     bench_global_summaries_lookup_same_lang_go,
+    bench_taint_callee_resolve_stress_go,
 );
 criterion_main!(benches);
