@@ -1031,14 +1031,7 @@ mod goto_succ_propagation_tests {
             },
         ));
 
-        let succ_states = compute_succ_states(
-            &block,
-            &cfg,
-            &ssa,
-            &transfer,
-            &exit_state,
-            &mut rustc_hash::FxHashMap::default(),
-        );
+        let succ_states = compute_succ_states(&block, &cfg, &ssa, &transfer, &exit_state);
 
         assert_eq!(
             succ_states.len(),
@@ -1124,16 +1117,41 @@ mod goto_succ_propagation_tests {
         };
         let exit_state = SsaTaintState::initial();
 
-        let succ_states = compute_succ_states(
-            &block,
-            &cfg,
-            &ssa,
-            &transfer,
-            &exit_state,
-            &mut rustc_hash::FxHashMap::default(),
-        );
+        let succ_states = compute_succ_states(&block, &cfg, &ssa, &transfer, &exit_state);
         assert_eq!(succ_states.len(), 1);
         assert_eq!(succ_states[0].0, BlockId(1));
+    }
+
+    /// The persistent per-thread branch-condition cache
+    /// (`classify_branch_cond_cached`) is a transparent memo over the pure
+    /// `classify_branch_cond`: the cached result on both the cold (first) and
+    /// warm (second) lookup must equal the uncached classification for the
+    /// same text.  Covers texts that exercise each `has_semantic_negation`
+    /// branch (AllowlistCheck `not in`, TypeCheck `!==`, ValidationCall
+    /// negative-polarity) plus a PathFact rejection idiom, so a future change
+    /// that breaks the cache↔pure-function equivalence is caught here rather
+    /// than as a silent finding drift on a real repo.
+    #[test]
+    fn branch_cond_cache_matches_uncached_cold_and_warm() {
+        let texts = [
+            "err != nil",
+            "x == null",
+            "scheme not in allowed",
+            "typeof x !== 'string'",
+            "isInvalidUrl(u)",
+            "p.contains(\"..\")",
+            "user.isAdmin",
+        ];
+        for t in texts {
+            let pure = classify_branch_cond(t);
+            // Cold lookup (first time this text is seen on this thread): the
+            // cache misses, computes, and inserts.
+            let cold = classify_branch_cond_cached(t);
+            // Warm lookup: the cache hits and returns a clone.
+            let warm = classify_branch_cond_cached(t);
+            assert_eq!(cold, pure, "cold cache result diverged for {t:?}");
+            assert_eq!(warm, pure, "warm cache result diverged for {t:?}");
+        }
     }
 
     // ── PathFact branch-narrowing smoke tests ─────────────────────────────

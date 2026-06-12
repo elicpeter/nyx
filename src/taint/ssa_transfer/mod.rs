@@ -610,13 +610,6 @@ fn run_ssa_taint_internal(
     // Per-predecessor exit states for path-sensitive phi evaluation
     let mut pred_states: PredStates = HashMap::new();
 
-    // Memoized text-only branch-condition classification, keyed by condition
-    // node index.  Invariant across worklist re-visits (see [`BranchCondClass`]),
-    // so the per-condition `str::find`/`str::contains` scans run once per branch
-    // rather than once per re-visit.
-    let mut cond_class_memo: rustc_hash::FxHashMap<u32, BranchCondClass> =
-        rustc_hash::FxHashMap::default();
-
     // Fixed-point iteration
     let mut worklist: VecDeque<usize> = VecDeque::new();
     let mut in_worklist: HashSet<usize> = HashSet::new();
@@ -669,8 +662,7 @@ fn run_ssa_taint_internal(
         block_exit_states[bid] = Some(exit_state.clone());
 
         // Build per-successor states (branch-aware for Branch terminators)
-        let succ_states =
-            compute_succ_states(block, cfg, ssa, transfer, &exit_state, &mut cond_class_memo);
+        let succ_states = compute_succ_states(block, cfg, ssa, transfer, &exit_state);
 
         // Store predecessor-specific states before joining
         for &(succ_id, ref succ_state) in &succ_states {
@@ -1188,7 +1180,7 @@ pub(super) fn transfer_block(
 /// pure `&str -> _`) can be computed once per branch node and reused across
 /// worklist re-visits, while the state-dependent narrowing still runs per
 /// visit.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct PathBranchClass {
     rejection_axes: SmallVec<[crate::abstract_interp::path_domain::PathRejection; 3]>,
     assertion: crate::abstract_interp::path_domain::PathAssertion,
@@ -1208,23 +1200,25 @@ fn classify_path_branch(cond_text: &str) -> PathBranchClass {
     }
 }
 
-/// Text-only classification of a branch condition, memoized per condition
-/// node across worklist re-visits (stored in `cond_class_memo` inside
-/// [`run_ssa_taint_internal`]).
+/// Text-only classification of a branch condition, memoized per distinct
+/// condition *text* in the persistent per-thread [`COND_CLASS_CACHE`].
 ///
 /// Every field is a deterministic function of the immutable condition text
 /// (the per-node `condition_negated` flag is applied by the caller), never
 /// of the mutable `SsaTaintState`.  The block-level worklist re-visits a
 /// branch block once per predecessor-state change (avg ~1.4×, more for
-/// loop-body branches); previously each visit re-ran
-/// `classify_condition_with_target`, the `has_semantic_negation` string scan,
-/// and the three PathFact text classifiers on the *same* `cond_text`.  Those
-/// `str::find` / `str::contains` scans (via `StrSearcher::new`) were ≈5% of
-/// static-engine self-time on mm/channels/app.  Memoizing the result keyed on
-/// the condition node turns every re-visit into an O(1) `FxHashMap` hit; only
-/// the state-application steps (which read taint state / SSA defs) still run
-/// per visit.
-#[derive(Clone)]
+/// loop-body branches), and the same body's worklist is re-run ~5×/file
+/// (summary extraction + main analysis + parent/child sink augmentation);
+/// previously each first visit re-ran `classify_condition_with_target`, the
+/// `has_semantic_negation` string scan, and the three PathFact text
+/// classifiers on the *same* `cond_text`.  Those `str::find` / `str::contains`
+/// scans (via `StrSearcher::new`) were ≈5% of static-engine self-time on
+/// mm/channels/app.  Caching the result keyed on the condition text turns
+/// every re-visit — within a worklist run, across the ~5 passes, and across
+/// every other body/file with the same condition idiom — into an O(1)
+/// `FxHashMap` hit; only the state-application steps (which read taint state /
+/// SSA defs) still run per visit.
+#[derive(Clone, Debug, PartialEq)]
 struct BranchCondClass {
     kind: PredicateKind,
     target_var: Option<String>,
@@ -1261,13 +1255,13 @@ fn classify_branch_cond(cond_text: &str) -> BranchCondClass {
     }
 }
 
-/// Escape hatch: `NYX_DISABLE_COND_MEMO=1` forces `compute_succ_states` to
-/// re-classify each branch condition on every worklist re-visit instead of
-/// reading the memo.  Used to A/B the memoized vs re-classifying path from a
-/// single binary (criterion baseline, differential-correctness check) and as
-/// a safety toggle.  Cached so the env read is paid once per process.  The two
-/// paths are bit-identical — the memo only caches a pure function — so this
-/// changes only performance.
+/// Escape hatch: `NYX_DISABLE_COND_MEMO=1` forces every branch-condition
+/// classification to recompute instead of consulting [`COND_CLASS_CACHE`].
+/// Used to A/B the cached vs re-classifying path from a single binary
+/// (criterion baseline, differential-correctness check) and as a safety
+/// toggle.  Cached so the env read is paid once per process.  The two paths
+/// are bit-identical — the cache only stores a pure function's result — so
+/// this changes only performance.
 fn cond_class_memo_disabled() -> bool {
     static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *DISABLED.get_or_init(|| {
@@ -1277,22 +1271,82 @@ fn cond_class_memo_disabled() -> bool {
     })
 }
 
+thread_local! {
+    /// Persistent per-thread cache of the text-only branch-condition
+    /// classification ([`BranchCondClass`]), keyed by the condition *text* —
+    /// the sole input to [`classify_branch_cond`].
+    ///
+    /// Keyed on text, **not** on the CFG condition node index: the `Cfg` is
+    /// per-body (`taint/mod.rs` binds `let cfg = &body.graph`), so node
+    /// indices collide across the file's functions and a node-index key would
+    /// return one function's classification for another's condition.  The
+    /// condition *text* is the collision-free invariant and is identical
+    /// across every worklist re-visit, every pass, every function, and every
+    /// file that contains the same condition idiom (`if err != nil`,
+    /// `if (x == null)`, …), so the cache captures all of that reuse.
+    ///
+    /// session-0015 used a worklist-local `FxHashMap<u32, BranchCondClass>`
+    /// (rebuilt empty per `run_ssa_taint_internal` call), which only caught
+    /// re-visits within one worklist run; the first visit of every branch in
+    /// every one of the ~5 passes/file still re-ran the string scans.  This
+    /// per-thread cache classifies each distinct condition text once for the
+    /// whole scan.  Lives across files via the rayon worker thread (each file
+    /// is processed start-to-finish on one worker); correctness is independent
+    /// of cache state because the stored value is a pure function of the key.
+    static COND_CLASS_CACHE: RefCell<rustc_hash::FxHashMap<String, BranchCondClass>> =
+        RefCell::new(rustc_hash::FxHashMap::default());
+}
+
+/// Soft cap on [`COND_CLASS_CACHE`].  Distinct branch-condition texts are
+/// bounded in practice (a handful of idioms dominate), but an XL repo could
+/// accumulate many across a worker's lifetime; clearing the map when it
+/// exceeds the cap bounds per-thread memory to ~`CAP` entries.  Safe: the
+/// value is a pure function of the text, so a post-clear miss only forfeits a
+/// future hit, never correctness.
+const COND_CLASS_CACHE_CAP: usize = 1 << 16;
+
+/// Fetch-or-compute the text-only [`BranchCondClass`] for `cond_text` via the
+/// persistent per-thread [`COND_CLASS_CACHE`].  Returns an owned value (a cheap
+/// clone on a hit — a small enum + one optional short `String` + an inline
+/// `SmallVec`, vs the multi-`StrSearcher` recompute it replaces) so the caller
+/// holds no borrow into the cache.
+fn classify_branch_cond_cached(cond_text: &str) -> BranchCondClass {
+    if cond_class_memo_disabled() {
+        return classify_branch_cond(cond_text);
+    }
+    COND_CLASS_CACHE.with(|cell| {
+        {
+            let map = cell.borrow();
+            if let Some(hit) = map.get(cond_text) {
+                return hit.clone();
+            }
+        }
+        let computed = classify_branch_cond(cond_text);
+        let mut map = cell.borrow_mut();
+        if map.len() >= COND_CLASS_CACHE_CAP {
+            map.clear();
+        }
+        map.insert(cond_text.to_string(), computed.clone());
+        computed
+    })
+}
+
 /// Compute per-successor states with branch-aware predicate handling.
 ///
 /// For `Branch` terminators, inspects the condition node for validation/predicate
 /// info and produces specialized true/false states. For other terminators,
 /// propagates the exit state uniformly.
 ///
-/// `cond_class_memo` caches the text-only [`BranchCondClass`] per condition
-/// node so the per-condition string scans run once per branch, not once per
-/// worklist re-visit.
+/// Branch-condition classification is cached in the persistent per-thread
+/// [`COND_CLASS_CACHE`] (see [`classify_branch_cond_cached`]) so the
+/// per-condition string scans run once per distinct condition text for the
+/// whole scan, not once per worklist re-visit / pass / body.
 fn compute_succ_states(
     block: &SsaBlock,
     cfg: &Cfg,
     ssa: &SsaBody,
     transfer: &SsaTaintTransfer,
     exit_state: &SsaTaintState,
-    cond_class_memo: &mut rustc_hash::FxHashMap<u32, BranchCondClass>,
 ) -> SmallVec<[(BlockId, SsaTaintState); 2]> {
     match &block.terminator {
         Terminator::Branch {
@@ -1315,18 +1369,13 @@ fn compute_succ_states(
             if cond_info.condition_text.is_some() && !cond_info.condition_vars.is_empty() {
                 let cond_text = cond_info.condition_text.as_deref().unwrap_or("");
                 // Fetch-or-compute the text-only classification for this
-                // condition node.  Invariant across worklist re-visits, so the
+                // condition.  Cached per distinct condition text in the
+                // persistent per-thread `COND_CLASS_CACHE`, so the
                 // `classify_condition_with_target` + `has_semantic_negation` +
-                // PathFact-classifier string scans run once per branch.
-                let owned_class;
-                let class: &BranchCondClass = if cond_class_memo_disabled() {
-                    owned_class = classify_branch_cond(cond_text);
-                    &owned_class
-                } else {
-                    cond_class_memo
-                        .entry(cond.index() as u32)
-                        .or_insert_with(|| classify_branch_cond(cond_text))
-                };
+                // PathFact-classifier string scans run once per condition idiom
+                // for the whole scan rather than once per worklist re-visit /
+                // pass / body.
+                let class = classify_branch_cond_cached(cond_text);
                 let kind = class.kind;
 
                 // Determine which vars to apply validation to:

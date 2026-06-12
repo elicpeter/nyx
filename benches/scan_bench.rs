@@ -504,12 +504,17 @@ fn bench_taint_branch_stress_go(c: &mut Criterion) {
 /// Branch conditions INSIDE nested loops, so the taint worklist re-visits
 /// loop-body blocks until fixpoint and (before the memo) re-classified the
 /// same condition text on every re-visit.  Isolates the per-condition
-/// classification memo added to `compute_succ_states`: with the memo each
-/// branch's `classify_condition_with_target` / `has_semantic_negation` /
-/// PathFact-classifier `str::find`/`str::contains` scans run once per branch
-/// rather than once per re-visit.  Reintroducing the per-visit
-/// re-classification (dropping `cond_class_memo`) surfaces here proportional
-/// to the loop re-visit count.
+/// classification cache: each branch's `classify_condition_with_target` /
+/// `has_semantic_negation` / PathFact-classifier `str::find`/`str::contains`
+/// scans run once per distinct condition text via the persistent per-thread
+/// `COND_CLASS_CACHE`, rather than once per re-visit / pass.  `analyse_file_fused`
+/// runs the body's worklist ~5× (summary extraction + main + sink
+/// augmentation), and criterion keeps the thread-local warm across `b.iter()`
+/// iterations, so this bench captures the cross-pass / cross-iteration reuse
+/// the persistent cache adds over the worklist-local memo
+/// (session-0018: −2.5% vs worklist-local, −12.5% vs `NYX_DISABLE_COND_MEMO=1`).
+/// Reverting the cache to per-`run_ssa_taint_internal` (or recompute-per-visit)
+/// surfaces here proportional to the loop re-visit count × pass count.
 fn bench_taint_cond_revisit_go(c: &mut Criterion) {
     let fixture = Path::new("benches/perf_fixtures/taint_cond_revisit.go")
         .canonicalize()
