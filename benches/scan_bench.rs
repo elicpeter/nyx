@@ -536,6 +536,36 @@ fn bench_taint_cond_revisit_go(c: &mut Criterion) {
     });
 }
 
+/// CFG-construction throughput on the large gin Go module (~1.5k lines,
+/// selector-expression-dense).  Targets `build_cfg_for_file`, whose hot
+/// inner path runs `push_node` → `first_member_label` → `member_expr_text`
+/// on every `CallWrapper`/`Assignment` node.  Pre-fix `member_expr_text`
+/// built its dot-joined member path bottom-up via a `format!("{o}.{p}")`
+/// chain, allocating one intermediate `String` per nesting level (and the
+/// `first_member_label` classify path threw every one of those Strings away
+/// after a single `classify(&str)` call).  The fix rewrote the builder to
+/// append directly into a single reused buffer (`member_expr_text_into`),
+/// collapsing the O(depth) intermediate allocations to one final allocation
+/// (zero on the `first_member_label` classify path, which uses a thread-local
+/// scratch buffer).  This bench isolates that allocation churn — the biggest
+/// self-time bucket on the mm/channels/app static profile — from the taint /
+/// SSA passes.  A regression that reintroduces the per-level `format!` chain
+/// surfaces here proportional to member-expression nesting depth.
+fn bench_cfg_build_large_go(c: &mut Criterion) {
+    let fixture = Path::new("benches/perf_fixtures/large_go_module.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let cfg = Config::default();
+
+    c.bench_function("cfg_build_large_go", |b| {
+        b.iter(|| {
+            nyx_scanner::ast::build_cfg_for_file(&fixture, &cfg)
+                .expect("build cfg")
+                .expect("supported language")
+        });
+    });
+}
+
 /// AST pattern-query pass throughput on the large gin Go module.
 ///
 /// Targets `ParsedSource::run_ast_queries` (via the `bench_run_ast_queries`
@@ -581,6 +611,7 @@ criterion_group!(
     bench_taint_callee_resolve_stress_go,
     bench_taint_branch_stress_go,
     bench_taint_cond_revisit_go,
+    bench_cfg_build_large_go,
     bench_ast_queries_large_go,
 );
 criterion_main!(benches);
