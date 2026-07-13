@@ -1462,6 +1462,32 @@ impl<'a> ParsedSource<'a> {
         {
             return None;
         }
+        // Layer I: Ruby `instance_eval` / `class_eval` / `module_eval`
+        // flagged as string-eval code execution, but invoked in the BLOCK
+        // form (`model.class_eval do … end` / `obj.instance_eval { … }`).
+        // The rule query matches the method name with no argument
+        // constraint, so it over-fires on the pervasive Ruby
+        // metaprogramming DSL idiom (`included(model) { model.class_eval
+        // do … end }` mixins, RSpec `subject.instance_eval { … }` probes)
+        // where the evaluated code is a statically-authored block — there
+        // is no injection surface.  These reflection methods evaluate code
+        // dynamically only when passed a STRING argument
+        // (`klass.class_eval("def #{m}; end")`), which lives in the call's
+        // argument list; a `do … end` / `{ … }` block lives in the
+        // separate `block:` field and a `&proc` block-pass is not a code
+        // string either.  Suppress unless the call carries a code-string
+        // argument.  Constant-string forms (`instance_eval("2 + 2")`) are
+        // already handled by the Layer A all-literal-args suppression, so
+        // what survives here is the genuinely dynamic
+        // string-eval shape.
+        if matches!(
+            meta.id,
+            "rb.code_exec.instance_eval" | "rb.code_exec.class_eval"
+        ) && self.lang_slug == "ruby"
+            && !is_ruby_eval_string_arg(cap_node)
+        {
+            return None;
+        }
         let point = cap_node.start_position();
         Some(Diag {
             path: self.path.to_string_lossy().into_owned(),
@@ -4285,6 +4311,53 @@ fn is_ruby_deser_inside_test_assertion(cap_node: tree_sitter::Node, bytes: &[u8]
         return ruby_rspec_matcher_bounds_deser(matcher_args, bytes);
     }
 
+    false
+}
+
+/// True iff the Ruby `instance_eval` / `class_eval` / `module_eval` call
+/// enclosing `cap_node` is passed a **code-string argument** — the shape
+/// that actually evaluates dynamic code — rather than a block.
+///
+/// `instance_eval` / `class_eval` / `module_eval` are dual-form methods:
+///
+/// * **Block form** (`obj.instance_eval do … end`, `klass.class_eval { …
+///   }`): the code is statically authored in the source and lives in the
+///   call's separate `block:` field (a `do_block` / `block` node), never
+///   in the argument list.  This is the canonical Ruby metaprogramming
+///   DSL idiom (Rails `included` mixins, RSpec object probes) and carries
+///   **no injection surface** — there is nothing an attacker can steer.
+/// * **String form** (`klass.class_eval("def #{m}; end")`): the first
+///   positional argument is the code string, which CAN be built from
+///   dynamic / attacker-controlled data.  This is the genuine
+///   code-execution sink.
+///
+/// So the presence of a non-block-pass argument in the call's argument
+/// list is the signal that this is a real string-eval.  A `&proc`
+/// block-pass (`instance_eval(&blk)`) is not a code string and is
+/// skipped.  `cap_node` may be the method-name identifier capture or the
+/// whole-call capture; [`find_enclosing_call`] normalises both.
+fn is_ruby_eval_string_arg(cap_node: tree_sitter::Node) -> bool {
+    let Some(call) = find_enclosing_call(cap_node) else {
+        return false;
+    };
+    // Block form (or a bare receiver-less `eval`-family call with neither
+    // args nor block) has no `argument_list` child at all — the block sits
+    // in the `block:` field.  No argument list ⇒ no code string.
+    let Some(arg_list) = find_arg_list(call) else {
+        return false;
+    };
+    for i in 0..arg_list.named_child_count() as u32 {
+        let Some(child) = arg_list.named_child(i) else {
+            continue;
+        };
+        // `&blk` block-pass is a proc, not a code string.  Any other
+        // positional argument is the evaluated code string (the method
+        // contract puts it first), so it is a real string-eval.
+        if child.kind() == "block_argument" {
+            continue;
+        }
+        return true;
+    }
     false
 }
 
@@ -7854,6 +7927,87 @@ fn ruby_deser_inside_test_assertion_recognises_roundtrip_shapes() {
     assert!(
         !is_ruby_deser_inside_test_assertion(cap, code),
         "old-style .should == LIT should NOT be suppressed"
+    );
+}
+
+/// Ruby Layer I invariants.  `instance_eval` / `class_eval` /
+/// `module_eval` are string-eval sinks ONLY in the string-argument form;
+/// the block form (`do … end` / `{ … }`) is a static metaprogramming DSL
+/// with no injection surface and must NOT fire.
+#[test]
+fn ruby_eval_string_arg_distinguishes_block_from_string() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
+    parser.set_language(&lang).unwrap();
+    let q_ie =
+        r#"(call method: (identifier) @id (#eq? @id "instance_eval")) @vuln"#;
+    let q_ce = r#"(call method: (identifier) @id (#match? @id "^(class_eval|module_eval)$")) @vuln"#;
+
+    // ── Block forms → NOT a string eval (suppress) ─────────────────────
+    // `do … end` block.
+    let code = b"module M\n  def self.included(model)\n    model.class_eval do\n      belongs_to :author\n    end\n  end\nend\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ce);
+    assert!(
+        !is_ruby_eval_string_arg(cap),
+        "class_eval do … end block is a static DSL, not a string eval"
+    );
+
+    // `{ … }` brace block.
+    let code = b"before do\n  @fetcher.instance_eval {\n    @person = person\n  }\nend\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ie);
+    assert!(
+        !is_ruby_eval_string_arg(cap),
+        "instance_eval brace block is not a string eval"
+    );
+
+    // `&proc` block-pass — a proc, not a code string.
+    let code = b"def run(blk)\n  obj.instance_eval(&blk)\nend\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ie);
+    assert!(
+        !is_ruby_eval_string_arg(cap),
+        "instance_eval(&blk) block-pass is a proc, not a code string"
+    );
+
+    // ── String forms → real string eval (fires) ───────────────────────
+    // Interpolated string argument (dynamic — the real sink).
+    let code = b"def define(m)\n  klass.class_eval(\"def #{m}; end\")\nend\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ce);
+    assert!(
+        is_ruby_eval_string_arg(cap),
+        "class_eval(\"def #{{m}}; end\") interpolated string IS a string eval"
+    );
+
+    // Variable argument — could hold a dynamic code string.
+    let code = b"def run(code)\n  obj.instance_eval(code)\nend\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ie);
+    assert!(
+        is_ruby_eval_string_arg(cap),
+        "instance_eval(code) variable arg IS a string eval"
+    );
+
+    // String literal argument (recogniser reports true; Layer A separately
+    // handles the all-literal case).
+    let code = b"obj.instance_eval(\"2 + 2\")\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ie);
+    assert!(
+        is_ruby_eval_string_arg(cap),
+        "instance_eval(\"literal\") carries a code-string argument"
+    );
+
+    // String argument alongside a trailing block still counts as a string
+    // eval (the string is evaluated).
+    let code = b"obj.instance_eval(code) { extra }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ie);
+    assert!(
+        is_ruby_eval_string_arg(cap),
+        "instance_eval(code) with both arg and trailing block still evals the string"
     );
 }
 

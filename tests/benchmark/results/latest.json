@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-06-12T21:08:15Z",
+  "timestamp": "2026-07-13T20:17:53Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:74e36c9dc8aa118e475d97a91adac78ffacdeaeccf6932367a2a4042671c0b6d",
-  "corpus_size": 602,
-  "cases_run": 600,
+  "ground_truth_hash": "sha256:8bda1c4815d7986bd9f8ad3874a990d041880548f0706135c0f0d64836e5591f",
+  "corpus_size": 612,
+  "cases_run": 610,
   "cases_skipped": 2,
   "outcomes": [
     {
@@ -1738,6 +1738,40 @@
       "unexpected_rule_ids": [],
       "all_finding_ids": [
         "taint-unsanitised-flow (source 52:30)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-js-2026-42259-patched",
+      "file": "cve_corpus/javascript/CVE-2026-42259/patched.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-js-2026-42259-vulnerable",
+      "file": "cve_corpus/javascript/CVE-2026-42259/vulnerable.js",
+      "language": "javascript",
+      "vuln_class": "open_redirect",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-open-redirect (source 39:18)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-open-redirect (source 39:18)"
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 0
@@ -4720,6 +4754,25 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "js-open_redirect-001",
+      "file": "javascript/open_redirect/redirect_weak_relative_check.js",
+      "language": "javascript",
+      "vuln_class": "open_redirect",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-open-redirect (source 16:3)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-open-redirect (source 16:3)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "js-path_traversal-001",
       "file": "javascript/path_traversal/path_traversal.js",
       "language": "javascript",
@@ -4955,6 +5008,21 @@
     {
       "case_id": "js-safe-022",
       "file": "javascript/safe/safe_env_empty_fallback.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-safe-023",
+      "file": "javascript/safe/safe_redirect_normalize_confiner.js",
       "language": "javascript",
       "vuln_class": "safe",
       "is_vulnerable": false,
@@ -6486,6 +6554,78 @@
         "py.auth.missing_ownership_check"
       ],
       "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-auth-realrepo-023",
+      "file": "python/safe/fastapi_local_include_router_auth.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-auth-realrepo-024",
+      "file": "python/auth/fastapi_local_include_router_no_deps.py",
+      "language": "python",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.auth.missing_ownership_check",
+        "py.auth.token_override_without_validation"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "py.auth.missing_ownership_check",
+        "py.auth.token_override_without_validation"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-auth-realrepo-025",
+      "file": "python/safe/fastapi_transitive_include_router/",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-auth-realrepo-026",
+      "file": "python/auth/fastapi_transitive_no_deps/",
+      "language": "python",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.auth.missing_ownership_check",
+        "py.auth.token_override_without_validation"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "py.auth.missing_ownership_check",
+        "py.auth.token_override_without_validation"
+      ],
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -9077,6 +9217,25 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "ruby-code_injection-002",
+      "file": "ruby/code_injection/eval_string_dynamic.rb",
+      "language": "ruby",
+      "vuln_class": "code_injection",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "rb.code_exec.instance_eval"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rb.code_exec.instance_eval"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "ruby-deser-001",
       "file": "ruby/deser/deser_marshal.rb",
       "language": "ruby",
@@ -9281,6 +9440,21 @@
     {
       "case_id": "ruby-safe-009",
       "file": "ruby/safe/safe_kernel_open_file_namespaced.rb",
+      "language": "ruby",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-safe-010",
+      "file": "ruby/safe/safe_eval_block_dsl.rb",
       "language": "ruby",
       "vuln_class": "safe",
       "is_vulnerable": false,
@@ -10702,22 +10876,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 288,
+    "tp": 293,
     "fp": 7,
     "fn_": 7,
-    "tn": 298,
-    "precision": 0.976271186440678,
-    "recall": 0.976271186440678,
-    "f1": 0.976271186440678
+    "tn": 303,
+    "precision": 0.9766666666666667,
+    "recall": 0.9766666666666667,
+    "f1": 0.9766666666666667
   },
   "aggregate_rule_level": {
-    "tp": 288,
+    "tp": 293,
     "fp": 7,
     "fn_": 7,
-    "tn": 298,
-    "precision": 0.976271186440678,
-    "recall": 0.976271186440678,
-    "f1": 0.976271186440678
+    "tn": 303,
+    "precision": 0.9766666666666667,
+    "recall": 0.9766666666666667,
+    "f1": 0.9766666666666667
   },
   "by_language": {
     "c": {
@@ -10757,10 +10931,10 @@
       "f1": 0.9615384615384616
     },
     "javascript": {
-      "tp": 25,
+      "tp": 27,
       "fp": 0,
       "fn_": 0,
-      "tn": 32,
+      "tn": 34,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -10775,19 +10949,19 @@
       "f1": 0.92
     },
     "python": {
-      "tp": 41,
+      "tp": 43,
       "fp": 0,
       "fn_": 0,
-      "tn": 44,
+      "tn": 46,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
     },
     "ruby": {
-      "tp": 25,
+      "tp": 26,
       "fp": 0,
       "fn_": 0,
-      "tn": 27,
+      "tn": 28,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -10813,13 +10987,13 @@
   },
   "by_vuln_class": {
     "auth": {
-      "tp": 24,
+      "tp": 26,
       "fp": 0,
       "fn_": 2,
       "tn": 4,
       "precision": 1.0,
-      "recall": 0.9230769230769231,
-      "f1": 0.9600000000000001
+      "recall": 0.9285714285714286,
+      "f1": 0.962962962962963
     },
     "buffer_overflow": {
       "tp": 7,
@@ -10849,7 +11023,7 @@
       "f1": 1.0
     },
     "code_injection": {
-      "tp": 11,
+      "tp": 12,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -10921,7 +11095,7 @@
       "f1": 1.0
     },
     "open_redirect": {
-      "tp": 2,
+      "tp": 4,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -10960,7 +11134,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 293,
+      "tn": 298,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -11013,31 +11187,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 89,
-      "fp": 130,
-      "fn_": 206,
-      "tn": 175,
-      "precision": 0.4063926940639269,
-      "recall": 0.3016949152542373,
-      "f1": 0.3463035019455253
+      "tp": 93,
+      "fp": 129,
+      "fn_": 207,
+      "tn": 181,
+      "precision": 0.4189189189189189,
+      "recall": 0.31,
+      "f1": 0.3563218390804598
     },
     ">=Low": {
-      "tp": 90,
+      "tp": 93,
       "fp": 153,
-      "fn_": 205,
-      "tn": 152,
-      "precision": 0.37037037037037035,
-      "recall": 0.3050847457627119,
-      "f1": 0.3345724907063197
+      "fn_": 207,
+      "tn": 157,
+      "precision": 0.3780487804878049,
+      "recall": 0.31,
+      "f1": 0.34065934065934067
     },
     ">=Medium": {
-      "tp": 89,
+      "tp": 93,
       "fp": 132,
-      "fn_": 206,
-      "tn": 173,
-      "precision": 0.40271493212669685,
-      "recall": 0.3016949152542373,
-      "f1": 0.3449612403100775
+      "fn_": 207,
+      "tn": 178,
+      "precision": 0.41333333333333333,
+      "recall": 0.31,
+      "f1": 0.3542857142857142
     }
   }
 }

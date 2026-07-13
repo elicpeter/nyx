@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 612
+    "corpus_size": 614
   },
   "cases": [
     {
@@ -4029,6 +4029,35 @@
       "notes": "Negative regression for Ruby =open exact-matcher: File.open with a hardcoded path must not fire the bare-open CMDI rule (or any taint rule); pairs with ruby-cmdi-003"
     },
     {
+      "case_id": "ruby-safe-010",
+      "file": "ruby/safe/safe_eval_block_dsl.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rb.code_exec.instance_eval",
+        "rb.code_exec.class_eval"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "instance_eval",
+        "class_eval",
+        "block-dsl",
+        "real-repo-precision-2026-07-13"
+      ],
+      "disabled": false,
+      "notes": "Block-form instance_eval/class_eval metaprogramming DSL (diaspora self.included mixins); statically-authored code with no injection surface, must not fire the code_exec pattern rules; pairs with ruby-code_injection-002"
+    },
+    {
       "case_id": "ruby-ssrf-safe-001",
       "file": "ruby/ssrf/safe_ssrf_hardcoded.rb",
       "language": "ruby",
@@ -4205,6 +4234,41 @@
       ],
       "disabled": false,
       "notes": "Code injection via eval() with user-controlled expression"
+    },
+    {
+      "case_id": "ruby-code_injection-002",
+      "file": "ruby/code_injection/eval_string_dynamic.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "code_injection",
+      "cwe": "CWE-94",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rb.code_exec.instance_eval"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "instance_eval",
+        "string-eval",
+        "code-injection",
+        "real-repo-precision-2026-07-13"
+      ],
+      "disabled": false,
+      "notes": "instance_eval with a user-controlled STRING argument is arbitrary code execution (recall guard for the Layer I block-vs-string recogniser); the block form is the safe counterpart in ruby-safe-010"
     },
     {
       "case_id": "ruby-deser-001",
