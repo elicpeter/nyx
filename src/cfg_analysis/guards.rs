@@ -2395,6 +2395,86 @@ fn cond_confinement_helper(info: &crate::cfg::NodeInfo, ctx: &AnalysisContext) -
     false
 }
 
+/// Whether the `if`-condition at `info` gates a redirect on the result of a
+/// recognised relative-URL confiner
+/// ([`crate::summary::ssa_summary::SsaFuncSummary::sanitizes_open_redirect_return`]),
+/// e.g. `const dest = normalize_relative_url(...); if (dest !== null) res.redirect(dest);`.
+///
+/// Mirrors the taint layer's OPEN_REDIRECT strip (the `outer_callee`-aware
+/// confiner check in `transfer_inst`) so `cfg-unguarded-sink` agrees the
+/// redirect is guarded.  The confining call is recorded either as the defining
+/// node's `callee` or — when it wraps a nested source expression — as its
+/// `outer_callee`.  Scoped by the caller to `Cap::OPEN_REDIRECT`.  Motivated
+/// by CVE-2026-42259 (Saltcorn login open redirect).
+fn cond_open_redirect_confiner(info: &crate::cfg::NodeInfo, ctx: &AnalysisContext) -> bool {
+    let Some(ssa_summaries) = ctx.ssa_summaries else {
+        return false;
+    };
+    let confines = |name: &str| -> bool {
+        ssa_summaries
+            .iter()
+            .any(|(k, s)| k.lang == ctx.lang && k.name == name && s.sanitizes_open_redirect_return)
+    };
+
+    // Inline form: `if (helper(x) !== null)` / `if (!helper(x))`.
+    if let Some(cond_text) = info.condition_text.as_deref()
+        && !cond_text.contains("&&")
+        && !cond_text.contains("||")
+    {
+        let trimmed = cond_text.trim_start_matches(['(', '!', ' ', '\t']);
+        if trimmed.contains('(') {
+            let callee_part = trimmed.split('(').next().unwrap_or("");
+            let bare = callee_part
+                .rsplit(['.', ':'])
+                .next()
+                .unwrap_or(callee_part)
+                .trim();
+            if !bare.is_empty() && confines(bare) {
+                return true;
+            }
+        }
+    }
+
+    // Two-statement form: `const dest = normalize_relative_url(...); if (dest ...)`.
+    if info.condition_vars.len() == 1 {
+        let var_name = info.condition_vars[0].as_str();
+        let cond_func = info.ast.enclosing_func.as_deref();
+        let cond_span_start = info.ast.span.0;
+        let mut best: Option<(usize, NodeIndex)> = None;
+        for nidx in ctx.cfg.node_indices() {
+            let n = &ctx.cfg[nidx];
+            if n.kind != crate::cfg::StmtKind::Call {
+                continue;
+            }
+            if n.taint.defines.as_deref() != Some(var_name) {
+                continue;
+            }
+            if n.ast.enclosing_func.as_deref() != cond_func {
+                continue;
+            }
+            let span_start = n.ast.span.0;
+            if span_start >= cond_span_start {
+                continue;
+            }
+            match best {
+                Some((s, _)) if s >= span_start => {}
+                _ => best = Some((span_start, nidx)),
+            }
+        }
+        if let Some((_, nidx)) = best {
+            let n = &ctx.cfg[nidx];
+            let matches = |c: &str| confines(crate::labels::bare_method_name(c));
+            if n.call.callee.as_deref().is_some_and(matches)
+                || n.call.outer_callee.as_deref().is_some_and(matches)
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Match a guard suffix matcher against a callee, requiring the suffix to
 /// begin on a *leaf-name boundary* rather than mid-identifier.
 ///
@@ -2490,6 +2570,15 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
                     // predicate.  Scope to FILE_IO (confinement only proves
                     // path safety).  Motivated by CVE-2026-39365 (Vite).
                     result.push((idx, Cap::FILE_IO));
+                } else if cond_open_redirect_confiner(info, ctx) {
+                    // Behaviour-based relative-URL confiner guard:
+                    //   const dest = normalize_relative_url(x);
+                    //   if (dest !== null) res.redirect(dest);
+                    // The helper's SSA summary records an OPEN_REDIRECT
+                    // confinement (rejects `//` + `scheme:`), so a redirect
+                    // gated on its non-null result is same-origin.  Scope to
+                    // OPEN_REDIRECT.  Motivated by CVE-2026-42259 (Saltcorn).
+                    result.push((idx, Cap::OPEN_REDIRECT));
                 } else if matches!(
                     kind,
                     PredicateKind::ShellMetaValidated | PredicateKind::BoundedLength

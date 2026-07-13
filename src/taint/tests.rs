@@ -7545,3 +7545,120 @@ fn cross_package_func_keys_namespace_uses_resolver_when_available() {
     );
     assert_eq!(plain.namespace, "packages/util/src/index.ts");
 }
+
+/// Behaviour-based open-redirect confiner (CVE-2026-42259, Saltcorn).  A
+/// helper whose name is NOT a recognised validator (`normalize_relative_url`)
+/// but whose body normalises the input and rejects protocol-relative (`//`)
+/// and `scheme:` URLs is recognised by behaviour: redirecting to its non-null
+/// result is same-origin, so the flow is silent even though the source is
+/// nested directly in the confining call.
+#[test]
+fn js_open_redirect_normalizer_confines_return() {
+    let src = br#"const normalize_relative_url = (url) => {
+  if (typeof url !== "string") return null;
+  const normalised = url.replace(/\\/g, "/").trimStart();
+  if (normalised.startsWith("//")) return null;
+  if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(normalised)) return null;
+  return normalised;
+};
+function handler(req, res) {
+  const dest = normalize_relative_url(decodeURIComponent(req.body.dest));
+  if (dest !== null) res.redirect(dest);
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "relative-URL confiner must clear OPEN_REDIRECT on its return; got {findings:?}"
+    );
+}
+
+/// Precision guard for the open-redirect confiner: a redirect gated only by
+/// the *weak* `is_relative_url` (substring `.includes("//")`, no backslash
+/// normalisation) must still fire — the weak form is not a sound confiner.
+#[test]
+fn js_open_redirect_weak_relative_check_still_fires() {
+    let src = br#"const is_relative_url = (url) => {
+  return typeof url === "string" && !url.includes(":/") && !url.includes("//");
+};
+function handler(req, res) {
+  if (is_relative_url(decodeURIComponent(req.body.dest))) {
+    res.redirect(decodeURIComponent(req.body.dest));
+  }
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "weak is_relative_url gate must not suppress the redirect; got {findings:?}"
+    );
+}
+
+/// Pins the summary-extraction invariant: the confiner's `SsaFuncSummary`
+/// sets `sanitizes_open_redirect_return`, while the weak substring form does
+/// not.
+#[test]
+fn ssa_summary_records_open_redirect_normalizer() {
+    let src = br#"const normalize_relative_url = (url) => {
+  if (typeof url !== "string") return null;
+  const normalised = url.replace(/\\/g, "/").trimStart();
+  if (normalised.startsWith("//")) return null;
+  if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(normalised)) return null;
+  return normalised;
+};
+const is_relative_url = (url) => {
+  return typeof url === "string" && !url.includes(":/") && !url.includes("//");
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let (ssa_summaries, _) = crate::taint::lower_all_functions_from_bodies(
+        &file_cfg,
+        Lang::JavaScript,
+        "test.js",
+        &file_cfg.summaries,
+        None,
+        None,
+        None,
+        None,
+    );
+    let confiner = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "normalize_relative_url")
+        .map(|(_, v)| v)
+        .expect("normalize_relative_url summary must exist");
+    assert!(
+        confiner.sanitizes_open_redirect_return,
+        "normalize_relative_url must be recognised as an OPEN_REDIRECT confiner"
+    );
+    let weak = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "is_relative_url")
+        .map(|(_, v)| v)
+        .expect("is_relative_url summary must exist");
+    assert!(
+        !weak.sanitizes_open_redirect_return,
+        "weak is_relative_url (.includes substring form) must not be recognised as a confiner"
+    );
+}

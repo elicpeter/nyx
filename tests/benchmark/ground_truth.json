@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 608
+    "corpus_size": 612
   },
   "cases": [
     {
@@ -10241,6 +10241,140 @@
       ],
       "disabled": false,
       "notes": "CVE-2026-42353 patched counterpart: utils.isSafeIdentifier denylist applied via languages.filter(isSafeIdentifier) before forwarding to backend. Enabled 2026-05-04: array-method validator-callback narrowing recognises `<arr>.filter(<is*/has*Valid|isSafe>)` shapes and strips the receiver-derived caps from the call result."
+    },
+    {
+      "case_id": "cve-js-2026-42259-vulnerable",
+      "file": "cve_corpus/javascript/CVE-2026-42259/vulnerable.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "open_redirect",
+      "cwe": "CWE-601",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          39,
+          39
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "saltcorn",
+        "open_redirect",
+        "express",
+        "redirect"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-42259 / GHSA-f3g8-9xv5-77gv: Saltcorn login handler redirects to a user-supplied `dest` gated only by the weak `is_relative_url` (blocks `://`/`//` substrings but not backslash-normalised `/\\evil.com`), reaching res.redirect(decodeURIComponent(req.body.dest)) -> open redirect. MIT."
+    },
+    {
+      "case_id": "cve-js-2026-42259-patched",
+      "file": "cve_corpus/javascript/CVE-2026-42259/patched.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-open-redirect",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "saltcorn",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-42259 patched counterpart: `normalize_relative_url` normalises backslashes then rejects protocol-relative (`//`) and any `scheme:` URL, returning null on reject; `res.redirect(dest)` runs only when the confined result is non-null. Silenced by behaviour-based open-redirect normalizer recognition (SsaFuncSummary.sanitizes_open_redirect_return)."
+    },
+    {
+      "case_id": "js-open_redirect-001",
+      "file": "javascript/open_redirect/redirect_weak_relative_check.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "open_redirect",
+      "cwe": "CWE-601",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          18,
+          18
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          16,
+          16
+        ]
+      ],
+      "tags": [
+        "open_redirect",
+        "weak-validator",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "Regression guard for CVE-2026-42259: a redirect gated only by the weak is_relative_url (.includes substring form) must still fire; the weak form is NOT a recognised relative-URL confiner (no backslash normalisation, no `//`-prefix / scheme rejection)."
+    },
+    {
+      "case_id": "js-safe-023",
+      "file": "javascript/safe/safe_redirect_normalize_confiner.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-open-redirect",
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "open_redirect",
+        "confiner",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "Precision guard for CVE-2026-42259: a redirect through the behaviour-recognised normalize_relative_url confiner (rejects `//` and `scheme:`) must be silent on both the taint and cfg-unguarded-sink layers."
     },
     {
       "case_id": "cve-ts-2023-26159-vulnerable",

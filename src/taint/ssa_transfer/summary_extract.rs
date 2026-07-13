@@ -293,6 +293,116 @@ fn detect_path_confining_predicate_params(
     result
 }
 
+/// Detect a *relative-URL confiner*: a helper whose return value is provably a
+/// same-origin (relative) URL, so redirecting to it cannot leave the trusted
+/// origin.
+///
+/// Recognises the WHATWG-correct confinement shape as three co-occurring
+/// behaviours in the function body, plus a parameter-derived return:
+///
+/// ```text
+/// const normalize_relative_url = (url) => {
+///   if (typeof url !== "string") return null;
+///   const normalised = url.replace(/\\/g, "/").trimStart();   // (1) normalise `\`->`/`
+///   if (normalised.startsWith("//")) return null;             // (2) reject protocol-relative
+///   if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(normalised)) return null;  // (3) reject scheme:
+///   return normalised;                                        // param-derived return
+/// };
+/// ```
+///
+///  1. a `.replace(...)` normalisation call (backslash-to-slash rewriting is
+///     what defeats the `/\evil.com` bypass — required for soundness, since a
+///     confiner that skips it still leaks through a browser `\`->`/` rewrite),
+///  2. a `startsWith("//")` protocol-relative rejection (const `"//"` arg), and
+///  3. a scheme rejection expressed as a regex `.test(...)` call.
+///
+/// All three together, with at least one return path carrying a
+/// parameter-derived value, mark the return as OPEN_REDIRECT-confined.
+///
+/// Conservative by construction: the *weak* validator
+/// `!url.includes("//") && !url.includes(":/")` matches none of these — it uses
+/// `.includes` (substring, not prefix) and never normalises backslashes — so a
+/// redirect gated only by it still fires.  Motivated by CVE-2026-42259
+/// (Saltcorn login open redirect): the patched `normalize_relative_url` is
+/// recognised here and stops the patched code from false-positiving.
+fn detect_open_redirect_normalizer(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    param_index_of: &HashMap<SsaValue, usize>,
+) -> bool {
+    if param_index_of.is_empty() {
+        return false;
+    }
+
+    let mut has_normalize_replace = false;
+    let mut has_protocol_relative_reject = false;
+    let mut has_scheme_reject = false;
+
+    // (1) Backslash-normalisation `.replace(...)` — appears as an SSA Call
+    // whose textual callee carries the `.replace(` chain segment (the outer
+    // `.trimStart()` swallows the method name, so match on the callee string
+    // rather than the bare terminal method).
+    for block in &ssa.blocks {
+        for inst in &block.body {
+            let SsaOp::Call {
+                callee, callee_text, ..
+            } = &inst.op
+            else {
+                continue;
+            };
+            let text = callee_text.as_deref().unwrap_or(callee.as_str());
+            if text.to_ascii_lowercase().contains(".replace(") {
+                has_normalize_replace = true;
+            }
+        }
+    }
+
+    // (2)+(3) Protocol-relative and scheme rejections live in `if (...)`
+    // conditions (`Branch` terminators), whose text the CFG node carries in
+    // `condition_text`.
+    for block in &ssa.blocks {
+        let Terminator::Branch { cond, .. } = &block.terminator else {
+            continue;
+        };
+        let Some(text) = cfg.node_weight(*cond).and_then(|n| n.condition_text.as_deref()) else {
+            continue;
+        };
+        let lower = text.to_ascii_lowercase();
+        // Prefix-based protocol-relative rejection: `x.startsWith("//")`
+        // (NOT the weak `.includes("//")` substring form).
+        if lower.contains("startswith(\"//\")") || lower.contains("startswith('//')") {
+            has_protocol_relative_reject = true;
+        }
+        // Scheme rejection: a regex `.test(...)` whose pattern pins a
+        // `scheme:` (the `:` marker distinguishes it from an unrelated regex).
+        if lower.contains(".test(") && lower.contains(':') {
+            has_scheme_reject = true;
+        }
+    }
+
+    if !(has_normalize_replace && has_protocol_relative_reject && has_scheme_reject) {
+        return false;
+    }
+
+    // At least one return path must carry a parameter-derived (normalised)
+    // value — the confined result the caller redirects to.  Pure-`null`
+    // reject returns don't count.
+    let mut budget = 512u32;
+    for block in &ssa.blocks {
+        let Terminator::Return(Some(rv)) = &block.terminator else {
+            continue;
+        };
+        let mut seen = HashSet::new();
+        let mut params: SmallVec<[usize; 2]> = SmallVec::new();
+        collect_reaching_params(ssa, *rv, param_index_of, &mut seen, &mut params, &mut budget);
+        if !params.is_empty() {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Extract a precise per-parameter `SsaFuncSummary` from an already-lowered SSA body.
 ///
 /// For each parameter (up to `MAX_PROBE_PARAMS`), runs a taint probe by seeding
@@ -1148,6 +1258,13 @@ pub fn extract_ssa_func_summary_full(
     let confines_path_params =
         detect_path_confining_predicate_params(ssa, &probe_const_values, &param_index_of);
 
+    // Behaviour-based open-redirect confiner detection (CVE-2026-42259):
+    // a helper that normalises its input then rejects protocol-relative
+    // (`//`) and `scheme:` URLs before returning the confined value marks
+    // its return as OPEN_REDIRECT-clean.
+    let sanitizes_open_redirect_return =
+        detect_open_redirect_normalizer(ssa, cfg, &param_index_of);
+
     SsaFuncSummary {
         param_to_return,
         param_to_sink,
@@ -1177,6 +1294,7 @@ pub fn extract_ssa_func_summary_full(
         typed_call_receivers: Vec::new(),
         validated_params_to_return,
         confines_path_params,
+        sanitizes_open_redirect_return,
         // Phase-10 entry-point classification is attached post-extraction
         // by `taint::lower_all_functions_from_bodies` (which has access
         // to `FileCfg::entry_kinds`).  Empty here means the extractor

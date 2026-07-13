@@ -530,6 +530,7 @@ fn ssa_summary_serde_round_trip_identity() {
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
         confines_path_params: smallvec::SmallVec::new(),
+        sanitizes_open_redirect_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -566,6 +567,7 @@ fn ssa_summary_serde_round_trip_strip_bits() {
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
         confines_path_params: smallvec::SmallVec::new(),
+        sanitizes_open_redirect_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -599,6 +601,7 @@ fn ssa_summary_serde_round_trip_add_bits() {
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
         confines_path_params: smallvec::SmallVec::new(),
+        sanitizes_open_redirect_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -639,6 +642,7 @@ fn ssa_summary_serde_round_trip_all_variants() {
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
         confines_path_params: smallvec::SmallVec::new(),
+        sanitizes_open_redirect_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -681,6 +685,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
         confines_path_params: smallvec::SmallVec::new(),
+        sanitizes_open_redirect_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -711,6 +716,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
         confines_path_params: smallvec::SmallVec::new(),
+        sanitizes_open_redirect_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -761,6 +767,7 @@ fn global_summaries_merge_with_ssa_entries() {
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
         confines_path_params: smallvec::SmallVec::new(),
+        sanitizes_open_redirect_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -787,6 +794,7 @@ fn global_summaries_merge_with_ssa_entries() {
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
         confines_path_params: smallvec::SmallVec::new(),
+        sanitizes_open_redirect_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -837,6 +845,7 @@ fn global_summaries_is_empty_considers_ssa() {
             typed_call_receivers: vec![],
             validated_params_to_return: smallvec::SmallVec::new(),
             confines_path_params: smallvec::SmallVec::new(),
+            sanitizes_open_redirect_return: false,
             param_to_gate_filters: vec![],
             entry_kind: None,
         },
@@ -870,6 +879,7 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
         confines_path_params: smallvec::SmallVec::new(),
+        sanitizes_open_redirect_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -918,6 +928,7 @@ fn ssa_summary_serde_round_trip_container_fields() {
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
         confines_path_params: smallvec::SmallVec::new(),
+        sanitizes_open_redirect_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -976,6 +987,7 @@ fn ssa_summary_serde_round_trip_return_abstract() {
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
         confines_path_params: smallvec::SmallVec::new(),
+        sanitizes_open_redirect_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -1504,6 +1516,7 @@ fn global_summaries_resolve_body_requires_body_present() {
             typed_call_receivers: vec![],
             validated_params_to_return: smallvec::SmallVec::new(),
             confines_path_params: smallvec::SmallVec::new(),
+            sanitizes_open_redirect_return: false,
             param_to_gate_filters: vec![],
             entry_kind: None,
         },
@@ -3648,6 +3661,7 @@ fn cf4_return_path_transform_serde_round_trip() {
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
         confines_path_params: smallvec::SmallVec::new(),
+        sanitizes_open_redirect_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };

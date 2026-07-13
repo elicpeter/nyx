@@ -376,6 +376,30 @@ pub struct SsaFuncSummary {
     #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
     pub confines_path_params: SmallVec<[usize; 2]>,
 
+    /// The function's return value is a *relative-URL confiner*: it
+    /// normalises its input and rejects protocol-relative (`//`) and
+    /// absolute-`scheme:` URLs before returning the confined, same-origin
+    /// value (returning a reject sentinel — `null`/`false`/`undefined` —
+    /// otherwise).  When such a helper's result is redirected to, the
+    /// redirect target is provably same-origin, so the call's return value
+    /// clears [`crate::labels::Cap::OPEN_REDIRECT`].
+    ///
+    /// Recognised structurally by `detect_open_redirect_normalizer`: the
+    /// body must contain both a `startsWith("//")` protocol-relative
+    /// rejection *and* a scheme rejection (a regex `.test(...)`), and at
+    /// least one return path must carry a parameter-derived (normalised)
+    /// value.  The *weak* form `!url.includes("//") && !url.includes(":/")`
+    /// — which misses backslash normalisation and matches by substring, not
+    /// prefix — is deliberately **not** recognised, so a redirect gated only
+    /// by it still fires.
+    ///
+    /// Closes the precision gap behind CVE-2026-42259 (Saltcorn login
+    /// open redirect): the patched fix routes `dest` through a
+    /// `normalize_relative_url` confiner, which nyx false-positived on
+    /// before.  `false` (the default) for helpers that do not confine.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sanitizes_open_redirect_return: bool,
+
     /// Phase-10 Next.js entry-point classification.  Mirrors
     /// [`crate::summary::FuncSummary::entry_kind`] — recorded on the
     /// SSA summary so cross-file consumers don't have to consult the

@@ -2152,6 +2152,23 @@ fn summary_confined_positions<'b>(
     None
 }
 
+/// Whether a callee (by bare name) is a recognised relative-URL confiner
+/// whose return value clears [`Cap::OPEN_REDIRECT`].
+///
+/// Mirrors [`summary_confined_positions`]: looks the callee up in the
+/// intra-file SSA summary map by same-language `FuncKey.name` and returns
+/// its [`SsaFuncSummary::sanitizes_open_redirect_return`] flag.  Intra-file
+/// only — relative-URL confiners (`normalize_relative_url`) live in the same
+/// module as the redirect handler.  Motivated by CVE-2026-42259.
+fn summary_confines_open_redirect(transfer: &SsaTaintTransfer, bare_name: &str) -> bool {
+    let Some(map) = transfer.ssa_summaries else {
+        return false;
+    };
+    map.iter().any(|(key, sum)| {
+        key.lang == transfer.lang && key.name == bare_name && sum.sanitizes_open_redirect_return
+    })
+}
+
 /// Extract the bare callee name of an inline call condition.
 ///
 /// Strips leading `!` / `(` / whitespace and a Python `not ` keyword, then
@@ -5355,6 +5372,18 @@ pub(super) fn transfer_inst(
                     return_bits &= !resolved.sanitizer_caps;
                 }
 
+                // Behaviour-based open-redirect confiner (CVE-2026-42259):
+                // when the callee normalises its input and rejects
+                // protocol-relative (`//`) and `scheme:` URLs before
+                // returning the confined value, its return is provably
+                // same-origin — strip OPEN_REDIRECT so redirecting to the
+                // result no longer fires.  Sound because the recogniser
+                // requires backslash normalisation + `//`-prefix rejection +
+                // scheme rejection (see `detect_open_redirect_normalizer`);
+                // the weak `!url.includes("//")` form is not recognised.
+                // (Applied at the universal result-commit point below so it
+                // runs regardless of which resolution path handled the call.)
+
                 // Validated-flow propagation through callee summaries.
                 //
                 // When the callee's body validates a parameter on every
@@ -6053,6 +6082,39 @@ pub(super) fn transfer_inst(
                 return_bits &= !strip;
                 if return_bits.is_empty() {
                     return_origins.clear();
+                }
+            }
+
+            // Behaviour-based open-redirect confiner (CVE-2026-42259): when
+            // the callee normalises its input and rejects protocol-relative
+            // (`//`) and `scheme:` URLs before returning the confined value,
+            // its return is provably same-origin — strip OPEN_REDIRECT so
+            // redirecting to the result no longer fires.  Applied at this
+            // universal commit point so it holds regardless of which
+            // resolution path (inline / summary / label) produced
+            // `return_bits`.  Sound: the recogniser requires backslash
+            // normalisation + `//`-prefix rejection + scheme rejection (see
+            // `detect_open_redirect_normalizer`); the weak
+            // `!url.includes("//")` form is not recognised.
+            // The confining call is often the *outer* wrapper of a nested
+            // source expression — `const dest = normalize_relative_url(
+            // decodeURIComponent(req.body.dest))` lowers to the `req.body.dest`
+            // source flowing straight into `dest`, with the wrapper recorded
+            // only in `info.call.outer_callee`.  Consult both the primary
+            // callee and the outer wrapper.
+            if return_bits.contains(Cap::OPEN_REDIRECT) {
+                let primary_confines = summary_confines_open_redirect(
+                    transfer,
+                    crate::labels::bare_method_name(callee),
+                );
+                let outer_confines = info.call.outer_callee.as_deref().is_some_and(|oc| {
+                    summary_confines_open_redirect(transfer, crate::labels::bare_method_name(oc))
+                });
+                if primary_confines || outer_confines {
+                    return_bits &= !Cap::OPEN_REDIRECT;
+                    if return_bits.is_empty() {
+                        return_origins.clear();
+                    }
                 }
             }
 
