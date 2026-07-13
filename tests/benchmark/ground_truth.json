@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 604
+    "corpus_size": 608
   },
   "cases": [
     {
@@ -18046,6 +18046,142 @@
       ],
       "disabled": false,
       "notes": "Recall counterpart to py-auth-realrepo-021.  Same shape, but the mutation declares NO `Meta.permissions` \u2014 a public graphene mutation.  The `GrapheneExtractor` must NOT mark `perform_mutation` authorized (the soundness gate fires only on a non-empty `Meta.permissions`), so the in-file caller-scope pass refuses to lift onto `_cancel_order_rows` and `missing_ownership_check` still fires on its id-targeted ORM write at line 21."
+    },
+    {
+      "case_id": "py-auth-realrepo-023",
+      "file": "python/safe/fastapi_local_include_router_auth.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.auth.missing_ownership_check",
+        "py.auth.token_override_without_validation"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-07-13"
+      ],
+      "disabled": false,
+      "notes": "Bare-identifier same-file include_router lift: outer=APIRouter(dependencies=[Security(require_auth)]); outer.include_router(inner); route under inner is authorized. Engine fix: router_facts.rs parse_include_router_call now captures bare-identifier local edges; summary/mod.rs resolve_cross_file_router_deps is a transitive fixed-point."
+    },
+    {
+      "case_id": "py-auth-realrepo-024",
+      "file": "python/auth/fastapi_local_include_router_no_deps.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [
+        "py.auth.token_override_without_validation"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          25,
+          25
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          23,
+          23
+        ]
+      ],
+      "tags": [
+        "auth",
+        "positive",
+        "real-repo-precision-2026-07-13"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for the bare-identifier local include_router lift: parent router declares no deps, so nothing is lifted; the id-keyed session.add must still fire."
+    },
+    {
+      "case_id": "py-auth-realrepo-025",
+      "file": "python/safe/fastapi_transitive_include_router/",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.auth.missing_ownership_check",
+        "py.auth.token_override_without_validation"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "cross-file",
+        "negative",
+        "real-repo-precision-2026-07-13"
+      ],
+      "disabled": false,
+      "notes": "Transitive cross-file include_router chain: Security root app_router -> bare `secured` (local edge) -> v1.router -> leaf.router. The leaf route is authorized transitively (2 deps-less intermediate hops) and must not fire. Engine fix: transitive fixed-point in summary/mod.rs resolve_cross_file_router_deps."
+    },
+    {
+      "case_id": "py-auth-realrepo-026",
+      "file": "python/auth/fastapi_transitive_no_deps/",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [
+        "py.auth.token_override_without_validation"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "tags": [
+        "auth",
+        "cross-file",
+        "positive",
+        "real-repo-precision-2026-07-13"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for the transitive resolver: outer -> mid (local edge) -> leaf.router with NO deps anywhere; leaf route must fire. Proves the transitive fixed-point does not hallucinate deps down a deps-less chain."
     },
     {
       "case_id": "cve-ts-2026-25544-vulnerable",

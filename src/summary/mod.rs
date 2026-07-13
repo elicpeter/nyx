@@ -1239,20 +1239,37 @@ impl GlobalSummaries {
     }
 
     /// Resolve cross-file router-level deps for the file identified by
-    /// `child_module_id`.  Walks every other file's persisted
-    /// `RouterIncludeEdge` list, finds edges whose `child_module_id`
-    /// matches, and accumulates the parent file's
-    /// `local_router_deps[parent_var]` against `child_var` — producing
-    /// a `<child_var> → Vec<(CallSite, scoped_security)>` map ready to
+    /// `child_module_id`.  Produces a `<child_var> →
+    /// Vec<(CallSite, scoped_security)>` map of the deps a router declared
+    /// in this file inherits from its FastAPI ancestor routers, ready to
     /// merge into the active file's
     /// `AuthorizationModel.cross_file_router_deps`.
     ///
-    /// Single-hop only.  Transitive lifts (`grandparent.include_router(parent);
-    /// parent.include_router(child)`) are not currently resolved — the
-    /// airflow shape that motivated this fix is single-hop, and adding
-    /// transitive resolution is a follow-up that would also need to
-    /// model the bare-identifier `outer.include_router(inner_router)`
-    /// case which the extractor presently skips.
+    /// **Transitive.**  FastAPI applies a router's `dependencies=[...]` to
+    /// every route reachable through `include_router`, including nested
+    /// chains: `grandparent.include_router(parent);
+    /// parent.include_router(child)` lifts the grandparent's deps onto the
+    /// child even when the intermediate `parent` declares no deps of its
+    /// own.  This resolver builds a router graph over
+    /// `(storage_key, var)` nodes — where an edge points a child node at
+    /// its parent router — and accumulates every ancestor's own deps via a
+    /// cycle-guarded DFS.  Both dotted cross-file child refs
+    /// (`task_instances.router`) and bare same-file child refs
+    /// (`outer.include_router(inner_router)`, `child_local == true`) are
+    /// modeled.
+    ///
+    /// Nodes are keyed by the file's **storage key** (full path) rather
+    /// than its basename module id, because a parent router can live in a
+    /// `__init__.py` file whose [`module_id_for_path`] is `None`
+    /// (`__init__.py` is unaddressable as a *child* target).  Storage-key
+    /// keying keeps such root/parent routers in the graph so their deps
+    /// still propagate — a basename keying would silently drop every
+    /// `__init__.py`-declared parent's deps and regress the airflow
+    /// single-hop shape.  Duplicate basenames still over-accumulate (a
+    /// dotted child ref wires the parent onto *every* file sharing that
+    /// basename), matching the prior single-hop behavior.
+    ///
+    /// [`module_id_for_path`]: crate::auth_analysis::router_facts::module_id_for_path
     ///
     /// Returns an empty map when `child_module_id` matches no edges or
     /// when the index is empty.
@@ -1260,34 +1277,93 @@ impl GlobalSummaries {
         &self,
         child_module_id: &str,
     ) -> HashMap<String, Vec<(crate::auth_analysis::model::CallSite, bool)>> {
+        use crate::auth_analysis::router_facts::module_id_for_path;
+        use std::path::Path;
+
         let mut out: HashMap<String, Vec<(crate::auth_analysis::model::CallSite, bool)>> =
             HashMap::new();
         if self.router_facts_by_module.is_empty() {
             return out;
         }
-        for facts in self.router_facts_by_module.values() {
+
+        // ── Build the router graph (all borrows outlive this fn) ──────
+        // `files_by_module[basename]` = storage keys sharing that
+        // basename, for dotted child-ref resolution.
+        // `own_deps[(storage_key, var)]` = that router's inline deps.
+        let mut files_by_module: HashMap<String, Vec<&str>> = HashMap::new();
+        let mut own_deps: HashMap<
+            (&str, &str),
+            &Vec<(crate::auth_analysis::model::CallSite, bool)>,
+        > = HashMap::new();
+        for (storage_key, facts) in &self.router_facts_by_module {
+            if let Some(m) = module_id_for_path(Path::new(storage_key)) {
+                files_by_module.entry(m).or_default().push(storage_key.as_str());
+            }
+            for (var, deps) in &facts.local_router_deps {
+                if !deps.is_empty() {
+                    own_deps.insert((storage_key.as_str(), var.as_str()), deps);
+                }
+            }
+        }
+
+        // `parents[child_node]` = router nodes that `include_router` the
+        // child (FastAPI parents whose deps flow downward).  A dotted
+        // child ref wires the parent onto every file sharing the child's
+        // basename; a local (bare-identifier) ref wires it onto the
+        // sibling var in the edge's own file.
+        let mut parents: HashMap<(&str, &str), Vec<(&str, &str)>> = HashMap::new();
+        for (storage_key, facts) in &self.router_facts_by_module {
             for edge in &facts.include_router_edges {
-                if edge.child_module_id != child_module_id {
+                let parent_node = (storage_key.as_str(), edge.parent_var.as_str());
+                if edge.child_local {
+                    let child_node = (storage_key.as_str(), edge.child_var.as_str());
+                    parents.entry(child_node).or_default().push(parent_node);
+                } else if let Some(files) = files_by_module.get(edge.child_module_id.as_str()) {
+                    for &child_sk in files {
+                        let child_node = (child_sk, edge.child_var.as_str());
+                        parents.entry(child_node).or_default().push(parent_node);
+                    }
+                }
+            }
+        }
+
+        // ── For each edge whose child resolves to the target module,
+        // accumulate the parent node's full ancestor deps onto the child
+        // var.  `effective_deps(parent)` already folds in the parent's own
+        // inline deps plus every transitively-reachable ancestor. ──
+        for (storage_key, facts) in &self.router_facts_by_module {
+            let owner_mod = module_id_for_path(Path::new(storage_key));
+            for edge in &facts.include_router_edges {
+                let matches_target = if edge.child_local {
+                    owner_mod.as_deref() == Some(child_module_id)
+                } else {
+                    edge.child_module_id == child_module_id
+                };
+                if !matches_target {
                     continue;
                 }
-                // Look up the parent's deps in the SAME file's
-                // local_router_deps map (parent declarations and the
-                // include_router edge live in the same file).
-                let Some(parent_deps) = facts.local_router_deps.get(&edge.parent_var) else {
-                    continue;
-                };
-                if parent_deps.is_empty() {
+                let parent_node = (storage_key.as_str(), edge.parent_var.as_str());
+                let mut visited = std::collections::HashSet::new();
+                let mut deps = Vec::new();
+                accumulate_router_ancestor_deps(
+                    parent_node,
+                    &own_deps,
+                    &parents,
+                    &mut visited,
+                    &mut deps,
+                );
+                if deps.is_empty() {
                     continue;
                 }
                 let entry = out.entry(edge.child_var.clone()).or_default();
-                for dep in parent_deps {
+                for dep in deps {
                     // Dedup by (callee name, scoped flag) so multiple
-                    // parents declaring the same dep don't double-fire.
+                    // ancestors declaring the same dep don't double-fire.
                     let already = entry
                         .iter()
                         .any(|(call, scoped)| call.name == dep.0.name && *scoped == dep.1);
                     if !already {
-                        entry.push(dep.clone());
+                        entry.push(dep);
                     }
                 }
             }
@@ -2026,6 +2102,40 @@ pub(crate) fn synthesize_disambig(summary: &FuncSummary) -> u32 {
     summary.sink_caps.hash(&mut h);
     summary.module_path.hash(&mut h);
     h.finish() as u32
+}
+
+/// Depth-first accumulation of a router node's ancestor deps for
+/// [`GlobalSummaries::resolve_cross_file_router_deps`].  Collects the
+/// node's own inline deps, then recurses into every parent router that
+/// `include_router`s it, deduping by `(callee name, scoped flag)`.  The
+/// `visited` set both prevents cycles (`a.include_router(b);
+/// b.include_router(a)`) and collapses diamond ancestries to a single
+/// visit — correct because the dedup makes the union idempotent.
+fn accumulate_router_ancestor_deps<'a>(
+    node: (&'a str, &'a str),
+    own_deps: &HashMap<(&'a str, &'a str), &'a Vec<(crate::auth_analysis::model::CallSite, bool)>>,
+    parents: &HashMap<(&'a str, &'a str), Vec<(&'a str, &'a str)>>,
+    visited: &mut std::collections::HashSet<(&'a str, &'a str)>,
+    out: &mut Vec<(crate::auth_analysis::model::CallSite, bool)>,
+) {
+    if !visited.insert(node) {
+        return;
+    }
+    if let Some(deps) = own_deps.get(&node) {
+        for dep in deps.iter() {
+            let already = out
+                .iter()
+                .any(|(call, scoped)| call.name == dep.0.name && *scoped == dep.1);
+            if !already {
+                out.push(dep.clone());
+            }
+        }
+    }
+    if let Some(ps) = parents.get(&node) {
+        for &parent in ps {
+            accumulate_router_ancestor_deps(parent, own_deps, parents, visited, out);
+        }
+    }
 }
 
 /// Return `true` iff the new `SsaFuncSummary` is consistent with the

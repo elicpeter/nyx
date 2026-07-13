@@ -51,3 +51,25 @@ fn fastapi_cross_file_include_router_lifts_parent_security_onto_child_router() {
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }
+
+/// Transitive + bare-identifier `include_router` chain (deferred deep fix,
+/// 2026-05-04).  `api.py` declares the root
+/// `app_router = APIRouter(dependencies=[Security(require_auth)])`, then:
+///   1. `app_router.include_router(secured)` — a bare-identifier same-file
+///      edge (previously dropped) that lifts the Security dep onto a
+///      sibling `secured` router.
+///   2. `secured.include_router(v1.router)` + `v1.router.include_router(
+///      items.router)` — a two-hop cross-file chain through deps-less
+///      intermediates (previously single-hop, so `items.router` inherited
+///      nothing).
+///
+/// Post-fix the transitive resolver walks the full ancestor chain, so the
+/// id-keyed write in `items.py` is seen as authorized and must NOT fire
+/// `missing_ownership_check`.  Recall guard: `public.py` is attached under
+/// a deps-less `open_router`, so its id-keyed write MUST still fire.
+#[test]
+fn fastapi_transitive_include_router_lifts_root_security_onto_leaf_router() {
+    let dir = fixture_path("auth_analysis_fastapi_transitive_include_router");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}

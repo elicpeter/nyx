@@ -3996,11 +3996,13 @@ fn resolve_cross_file_router_deps_lifts_parent_security_dep_onto_child_router() 
         parent_var: "authenticated_router".into(),
         child_module_id: "task_instances".into(),
         child_var: "router".into(),
+        child_local: false,
     });
     parent_facts.include_router_edges.push(RouterIncludeEdge {
         parent_var: "authenticated_router".into(),
         child_module_id: "dag_runs".into(),
         child_var: "router".into(),
+        child_local: false,
     });
     gs.insert_router_facts("routes::__init__".into(), parent_facts);
 
@@ -4037,6 +4039,7 @@ fn resolve_cross_file_router_deps_skips_edges_with_no_parent_deps() {
         parent_var: "ghost_router".into(),
         child_module_id: "child".into(),
         child_var: "router".into(),
+        child_local: false,
     });
     gs.insert_router_facts("parent".into(), parent);
 
@@ -4068,6 +4071,7 @@ fn resolve_cross_file_router_deps_dedups_duplicate_parent_deps() {
         parent_var: "router_a".into(),
         child_module_id: "child".into(),
         child_var: "router".into(),
+        child_local: false,
     });
     gs.insert_router_facts("parent_a".into(), p_a);
 
@@ -4079,12 +4083,152 @@ fn resolve_cross_file_router_deps_dedups_duplicate_parent_deps() {
         parent_var: "router_b".into(),
         child_module_id: "child".into(),
         child_var: "router".into(),
+        child_local: false,
     });
     gs.insert_router_facts("parent_b".into(), p_b);
 
     let resolved = gs.resolve_cross_file_router_deps("child");
     let deps = resolved.get("router").expect("router resolved");
     assert_eq!(deps.len(), 1, "duplicate (callee, scoped) deduplicated");
+}
+
+/// Transitive chain: `main.py` declares `app_router =
+/// APIRouter(dependencies=[Security(require_auth)])` and includes
+/// `v1.router`; `v1.py` declares a bare `router` (NO deps) and includes
+/// `items.router`; `items.py` declares a bare `router`.  FastAPI lifts
+/// the grandparent's Security dep all the way onto `items.router`'s
+/// routes even though the intermediate `v1.router` declares nothing.
+/// The resolver must walk the two-hop chain (single-hop would miss it).
+#[test]
+fn resolve_cross_file_router_deps_transitive_chain_lifts_grandparent_deps() {
+    use crate::auth_analysis::model::CallSite;
+    use crate::auth_analysis::router_facts::{PerFileRouterFacts, RouterIncludeEdge};
+
+    let cs = CallSite {
+        name: "require_auth".into(),
+        args: Vec::new(),
+        span: (0, 0),
+        args_value_refs: Vec::new(),
+    };
+    let mut gs = GlobalSummaries::new();
+
+    // Grandparent: main.py, app_router carries the Security dep + edge to v1.
+    let mut main_facts = PerFileRouterFacts::default();
+    main_facts
+        .local_router_deps
+        .insert("app_router".into(), vec![(cs.clone(), true)]);
+    main_facts.include_router_edges.push(RouterIncludeEdge {
+        parent_var: "app_router".into(),
+        child_module_id: "v1".into(),
+        child_var: "router".into(),
+        child_local: false,
+    });
+    gs.insert_router_facts("/proj/main.py".into(), main_facts);
+
+    // Intermediate: v1.py, bare router (no deps) + edge to items.
+    let mut v1_facts = PerFileRouterFacts::default();
+    v1_facts.include_router_edges.push(RouterIncludeEdge {
+        parent_var: "router".into(),
+        child_module_id: "items".into(),
+        child_var: "router".into(),
+        child_local: false,
+    });
+    gs.insert_router_facts("/proj/v1.py".into(), v1_facts);
+
+    // Leaf: items.py, bare router, no edges.
+    gs.insert_router_facts("/proj/items.py".into(), PerFileRouterFacts::default());
+
+    // items.router inherits the grandparent's Security dep transitively.
+    let resolved = gs.resolve_cross_file_router_deps("items");
+    let deps = resolved
+        .get("router")
+        .expect("items.router inherits grandparent dep");
+    assert_eq!(deps.len(), 1);
+    assert_eq!(deps[0].0.name, "require_auth");
+    assert!(deps[0].1, "scoped flag preserved through the chain");
+
+    // The intermediate v1.router also inherits the grandparent dep.
+    let resolved_v1 = gs.resolve_cross_file_router_deps("v1");
+    assert_eq!(resolved_v1.get("router").map(|v| v.len()), Some(1));
+}
+
+/// Same-file bare-identifier lift: `app.py` declares
+/// `outer = APIRouter(dependencies=[Security(require_auth)])` then
+/// `outer.include_router(inner_router)`.  The bare-identifier edge must
+/// lift `outer`'s deps onto `inner_router` — the in-file router-dep map
+/// alone does not model `include_router` propagation, so this closes the
+/// same-file bare-child gap.
+#[test]
+fn resolve_cross_file_router_deps_local_bare_identifier_edge_lifts_within_file() {
+    use crate::auth_analysis::model::CallSite;
+    use crate::auth_analysis::router_facts::{PerFileRouterFacts, RouterIncludeEdge};
+
+    let cs = CallSite {
+        name: "require_auth".into(),
+        args: Vec::new(),
+        span: (0, 0),
+        args_value_refs: Vec::new(),
+    };
+    let mut gs = GlobalSummaries::new();
+
+    let mut app = PerFileRouterFacts::default();
+    app.local_router_deps
+        .insert("outer".into(), vec![(cs, true)]);
+    app.include_router_edges.push(RouterIncludeEdge {
+        parent_var: "outer".into(),
+        child_module_id: String::new(),
+        child_var: "inner_router".into(),
+        child_local: true,
+    });
+    gs.insert_router_facts("/proj/app.py".into(), app);
+
+    let resolved = gs.resolve_cross_file_router_deps("app");
+    let deps = resolved
+        .get("inner_router")
+        .expect("inner_router inherits outer's dep via local include_router");
+    assert_eq!(deps.len(), 1);
+    assert_eq!(deps[0].0.name, "require_auth");
+}
+
+/// Cycle safety: `a.include_router(b); b.include_router(a)` (both bare
+/// same-file edges) must terminate.  The DFS visited-set guard collapses
+/// the cycle; `a`'s deps still lift onto `b` and vice versa.
+#[test]
+fn resolve_cross_file_router_deps_cycle_terminates() {
+    use crate::auth_analysis::model::CallSite;
+    use crate::auth_analysis::router_facts::{PerFileRouterFacts, RouterIncludeEdge};
+
+    let cs = CallSite {
+        name: "require_auth".into(),
+        args: Vec::new(),
+        span: (0, 0),
+        args_value_refs: Vec::new(),
+    };
+    let mut gs = GlobalSummaries::new();
+
+    let mut c = PerFileRouterFacts::default();
+    c.local_router_deps.insert("a".into(), vec![(cs, true)]);
+    c.include_router_edges.push(RouterIncludeEdge {
+        parent_var: "a".into(),
+        child_module_id: String::new(),
+        child_var: "b".into(),
+        child_local: true,
+    });
+    c.include_router_edges.push(RouterIncludeEdge {
+        parent_var: "b".into(),
+        child_module_id: String::new(),
+        child_var: "a".into(),
+        child_local: true,
+    });
+    gs.insert_router_facts("/proj/c.py".into(), c);
+
+    let resolved = gs.resolve_cross_file_router_deps("c");
+    // Cycle: `a`'s dep reaches `b` (a is b's parent), and `a` also
+    // inherits it back through `b` (b's ancestry loops to a).  The
+    // visited-set guard makes the union idempotent, so each var carries
+    // exactly one copy of the dep and the walk terminates.
+    assert_eq!(resolved.get("b").map(|v| v.len()), Some(1));
+    assert_eq!(resolved.get("a").map(|v| v.len()), Some(1));
 }
 
 // ── the analysis ────────────────────

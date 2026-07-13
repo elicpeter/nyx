@@ -14,18 +14,24 @@
 //! Storage shape: per-Python-file [`PerFileRouterFacts`] with
 //! `local_router_deps` (the `<router> = X(deps=[…])` declarations
 //! visible in the file) and `include_router_edges` (the
-//! `<parent>.include_router(<child_module>.<child_var>, …)` calls).
-//! Persisted into `crate::summary::GlobalSummaries::router_facts_by_module`
-//! during pass 1 and resolved into the active file's
+//! `<parent>.include_router(<child>, …)` calls — both dotted cross-file
+//! `<child_module>.<child_var>` refs and bare same-file `<child_var>`
+//! refs; see [`RouterIncludeEdge`]).  Persisted into
+//! `crate::summary::GlobalSummaries::router_facts_by_module` during pass 1
+//! and resolved into the active file's
 //! [`crate::auth_analysis::model::AuthorizationModel::cross_file_router_deps`]
 //! at pass 2 entry.
 //!
 //! Module identity: file basename without `.py`.  This is approximate (two
 //! files named `task_instances.py` in different packages would collide) but
 //! covers airflow-style codebases where include_router targets reference the
-//! child's module name directly (`task_instances.router`).  Transitive lifts
-//! (`grandparent.include_router(parent); parent.include_router(child)`) are
-//! resolved by walking the index iteratively at lookup time.
+//! child's module name directly (`task_instances.router`).
+//!
+//! Resolution ([`crate::summary::GlobalSummaries::resolve_cross_file_router_deps`])
+//! is **transitive**: it builds a router graph over the persisted edges and
+//! accumulates every ancestor router's deps down each `include_router`
+//! chain, so `grandparent → parent → child` lifts the grandparent's auth
+//! onto the child even when the intermediate `parent` declares none.
 
 use crate::auth_analysis::extract::common::{
     call_site_from_node, named_children, string_literal_value, text,
@@ -51,15 +57,31 @@ pub struct PerFileRouterFacts {
     pub include_router_edges: Vec<RouterIncludeEdge>,
 }
 
-/// A single `<parent>.include_router(<child_module>.<child_var>, ...)`
-/// edge.  `parent_var` is the local variable that owns the deps to lift;
-/// `child_module_id` + `child_var` together name the child router whose
-/// routes inherit the parent's deps.
+/// A single `<parent>.include_router(<child>, ...)` edge.  `parent_var`
+/// is the local variable that owns the deps to lift.
+///
+/// Two child-reference shapes are captured:
+///
+/// * **Dotted / cross-file** (`<child_module>.<child_var>`, e.g.
+///   `task_instances.router`): `child_local == false` and
+///   `child_module_id` is the last module segment (`task_instances`).
+///   Resolution matches the child against every file whose basename
+///   equals `child_module_id`.
+/// * **Bare identifier / same-file** (`<child_var>`, e.g.
+///   `inner_router` — a sibling router declared in the SAME file as the
+///   edge): `child_local == true` and `child_module_id` is empty.
+///   Resolution substitutes the edge-owning file's own module id, so the
+///   lift stays confined to that one file.  FastAPI applies the same
+///   dependency propagation to `outer.include_router(inner_router)` as to
+///   the dotted cross-file form, so both must be tracked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouterIncludeEdge {
     pub parent_var: String,
     pub child_module_id: String,
     pub child_var: String,
+    /// True iff the child was a bare identifier (same-file sibling
+    /// router).  See the struct doc for how resolution treats it.
+    pub child_local: bool,
 }
 
 /// Translate a file path into a stable cross-file module identifier.
@@ -183,11 +205,10 @@ fn collect_local_router_deps(
 }
 
 /// Walk every call expression in the file looking for
-/// `<parent>.include_router(<child_module>.<child_var>, ...)` shapes.
-/// Records `(parent_var, child_module_id, child_var)` for each.  Skips
-/// edges where the child reference is a bare identifier (no module
-/// segment) — those would require Python import resolution to attach
-/// to a specific file, beyond this single-hop basename matching.
+/// `<parent>.include_router(<child>, ...)` shapes.  Records one
+/// [`RouterIncludeEdge`] per call — dotted `<child_module>.<child_var>`
+/// refs as cross-file edges, bare `<child_var>` refs as same-file local
+/// edges (see [`parse_include_router_call`]).
 fn collect_include_router_edges(root: Node<'_>, bytes: &[u8], out: &mut Vec<RouterIncludeEdge>) {
     walk_for_include_router(root, bytes, out);
 }
@@ -225,35 +246,58 @@ fn parse_include_router_call(node: Node<'_>, bytes: &[u8]) -> Option<RouterInclu
     let first = named_children(arguments)
         .into_iter()
         .find(|child| child.kind() != "keyword_argument")?;
-    if first.kind() != "attribute" {
-        return None;
-    }
-    let child_attr = first.child_by_field_name("attribute")?;
-    let child_var = text(child_attr, bytes).trim().to_string();
-    if child_var.is_empty() {
-        return None;
-    }
-    let child_object = first.child_by_field_name("object")?;
-    // Use the **last segment** of a possibly-dotted module reference as
-    // the cross-file module id.  `task_instances.router` →
-    // module_id="task_instances"; `pkg.task_instances.router` →
-    // module_id="task_instances" (last attribute segment).
-    let child_module_id = match child_object.kind() {
-        "identifier" => text(child_object, bytes).trim().to_string(),
+    match first.kind() {
+        // Dotted / cross-file child ref: `<child_module>.<child_var>`.
+        // Use the **last segment** of a possibly-dotted module reference
+        // as the cross-file module id.  `task_instances.router` →
+        // module_id="task_instances"; `pkg.task_instances.router` →
+        // module_id="task_instances" (last attribute segment).
         "attribute" => {
-            let inner_attr = child_object.child_by_field_name("attribute")?;
-            text(inner_attr, bytes).trim().to_string()
+            let child_attr = first.child_by_field_name("attribute")?;
+            let child_var = text(child_attr, bytes).trim().to_string();
+            if child_var.is_empty() {
+                return None;
+            }
+            let child_object = first.child_by_field_name("object")?;
+            let child_module_id = match child_object.kind() {
+                "identifier" => text(child_object, bytes).trim().to_string(),
+                "attribute" => {
+                    let inner_attr = child_object.child_by_field_name("attribute")?;
+                    text(inner_attr, bytes).trim().to_string()
+                }
+                _ => return None,
+            };
+            if child_module_id.is_empty() {
+                return None;
+            }
+            Some(RouterIncludeEdge {
+                parent_var,
+                child_module_id,
+                child_var,
+                child_local: false,
+            })
         }
-        _ => return None,
-    };
-    if child_module_id.is_empty() {
-        return None;
+        // Bare-identifier child ref: `<child_var>` — a sibling router
+        // declared in the SAME file as this edge (e.g.
+        // `outer.include_router(inner_router)`).  Recorded as a local
+        // edge; resolution substitutes the edge-owning file's own module
+        // id so the lift stays confined to this file.  A self-include
+        // (`r.include_router(r)`) carries no propagation and is skipped
+        // to keep the router graph acyclic and noise-free.
+        "identifier" => {
+            let child_var = text(first, bytes).trim().to_string();
+            if child_var.is_empty() || child_var == parent_var {
+                return None;
+            }
+            Some(RouterIncludeEdge {
+                parent_var,
+                child_module_id: String::new(),
+                child_var,
+                child_local: true,
+            })
+        }
+        _ => None,
     }
-    Some(RouterIncludeEdge {
-        parent_var,
-        child_module_id,
-        child_var,
-    })
 }
 
 fn keyword_argument_value<'tree>(
@@ -461,19 +505,46 @@ mod tests {
             e.parent_var == "authenticated_router"
                 && e.child_module_id == "dag_runs"
                 && e.child_var == "router"
+                && !e.child_local
+        }));
+
+        // The nested `execution_api_router.include_router(authenticated_router)`
+        // is now captured as a same-file LOCAL edge (bare-identifier
+        // child), so transitive in-file lifts can flow through it.
+        assert!(facts.include_router_edges.iter().any(|e| {
+            e.parent_var == "execution_api_router"
+                && e.child_var == "authenticated_router"
+                && e.child_local
+                && e.child_module_id.is_empty()
         }));
     }
 
-    /// `<parent>.include_router(<bare_var>)` — child reference is a bare
-    /// identifier, no module segment.  Cannot resolve to a specific
-    /// file, so no edge is emitted.  This includes the canonical
-    /// `execution_api_router.include_router(authenticated_router)` chain
-    /// where the child is a sibling router declared in the same file —
-    /// transitive in-file lifts are handled by the local-deps map, not
-    /// the cross-file edge list.
+    /// `<parent>.include_router(<bare_var>)` — child is a bare identifier
+    /// (a sibling router in the same file).  Captured as a LOCAL edge
+    /// (`child_local == true`, empty `child_module_id`) so the same-file
+    /// FastAPI dependency lift is modeled.  FastAPI applies the parent's
+    /// `dependencies=[...]` to every route under the bare child router
+    /// exactly as it does for the dotted cross-file form.
     #[test]
-    fn extract_router_facts_skips_bare_identifier_child_refs() {
-        let src = "outer = APIRouter()\nouter.include_router(authenticated_router)\n";
+    fn extract_router_facts_captures_bare_identifier_local_edge() {
+        let src = "outer = APIRouter()\nouter.include_router(inner_router)\n";
+        let tree = parse_python(src);
+        let bytes = src.as_bytes();
+        let facts = extract_router_facts_for_python(&tree, bytes);
+        assert_eq!(facts.include_router_edges.len(), 1);
+        let edge = &facts.include_router_edges[0];
+        assert_eq!(edge.parent_var, "outer");
+        assert_eq!(edge.child_var, "inner_router");
+        assert!(edge.child_local);
+        assert!(edge.child_module_id.is_empty());
+    }
+
+    /// A self-include (`r.include_router(r)`) carries no dependency
+    /// propagation and would introduce a self-loop into the router
+    /// graph, so it is skipped entirely.
+    #[test]
+    fn extract_router_facts_skips_self_include() {
+        let src = "r = APIRouter()\nr.include_router(r)\n";
         let tree = parse_python(src);
         let bytes = src.as_bytes();
         let facts = extract_router_facts_for_python(&tree, bytes);
