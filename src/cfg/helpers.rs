@@ -257,7 +257,7 @@ pub(crate) fn find_classifiable_inner_call<'a>(
     lang: &str,
     code: &'a [u8],
     extra: Option<&[crate::labels::RuntimeLabelRule]>,
-) -> Option<(String, DataLabel, (usize, usize))> {
+) -> Option<(String, DataLabel, Node<'a>)> {
     find_inner_call_impl(n, lang, code, extra, false)
 }
 
@@ -275,7 +275,7 @@ pub(crate) fn find_inner_sink_call<'a>(
     lang: &str,
     code: &'a [u8],
     extra: Option<&[crate::labels::RuntimeLabelRule]>,
-) -> Option<(String, DataLabel, (usize, usize))> {
+) -> Option<(String, DataLabel, Node<'a>)> {
     find_inner_call_impl(n, lang, code, extra, true)
 }
 
@@ -289,7 +289,7 @@ fn find_inner_call_impl<'a>(
     code: &'a [u8],
     extra: Option<&[crate::labels::RuntimeLabelRule]>,
     require_sink: bool,
-) -> Option<(String, DataLabel, (usize, usize))> {
+) -> Option<(String, DataLabel, Node<'a>)> {
     let accept = |lbl: &DataLabel| !require_sink || matches!(lbl, DataLabel::Sink(_));
     let mut cursor = n.walk();
     for c in n.children(&mut cursor) {
@@ -340,7 +340,7 @@ fn find_inner_call_impl<'a>(
                     && let Some(lbl) = classify(lang, id, extra)
                     && accept(&lbl)
                 {
-                    return Some((id.clone(), lbl, (c.start_byte(), c.end_byte())));
+                    return Some((id.clone(), lbl, c));
                 }
                 // Receiver-type rewrite fallback: when the literal
                 // `recv.method` text didn't classify, AND we're inside
@@ -371,7 +371,7 @@ fn find_inner_call_impl<'a>(
                     if let Some(lbl) = classify(lang, &alt, extra)
                         && accept(&lbl)
                     {
-                        return Some((alt, lbl, (c.start_byte(), c.end_byte())));
+                        return Some((alt, lbl, c));
                     }
                 }
                 // Recurse into arguments of this call

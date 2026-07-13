@@ -1241,6 +1241,7 @@ fn clone_preserves_all_sub_structs() {
             arg_uses: vec![vec!["a".into()]],
             receiver: Some("obj".into()),
             sink_payload_args: Some(vec![1, 2]),
+            sink_reaching_uses: Some(vec!["a".into()]),
             kwargs: vec![("shell".into(), vec!["True".into()])],
             arg_string_literals: vec![Some("lit".into())],
             destination_uses: None,
@@ -1278,6 +1279,10 @@ fn clone_preserves_all_sub_structs() {
     assert_eq!(
         cloned.call.sink_payload_args,
         original.call.sink_payload_args
+    );
+    assert_eq!(
+        cloned.call.sink_reaching_uses,
+        original.call.sink_reaching_uses
     );
     assert_eq!(cloned.call.kwargs, original.call.kwargs);
     assert_eq!(cloned.taint.labels.len(), original.taint.labels.len());
@@ -1447,6 +1452,44 @@ fn rust_nested_use_as_alias() {
     assert_eq!(file_cfg.import_bindings.len(), 1);
     let b = &file_cfg.import_bindings["IoRead"];
     assert_eq!(b.original, "Read");
+}
+
+/// `Ok(Reader { meta: <tainted>, tasks: File::open(const) })` collapses the
+/// whole aggregate into one CFG node whose `Sink(FILE_IO)` label is
+/// contributed by the nested `File::open`.  The node's def-use set includes
+/// the tainted sibling field `meta`, which is NOT the sink's argument.
+/// `sink_reaching_uses` must capture the inner sink call's own identifiers
+/// (`dir`) and exclude the sibling (`meta`) so the taint sink scan does not
+/// spuriously report `meta` as reaching the `File::open` path argument
+/// (meilisearch `crates/dump/src/reader/v{2..6}/mod.rs`).
+#[test]
+fn rust_inner_sink_in_aggregate_records_reaching_uses_excluding_sibling() {
+    let src = br#"
+fn open(dir: &std::path::Path) -> std::io::Result<Reader> {
+    let meta_file = std::fs::read(dir.join("metadata.json")).unwrap();
+    let meta = String::from_utf8(meta_file).unwrap();
+    Ok(Reader { meta, tasks: File::open(dir.join("data.jsonl")).unwrap() })
+}
+"#;
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let node = cfg
+        .node_indices()
+        .find(|&n| {
+            let info = &cfg[n];
+            info.call.outer_callee.as_deref() == Some("Ok")
+                && info.call.sink_reaching_uses.is_some()
+        })
+        .expect("expected an inner-sink override node (outer=Ok) with sink_reaching_uses");
+    let reaching = cfg[node].call.sink_reaching_uses.as_ref().unwrap();
+    assert!(
+        reaching.iter().any(|u| u == "dir"),
+        "inner File::open path ident `dir` must be recorded, got {reaching:?}"
+    );
+    assert!(
+        !reaching.iter().any(|u| u == "meta"),
+        "sibling struct field `meta` must NOT be recorded, got {reaching:?}"
+    );
 }
 
 /// `format!("{x}")` uses x even though x is captured via the format

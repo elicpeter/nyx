@@ -602,6 +602,23 @@ pub struct CallMeta {
     /// When `Some`, only variables from these `arg_uses` positions are checked
     /// for taint.  `None` = all arguments are payload (default).
     pub sink_payload_args: Option<Vec<usize>>,
+    /// Identifiers syntactically contained in a nested inner sink call when the
+    /// node's `Sink` label was contributed by
+    /// [`crate::cfg::find_classifiable_inner_call`] /
+    /// [`crate::cfg::find_inner_sink_call`] overriding the outer callee.
+    ///
+    /// A flattened aggregate node (`Ok(Reader { meta: <tainted>, h:
+    /// File::open(const) })`) collapses the whole expression into one CFG
+    /// node whose `Sink` label applies only to the inner `File::open`
+    /// sub-expression, yet whose def-use set (and hence the SSA Call's
+    /// implicit args) includes the tainted sibling field `meta`.  Without a
+    /// filter the sink scan's aggregate fallback would treat that sibling as
+    /// reaching the sink.  When `Some`, the SSA sink scan drops any tainted
+    /// value whose `var_name` is present but NOT in this set; unnamed
+    /// temporaries are kept (conservative for recall).  `None` for the common
+    /// case where the classified call IS the outer AST node.
+    #[serde(default)]
+    pub sink_reaching_uses: Option<Vec<String>>,
     /// Keyword/named arguments attached to this call, in source order.
     ///
     /// Each entry is `(keyword_name, uses)` where `uses` are the identifier
@@ -2784,6 +2801,11 @@ pub(super) fn push_node<'a>(
     // CVE-2023-38337, the Marshal/JSON/YAML-of-File.read pattern, etc.).
     let mut outer_callee: Option<String> = None;
     let mut inner_callee_span: Option<(usize, usize)> = None;
+    // Identifiers syntactically contained in a nested inner sink call when
+    // `find_classifiable_inner_call` / `find_inner_sink_call` overrides the
+    // outer callee.  Restricts the taint sink scan to the inner sink's own
+    // sub-expression, excluding sibling positions of the enclosing aggregate.
+    let mut sink_reaching_uses: Option<Vec<String>> = None;
     // JS/TS Promise callback methods (`.then`/`.catch`/`.finally`) on chained
     // receivers (`Promise.resolve(req.body).then(cb)`).  Without this guard,
     // `find_classifiable_inner_call` walks into the chain receiver and
@@ -2854,12 +2876,33 @@ pub(super) fn push_node<'a>(
         } else {
             find_inner_sink_call(ast, lang, code, extra)
         };
-        if let Some((inner_text, inner_label, inner_span)) = inner {
+        if let Some((inner_text, inner_label, inner_node)) = inner {
+            let inner_is_sink = matches!(inner_label, DataLabel::Sink(_));
             labels.push(inner_label);
             if !outer_is_promise_callback {
                 outer_callee = Some(text.clone());
                 text = inner_text;
-                inner_callee_span = Some(inner_span);
+                inner_callee_span = Some((inner_node.start_byte(), inner_node.end_byte()));
+                // Inner-nested-sink argument attribution.  The Sink label was
+                // contributed by a call nested inside a larger, non-sink outer
+                // expression (`Ok(Reader { meta: <tainted>, h:
+                // File::open(const) })`, `str(eval(x))`).  Record the
+                // identifiers that syntactically appear *inside* that inner
+                // sink call so the taint sink scan can exclude values that
+                // occupy a DIFFERENT sub-position of the enclosing aggregate
+                // (a sibling struct field / tuple element), which are NOT the
+                // sink's payload.  Only meaningful for sink overrides — a
+                // Source/Sanitizer override taints the wrapper's *result*, a
+                // separate channel handled elsewhere.
+                if inner_is_sink {
+                    let mut idents = Vec::new();
+                    let mut paths = Vec::new();
+                    collect_idents_with_paths(inner_node, code, &mut idents, &mut paths);
+                    paths.extend(idents);
+                    if !paths.is_empty() {
+                        sink_reaching_uses = Some(paths);
+                    }
+                }
             }
         }
     }
@@ -3901,6 +3944,7 @@ pub(super) fn push_node<'a>(
             arg_uses,
             receiver,
             sink_payload_args,
+            sink_reaching_uses,
             kwargs,
             arg_string_literals,
             destination_uses,

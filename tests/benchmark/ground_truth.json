@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 614
+    "corpus_size": 616
   },
   "cases": [
     {
@@ -19339,6 +19339,72 @@
       ],
       "disabled": false,
       "notes": "Unrestricted Environment(loader=BaseLoader).from_string positive: Layer G must NOT suppress \u2014 only sandboxed receivers are safe."
+    },
+    {
+      "case_id": "rs-safe-021",
+      "file": "rust/safe/safe_reader_sibling_file_open.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "real-repo-precision-2026-07-13",
+        "aggregate-sibling",
+        "file-io"
+      ],
+      "disabled": false,
+      "notes": "meilisearch dump-reader: tainted file contents in one struct field, File::open(const) in a sibling field of the same Ok(...) aggregate; the sibling must not reach the nested FILE_IO sink"
+    },
+    {
+      "case_id": "rs-path-009",
+      "file": "rust/path_traversal/reader_wrapped_file_open.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.file_io.File"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          13,
+          13
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-07-13",
+        "aggregate-wrapper",
+        "recall-guard"
+      ],
+      "disabled": false,
+      "notes": "Ok(File::open(&tainted_contents)) \u2014 tainted file contents ARE the inner sink path arg; must fire despite the Ok(...) wrapper (recall guard for the sibling-attribution fix)"
     }
   ]
 }

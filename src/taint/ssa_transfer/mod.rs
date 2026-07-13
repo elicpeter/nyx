@@ -9846,6 +9846,28 @@ fn collect_tainted_sink_values(
         check_heap_taint(v, &mut result);
     }
 
+    // Inner-nested-sink argument attribution.  When this node's `Sink` label
+    // was contributed by a call nested inside a larger non-sink outer
+    // expression (`Ok(Reader { meta: <tainted>, h: File::open(const) })`,
+    // `str(eval(x))`), only values that syntactically appear inside that
+    // inner sink call are its payload.  A tainted value occupying a DIFFERENT
+    // sub-position of the enclosing aggregate is a sibling that reaches the
+    // aggregate's returned value, not the sink's argument, so drop it.  Named
+    // values outside the set are dropped; unnamed temporaries are kept
+    // (conservative — the inner sink's payload may be an unnamed sub-call).
+    if let Some(reaching) = info.call.sink_reaching_uses.as_deref() {
+        result.retain(|(v, _, _)| {
+            match ssa
+                .value_defs
+                .get(v.0 as usize)
+                .and_then(|vd| vd.var_name.as_deref())
+            {
+                Some(name) => reaching.iter().any(|n| n == name),
+                None => true,
+            }
+        });
+    }
+
     apply_field_aware_suppression(&mut result, inst, info, state, sink_caps, ssa);
     apply_arg_type_safe_suppression(&mut result, sink_caps, transfer.type_facts, inst, info, ssa);
     result

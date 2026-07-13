@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-07-13T20:17:53Z",
+  "timestamp": "2026-07-13T22:10:11Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:8bda1c4815d7986bd9f8ad3874a990d041880548f0706135c0f0d64836e5591f",
-  "corpus_size": 612,
-  "cases_run": 610,
+  "ground_truth_hash": "sha256:71446528b705eafb006ab9643357e143730d60612fe050c0399d22649e3f2466",
+  "corpus_size": 614,
+  "cases_run": 612,
   "cases_skipped": 2,
   "outcomes": [
     {
@@ -1404,15 +1404,16 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
-        "taint-unsanitised-flow (source 35:22)",
-        "taint-unsanitised-flow (source 35:22)",
+        "taint-unsanitised-flow (source 32:17)",
         "taint-unsanitised-flow (source 35:22)",
         "taint-unsanitised-flow (source 35:22)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
       "all_finding_ids": [
-        "taint-unsanitised-flow (source 35:22)",
-        "taint-unsanitised-flow (source 35:22)",
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow (source 32:17)",
         "taint-unsanitised-flow (source 35:22)",
         "taint-unsanitised-flow (source 35:22)"
       ],
@@ -8547,6 +8548,25 @@
       "non_security_finding_count": 2
     },
     {
+      "case_id": "rs-path-009",
+      "file": "rust/path_traversal/reader_wrapped_file_open.rs",
+      "language": "rust",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 12:16)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 12:16)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "rs-safe-001",
       "file": "rust/safe/safe_constant.rs",
       "language": "rust",
@@ -8902,6 +8922,24 @@
       ],
       "security_finding_count": 0,
       "non_security_finding_count": 1
+    },
+    {
+      "case_id": "rs-safe-021",
+      "file": "rust/safe/safe_reader_sibling_file_open.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 2
     },
     {
       "case_id": "rs-safe-cross-001",
@@ -10876,22 +10914,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 293,
+    "tp": 294,
     "fp": 7,
     "fn_": 7,
-    "tn": 303,
-    "precision": 0.9766666666666667,
-    "recall": 0.9766666666666667,
-    "f1": 0.9766666666666667
+    "tn": 304,
+    "precision": 0.9767441860465116,
+    "recall": 0.9767441860465116,
+    "f1": 0.9767441860465116
   },
   "aggregate_rule_level": {
-    "tp": 293,
+    "tp": 294,
     "fp": 7,
     "fn_": 7,
-    "tn": 303,
-    "precision": 0.9766666666666667,
-    "recall": 0.9766666666666667,
-    "f1": 0.9766666666666667
+    "tn": 304,
+    "precision": 0.9767441860465116,
+    "recall": 0.9767441860465116,
+    "f1": 0.9767441860465116
   },
   "by_language": {
     "c": {
@@ -10967,13 +11005,13 @@
       "f1": 1.0
     },
     "rust": {
-      "tp": 46,
+      "tp": 47,
       "fp": 2,
       "fn_": 0,
-      "tn": 49,
-      "precision": 0.9583333333333334,
+      "tn": 50,
+      "precision": 0.9591836734693877,
       "recall": 1.0,
-      "f1": 0.9787234042553191
+      "f1": 0.9791666666666666
     },
     "typescript": {
       "tp": 38,
@@ -11104,7 +11142,7 @@
       "f1": 1.0
     },
     "path_traversal": {
-      "tp": 38,
+      "tp": 39,
       "fp": 0,
       "fn_": 0,
       "tn": 1,
@@ -11134,7 +11172,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 298,
+      "tn": 299,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -11187,31 +11225,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 93,
-      "fp": 129,
-      "fn_": 207,
-      "tn": 181,
-      "precision": 0.4189189189189189,
-      "recall": 0.31,
-      "f1": 0.3563218390804598
+      "tp": 92,
+      "fp": 133,
+      "fn_": 209,
+      "tn": 178,
+      "precision": 0.4088888888888889,
+      "recall": 0.30564784053156147,
+      "f1": 0.349809885931559
     },
     ">=Low": {
-      "tp": 93,
-      "fp": 153,
-      "fn_": 207,
-      "tn": 157,
-      "precision": 0.3780487804878049,
-      "recall": 0.31,
-      "f1": 0.34065934065934067
+      "tp": 92,
+      "fp": 157,
+      "fn_": 209,
+      "tn": 154,
+      "precision": 0.36947791164658633,
+      "recall": 0.30564784053156147,
+      "f1": 0.33454545454545453
     },
     ">=Medium": {
-      "tp": 93,
-      "fp": 132,
-      "fn_": 207,
-      "tn": 178,
-      "precision": 0.41333333333333333,
-      "recall": 0.31,
-      "f1": 0.3542857142857142
+      "tp": 92,
+      "fp": 137,
+      "fn_": 209,
+      "tn": 174,
+      "precision": 0.4017467248908297,
+      "recall": 0.30564784053156147,
+      "f1": 0.3471698113207547
     }
   }
 }
