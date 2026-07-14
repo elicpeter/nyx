@@ -924,10 +924,10 @@ mod tests {
             cfg_node_map,
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         }
     }
 

@@ -786,10 +786,10 @@ mod tests {
             cfg_node_map: [(sink_node, sink_val)].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let finding = Finding {
@@ -844,10 +844,10 @@ mod tests {
             cfg_node_map: [(sink_node, SsaValue(5))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let cfg = Cfg::new();
         let finding = Finding {
@@ -908,10 +908,10 @@ mod tests {
             cfg_node_map: [(sink_node, sink_val)].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let finding = Finding {
@@ -973,10 +973,10 @@ mod tests {
             cfg_node_map: [(sink_node, sink_val)].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let finding = Finding {

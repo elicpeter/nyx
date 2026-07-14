@@ -2054,13 +2054,13 @@ async function recentAuditLogs() {
             }],
             entry: BlockId(0),
             value_defs,
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner,
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let facts = analyse_body(&body, BodyId(0));

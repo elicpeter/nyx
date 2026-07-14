@@ -2,9 +2,10 @@ use crate::constraint::domain::ConstValue;
 use crate::constraint::lower::ConditionExpr;
 use crate::ssa::type_facts::TypeKind;
 use petgraph::graph::NodeIndex;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Unique identifier for an SSA value (one per definition point).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -325,7 +326,15 @@ pub struct SsaBody {
     /// Per-SsaValue definition info, indexed by SsaValue.0.
     pub value_defs: Vec<ValueDef>,
     /// Map from original CFG NodeIndex to the primary SsaValue defined there.
-    pub cfg_node_map: std::collections::HashMap<NodeIndex, SsaValue>,
+    ///
+    /// `FxHashMap` (rustc_hash) over stdlib SipHash: keys are dense `NodeIndex`
+    /// integers (petgraph `DiGraph` indices), the map is point-looked-up
+    /// throughout taint / guards / symex and only ever iterated in an
+    /// order-insensitive validation pass ([`crate::ssa::invariants`]), so the
+    /// cheaper deterministic hasher is bit-identical to the old SipHash map and
+    /// serialises to the same msgpack map form (existing `CalleeSsaBody` DB
+    /// blobs decode unchanged). Built once per body during lowering.
+    pub cfg_node_map: FxHashMap<NodeIndex, SsaValue>,
     /// Exception edges: (source block, catch entry block).
     /// Recorded during lowering when exception edges are stripped from the CFG.
     /// Used by taint analysis to seed catch blocks with try-body taint state.
@@ -352,7 +361,7 @@ pub struct SsaBody {
     /// Serialized via `#[serde(default)]` so pre-W1 SSA blobs decode
     /// cleanly with an empty map (no migration needed).
     #[serde(default)]
-    pub field_writes: HashMap<SsaValue, (SsaValue, FieldId)>,
+    pub field_writes: FxHashMap<SsaValue, (SsaValue, FieldId)>,
     /// SSA values that lowering injected for **free / closure-captured**
     /// variables (variables referenced by the body but not declared as
     /// formal parameters and not assigned within the body).
@@ -372,7 +381,7 @@ pub struct SsaBody {
     /// `#[serde(default)]` for backward compatibility with summary blobs
     /// produced before this field existed.
     #[serde(default)]
-    pub synthetic_externals: HashSet<SsaValue>,
+    pub synthetic_externals: FxHashSet<SsaValue>,
     /// SSA values whose [`SsaOp::Assign`] is a slot-scoped binding from a
     /// bare-array destructure rewrite (see `bare_array_ops` in
     /// [`crate::ssa::lower`]). The Assign transfer arm in
@@ -388,7 +397,7 @@ pub struct SsaBody {
     /// Empty by default; only the per-slot kill arm in the bare-array
     /// destructure lowering populates this set.
     #[serde(default)]
-    pub slot_scoped_assigns: HashSet<SsaValue>,
+    pub slot_scoped_assigns: FxHashSet<SsaValue>,
 }
 
 impl SsaBody {
@@ -592,12 +601,12 @@ mod tests {
                 cfg_node: NodeIndex::new(0),
                 block: BlockId(0),
             }],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: FieldInterner::new(),
-            field_writes: HashMap::new(),
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let fid = body.intern_field("mu");
         body.blocks[0].body.push(SsaInst {
@@ -625,5 +634,59 @@ mod tests {
             }
             other => panic!("expected FieldProj, got {other:?}"),
         }
+    }
+
+    /// Pins that the four side-table maps converted to `FxHashMap`/`FxHashSet`
+    /// (2026-07-14 perfhunt session-0015) round-trip through the exact DB blob
+    /// codec (`rmp_serde::to_vec_named`, used by `CalleeSsaBody` persistence in
+    /// `database.rs`) with their contents intact.  `FxHashMap` serialises to
+    /// the identical msgpack *map* form as the old `std::collections::HashMap`,
+    /// so pre-conversion blobs decode unchanged; this asserts the codec side of
+    /// that blob-compatibility claim.
+    #[test]
+    fn ssa_body_side_table_maps_roundtrip_msgpack() {
+        let mut body = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![],
+                terminator: Terminator::Return(None),
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs: vec![
+                ValueDef {
+                    var_name: Some("obj".into()),
+                    cfg_node: NodeIndex::new(0),
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("slot".into()),
+                    cfg_node: NodeIndex::new(1),
+                    block: BlockId(0),
+                },
+            ],
+            cfg_node_map: Default::default(),
+            exception_edges: vec![],
+            field_interner: FieldInterner::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
+        };
+        body.cfg_node_map.insert(NodeIndex::new(0), SsaValue(0));
+        body.cfg_node_map.insert(NodeIndex::new(1), SsaValue(1));
+        let fid = body.intern_field("cache");
+        body.field_writes.insert(SsaValue(1), (SsaValue(0), fid));
+        body.synthetic_externals.insert(SsaValue(0));
+        body.slot_scoped_assigns.insert(SsaValue(1));
+
+        let blob = rmp_serde::to_vec_named(&body).expect("msgpack encode");
+        let restored: SsaBody = rmp_serde::from_slice(&blob).expect("msgpack decode");
+
+        assert_eq!(restored.cfg_node_map, body.cfg_node_map);
+        assert_eq!(restored.field_writes, body.field_writes);
+        assert_eq!(restored.synthetic_externals, body.synthetic_externals);
+        assert_eq!(restored.slot_scoped_assigns, body.slot_scoped_assigns);
     }
 }

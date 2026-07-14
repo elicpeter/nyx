@@ -607,6 +607,18 @@ fn bench_ast_queries_large_go(c: &mut Criterion) {
 /// or short variable-name strings, none are iterated in an output-observable
 /// order, so the cheaper deterministic hasher is bit-identical.  A
 /// regression that re-introduces SipHash on this path surfaces here.
+///
+/// 2026-07-14 (perfhunt session-0015) extended the conversion to the four
+/// maps `lower_to_ssa` *returns* inside `SsaBody` — `cfg_node_map`
+/// (`NodeIndex`→`SsaValue`), `field_writes`, `synthetic_externals`,
+/// `slot_scoped_assigns` — which had stayed `std::collections::HashMap`/
+/// `HashSet` because they cross the return boundary into the taint / guards /
+/// symex consumers and the `CalleeSsaBody` DB blob.  All consumer accesses are
+/// point lookups (audited: the only iteration is the order-insensitive
+/// `ssa::invariants` validation), and `FxHashMap` serialises to the identical
+/// msgpack map form, so the swap is bit-identical and blob-compatible.  This
+/// bench builds `cfg_node_map` on every lowered body, so a regression that
+/// reverts those fields to SipHash surfaces here proportional to node count.
 fn bench_ssa_lower_large_go(c: &mut Criterion) {
     use nyx_scanner::ssa;
 

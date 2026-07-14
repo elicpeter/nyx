@@ -822,12 +822,12 @@ mod tests {
                 make_value_def(BlockId(0), src_node),
                 make_value_def(BlockId(0), use_node),
             ],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         (ssa, cfg)
@@ -913,12 +913,12 @@ mod tests {
             }],
             entry: BlockId(0),
             value_defs: vec![make_value_def(BlockId(0), c_node)],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let demand = DemandState::new(Cap::all());
         let (step, next) = backward_transfer(&ssa, SsaValue(0), &demand);
@@ -947,12 +947,12 @@ mod tests {
             }],
             entry: BlockId(0),
             value_defs: vec![make_value_def(BlockId(0), p_node)],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let demand = DemandState::new(Cap::all());
         let (step, _next) = backward_transfer(&ssa, SsaValue(0), &demand);
@@ -1036,12 +1036,12 @@ mod tests {
                 make_value_def(BlockId(2), n2),
                 make_value_def(BlockId(2), n3),
             ],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let demand = DemandState::new(Cap::all());
@@ -1126,12 +1126,12 @@ mod tests {
                 make_value_def(BlockId(1), n1),
                 make_value_def(BlockId(2), n2),
             ],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let ctx = BackwardsCtx::new(&ssa, &cfg, Lang::JavaScript);
@@ -1287,12 +1287,12 @@ mod tests {
             }],
             entry: BlockId(0),
             value_defs: vec![make_value_def(BlockId(0), p_node)],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let opt = crate::ssa::optimize_ssa(&mut ssa, &cfg, Some(Lang::JavaScript));
         CalleeSsaBody {
@@ -1353,12 +1353,12 @@ mod tests {
                 make_value_def(BlockId(0), src_node),
                 make_value_def(BlockId(0), call_node),
             ],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let mut bodies: HashMap<FuncKey, CalleeSsaBody> = HashMap::new();
@@ -1407,12 +1407,12 @@ mod tests {
             blocks: vec![],
             entry: BlockId(0),
             value_defs: vec![],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let ctx = BackwardsCtx {
             ssa: &dummy_ssa,

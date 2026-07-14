@@ -1391,13 +1391,13 @@ mod tests {
             ],
             entry: b0,
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let empty_succs = HashMap::new();
@@ -1453,13 +1453,13 @@ mod tests {
             ],
             entry: b0,
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let empty_succs = HashMap::new();
@@ -1574,12 +1574,12 @@ mod tests {
             ],
             entry: b0,
             value_defs: vec![make_value_def(b0, n0), make_value_def(b1, n1)],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let cfg = Cfg::new();
         let finding = make_finding(n0, n1);
@@ -1662,10 +1662,10 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let finding = make_finding(n0, n1);
@@ -1772,10 +1772,10 @@ mod tests {
             .collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         // Finding path goes through B0 → B1 → B3
@@ -1921,10 +1921,10 @@ mod tests {
                 .collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let finding = Finding {
@@ -2033,13 +2033,13 @@ mod tests {
             ],
             entry: b0,
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![(b0, b2)],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let mut exc_succs: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
@@ -2102,13 +2102,13 @@ mod tests {
             ],
             entry: b0,
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![(b0, b2)],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let mut exc_succs: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
@@ -2215,10 +2215,10 @@ mod tests {
             .collect(),
             exception_edges: vec![(b1, b2)],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let finding = Finding {

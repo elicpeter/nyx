@@ -1102,16 +1102,16 @@ fn rename_variables(
 ) -> (
     Vec<SsaBlock>,
     Vec<ValueDef>,
-    HashMap<NodeIndex, SsaValue>,
+    FxHashMap<NodeIndex, SsaValue>,
     crate::ssa::ir::FieldInterner,
-    HashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
-    HashSet<SsaValue>,
-    HashSet<SsaValue>,
+    FxHashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
+    FxHashSet<SsaValue>,
+    FxHashSet<SsaValue>,
 ) {
     let num_blocks = blocks_nodes.len();
     let mut next_value: u32 = 0;
     let mut value_defs: Vec<ValueDef> = Vec::new();
-    let mut cfg_node_map: HashMap<NodeIndex, SsaValue> = HashMap::new();
+    let mut cfg_node_map: FxHashMap<NodeIndex, SsaValue> = FxHashMap::default();
     // Per-body interner for FieldProj field names; populated when the
     // member-access decomposition (try_lower_field_proj_chain) emits a
     // chain for chained-receiver method calls (`a.b.c()`), and remains
@@ -1122,11 +1122,11 @@ fn rename_variables(
     // [`SsaOp::Assign`]'s defined value to its `(receiver, field)` pair.
     // Populated below at the synthetic-Assign emission site.  Read by
     // the taint engine to lift the assign into a structural field WRITE.
-    let mut field_writes: HashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)> = HashMap::new();
+    let mut field_writes: FxHashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)> = FxHashMap::default();
     // SSA values whose `Assign` comes from a bare-array destructure
     // slot-scoped kill arm; the taint engine consults this set to skip
     // outer-node Source label pickup while still unioning operand taint.
-    let mut slot_scoped_assigns: HashSet<SsaValue> = HashSet::new();
+    let mut slot_scoped_assigns: FxHashSet<SsaValue> = FxHashSet::default();
 
     // Per-variable rename stacks
     // `FxHashMap` (rustc_hash) over stdlib SipHash: `var_stacks` is the
@@ -1197,12 +1197,12 @@ fn rename_variables(
         ssa_blocks: &mut [SsaBlock],
         phi_values: &mut [BTreeMap<String, SsaValue>],
         value_defs: &mut Vec<ValueDef>,
-        cfg_node_map: &mut HashMap<NodeIndex, SsaValue>,
+        cfg_node_map: &mut FxHashMap<NodeIndex, SsaValue>,
         next_value: &mut u32,
         nop_nodes: &FxHashSet<NodeIndex>,
         field_interner: &mut crate::ssa::ir::FieldInterner,
-        field_writes: &mut HashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
-        slot_scoped_assigns: &mut HashSet<SsaValue>,
+        field_writes: &mut FxHashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
+        slot_scoped_assigns: &mut FxHashSet<SsaValue>,
     ) {
         let block_id = BlockId(block_idx as u32);
 
@@ -2266,7 +2266,7 @@ fn rename_variables(
     // unless it appears in `formal_params`, so the auto-seed pass cannot
     // mistake a bubbled-up free var (like `userId` lifted from a nested
     // jest test callback) for a formal of the outer body.
-    let mut synthetic_externals: HashSet<SsaValue> = HashSet::new();
+    let mut synthetic_externals: FxHashSet<SsaValue> = FxHashSet::default();
     let formal_set: HashSet<&str> = formal_params.iter().map(|s| s.as_str()).collect();
     let track_synthetic = with_params;
     if !external_vars.is_empty() {

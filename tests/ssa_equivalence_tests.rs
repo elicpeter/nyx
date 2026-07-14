@@ -831,10 +831,10 @@ fn orphan_catch_block_triggers_reachability_invariant() {
         cfg_node_map: Default::default(),
         exception_edges: vec![], // intentionally empty, the orphan condition,
         field_interner: nyx_scanner::ssa::ir::FieldInterner::default(),
-        field_writes: std::collections::HashMap::new(),
+        field_writes: Default::default(),
 
-        synthetic_externals: std::collections::HashSet::new(),
-        slot_scoped_assigns: std::collections::HashSet::new(),
+        synthetic_externals: Default::default(),
+        slot_scoped_assigns: Default::default(),
     };
 
     let err = check_catch_block_reachability(&body)
@@ -895,10 +895,10 @@ fn normally_reachable_catch_block_passes_invariant() {
         cfg_node_map: Default::default(),
         exception_edges: vec![],
         field_interner: nyx_scanner::ssa::ir::FieldInterner::default(),
-        field_writes: std::collections::HashMap::new(),
+        field_writes: Default::default(),
 
-        synthetic_externals: std::collections::HashSet::new(),
-        slot_scoped_assigns: std::collections::HashSet::new(),
+        synthetic_externals: Default::default(),
+        slot_scoped_assigns: Default::default(),
     };
 
     assert!(check_catch_block_reachability(&body).is_ok());
@@ -951,10 +951,10 @@ fn exception_edge_catch_block_passes_invariant() {
         cfg_node_map: Default::default(),
         exception_edges: vec![(BlockId(0), BlockId(1))],
         field_interner: nyx_scanner::ssa::ir::FieldInterner::default(),
-        field_writes: std::collections::HashMap::new(),
+        field_writes: Default::default(),
 
-        synthetic_externals: std::collections::HashSet::new(),
-        slot_scoped_assigns: std::collections::HashSet::new(),
+        synthetic_externals: Default::default(),
+        slot_scoped_assigns: Default::default(),
     };
 
     assert!(check_catch_block_reachability(&body).is_ok());

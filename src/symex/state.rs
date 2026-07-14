@@ -350,10 +350,10 @@ mod tests {
             cfg_node_map: [(node, SsaValue(5))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let witness = state.get_sink_witness(&finding, &ssa);
@@ -393,10 +393,10 @@ mod tests {
             cfg_node_map: [(node, SsaValue(5))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         assert_eq!(state.get_sink_witness(&finding, &ssa), None);
@@ -430,13 +430,13 @@ mod tests {
             blocks: vec![],
             entry: BlockId(0),
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         assert_eq!(state.get_sink_witness(&finding, &ssa), None);
@@ -473,13 +473,13 @@ mod tests {
             }],
             entry: BlockId(0),
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         state.widen_at_loop_head(BlockId(0), &ssa);
@@ -519,13 +519,13 @@ mod tests {
             }],
             entry: BlockId(0),
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         state.widen_at_loop_head(BlockId(0), &ssa);
@@ -565,13 +565,13 @@ mod tests {
             }],
             entry: BlockId(0),
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         state.widen_at_loop_head(BlockId(0), &ssa);

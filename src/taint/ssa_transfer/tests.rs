@@ -81,13 +81,13 @@ mod cross_file_tests {
                         block: BlockId(0),
                     },
                 ],
-                cfg_node_map: std::collections::HashMap::new(),
+                cfg_node_map: Default::default(),
                 exception_edges: vec![],
                 field_interner: crate::ssa::ir::FieldInterner::default(),
-                field_writes: std::collections::HashMap::new(),
+                field_writes: Default::default(),
 
-                synthetic_externals: std::collections::HashSet::new(),
-                slot_scoped_assigns: std::collections::HashSet::new(),
+                synthetic_externals: Default::default(),
+                slot_scoped_assigns: Default::default(),
             },
             opt: crate::ssa::OptimizeResult {
                 const_values: std::collections::HashMap::new(),
@@ -756,7 +756,6 @@ mod primary_sink_location_tests {
     use petgraph::graph::NodeIndex;
     use petgraph::prelude::*;
     use smallvec::smallvec;
-    use std::collections::HashMap;
 
     /// Build a caller CFG that models `sink(source())`: two nodes, where
     /// the sink node carries `callee = "dangerous_exec"` so
@@ -791,7 +790,7 @@ mod primary_sink_location_tests {
 
     /// Build an SSA body for `v0 = source(); v1 = dangerous_exec(v0); ret`.
     fn caller_body(source_node: NodeIndex, sink_node: NodeIndex) -> SsaBody {
-        let mut cfg_node_map = HashMap::new();
+        let mut cfg_node_map = rustc_hash::FxHashMap::default();
         cfg_node_map.insert(source_node, SsaValue(0));
         cfg_node_map.insert(sink_node, SsaValue(1));
         SsaBody {
@@ -839,10 +838,10 @@ mod primary_sink_location_tests {
             cfg_node_map,
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         }
     }
 
@@ -973,13 +972,13 @@ mod goto_succ_propagation_tests {
             blocks: vec![block.clone()],
             entry: BlockId(0),
             value_defs: vec![],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let cfg: Cfg = Graph::new();
@@ -1072,13 +1071,13 @@ mod goto_succ_propagation_tests {
             blocks: vec![block.clone()],
             entry: BlockId(0),
             value_defs: vec![],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let cfg: Cfg = Graph::new();
         let interner = SymbolInterner::new();
@@ -1172,13 +1171,13 @@ mod goto_succ_propagation_tests {
                 cfg_node: NodeIndex::new(0),
                 block: BlockId(0),
             }],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         }
     }
 
@@ -1437,13 +1436,13 @@ mod goto_succ_propagation_tests {
                 cfg_node: NodeIndex::new(0),
                 block: BlockId(0),
             }],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         }
     }
 
@@ -1492,7 +1491,6 @@ mod receiver_candidates_field_proj_tests {
     use crate::symbol::Lang;
     use petgraph::graph::NodeIndex;
     use smallvec::smallvec;
-    use std::collections::HashMap;
 
     fn empty_value_def(name: &str) -> ValueDef {
         ValueDef {
@@ -1565,13 +1563,13 @@ mod receiver_candidates_field_proj_tests {
                 empty_value_def("c.client"),
                 empty_value_def("c.client.send"),
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: interner,
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         }
     }
 
@@ -1653,13 +1651,13 @@ mod receiver_candidates_field_proj_tests {
             blocks,
             entry: BlockId(0),
             value_defs: vec![empty_value_def("v0")],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: interner,
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let cands =
             super::super::receiver_candidates_for_type_lookup(SsaValue(0), Some(&body), Lang::Go);
@@ -2057,18 +2055,18 @@ mod field_write_tests {
                 block: BlockId(0),
             },
         ];
-        let mut field_writes = HashMap::new();
+        let mut field_writes = rustc_hash::FxHashMap::default();
         field_writes.insert(SsaValue(2), (SsaValue(0), cache_id));
         let body = SsaBody {
             blocks,
             entry: BlockId(0),
             value_defs,
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner,
             field_writes,
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         (body, cache_id)
     }
@@ -2376,16 +2374,16 @@ mod field_write_tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner,
             field_writes: {
-                let mut m = HashMap::new();
+                let mut m = rustc_hash::FxHashMap::default();
                 m.insert(SsaValue(2), (SsaValue(0), cache_id));
                 m
             },
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let pf = crate::pointer::analyse_body(&body, crate::cfg::BodyId(0));
         // v0 is Const → empty pt, the hook should not insert anything.
@@ -2625,13 +2623,13 @@ mod container_elem_tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         // Run pointer analysis first to confirm the result of `shift()`
@@ -2766,13 +2764,13 @@ mod container_elem_tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let pf = crate::pointer::analyse_body(&body, crate::cfg::BodyId(7));
@@ -2915,13 +2913,13 @@ mod container_elem_tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let interner = SymbolInterner::new();
@@ -2994,7 +2992,6 @@ mod cross_call_field_tests {
     use crate::taint::ssa_transfer::state::FieldTaintKey;
     use petgraph::graph::NodeIndex;
     use smallvec::smallvec;
-    use std::collections::HashMap;
 
     /// W3 / W4: shared empty interner, these unit tests don't seed
     /// validation bits, so a fresh interner is sufficient for the
@@ -3047,13 +3044,13 @@ mod cross_call_field_tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner,
-            field_writes: HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let pf = crate::pointer::analyse_body(&body, crate::cfg::BodyId(7));
         (body, cache_id, pf)
@@ -3422,13 +3419,13 @@ mod field_taint_origin_cap_tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner,
-            field_writes: HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         (body, cache_id, cfg, n_proj)
     }
@@ -3746,7 +3743,7 @@ mod pointer_lattice_worklist_tests {
             },
         ];
 
-        let mut field_writes = HashMap::new();
+        let mut field_writes = rustc_hash::FxHashMap::default();
         field_writes.insert(SsaValue(2), (SsaValue(0), cache_id));
         field_writes.insert(SsaValue(3), (SsaValue(0), cache_id));
 
@@ -3754,12 +3751,12 @@ mod pointer_lattice_worklist_tests {
             blocks: vec![block0, block1, block2, block3],
             entry: BlockId(0),
             value_defs,
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner,
             field_writes,
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let mut interner = SymbolInterner::new();
