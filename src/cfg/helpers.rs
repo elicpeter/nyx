@@ -115,6 +115,25 @@ pub(crate) fn text_of<'a>(n: Node<'a>, code: &'a [u8]) -> Option<String> {
     slice_str(code, n.start_byte(), n.end_byte()).map(|s| s.to_string())
 }
 
+/// Borrowed sibling of [`text_of`]: return `code[n.start_byte()..n.end_byte()]`
+/// as `&str` **without allocating**, via the pre-validated-source fast path.
+///
+/// Bit-identical to `n.utf8_text(code).ok()` and to
+/// `std::str::from_utf8(&code[n.byte_range()]).ok()` — the same byte range, the
+/// same `Some`/`None` verdict (`None` only when that range is not valid UTF-8,
+/// which under a live [`ValidSourceGuard`] can only happen in a non-UTF-8 file
+/// where the guard registers nothing and this falls back to checked `from_utf8`
+/// anyway). Prefer this over `Node::utf8_text` / `from_utf8(&code[range])` on
+/// the per-file scan path so the `O(range_len)` UTF-8 re-validation collapses to
+/// an `O(1)` `str::get` once the file is registered by the guard.
+#[inline]
+pub(crate) fn node_str<'c>(n: Node<'_>, code: &'c [u8]) -> Option<&'c str> {
+    // The result borrows `code` only (the byte offsets are plain `usize`), so the
+    // node's tree lifetime is intentionally independent of the returned `&str` —
+    // mirroring the old `from_utf8(&code[n.byte_range()])` borrow shape.
+    slice_str(code, n.start_byte(), n.end_byte())
+}
+
 /// Walk through chained calls / member accesses to find the root receiver.
 ///
 /// For `Runtime.getRuntime().exec(cmd)`, the receiver of `exec` is the call
@@ -1292,7 +1311,43 @@ pub(crate) fn subscript_components<'a>(n: Node<'a>, code: &'a [u8]) -> Option<(S
 
 #[cfg(test)]
 mod source_str_tests {
-    use super::{VALID_SOURCE, ValidSourceGuard, slice_str};
+    use super::{VALID_SOURCE, ValidSourceGuard, node_str, slice_str};
+
+    /// `node_str` must decode every node's byte range identically to the checked
+    /// `from_utf8(&code[node.byte_range()]).ok()` it replaced at the scan-path
+    /// call sites (ast query pass, entry-point detection, import resolution),
+    /// with the pre-validated-source fast path active. Walks a real parsed tree
+    /// so the guard covers the actual `Node::start_byte()/end_byte()` offsets.
+    #[test]
+    fn node_str_matches_checked_over_parsed_tree() {
+        let code =
+            b"package main\nfunc handler(w http.ResponseWriter) { fmt.Println(\"héllo\") }\n";
+        let _g = ValidSourceGuard::new(code.as_slice());
+        assert_eq!(
+            VALID_SOURCE.with(|c| c.get()),
+            Some((code.as_ptr(), code.len())),
+            "fast path must be active for this exact slice",
+        );
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_go::LANGUAGE.into())
+            .expect("load go grammar");
+        let tree = parser.parse(code.as_slice(), None).expect("parse");
+
+        fn walk(n: tree_sitter::Node, code: &[u8]) {
+            let got = node_str(n, code).map(str::to_string);
+            let want = code
+                .get(n.start_byte()..n.end_byte())
+                .and_then(|b| std::str::from_utf8(b).ok())
+                .map(str::to_string);
+            assert_eq!(got, want, "node_str diverged at {:?}", n.byte_range());
+            let mut c = n.walk();
+            for child in n.children(&mut c) {
+                walk(child, code);
+            }
+        }
+        walk(tree.root_node(), code.as_slice());
+    }
 
     /// Reference decode: exactly what `text_of`/the direct sites did before the
     /// pre-validated fast path — an unconditional checked `from_utf8` of the

@@ -312,7 +312,7 @@ fn jsx_element_tag_is_form(elem: Node, bytes: &[u8]) -> bool {
     if name_node.kind() != "identifier" {
         return false;
     }
-    name_node.utf8_text(bytes).ok() == Some("form")
+    crate::cfg::node_str(name_node, bytes) == Some("form")
 }
 
 /// Return the `value` field node of an `action="..."` / `action={...}`
@@ -326,7 +326,7 @@ fn jsx_element_action_attr_value<'a>(elem: Node<'a>, bytes: &[u8]) -> Option<Nod
         let name = child
             .child_by_field_name("name")
             .or_else(|| child.named_child(0))?;
-        let Ok(text) = name.utf8_text(bytes) else {
+        let Some(text) = crate::cfg::node_str(name, bytes) else {
             continue;
         };
         if text != "action" {
@@ -364,7 +364,7 @@ fn record_form_action_handler(value: Node, bytes: &[u8], out: &mut FormActionHan
     }
     match cur.kind() {
         "identifier" => {
-            if let Ok(name) = cur.utf8_text(bytes) {
+            if let Some(name) = crate::cfg::node_str(cur, bytes) {
                 out.by_name.insert(name.to_string());
             }
         }
@@ -452,7 +452,7 @@ fn visit_recursive_js<F: FnMut(Node, Option<&str>)>(
         | "generator_function" => {
             let name = node
                 .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(bytes).ok());
+                .and_then(|n| crate::cfg::node_str(n, bytes));
             visit(node, name);
         }
         "arrow_function" => {
@@ -462,7 +462,7 @@ fn visit_recursive_js<F: FnMut(Node, Option<&str>)>(
         "method_definition" => {
             let name = node
                 .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(bytes).ok());
+                .and_then(|n| crate::cfg::node_str(n, bytes));
             visit(node, name);
         }
         _ => {}
@@ -482,7 +482,7 @@ fn function_name_for_arrow(node: Node, bytes: &[u8]) -> Option<String> {
         return None;
     }
     let name_node = parent.child_by_field_name("name")?;
-    let text = name_node.utf8_text(bytes).ok()?;
+    let text = crate::cfg::node_str(name_node, bytes)?;
     Some(text.to_string())
 }
 
@@ -509,7 +509,7 @@ fn first_string_child<'a>(node: Node<'a>) -> Option<Node<'a>> {
 /// Compare the textual content of a `string` node (quotes stripped)
 /// to `expected`.
 fn string_literal_equals(string_node: Node, bytes: &[u8], expected: &str) -> bool {
-    let Ok(raw) = string_node.utf8_text(bytes) else {
+    let Some(raw) = crate::cfg::node_str(string_node, bytes) else {
         return false;
     };
     let trimmed = raw
@@ -550,7 +550,7 @@ fn exports_function(func_node: Node, root: Node, bytes: &[u8], name: Option<&str
                     for s in export_child.children(&mut spec) {
                         if s.kind() == "export_specifier"
                             && s.child_by_field_name("name")
-                                .and_then(|n| n.utf8_text(bytes).ok())
+                                .and_then(|n| crate::cfg::node_str(n, bytes))
                                 .is_some_and(|t| t == target)
                         {
                             return true;
@@ -586,7 +586,7 @@ fn collect_named_exports(node: Node, bytes: &[u8], out: &mut HashMap<String, Htt
         "function_declaration" | "generator_function_declaration" => {
             if let Some(name) = node
                 .child_by_field_name("name")
-                .and_then(|n| n.utf8_text(bytes).ok())
+                .and_then(|n| crate::cfg::node_str(n, bytes))
                 && let Some(m) = HttpMethod::from_ident(name)
             {
                 out.insert(name.to_string(), m);
@@ -598,7 +598,7 @@ fn collect_named_exports(node: Node, bytes: &[u8], out: &mut HashMap<String, Htt
                 if child.kind() == "variable_declarator"
                     && let Some(name) = child
                         .child_by_field_name("name")
-                        .and_then(|n| n.utf8_text(bytes).ok())
+                        .and_then(|n| crate::cfg::node_str(n, bytes))
                     && let Some(m) = HttpMethod::from_ident(name)
                 {
                     out.insert(name.to_string(), m);
@@ -639,7 +639,7 @@ fn walk_express_recursive(node: Node, bytes: &[u8], out: &mut ExpressHandlers) {
         if let Some(handler) = last_handler {
             match handler.kind() {
                 "identifier" => {
-                    if let Ok(name) = handler.utf8_text(bytes) {
+                    if let Some(name) = crate::cfg::node_str(handler, bytes) {
                         out.by_name.insert(name.to_string(), method);
                     }
                 }
@@ -675,7 +675,7 @@ fn express_call_method(call_node: Node, bytes: &[u8]) -> Option<HttpMethod> {
         return None;
     }
     let prop = func.child_by_field_name("property")?;
-    let name = prop.utf8_text(bytes).ok()?;
+    let name = crate::cfg::node_str(prop, bytes)?;
     let method = HttpMethod::from_ident(name)?;
     let object = func.child_by_field_name("object")?;
     if !express_receiver_text_matches(object, bytes) {
@@ -704,18 +704,18 @@ fn express_receiver_text_matches(object: Node, bytes: &[u8]) -> bool {
     }
     match object.kind() {
         "identifier" | "property_identifier" => {
-            object.utf8_text(bytes).ok().is_some_and(matches_suffix)
+            crate::cfg::node_str(object, bytes).is_some_and(matches_suffix)
         }
         "member_expression" => object
             .child_by_field_name("property")
-            .and_then(|p| p.utf8_text(bytes).ok())
+            .and_then(|p| crate::cfg::node_str(p, bytes))
             .is_some_and(matches_suffix),
         "call_expression" => {
             // `express()` / `Router()` constructor inline.
             let Some(callee) = object.child_by_field_name("function") else {
                 return false;
             };
-            let Ok(text) = callee.utf8_text(bytes) else {
+            let Some(text) = crate::cfg::node_str(callee, bytes) else {
                 return false;
             };
             let leaf = text.rsplit('.').next().unwrap_or(text).trim();
@@ -786,7 +786,7 @@ fn python_decorator_entry_kind(decorated: Node, bytes: &[u8]) -> Option<EntryKin
             continue;
         }
         let attr = target.child_by_field_name("attribute")?;
-        let attr_text = attr.utf8_text(bytes).ok()?;
+        let attr_text = crate::cfg::node_str(attr, bytes)?;
         let attr_lower = attr_text.to_ascii_lowercase();
         if let Some(method) = HttpMethod::from_ident(attr_text) {
             return Some(EntryKind::FastApiRoute { method });
@@ -829,7 +829,7 @@ fn extract_flask_methods_arg(args: Node, bytes: &[u8]) -> Option<HttpMethod> {
             continue;
         }
         let name_node = arg.child_by_field_name("name")?;
-        let Ok(name) = name_node.utf8_text(bytes) else {
+        let Some(name) = crate::cfg::node_str(name_node, bytes) else {
             continue;
         };
         if name == "methods" {
@@ -844,7 +844,7 @@ fn extract_first_method_in_list(node: Node, bytes: &[u8]) -> Option<HttpMethod> 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "string" {
-            let raw = child.utf8_text(bytes).ok()?;
+            let raw = crate::cfg::node_str(child, bytes)?;
             let trimmed = raw
                 .trim()
                 .trim_start_matches(['\'', '"'])
@@ -862,13 +862,13 @@ fn python_django_method_kind(func_node: Node, bytes: &[u8]) -> Option<EntryKind>
     // `class_definition` whose superclass list mentions `View` /
     // `APIView` / `ViewSet`.
     let name_node = func_node.child_by_field_name("name")?;
-    let name = name_node.utf8_text(bytes).ok()?;
+    let name = crate::cfg::node_str(name_node, bytes)?;
     let method = HttpMethod::from_ident(name)?;
     let class = enclosing_python_class(func_node)?;
     let supers = class.child_by_field_name("superclasses")?;
     let mut cursor = supers.walk();
     for sup in supers.named_children(&mut cursor) {
-        let text = sup.utf8_text(bytes).ok()?;
+        let text = crate::cfg::node_str(sup, bytes)?;
         if text.contains("View")
             || text.contains("APIView")
             || text.contains("ViewSet")
@@ -927,7 +927,7 @@ fn java_method_entry_kind(method: Node, bytes: &[u8]) -> Option<EntryKind> {
         match ch.kind() {
             "marker_annotation" | "annotation" => {
                 let name_node = ch.child_by_field_name("name")?;
-                let name = name_node.utf8_text(bytes).ok()?;
+                let name = crate::cfg::node_str(name_node, bytes)?;
                 if let Some(kind) = java_annotation_to_entry_kind(name, ch, bytes) {
                     return Some(kind);
                 }
@@ -982,7 +982,7 @@ fn extract_spring_request_mapping_method(annotation: Node, bytes: &[u8]) -> Opti
             continue;
         }
         let key_node = child.child_by_field_name("key")?;
-        let key = key_node.utf8_text(bytes).ok()?;
+        let key = crate::cfg::node_str(key_node, bytes)?;
         if key != "method" {
             continue;
         }
@@ -999,7 +999,7 @@ fn extract_spring_request_mapping_method(annotation: Node, bytes: &[u8]) -> Opti
 /// (`{RequestMethod.GET, RequestMethod.POST}`) and returns the first
 /// recognised verb.
 fn http_method_from_request_method_text(node: Node, bytes: &[u8]) -> Option<HttpMethod> {
-    let raw = node.utf8_text(bytes).ok()?;
+    let raw = crate::cfg::node_str(node, bytes)?;
     let trimmed = raw.trim().trim_matches('{').trim_matches('}');
     for token in trimmed.split(',') {
         let leaf = token.trim().rsplit('.').next().unwrap_or("").trim();
@@ -1051,13 +1051,13 @@ fn enclosing_ruby_controller<'a>(node: Node<'a>, bytes: &'a [u8]) -> Option<Node
             // (`ApplicationController`, `ActionController::Base`, etc.)
             // OR a class whose own name ends in `Controller`.
             if let Some(sup) = p.child_by_field_name("superclass")
-                && let Ok(text) = sup.utf8_text(bytes)
+                && let Some(text) = crate::cfg::node_str(sup, bytes)
                 && text.contains("Controller")
             {
                 return Some(p);
             }
             if let Some(name_node) = p.child_by_field_name("name")
-                && let Ok(name) = name_node.utf8_text(bytes)
+                && let Some(name) = crate::cfg::node_str(name_node, bytes)
                 && name.ends_with("Controller")
             {
                 return Some(p);
@@ -1078,7 +1078,7 @@ where
         // `get` and whose argument is the path.  The `do` block is a
         // sibling `do_block` child.
         if let Some(method_node) = node.child_by_field_name("method")
-            && let Ok(method_text) = method_node.utf8_text(bytes)
+            && let Some(method_text) = crate::cfg::node_str(method_node, bytes)
             && let Some(method) = HttpMethod::from_ident(method_text)
         {
             if let Some(block) = node.child_by_field_name("block") {
@@ -1176,7 +1176,7 @@ fn rust_function_entry_kind(
 fn collect_rust_attribute_text(func: Node, bytes: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
     let mut harvest = |node: Node<'_>| {
-        if let Ok(text) = node.utf8_text(bytes) {
+        if let Some(text) = crate::cfg::node_str(node, bytes) {
             out.push(text.to_string());
         }
     };
@@ -1221,7 +1221,7 @@ fn rust_signature_has_axum_extractor(func: Node, bytes: &[u8]) -> bool {
     let Some(params) = func.child_by_field_name("parameters") else {
         return false;
     };
-    let Ok(text) = params.utf8_text(bytes) else {
+    let Some(text) = crate::cfg::node_str(params, bytes) else {
         return false;
     };
     // Conservative substring scan against known axum extractor types.
@@ -1273,7 +1273,7 @@ where
 
 fn go_function_entry_kind(func: Node, bytes: &[u8]) -> Option<EntryKind> {
     let params = func.child_by_field_name("parameters")?;
-    let Ok(text) = params.utf8_text(bytes) else {
+    let Some(text) = crate::cfg::node_str(params, bytes) else {
         return None;
     };
     // net/http: signature ends with `*http.Request` (with or without the

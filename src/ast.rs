@@ -2787,7 +2787,7 @@ fn is_literal_or_named_scalar(
     // wrapper (PHP / Go) lifts a single child — unwrap and recurse.
     match kind {
         "identifier" | "variable_name" => {
-            let Ok(text) = std::str::from_utf8(&bytes[node.byte_range()]) else {
+            let Some(text) = crate::cfg::node_str(node, bytes) else {
                 return false;
             };
             scalars.contains(text)
@@ -2954,9 +2954,9 @@ fn is_php_include_param_passthrough(include_node: tree_sitter::Node, bytes: &[u8
     let Some(name_node) = name_node else {
         return false;
     };
-    let var_name = match std::str::from_utf8(&bytes[name_node.byte_range()]) {
-        Ok(s) => s,
-        Err(_) => return false,
+    let var_name = match crate::cfg::node_str(name_node, bytes) {
+        Some(s) => s,
+        None => return false,
     };
 
     // Walk up to the enclosing function/method/closure.
@@ -3042,7 +3042,7 @@ fn is_python_sandboxed_jinja_from_string(captured: tree_sitter::Node, bytes: &[u
         // Local variable: resolve its environment-constructor assignment in the
         // enclosing function / module body.
         "identifier" => {
-            let Ok(name) = std::str::from_utf8(&bytes[recv.byte_range()]) else {
+            let Some(name) = crate::cfg::node_str(recv, bytes) else {
                 return false;
             };
             python_local_is_sandboxed_env(call_node, name, bytes)
@@ -3074,7 +3074,7 @@ fn python_call_ctor_name<'a>(call_node: tree_sitter::Node, bytes: &'a [u8]) -> O
         "attribute" => func.child_by_field_name("attribute")?,
         _ => return None,
     };
-    std::str::from_utf8(&bytes[ident.byte_range()]).ok()
+    crate::cfg::node_str(ident, bytes)
 }
 
 fn is_sandboxed_env_name(name: &str) -> bool {
@@ -3126,7 +3126,7 @@ fn scan_python_env_assignments(
     if node.kind() == "assignment"
         && let Some(lhs) = node.child_by_field_name("left")
         && lhs.kind() == "identifier"
-        && std::str::from_utf8(&bytes[lhs.byte_range()]).ok() == Some(name)
+        && crate::cfg::node_str(lhs, bytes) == Some(name)
         && let Some(rhs) = node.child_by_field_name("right")
         && rhs.kind() == "call"
         && let Some(ctor) = python_call_ctor_name(rhs, bytes)
@@ -3186,7 +3186,7 @@ fn param_list_contains_name(params: tree_sitter::Node, target_name: &str, bytes:
         let Some(name_node) = name_node else {
             continue;
         };
-        if let Ok(name) = std::str::from_utf8(&bytes[name_node.byte_range()])
+        if let Some(name) = crate::cfg::node_str(name_node, bytes)
             && name == target_name
         {
             return true;
@@ -3223,7 +3223,7 @@ fn is_var_reassigned_before(
             if let Some(lhs) = lhs
                 && lhs.kind() == "variable_name"
                 && let Some(n) = lhs.named_child(0)
-                && let Ok(s) = std::str::from_utf8(&bytes[n.byte_range()])
+                && let Some(s) = crate::cfg::node_str(n, bytes)
                 && s == target_name
             {
                 return true;
@@ -3332,7 +3332,7 @@ fn is_php_unserialize_allowed_classes_restricted(
         //                                    the unsafe default.
         match value.kind() {
             "boolean" => {
-                if let Ok(s) = std::str::from_utf8(&bytes[value.byte_range()])
+                if let Some(s) = crate::cfg::node_str(value, bytes)
                     && s.eq_ignore_ascii_case("false")
                 {
                     return true;
@@ -3427,7 +3427,7 @@ fn is_php_unserialize_magic_method_passthrough(cap_node: tree_sitter::Node, byte
     else {
         return false;
     };
-    let Ok(method_name) = std::str::from_utf8(&bytes[name_node.byte_range()]) else {
+    let Some(method_name) = crate::cfg::node_str(name_node, bytes) else {
         return false;
     };
     if !method_name.eq_ignore_ascii_case("unserialize") {
@@ -3473,7 +3473,7 @@ fn is_php_unserialize_magic_method_passthrough(cap_node: tree_sitter::Node, byte
     let Some(inner_name_node) = inner_name_node else {
         return false;
     };
-    let Ok(param_name) = std::str::from_utf8(&bytes[inner_name_node.byte_range()]) else {
+    let Some(param_name) = crate::cfg::node_str(inner_name_node, bytes) else {
         return false;
     };
 
@@ -3500,7 +3500,7 @@ fn is_php_unserialize_magic_method_passthrough(cap_node: tree_sitter::Node, byte
     let Some(arg_name_node) = inner.named_child(0) else {
         return false;
     };
-    let Ok(arg_name) = std::str::from_utf8(&bytes[arg_name_node.byte_range()]) else {
+    let Some(arg_name) = crate::cfg::node_str(arg_name_node, bytes) else {
         return false;
     };
     arg_name == param_name
@@ -3608,7 +3608,7 @@ fn is_php_unserialize_inside_phpunit_assertion(cap_node: tree_sitter::Node, byte
     let Some(name_node) = name_node else {
         return false;
     };
-    let Ok(method_name) = std::str::from_utf8(&bytes[name_node.byte_range()]) else {
+    let Some(method_name) = crate::cfg::node_str(name_node, bytes) else {
         return false;
     };
     if !method_name
@@ -3858,7 +3858,7 @@ fn python_assertion_bounds_deser(
     let Some(name_node) = name_node else {
         return false;
     };
-    let Ok(verb) = std::str::from_utf8(&bytes[name_node.byte_range()]) else {
+    let Some(verb) = crate::cfg::node_str(name_node, bytes) else {
         return false;
     };
     let lowered = verb.to_ascii_lowercase();
@@ -3967,7 +3967,7 @@ fn python_pytest_assert_bounds_deser(deser_call: tree_sitter::Node, bytes: &[u8]
                 if func.kind() != "identifier" {
                     return false;
                 }
-                let Ok(name) = std::str::from_utf8(&bytes[func.byte_range()]) else {
+                let Some(name) = crate::cfg::node_str(func, bytes) else {
                     return false;
                 };
                 match name {
@@ -4079,10 +4079,10 @@ fn is_python_deser_call(call_node: tree_sitter::Node, bytes: &[u8]) -> bool {
             let Some(attr) = func.child_by_field_name("attribute") else {
                 return false;
             };
-            let Ok(obj_text) = std::str::from_utf8(&bytes[obj.byte_range()]) else {
+            let Some(obj_text) = crate::cfg::node_str(obj, bytes) else {
                 return false;
             };
-            let Ok(attr_text) = std::str::from_utf8(&bytes[attr.byte_range()]) else {
+            let Some(attr_text) = crate::cfg::node_str(attr, bytes) else {
                 return false;
             };
             matches!(
@@ -4099,7 +4099,7 @@ fn is_python_deser_call(call_node: tree_sitter::Node, bytes: &[u8]) -> bool {
             )
         }
         "identifier" => {
-            let Ok(name) = std::str::from_utf8(&bytes[func.byte_range()]) else {
+            let Some(name) = crate::cfg::node_str(func, bytes) else {
                 return false;
             };
             matches!(name, "loads" | "load" | "unsafe_load")
@@ -4306,7 +4306,7 @@ fn is_ruby_deser_inside_test_assertion(cap_node: tree_sitter::Node, bytes: &[u8]
     let Some(method_node) = outer_call.child_by_field_name("method") else {
         return false;
     };
-    let Ok(name) = std::str::from_utf8(&bytes[method_node.byte_range()]) else {
+    let Some(name) = crate::cfg::node_str(method_node, bytes) else {
         return false;
     };
 
@@ -4336,7 +4336,7 @@ fn is_ruby_deser_inside_test_assertion(cap_node: tree_sitter::Node, bytes: &[u8]
         let Some(rspec_method) = rspec_outer.child_by_field_name("method") else {
             return false;
         };
-        let Ok(verb) = std::str::from_utf8(&bytes[rspec_method.byte_range()]) else {
+        let Some(verb) = crate::cfg::node_str(rspec_method, bytes) else {
             return false;
         };
         if !matches!(verb, "to" | "not_to" | "to_not") {
@@ -4412,10 +4412,10 @@ fn is_ruby_deser_call(call_node: tree_sitter::Node, bytes: &[u8]) -> bool {
     if receiver.kind() != "constant" {
         return false;
     }
-    let Ok(recv_text) = std::str::from_utf8(&bytes[receiver.byte_range()]) else {
+    let Some(recv_text) = crate::cfg::node_str(receiver, bytes) else {
         return false;
     };
-    let Ok(method_text) = std::str::from_utf8(&bytes[method.byte_range()]) else {
+    let Some(method_text) = crate::cfg::node_str(method, bytes) else {
         return false;
     };
     matches!(
@@ -4439,7 +4439,7 @@ fn ruby_minitest_assertion_bounds_deser(
     let Some(method) = call.child_by_field_name("method") else {
         return false;
     };
-    let Ok(name) = std::str::from_utf8(&bytes[method.byte_range()]) else {
+    let Some(name) = crate::cfg::node_str(method, bytes) else {
         return false;
     };
     let Some(arg_list) = call.child_by_field_name("arguments") else {
@@ -4507,7 +4507,7 @@ fn ruby_rspec_matcher_bounds_deser(args_node: tree_sitter::Node, bytes: &[u8]) -
     match matcher.kind() {
         "identifier" => {
             // Bare-name matchers: be_nil, be_truthy, be_falsey, etc.
-            let Ok(name) = std::str::from_utf8(&bytes[matcher.byte_range()]) else {
+            let Some(name) = crate::cfg::node_str(matcher, bytes) else {
                 return false;
             };
             is_ruby_rspec_bare_matcher(name)
@@ -4516,7 +4516,7 @@ fn ruby_rspec_matcher_bounds_deser(args_node: tree_sitter::Node, bytes: &[u8]) -
             let Some(method) = matcher.child_by_field_name("method") else {
                 return false;
             };
-            let Ok(name) = std::str::from_utf8(&bytes[method.byte_range()]) else {
+            let Some(name) = crate::cfg::node_str(method, bytes) else {
                 return false;
             };
             let Some(matcher_args) = matcher.child_by_field_name("arguments") else {
@@ -4826,7 +4826,7 @@ fn is_c_lit_or_macro_branch(node: tree_sitter::Node, bytes: &[u8]) -> bool {
     match node.kind() {
         "string_literal" | "raw_string_literal" | "string" => true,
         "identifier" => {
-            let Ok(name) = std::str::from_utf8(&bytes[node.byte_range()]) else {
+            let Some(name) = crate::cfg::node_str(node, bytes) else {
                 return false;
             };
             is_all_caps_macro_name(name)
@@ -4874,13 +4874,13 @@ fn c_string_literal_payload(node: tree_sitter::Node, bytes: &[u8]) -> Option<Str
     for i in 0..node.named_child_count() as u32 {
         if let Some(c) = node.named_child(i)
             && c.kind() == "string_content"
-            && let Ok(s) = std::str::from_utf8(&bytes[c.byte_range()])
+            && let Some(s) = crate::cfg::node_str(c, bytes)
         {
             return Some(s.to_string());
         }
     }
     // Fall back: strip the surrounding quotes from the full literal text.
-    let raw = std::str::from_utf8(&bytes[node.byte_range()]).ok()?;
+    let raw = crate::cfg::node_str(node, bytes)?;
     let trimmed = raw.trim();
     // Drop optional encoding prefix.
     let after_prefix = trimmed
@@ -4985,13 +4985,13 @@ fn is_string_literal_with_text(node: tree_sitter::Node, text: &str, bytes: &[u8]
     }
     let Some(payload) = payload else {
         // Fall back: PHP single-quoted strings sometimes inline the content.
-        if let Ok(s) = std::str::from_utf8(&bytes[node.byte_range()]) {
+        if let Some(s) = crate::cfg::node_str(node, bytes) {
             let trimmed = s.trim_matches(|c| c == '\'' || c == '"');
             return trimmed == text;
         }
         return false;
     };
-    if let Ok(s) = std::str::from_utf8(&bytes[payload.byte_range()]) {
+    if let Some(s) = crate::cfg::node_str(payload, bytes) {
         return s == text;
     }
     false
@@ -5060,7 +5060,7 @@ fn is_cpp_cast_target_type_safe(rule_id: &str, cap_node: tree_sitter::Node, byte
     if targs.kind() != "template_argument_list" {
         return false;
     }
-    let Ok(text) = std::str::from_utf8(&bytes[targs.byte_range()]) else {
+    let Some(text) = crate::cfg::node_str(targs, bytes) else {
         return false;
     };
     let inner = text
@@ -5374,7 +5374,7 @@ fn is_php_weak_hash_non_crypto_use(cap_node: tree_sitter::Node, bytes: &[u8]) ->
                 });
                 if let Some(nn) = name_node
                     && nn.kind() == "name"
-                    && let Ok(method) = std::str::from_utf8(&bytes[nn.byte_range()])
+                    && let Some(method) = crate::cfg::node_str(nn, bytes)
                     && method_is_lookup_verb(method)
                 {
                     return true;
@@ -5397,7 +5397,7 @@ fn is_php_weak_hash_non_crypto_use(cap_node: tree_sitter::Node, bytes: &[u8]) ->
                         else {
                             return false;
                         };
-                        let Ok(name) = std::str::from_utf8(&bytes[nn.byte_range()]) else {
+                        let Some(name) = crate::cfg::node_str(nn, bytes) else {
                             return false;
                         };
                         return method_name_is_non_crypto(name);
@@ -5519,8 +5519,7 @@ fn resolve_php_lvalue_name(lhs: tree_sitter::Node, bytes: &[u8]) -> Option<Strin
     match lhs.kind() {
         "variable_name" => {
             let name_node = lhs.named_child(0)?;
-            std::str::from_utf8(&bytes[name_node.byte_range()])
-                .ok()
+            crate::cfg::node_str(name_node, bytes)
                 .map(String::from)
         }
         "member_access_expression" => {
@@ -5535,8 +5534,7 @@ fn resolve_php_lvalue_name(lhs: tree_sitter::Node, bytes: &[u8]) -> Option<Strin
             // Property access can name a `name` (bare ident) or a
             // `variable_name` (dynamic ${$x} — which we don't resolve).
             if n.kind() == "name" {
-                std::str::from_utf8(&bytes[n.byte_range()])
-                    .ok()
+                crate::cfg::node_str(n, bytes)
                     .map(String::from)
             } else {
                 None
@@ -5585,12 +5583,11 @@ fn string_literal_text(node: tree_sitter::Node, bytes: &[u8]) -> Option<String> 
         if let Some(c) = node.named_child(i)
             && (c.kind() == "string_content" || c.kind() == "string_value")
         {
-            return std::str::from_utf8(&bytes[c.byte_range()])
-                .ok()
+            return crate::cfg::node_str(c, bytes)
                 .map(String::from);
         }
     }
-    if let Ok(s) = std::str::from_utf8(&bytes[node.byte_range()]) {
+    if let Some(s) = crate::cfg::node_str(node, bytes) {
         let trimmed = s.trim_matches(|c| c == '\'' || c == '"');
         return Some(trimmed.to_string());
     }

@@ -56,7 +56,8 @@ use conditions::{
 use decorators::{extract_auth_decorators, extract_route_path_captures};
 pub(crate) use helpers::{
     ValidSourceGuard, collect_idents, collect_idents_with_paths, find_constructor_type_child,
-    first_call_ident, has_call_descendant, member_expr_text, root_receiver_text, slice_str, text_of,
+    first_call_ident, has_call_descendant, member_expr_text, node_str, root_receiver_text,
+    slice_str, text_of,
 };
 use imports::{
     extract_import_bindings, extract_local_import_view, extract_promisify_aliases,

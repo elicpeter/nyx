@@ -477,7 +477,7 @@ fn walk_import_statement(node: tree_sitter::Node, code: &[u8], out: &mut Vec<Raw
     let Some(source) = node.child_by_field_name("source") else {
         return;
     };
-    let Ok(raw) = source.utf8_text(code) else {
+    let Some(raw) = crate::cfg::node_str(source, code) else {
         return;
     };
     let spec = raw.trim_matches(|c| c == '\'' || c == '"' || c == '`');
@@ -495,7 +495,7 @@ fn walk_import_statement(node: tree_sitter::Node, code: &[u8], out: &mut Vec<Raw
         for part in clause_child.children(&mut c2) {
             match part.kind() {
                 "identifier" => {
-                    if let Ok(name) = part.utf8_text(code) {
+                    if let Some(name) = crate::cfg::node_str(part, code) {
                         out.push(RawJsImport {
                             local: name.to_string(),
                             exported: "default".to_string(),
@@ -508,7 +508,7 @@ fn walk_import_statement(node: tree_sitter::Node, code: &[u8], out: &mut Vec<Raw
                     let mut c3 = part.walk();
                     for ns_child in part.children(&mut c3) {
                         if ns_child.kind() == "identifier"
-                            && let Ok(name) = ns_child.utf8_text(code)
+                            && let Some(name) = crate::cfg::node_str(ns_child, code)
                         {
                             out.push(RawJsImport {
                                 local: name.to_string(),
@@ -527,10 +527,10 @@ fn walk_import_statement(node: tree_sitter::Node, code: &[u8], out: &mut Vec<Raw
                         }
                         let original = spec_node
                             .child_by_field_name("name")
-                            .and_then(|n| n.utf8_text(code).ok());
+                            .and_then(|n| crate::cfg::node_str(n, code));
                         let alias = spec_node
                             .child_by_field_name("alias")
-                            .and_then(|n| n.utf8_text(code).ok());
+                            .and_then(|n| crate::cfg::node_str(n, code));
                         let (Some(orig), local) =
                             (original, alias.unwrap_or(original.unwrap_or("")))
                         else {
@@ -580,7 +580,7 @@ fn walk_require_decl(node: tree_sitter::Node, code: &[u8], out: &mut Vec<RawJsIm
         };
         match pattern.kind() {
             "identifier" => {
-                if let Ok(name) = pattern.utf8_text(code) {
+                if let Some(name) = crate::cfg::node_str(pattern, code) {
                     out.push(RawJsImport {
                         local: name.to_string(),
                         exported: "default".to_string(),
@@ -593,7 +593,7 @@ fn walk_require_decl(node: tree_sitter::Node, code: &[u8], out: &mut Vec<RawJsIm
                 for pair in pattern.children(&mut pc) {
                     match pair.kind() {
                         "shorthand_property_identifier_pattern" | "identifier" => {
-                            if let Ok(name) = pair.utf8_text(code) {
+                            if let Some(name) = crate::cfg::node_str(pair, code) {
                                 out.push(RawJsImport {
                                     local: name.to_string(),
                                     exported: name.to_string(),
@@ -604,10 +604,10 @@ fn walk_require_decl(node: tree_sitter::Node, code: &[u8], out: &mut Vec<RawJsIm
                         "pair_pattern" => {
                             let key = pair
                                 .child_by_field_name("key")
-                                .and_then(|n| n.utf8_text(code).ok());
+                                .and_then(|n| crate::cfg::node_str(n, code));
                             let val = pair
                                 .child_by_field_name("value")
-                                .and_then(|n| n.utf8_text(code).ok());
+                                .and_then(|n| crate::cfg::node_str(n, code));
                             if let (Some(orig), Some(local)) = (key, val) {
                                 out.push(RawJsImport {
                                     local: local.to_string(),
@@ -630,7 +630,7 @@ fn require_spec_from_value(value: tree_sitter::Node, code: &[u8]) -> Option<Stri
         return None;
     }
     let func = value.child_by_field_name("function")?;
-    let name = func.utf8_text(code).ok()?;
+    let name = crate::cfg::node_str(func, code)?;
     if name != "require" {
         return None;
     }
@@ -638,7 +638,7 @@ fn require_spec_from_value(value: tree_sitter::Node, code: &[u8]) -> Option<Stri
     let mut cursor = args.walk();
     for arg in args.children(&mut cursor) {
         if matches!(arg.kind(), "string" | "template_string") {
-            let raw = arg.utf8_text(code).ok()?;
+            let raw = crate::cfg::node_str(arg, code)?;
             return Some(
                 raw.trim_matches(|c| c == '\'' || c == '"' || c == '`')
                     .to_string(),
