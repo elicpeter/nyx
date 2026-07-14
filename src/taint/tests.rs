@@ -7986,3 +7986,125 @@ char *compose_path(ctrl_t *ctrl, char *path)
         "strncmp(dir, ...) confines a different var than the returned rpath — must not confine"
     );
 }
+
+/// CVE-2022-24776 (Flask-AppBuilder): the patched `get_safe_redirect` returns
+/// its URL parameter only on the validated branch of a URL-safety guard
+/// (`is_safe_redirect_url`), so its SSA summary must record
+/// `sanitizes_open_redirect_return` (the guarded-passthrough confiner shape).
+#[test]
+fn ssa_summary_records_open_redirect_guarded_passthrough() {
+    let src = br#"
+from urllib.parse import urljoin, urlparse
+def is_safe_redirect_url(url):
+    host_url = urlparse(request.host_url)
+    redirect_url = urlparse(urljoin(request.host_url, url))
+    return redirect_url.scheme in ("http", "https") and host_url.netloc == redirect_url.netloc
+def get_safe_redirect(url):
+    if url and is_safe_redirect_url(url):
+        return url
+    return "/"
+def unguarded_passthrough(url):
+    log(url)
+    return url
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_lang(src, "python", lang);
+    let (ssa_summaries, _) = crate::taint::lower_all_functions_from_bodies(
+        &file_cfg,
+        Lang::Python,
+        "test.py",
+        &file_cfg.summaries,
+        None,
+        None,
+        None,
+        None,
+    );
+    let confiner = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "get_safe_redirect")
+        .map(|(_, v)| v)
+        .expect("get_safe_redirect summary must exist");
+    assert!(
+        confiner.sanitizes_open_redirect_return,
+        "get_safe_redirect (validated-branch passthrough) must be an OPEN_REDIRECT confiner"
+    );
+    // An unguarded passthrough (returns the param with no URL-safety guard) must
+    // NOT be recognised — it does not confine.
+    let weak = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "unguarded_passthrough")
+        .map(|(_, v)| v)
+        .expect("unguarded_passthrough summary must exist");
+    assert!(
+        !weak.sanitizes_open_redirect_return,
+        "an unguarded param passthrough must not be recognised as an OPEN_REDIRECT confiner"
+    );
+}
+
+/// CVE-2022-24776 end-to-end: `return redirect(get_safe_redirect(next_url))`
+/// (the confiner collapses out of the SSA and the tainted URL reaches the sink
+/// directly) must NOT fire — the `arg_uses` wrapper recovery strips
+/// OPEN_REDIRECT/SSRF for both the standalone and the `return`-duplicate node.
+#[test]
+fn python_nested_get_safe_redirect_suppresses_open_redirect() {
+    let src = br#"
+from urllib.parse import urljoin, urlparse
+from flask import Flask, redirect, request
+def is_safe_redirect_url(url):
+    host_url = urlparse(request.host_url)
+    redirect_url = urlparse(urljoin(request.host_url, url))
+    return redirect_url.scheme in ("http", "https") and host_url.netloc == redirect_url.netloc
+def get_safe_redirect(url):
+    if url and is_safe_redirect_url(url):
+        return url
+    return "/"
+def login():
+    next_url = request.args.get("next", "")
+    return redirect(get_safe_redirect(next_url))
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_lang(src, "python", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Python,
+        "test.py",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "get_safe_redirect confiner must clear OPEN_REDIRECT on the nested redirect; got {findings:?}"
+    );
+}
+
+/// Recall guard for the guarded-passthrough confiner: a redirect wrapped by a
+/// helper that does NOT validate the URL (a plain string transform) must still
+/// fire `taint-open-redirect`.
+#[test]
+fn python_weak_redirect_wrapper_still_fires() {
+    let src = br#"
+from flask import Flask, redirect, request
+def make_upper(url):
+    return url.upper()
+def login():
+    next_url = request.args.get("next", "")
+    return redirect(make_upper(next_url))
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_lang(src, "python", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Python,
+        "test.py",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "a non-validating wrapper must not confine the redirect; got {findings:?}"
+    );
+}

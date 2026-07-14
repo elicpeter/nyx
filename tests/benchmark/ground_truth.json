@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 644
+    "corpus_size": 648
   },
   "cases": [
     {
@@ -20385,6 +20385,149 @@
       ],
       "disabled": false,
       "notes": "Recall guard for ts-safe-025: a variable holding raw interpolated SQL with NO trailing ORM method (`connection.query(sql)`) must still fire, and a concatenation arg 0 even with an ORM-method chain (`db.query('...'+term).findMany`) is refused by the model-UID-reference gate (binary_expression). Relaxing the ORM-chain recogniser to accept UID references must not blanket-suppress query(variable)."
+    },
+    {
+      "case_id": "cve-py-2022-24776-vulnerable",
+      "file": "cve_corpus/python/CVE-2022-24776/vulnerable.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "open_redirect",
+      "cwe": "CWE-601",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          39,
+          39
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          38,
+          38
+        ]
+      ],
+      "tags": [
+        "cve",
+        "flask-appbuilder",
+        "open_redirect",
+        "flask",
+        "positive"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-24776: Flask-AppBuilder DB-login view redirected to the raw `next` query param without a host/scheme allowlist; open redirect. BSD-3-Clause"
+    },
+    {
+      "case_id": "cve-py-2022-24776-patched",
+      "file": "cve_corpus/python/CVE-2022-24776/patched.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-open-redirect",
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "flask-appbuilder",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-24776 patched counterpart: `redirect(get_safe_redirect(next_url))` routes the URL through the same-origin `is_safe_redirect_url` confiner; the guarded-passthrough OPEN_REDIRECT confiner + nested-sink arg_uses recovery keep Nyx silent."
+    },
+    {
+      "case_id": "py-safe-023",
+      "file": "python/safe/safe_get_safe_redirect_confiner.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-601",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-open-redirect",
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "open_redirect",
+        "guarded-passthrough-confiner",
+        "get_safe_redirect",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "Pins the CVE-2022-24776 guarded-passthrough confiner: `redirect(get_safe_redirect(next_url))` where get_safe_redirect returns its param only under the `is_safe_redirect_url` same-origin guard must stay silent (detect_open_redirect_guarded_passthrough + nested-sink arg_uses OPEN_REDIRECT/SSRF strip)."
+    },
+    {
+      "case_id": "py-open_redirect-001",
+      "file": "python/open_redirect/redirect_weak_wrapper.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "open_redirect",
+      "cwe": "CWE-601",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          21,
+          21
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          20,
+          20
+        ]
+      ],
+      "tags": [
+        "open_redirect",
+        "weak-wrapper",
+        "recall-guard",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for the CVE-2022-24776 confiner: a redirect wrapped by a non-validating helper (`normalize` = str.strip, not a URL-safety check) must still fire taint-open-redirect. Guards against over-suppression of the guarded-passthrough confiner recogniser."
     }
   ]
 }

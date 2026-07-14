@@ -2483,6 +2483,50 @@ fn cond_open_redirect_confiner(info: &crate::cfg::NodeInfo, ctx: &AnalysisContex
     }
 
     // Two-statement form: `const dest = normalize_relative_url(...); if (dest ...)`.
+    cond_open_redirect_confiner_two_statement(info, ctx)
+}
+
+/// Whether a Call node's argument expression wraps the redirect target in an
+/// open-redirect confiner, without an intervening `if` guard, e.g.
+/// `return redirect(get_safe_redirect(next_url))` (Flask-AppBuilder
+/// CVE-2022-24776).  The wrapper survives in [`CallMeta::arg_uses`] (or, for a
+/// `find_classifiable_inner_call` override, `outer_callee`), and its SSA summary
+/// records [`SsaFuncSummary::sanitizes_open_redirect_return`].  Mirrors the taint
+/// layer's nested-sink OPEN_REDIRECT strip so `cfg-unguarded-sink` agrees the
+/// redirect is same-origin.  Registered as a guard on the node itself
+/// (dominance is reflexive).
+fn call_arg_open_redirect_confiner(info: &crate::cfg::NodeInfo, ctx: &AnalysisContext) -> bool {
+    let Some(ssa_summaries) = ctx.ssa_summaries else {
+        return false;
+    };
+    let confines = |name: &str| -> bool {
+        ssa_summaries
+            .iter()
+            .any(|(k, s)| k.lang == ctx.lang && k.name == name && s.sanitizes_open_redirect_return)
+    };
+    info.call
+        .arg_uses
+        .iter()
+        .flatten()
+        .chain(info.call.outer_callee.as_ref())
+        .any(|id| confines(crate::labels::bare_method_name(id)))
+}
+
+/// Two-statement form of [`cond_open_redirect_confiner`]:
+/// `const dest = normalize_relative_url(...); if (dest !== null) res.redirect(dest);`.
+fn cond_open_redirect_confiner_two_statement(
+    info: &crate::cfg::NodeInfo,
+    ctx: &AnalysisContext,
+) -> bool {
+    let Some(ssa_summaries) = ctx.ssa_summaries else {
+        return false;
+    };
+    let confines = |name: &str| -> bool {
+        ssa_summaries
+            .iter()
+            .any(|(k, s)| k.lang == ctx.lang && k.name == name && s.sanitizes_open_redirect_return)
+    };
+
     if info.condition_vars.len() == 1 {
         let var_name = info.condition_vars[0].as_str();
         let cond_func = info.ast.enclosing_func.as_deref();
@@ -2559,6 +2603,17 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
 
     for idx in ctx.cfg.node_indices() {
         let info = &ctx.cfg[idx];
+
+        // Nested-expression open-redirect confiner guard (CVE-2022-24776):
+        //   return redirect(get_safe_redirect(next_url))
+        // The redirect target is wrapped by a same-origin confiner in one
+        // nested expression with no `if` guard; the wrapper name survives in the
+        // sink node's `arg_uses`.  Register the node itself as an OPEN_REDIRECT
+        // guard (dominance is reflexive) so `cfg-unguarded-sink` agrees the
+        // validated redirect is same-origin.  Mirrors the taint-layer strip.
+        if call_arg_open_redirect_confiner(info, ctx) {
+            result.push((idx, Cap::OPEN_REDIRECT));
+        }
 
         // If-condition guards: allowlist checks, type checks, validation
         // calls, shell-metachar rejections, and bounded-length checks in

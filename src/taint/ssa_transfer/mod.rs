@@ -2361,6 +2361,78 @@ fn summary_confines_open_redirect(transfer: &SsaTaintTransfer, bare_name: &str) 
     })
 }
 
+/// Whether an OPEN_REDIRECT sink's argument expression is wrapped by an
+/// open-redirect confiner whose call the SSA collapsed away.
+///
+/// `sink(confiner(source))` in one nested expression (Flask-AppBuilder
+/// CVE-2022-24776 `redirect(get_safe_redirect(next_url))`) lowers to
+/// `redirect(next_url)` — the SSA drops the unlabeled wrapper `get_safe_redirect`
+/// (it carries no source/sink/sanitizer label, so `find_classifiable_inner_call`
+/// never preserves it), and the tainted `next_url` flows straight into the sink
+/// as a direct arg.  The confiner-return strip in the Call handler therefore has
+/// nothing to latch onto.  The wrapper name does survive in the sink node's
+/// [`CallMeta::arg_uses`] though, so recover it here: if any argument-expression
+/// identifier resolves to a summary that [`SsaFuncSummary::
+/// sanitizes_open_redirect_return`], the URL was validated inside that wrapper
+/// before reaching the redirect — same-origin, so OPEN_REDIRECT does not apply.
+/// Intra-file (mirrors [`summary_confines_open_redirect`]); a no-op when
+/// `ssa_summaries` is `None` or no arg identifier names a confiner.
+fn sink_arg_wrapped_by_open_redirect_confiner(
+    info: &crate::cfg::NodeInfo,
+    transfer: &SsaTaintTransfer,
+) -> bool {
+    info.call
+        .arg_uses
+        .iter()
+        .flatten()
+        .chain(info.call.outer_callee.as_ref())
+        .any(|ident| summary_confines_open_redirect(transfer, crate::labels::bare_method_name(ident)))
+}
+
+/// Source-level identifiers whose value flows through an open-redirect confiner
+/// wrapper somewhere in this body's call arguments.
+///
+/// The nested `redirect(get_safe_redirect(next_url))` (CVE-2022-24776) lowers to
+/// two `redirect(next_url)` SSA calls — the standalone call node and the
+/// `return`-expression duplicate.  Only the standalone node carries the wrapper
+/// in [`CallMeta::arg_uses`]; the return node's `arg_uses` is empty, so the
+/// per-node [`sink_arg_wrapped_by_open_redirect_confiner`] check misses it.  This
+/// harvests every argument identifier that co-occurs with a confiner across the
+/// whole body (here `next_url`), so both redirect sinks — matched by their SSA
+/// argument's `var_name` — can be recognised as confined.  Empty (fast) for the
+/// common case where no call argument names a confiner.
+fn open_redirect_confined_arg_names(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    transfer: &SsaTaintTransfer,
+) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut seen_nodes = HashSet::new();
+    for block in &ssa.blocks {
+        for inst in &block.body {
+            if !seen_nodes.insert(inst.cfg_node) {
+                continue;
+            }
+            for group in &cfg[inst.cfg_node].call.arg_uses {
+                let has_confiner = group.iter().any(|id| {
+                    summary_confines_open_redirect(transfer, crate::labels::bare_method_name(id))
+                });
+                if has_confiner {
+                    for id in group {
+                        if !summary_confines_open_redirect(
+                            transfer,
+                            crate::labels::bare_method_name(id),
+                        ) {
+                            out.insert(id.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Extract the bare callee name of an inline call condition.
 ///
 /// Strips leading `!` / `(` / whitespace and a Python `not ` keyword, then
@@ -7765,6 +7837,12 @@ fn collect_block_events(
         }
     }
 
+    // Lazily-computed set of argument names wrapped by an open-redirect
+    // confiner across the whole body (CVE-2022-24776); only built when the
+    // block actually reaches an OPEN_REDIRECT sink whose own `arg_uses` did not
+    // already reveal the wrapper.
+    let mut or_confined_names: Option<HashSet<String>> = None;
+
     // Process body with sink detection
     for inst in &block.body {
         transfer_inst(inst, cfg, ssa, transfer, &mut state);
@@ -7794,6 +7872,36 @@ fn collect_block_events(
 
         let sink_info = resolve_sink_info(info, transfer);
         let mut sink_caps = sink_info.caps;
+
+        // Nested-expression open-redirect confiner (CVE-2022-24776).  When the
+        // redirect target is wrapped by a same-origin confiner in one nested
+        // expression (`redirect(get_safe_redirect(next_url))`), the SSA dropped
+        // the unlabeled wrapper and the tainted URL reaches the sink directly.
+        // Recover the confinement from the sink node's `arg_uses`, falling back
+        // to the whole-body confined-argument-name set for the `return`-node
+        // duplicate whose `arg_uses` is empty.  The same-origin host check
+        // neutralises both OPEN_REDIRECT and the SSRF bit the redirect sink also
+        // carries, so a validated redirect no longer fires either finding.
+        if sink_caps.intersects(Cap::OPEN_REDIRECT) {
+            let mut wrapped = sink_arg_wrapped_by_open_redirect_confiner(info, transfer);
+            if !wrapped {
+                let set = or_confined_names
+                    .get_or_insert_with(|| open_redirect_confined_arg_names(ssa, cfg, transfer));
+                if !set.is_empty() {
+                    if let SsaOp::Call { args, .. } = &inst.op {
+                        wrapped = args.iter().flatten().any(|v| {
+                            ssa.def_of(*v)
+                                .var_name
+                                .as_deref()
+                                .is_some_and(|n| set.contains(n))
+                        });
+                    }
+                }
+            }
+            if wrapped {
+                sink_caps &= !(Cap::OPEN_REDIRECT | Cap::SSRF);
+            }
+        }
 
         // [detectors.data_exfil] enabled toggle.  When the detector class is
         // disabled per-project, strip Cap::DATA_EXFIL from sink_caps so no

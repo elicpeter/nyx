@@ -26,6 +26,7 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2023-6568  | Python     | MLflow                     | Apache-2.0           | XSS             | detected |
 | CVE-2024-21513 | Python     | LangChain Experimental     | MIT                  | code_exec       | detected |
 | CVE-2024-32651 | Python     | changedetection.io         | Apache-2.0           | SSTI            | detected |
+| CVE-2022-24776 | Python     | Flask-AppBuilder           | BSD-3-Clause         | open_redirect   | detected |
 | CVE-2019-14939 | JavaScript | mongo-express              | MIT                  | code_exec       | detected |
 | CVE-2025-64430 | JavaScript | Parse Server               | Apache-2.0           | SSRF            | detected |
 | CVE-2023-22621 | JavaScript | Strapi                     | MIT                  | code_exec (SSTI)| detected |

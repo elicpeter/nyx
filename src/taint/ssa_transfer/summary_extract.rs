@@ -851,6 +851,203 @@ fn detect_open_redirect_normalizer(
     false
 }
 
+/// Recognise a canonical open-redirect URL-safety validator callee by name.
+///
+/// These are the ecosystem-standard boolean guards that pin a redirect target
+/// to the current host / a relative URL before it is used: Django's
+/// `url_has_allowed_host_and_scheme` (and its legacy `is_safe_url` alias),
+/// Flask / Flask-AppBuilder's `is_safe_redirect_url`, and app-local helpers
+/// named `*safe*redirect*` / `*safe*url*` / `*valid*redirect*`.  Their bodies
+/// are frequently library-internal (Django's live in `django.utils.http`), so
+/// name recognition is the only available signal.  Conservative: the name must
+/// carry an explicit redirect/URL-safety token, so a generic `is_valid_email`
+/// does not match.
+fn is_open_redirect_validator_name(name: &str) -> bool {
+    let leaf = name.rsplit(['.', ':']).next().unwrap_or(name);
+    let l = leaf.to_ascii_lowercase();
+    l == "url_has_allowed_host_and_scheme"
+        || l == "is_safe_url"
+        || l == "url_is_safe"
+        || (l.contains("safe") && l.contains("redirect"))
+        || (l.contains("safe") && l.contains("url"))
+        || (l.contains("valid") && l.contains("redirect"))
+}
+
+/// True when a branch `condition_text` invokes an open-redirect URL-safety
+/// validator (`is_safe_redirect_url(url)`,
+/// `url_has_allowed_host_and_scheme(url=next, ...)`).  Scans every `<ident>(`
+/// call head and tests its leaf name against
+/// [`is_open_redirect_validator_name`].
+fn condition_calls_open_redirect_validator(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b'(' {
+            continue;
+        }
+        let mut j = i;
+        while j > 0 {
+            let c = bytes[j - 1];
+            if c.is_ascii_alphanumeric() || c == b'_' || c == b'.' {
+                j -= 1;
+            } else {
+                break;
+            }
+        }
+        if j < i && is_open_redirect_validator_name(&text[j..i]) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the branch condition is a leading negation (`not X` / `!X`), which
+/// flips which successor edge is the validated one.
+fn condition_is_leading_negation(text: &str) -> bool {
+    let t = text.trim_start();
+    t.strip_prefix("not ").is_some() || t.strip_prefix('!').is_some_and(|r| !r.starts_with('='))
+}
+
+/// Whether block `r` is dominated by block `t` in `ssa` — every path from the
+/// entry block to `r` passes through `t`.  Computed as: `r` is unreachable from
+/// the entry once `t` is deleted from the block graph.  Operates on
+/// [`crate::ssa::ir::BlockId`] values verbatim (which are not assumed equal to
+/// `Vec` positions).
+fn block_dominated_by(ssa: &SsaBody, r: u32, t: u32) -> bool {
+    if r == t {
+        return true;
+    }
+    let Some(entry) = ssa.blocks.first().map(|b| b.id.0) else {
+        return false;
+    };
+    if r == entry {
+        return false;
+    }
+    let mut visited: HashSet<u32> = HashSet::new();
+    let mut stack = vec![entry];
+    while let Some(b) = stack.pop() {
+        if b == t || !visited.insert(b) {
+            continue;
+        }
+        if let Some(blk) = ssa.blocks.iter().find(|x| x.id.0 == b) {
+            for s in &blk.succs {
+                stack.push(s.0);
+            }
+        }
+    }
+    !visited.contains(&r)
+}
+
+/// Detect a *guarded-passthrough open-redirect confiner*: a helper that returns
+/// its URL parameter only on the validated branch of a URL-safety guard, and a
+/// constant otherwise.
+///
+/// Shape (Flask-AppBuilder CVE-2022-24776 `get_safe_redirect`):
+///
+/// ```python
+/// def get_safe_redirect(url):
+///     if url and is_safe_redirect_url(url):   # URL-safety guard
+///         return url                          # param-derived return
+///     return "/"                              # constant fallback
+/// ```
+///
+/// Every param-derived return block must be **dominated by the validated edge**
+/// of a guard whose condition calls a recognised open-redirect validator
+/// ([`is_open_redirect_validator_name`]) and mentions the returned parameter, so
+/// the parameter can only escape after passing validation — the return is
+/// provably OPEN_REDIRECT-safe.  Sound by construction: an unguarded return of
+/// the parameter (dominance fails) or a guard on an unrelated variable (name tie
+/// fails) leaves the confiner unrecognised, so the redirect still fires.
+///
+/// Complements [`detect_open_redirect_normalizer`] (the JS backslash-normalise /
+/// protocol-relative-reject shape, CVE-2026-42259): this recognises the
+/// validate-then-passthrough shape common to Python/Flask/Django redirect
+/// wrappers.  Motivated by CVE-2022-24776.
+fn detect_open_redirect_guarded_passthrough(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    param_index_of: &HashMap<SsaValue, usize>,
+) -> bool {
+    if param_index_of.is_empty() {
+        return false;
+    }
+
+    // Map param index -> source-level name (to tie a guard to the return it
+    // protects).
+    let mut param_name: HashMap<usize, String> = HashMap::new();
+    for block in &ssa.blocks {
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            if let SsaOp::Param { index } = inst.op {
+                if let Some(n) = &inst.var_name {
+                    param_name.entry(index).or_insert_with(|| n.clone());
+                }
+            }
+        }
+    }
+
+    // (1) Param-derived return blocks + the param indices they carry.
+    let mut param_returns: SmallVec<[(u32, SmallVec<[usize; 2]>); 2]> = SmallVec::new();
+    let mut budget = 512u32;
+    for block in &ssa.blocks {
+        let Terminator::Return(Some(rv)) = &block.terminator else {
+            continue;
+        };
+        let mut seen = HashSet::new();
+        let mut params: SmallVec<[usize; 2]> = SmallVec::new();
+        collect_reaching_params(ssa, *rv, param_index_of, &mut seen, &mut params, &mut budget);
+        if !params.is_empty() {
+            param_returns.push((block.id.0, params));
+        }
+    }
+    if param_returns.is_empty() {
+        return false;
+    }
+
+    // (2) URL-safety guard branches -> (validated-edge block id, condition text).
+    let mut guards: SmallVec<[(u32, String); 2]> = SmallVec::new();
+    for block in &ssa.blocks {
+        let Terminator::Branch {
+            cond,
+            true_blk,
+            false_blk,
+            ..
+        } = &block.terminator
+        else {
+            continue;
+        };
+        let Some(text) = cfg.node_weight(*cond).and_then(|n| n.condition_text.as_deref()) else {
+            continue;
+        };
+        if condition_calls_open_redirect_validator(text) {
+            let validated = if condition_is_leading_negation(text) {
+                false_blk
+            } else {
+                true_blk
+            };
+            guards.push((validated.0, text.to_string()));
+        }
+    }
+    if guards.is_empty() {
+        return false;
+    }
+
+    // (3) Every param-derived return must be dominated by the validated edge of
+    //     some guard whose condition names one of the returned params.
+    for (rblk, params) in &param_returns {
+        let names: SmallVec<[&str; 2]> = params
+            .iter()
+            .filter_map(|i| param_name.get(i).map(String::as_str))
+            .collect();
+        let confined = guards.iter().any(|(vblk, gtext)| {
+            let ties = names.is_empty() || names.iter().any(|n| gtext.contains(n));
+            ties && block_dominated_by(ssa, *rblk, *vblk)
+        });
+        if !confined {
+            return false;
+        }
+    }
+    true
+}
+
 /// Extract a precise per-parameter `SsaFuncSummary` from an already-lowered SSA body.
 ///
 /// For each parameter (up to `MAX_PROBE_PARAMS`), runs a taint probe by seeding
@@ -1713,12 +1910,17 @@ pub fn extract_ssa_func_summary_full(
     let asserts_path_confined_params =
         detect_assert_path_confined_params(ssa, &probe_const_values, &param_index_of);
 
-    // Behaviour-based open-redirect confiner detection (CVE-2026-42259):
-    // a helper that normalises its input then rejects protocol-relative
-    // (`//`) and `scheme:` URLs before returning the confined value marks
-    // its return as OPEN_REDIRECT-clean.
-    let sanitizes_open_redirect_return =
-        detect_open_redirect_normalizer(ssa, cfg, &param_index_of);
+    // Behaviour-based open-redirect confiner detection.  Two shapes mark the
+    // return as OPEN_REDIRECT-clean:
+    //   * `detect_open_redirect_normalizer` (CVE-2026-42259): normalise the
+    //     input then reject protocol-relative (`//`) and `scheme:` URLs before
+    //     returning the confined value (JS `normalize_relative_url`).
+    //   * `detect_open_redirect_guarded_passthrough` (CVE-2022-24776): return
+    //     the URL parameter only on the validated branch of a URL-safety guard
+    //     (`get_safe_redirect` -> `is_safe_redirect_url` /
+    //     `url_has_allowed_host_and_scheme`).
+    let sanitizes_open_redirect_return = detect_open_redirect_normalizer(ssa, cfg, &param_index_of)
+        || detect_open_redirect_guarded_passthrough(ssa, cfg, &param_index_of);
 
     // Return-value path-prefix confinement (CVE-2020-5221, uftpd): a function
     // whose every non-null return is guarded by `strncmp(rv, prefix,
