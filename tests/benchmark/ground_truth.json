@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 616
+    "corpus_size": 618
   },
   "cases": [
     {
@@ -11180,6 +11180,72 @@
       ],
       "disabled": false,
       "notes": "CVE-2026-33486 patched counterpart: isSafeRemoteUrl early-return validates scheme/host before fopen; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-php-2026-46364-vulnerable",
+      "file": "cve_corpus/php/CVE-2026-46364/vulnerable.php",
+      "language": "php",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          68,
+          68
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          52,
+          54
+        ]
+      ],
+      "tags": [
+        "cve",
+        "phpmyfaq",
+        "sqli"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-46364: phpMyFAQ BuiltinCaptcha::garbageCollector interpolates the attacker-controlled user-agent header and client IP into a DELETE via sprintf with no escaping before $db->query(). MPL-2.0"
+    },
+    {
+      "case_id": "cve-php-2026-46364-patched",
+      "file": "cve_corpus/php/CVE-2026-46364/patched.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "phpmyfaq",
+        "patched",
+        "negative"
+      ],
+      "disabled": true,
+      "disabled_reason": "Patched-precision false positive on the default (field-INsensitive) taint model. The fix routes $this->userAgent / $this->ip through $db->escape() before the DELETE, but a tainted write to ANY object field (`$this->ip = <source>`) taints the WHOLE `$this` scalar, and every subsequent `$this->...` reference (the escape/query receiver chain AND the sprintf `$this->configuration->getLanguage()` arg) reads that polluted base, so the escaped value is bypassed and `taint-unsanitised-flow` fires on the base object. Root cause: per-field cells are gated behind NYX_POINTER_ANALYSIS (off by default), so field writes fold into the base object scalar. A clean fix (base-write field-sensitivity: member_access_expression dotted defines + field-write base rebuild + FieldProj field-precise reads) was prototyped this session and DID silence the patched fixture, but zeroing the field-write base scalar is UNSOUND for whole-object reads (`res.send(obj)` where a field is tainted must still fire — regression on ssa_field_base_sink_no_suppression) and the sound alternative needs default-mode per-field cells that whole-object reads aggregate while field reads project — a multi-day core-model change with broad cross-language regression surface. Tracked in nyx-dev-tools/CVE_DEFERRED.md. MPL-2.0",
+      "notes": "CVE-2026-46364 patched counterpart: escapeQueryValue routes the user-agent header and client IP through $db->escape() before interpolation. MPL-2.0"
     },
     {
       "case_id": "cve-rb-2013-0156-vulnerable",

@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-07-13T22:10:11Z",
+  "timestamp": "2026-07-13T23:59:07Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,10 +9,10 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:71446528b705eafb006ab9643357e143730d60612fe050c0399d22649e3f2466",
-  "corpus_size": 614,
-  "cases_run": 612,
-  "cases_skipped": 2,
+  "ground_truth_hash": "sha256:558c575601de53ab0fb585c00898f4f09bda89c747d4e709bdde4cbe8188c039",
+  "corpus_size": 616,
+  "cases_run": 613,
+  "cases_skipped": 3,
   "outcomes": [
     {
       "case_id": "c-buf-001",
@@ -1917,6 +1917,25 @@
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 1
+    },
+    {
+      "case_id": "cve-php-2026-46364-vulnerable",
+      "file": "cve_corpus/php/CVE-2026-46364/vulnerable.php",
+      "language": "php",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 52:20)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 52:20)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
     },
     {
       "case_id": "cve-py-2017-18342-patched",
@@ -10914,22 +10933,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 294,
+    "tp": 295,
     "fp": 7,
     "fn_": 7,
     "tn": 304,
-    "precision": 0.9767441860465116,
-    "recall": 0.9767441860465116,
-    "f1": 0.9767441860465116
+    "precision": 0.9768211920529801,
+    "recall": 0.9768211920529801,
+    "f1": 0.9768211920529801
   },
   "aggregate_rule_level": {
-    "tp": 294,
+    "tp": 295,
     "fp": 7,
     "fn_": 7,
     "tn": 304,
-    "precision": 0.9767441860465116,
-    "recall": 0.9767441860465116,
-    "f1": 0.9767441860465116
+    "precision": 0.9768211920529801,
+    "recall": 0.9768211920529801,
+    "f1": 0.9768211920529801
   },
   "by_language": {
     "c": {
@@ -10978,13 +10997,13 @@
       "f1": 1.0
     },
     "php": {
-      "tp": 23,
+      "tp": 24,
       "fp": 4,
       "fn_": 0,
       "tn": 20,
-      "precision": 0.8518518518518519,
+      "precision": 0.8571428571428571,
       "recall": 1.0,
-      "f1": 0.92
+      "f1": 0.923076923076923
     },
     "python": {
       "tp": 43,
@@ -11196,13 +11215,13 @@
       "f1": 1.0
     },
     "sqli": {
-      "tp": 39,
+      "tp": 40,
       "fp": 0,
       "fn_": 1,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.975,
-      "f1": 0.9873417721518987
+      "recall": 0.975609756097561,
+      "f1": 0.9876543209876543
     },
     "ssrf": {
       "tp": 35,
@@ -11225,31 +11244,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 92,
-      "fp": 133,
+      "tp": 93,
+      "fp": 132,
       "fn_": 209,
-      "tn": 178,
-      "precision": 0.4088888888888889,
-      "recall": 0.30564784053156147,
-      "f1": 0.349809885931559
+      "tn": 179,
+      "precision": 0.41333333333333333,
+      "recall": 0.3079470198675497,
+      "f1": 0.3529411764705882
     },
     ">=Low": {
-      "tp": 92,
-      "fp": 157,
+      "tp": 93,
+      "fp": 156,
       "fn_": 209,
-      "tn": 154,
-      "precision": 0.36947791164658633,
-      "recall": 0.30564784053156147,
-      "f1": 0.33454545454545453
+      "tn": 155,
+      "precision": 0.37349397590361444,
+      "recall": 0.3079470198675497,
+      "f1": 0.33756805807622503
     },
     ">=Medium": {
-      "tp": 92,
-      "fp": 137,
+      "tp": 93,
+      "fp": 138,
       "fn_": 209,
-      "tn": 174,
-      "precision": 0.4017467248908297,
-      "recall": 0.30564784053156147,
-      "f1": 0.3471698113207547
+      "tn": 173,
+      "precision": 0.4025974025974026,
+      "recall": 0.3079470198675497,
+      "f1": 0.34896810506566606
     }
   }
 }
