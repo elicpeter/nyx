@@ -1102,7 +1102,7 @@ fn rename_variables(
 ) -> (
     Vec<SsaBlock>,
     Vec<ValueDef>,
-    FxHashMap<NodeIndex, SsaValue>,
+    crate::ssa::ir::CfgNodeMap,
     crate::ssa::ir::FieldInterner,
     FxHashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
     FxHashSet<SsaValue>,
@@ -1111,7 +1111,11 @@ fn rename_variables(
     let num_blocks = blocks_nodes.len();
     let mut next_value: u32 = 0;
     let mut value_defs: Vec<ValueDef> = Vec::new();
-    let mut cfg_node_map: FxHashMap<NodeIndex, SsaValue> = FxHashMap::default();
+    // Pre-sized to the CFG's node count so every `insert(node, _)` lands without
+    // a reallocation (`NodeIndex::index() < node_count` for a Graph built
+    // without node removals). Dense `Vec` side table — no hashing. See
+    // [`crate::ssa::ir::CfgNodeMap`].
+    let mut cfg_node_map = crate::ssa::ir::CfgNodeMap::with_node_count(cfg.node_count());
     // Per-body interner for FieldProj field names; populated when the
     // member-access decomposition (try_lower_field_proj_chain) emits a
     // chain for chained-receiver method calls (`a.b.c()`), and remains
@@ -1197,7 +1201,7 @@ fn rename_variables(
         ssa_blocks: &mut [SsaBlock],
         phi_values: &mut [BTreeMap<String, SsaValue>],
         value_defs: &mut Vec<ValueDef>,
-        cfg_node_map: &mut FxHashMap<NodeIndex, SsaValue>,
+        cfg_node_map: &mut crate::ssa::ir::CfgNodeMap,
         next_value: &mut u32,
         nop_nodes: &FxHashSet<NodeIndex>,
         field_interner: &mut crate::ssa::ir::FieldInterner,

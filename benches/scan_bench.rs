@@ -656,6 +656,70 @@ fn bench_ssa_lower_large_go(c: &mut Criterion) {
     });
 }
 
+/// Isolates the `cfg_node_map` **point-lookup** path — the map's hottest access
+/// pattern (18 `.get()` sites across taint / guards / symex / const-prop resolve
+/// a sink or source CFG node to its primary `SsaValue`).
+///
+/// Pre-2026-07-14 this was a `std::collections::HashMap<NodeIndex, SsaValue>`
+/// (SipHash), then an `FxHashMap` (session-0015).  2026-07-14 (session-0018)
+/// replaced it with a positional `CfgNodeMap` (`Vec<Option<SsaValue>>` indexed by
+/// `NodeIndex::index()`) — the option-(b) deep fix in `PERF_DEFERRED.md`.  A
+/// lookup is now a bounds-checked `Vec` index with **zero hashing** instead of an
+/// `FxHash` of the `NodeIndex` plus a bucket probe.  A regression that re-hashes
+/// the key surfaces here proportional to the number of value-defining nodes.
+///
+/// Sourced from `value_defs` (not `cfg_node_map.iter()`) so the bench compiles
+/// identically against the old `FxHashMap` and the new `CfgNodeMap`, enabling a
+/// clean `--save-baseline` before/after on the same bench.
+fn bench_cfg_node_map_lookup(c: &mut Criterion) {
+    use nyx_scanner::ssa;
+
+    let fixture = Path::new("benches/perf_fixtures/large_go_module.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let cfg_obj = Config::default();
+    let (file_cfg, _lang) = nyx_scanner::ast::build_cfg_for_file(&fixture, &cfg_obj)
+        .expect("build cfg")
+        .expect("supported language");
+
+    // Lower every body once (outside the measured loop); keep each lowered body
+    // paired with the value-defining CFG node indices — the realistic lookup
+    // keys.
+    let probes: Vec<_> = file_cfg
+        .bodies
+        .iter()
+        .filter_map(|body| {
+            let scope = body.meta.name.as_deref();
+            let scope_all = body.meta.name.is_none();
+            ssa::lower_to_ssa(&body.graph, body.entry, scope, scope_all)
+                .ok()
+                .and_then(|ssa_body| {
+                    let nodes: Vec<_> =
+                        ssa_body.value_defs.iter().map(|vd| vd.cfg_node).collect();
+                    if nodes.is_empty() {
+                        None
+                    } else {
+                        Some((ssa_body, nodes))
+                    }
+                })
+        })
+        .collect();
+
+    c.bench_function("cfg_node_map_lookup", |b| {
+        b.iter(|| {
+            let mut acc = 0u64;
+            for (ssa_body, nodes) in &probes {
+                for n in nodes {
+                    if let Some(v) = ssa_body.cfg_node_map.get(n) {
+                        acc = acc.wrapping_add(v.0 as u64);
+                    }
+                }
+            }
+            acc
+        });
+    });
+}
+
 /// Isolates `FuncKey` hashing on the pessimal map: a `std::collections::HashMap`
 /// (SipHash `RandomState`), the exact type used by the interprocedural indices
 /// `ssa_by_key` / `bodies_by_key` / `auth_by_key` in `GlobalSummaries`.
@@ -720,6 +784,7 @@ criterion_group!(
     bench_collect_top_level_units_go,
     bench_const_propagate_large_go,
     bench_ssa_lower_large_go,
+    bench_cfg_node_map_lookup,
     bench_global_summaries_lookup_same_lang_go,
     bench_funckey_hash_lookup,
     bench_taint_callee_resolve_stress_go,

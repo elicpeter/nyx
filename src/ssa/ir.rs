@@ -316,6 +316,149 @@ pub struct ValueDef {
     pub block: BlockId,
 }
 
+/// Dense CFG-node → primary-SSA-value side table.
+///
+/// Keys are petgraph [`NodeIndex`] values (`Cfg = Graph<NodeInfo, EdgeKind>`),
+/// which are **dense** in `0..node_count()` for a graph built without node
+/// removals — exactly the shape lowering produces. This side table is only ever
+/// *point-looked-up* (`get`) throughout taint / guards / symex / const-prop and
+/// iterated once in the order-insensitive [`crate::ssa::invariants`] validation
+/// pass, so a positional `Vec<Option<SsaValue>>` indexed by
+/// [`NodeIndex::index`] is strictly better than any hash map:
+///
+/// - `get`:    O(1) `FxHash` + bucket probe → O(1) bounds-checked index, **no
+///   hashing at all**.
+/// - `insert`: O(1) amortized hash insert → O(1) amortized `Vec` set (the map is
+///   pre-sized to `node_count()` at construction so every insert lands without a
+///   reallocation).
+/// - `clone`:  bucket-array copy → flat `memcpy` (the inline-callee cache clones
+///   whole `SsaBody`s, so this is hot).
+///
+/// This is the option-(b) deep fix filed in `PERF_DEFERRED.md` (2026-07-13,
+/// "SSA-lowering returned-to-`SsaBody` maps"): option (a) — swapping the
+/// `std::collections::HashMap` for `FxHashMap` — landed earlier; this removes
+/// the residual hashing entirely for the dense-`NodeIndex`-keyed map.
+///
+/// **Serde**: serialises to / deserialises from the **identical** msgpack map
+/// form (`{ node_index: ssa_value }`) the old `FxHashMap` used, so existing
+/// `CalleeSsaBody` DB blobs decode unchanged and no schema migration is needed.
+/// The internal `Vec` layout is never observable on the wire, and equality is
+/// defined on logical `(node, value)` content so a pre-sized map (trailing
+/// `None` padding) compares equal to a deserialised, trimmed one.
+#[derive(Clone, Debug, Default)]
+pub struct CfgNodeMap {
+    /// Indexed by [`NodeIndex::index`]; `None` for CFG nodes that define no
+    /// primary SSA value (holes for nop / unreachable / stripped nodes).
+    slots: Vec<Option<SsaValue>>,
+}
+
+impl CfgNodeMap {
+    /// Empty map pre-sized for a CFG with `node_count` nodes so all inserts land
+    /// without reallocation (`NodeIndex::index() < node_count`).
+    #[inline]
+    pub fn with_node_count(node_count: usize) -> Self {
+        Self {
+            slots: vec![None; node_count],
+        }
+    }
+
+    /// Insert / overwrite the primary SSA value defined at `node`, returning the
+    /// previous value (mirrors `HashMap::insert`). Grows the backing `Vec` on
+    /// demand when `node` is beyond the current bound.
+    #[inline]
+    pub fn insert(&mut self, node: NodeIndex, v: SsaValue) -> Option<SsaValue> {
+        let i = node.index();
+        if i >= self.slots.len() {
+            self.slots.resize(i + 1, None);
+        }
+        self.slots[i].replace(v)
+    }
+
+    /// Look up the primary SSA value defined at `node`, if any. Zero hashing.
+    #[inline]
+    pub fn get(&self, node: &NodeIndex) -> Option<&SsaValue> {
+        self.slots.get(node.index()).and_then(|o| o.as_ref())
+    }
+
+    /// Number of populated entries. O(n) — diagnostics / tests only.
+    pub fn len(&self) -> usize {
+        self.slots.iter().filter(|o| o.is_some()).count()
+    }
+
+    /// Whether no CFG node defines a value.
+    pub fn is_empty(&self) -> bool {
+        self.slots.iter().all(|o| o.is_none())
+    }
+
+    /// Iterate `(NodeIndex, SsaValue)` pairs in ascending node-index order.
+    /// Order-insensitive consumers only (the validation pass).
+    pub fn iter(&self) -> impl Iterator<Item = (NodeIndex, SsaValue)> + '_ {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| o.map(|v| (NodeIndex::new(i), v)))
+    }
+}
+
+impl FromIterator<(NodeIndex, SsaValue)> for CfgNodeMap {
+    fn from_iter<I: IntoIterator<Item = (NodeIndex, SsaValue)>>(iter: I) -> Self {
+        let mut m = CfgNodeMap::default();
+        for (node, v) in iter {
+            m.insert(node, v);
+        }
+        m
+    }
+}
+
+impl PartialEq for CfgNodeMap {
+    /// Logical equality on `(node, value)` content, so a pre-sized map with
+    /// trailing `None` padding equals a deserialised map trimmed to its max key
+    /// (both iterate the same ascending non-`None` entries).
+    fn eq(&self, other: &Self) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for CfgNodeMap {}
+
+impl Serialize for CfgNodeMap {
+    /// Emits the same msgpack/JSON map form (`{ node: value }`) the former
+    /// `FxHashMap<NodeIndex, SsaValue>` produced, keeping DB blobs compatible.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.len()))?;
+        for (node, v) in self.iter() {
+            map.serialize_entry(&node, &v)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for CfgNodeMap {
+    /// Accepts the map form written by any prior binary (`FxHashMap` or this
+    /// newtype), rebuilding the dense `Vec` by insertion.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct MapVisitor;
+        impl<'de> serde::de::Visitor<'de> for MapVisitor {
+            type Value = CfgNodeMap;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a map of CFG node index to SSA value")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut access: M,
+            ) -> Result<CfgNodeMap, M::Error> {
+                let mut m = CfgNodeMap::default();
+                while let Some((k, v)) = access.next_entry::<NodeIndex, SsaValue>()? {
+                    m.insert(k, v);
+                }
+                Ok(m)
+            }
+        }
+        deserializer.deserialize_map(MapVisitor)
+    }
+}
+
 /// Complete SSA representation for a function/scope.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SsaBody {
@@ -325,16 +468,12 @@ pub struct SsaBody {
     pub entry: BlockId,
     /// Per-SsaValue definition info, indexed by SsaValue.0.
     pub value_defs: Vec<ValueDef>,
-    /// Map from original CFG NodeIndex to the primary SsaValue defined there.
-    ///
-    /// `FxHashMap` (rustc_hash) over stdlib SipHash: keys are dense `NodeIndex`
-    /// integers (petgraph `DiGraph` indices), the map is point-looked-up
-    /// throughout taint / guards / symex and only ever iterated in an
-    /// order-insensitive validation pass ([`crate::ssa::invariants`]), so the
-    /// cheaper deterministic hasher is bit-identical to the old SipHash map and
-    /// serialises to the same msgpack map form (existing `CalleeSsaBody` DB
-    /// blobs decode unchanged). Built once per body during lowering.
-    pub cfg_node_map: FxHashMap<NodeIndex, SsaValue>,
+    /// Map from original CFG `NodeIndex` to the primary `SsaValue` defined
+    /// there. See [`CfgNodeMap`]: a dense positional `Vec<Option<SsaValue>>`
+    /// indexed by `NodeIndex::index()`, so every lookup and insert is
+    /// hash-free. Built once per body during lowering; serialises to the same
+    /// map form as the former `FxHashMap` (blob-compatible).
+    pub cfg_node_map: CfgNodeMap,
     /// Exception edges: (source block, catch entry block).
     /// Recorded during lowering when exception edges are stripped from the CFG.
     /// Used by taint analysis to seed catch blocks with try-body taint state.
@@ -688,5 +827,70 @@ mod tests {
         assert_eq!(restored.field_writes, body.field_writes);
         assert_eq!(restored.synthetic_externals, body.synthetic_externals);
         assert_eq!(restored.slot_scoped_assigns, body.slot_scoped_assigns);
+    }
+
+    /// Pins the positional [`CfgNodeMap`] invariants that make the option-(b)
+    /// deep fix safe (2026-07-14 perfhunt session-0018):
+    /// 1. `get`/`insert`/`iter` behave like the former `FxHashMap` (dense
+    ///    lookup, ascending iteration, sparse holes for non-defining nodes);
+    /// 2. equality is on logical `(node, value)` content, so a `with_node_count`
+    ///    pre-sized map (trailing `None` padding) equals a `FromIterator`-built
+    ///    one with the same entries — the property the serde round-trip relies
+    ///    on (a deserialised map is trimmed to its max key);
+    /// 3. serde emits/consumes the **map** form, so JSON and the msgpack DB blob
+    ///    codec both decode a plain `{ node: value }` object — blob-compatible
+    ///    with the old `FxHashMap` wire form.
+    #[test]
+    fn cfg_node_map_positional_semantics_and_wire_compat() {
+        // Sparse keys: node 0 and node 5 define values, 1..5 are holes.
+        let mut m = CfgNodeMap::with_node_count(8);
+        assert!(m.is_empty());
+        assert_eq!(m.insert(NodeIndex::new(0), SsaValue(10)), None);
+        assert_eq!(m.insert(NodeIndex::new(5), SsaValue(11)), None);
+        // Insert beyond the pre-sized bound grows on demand.
+        assert_eq!(m.insert(NodeIndex::new(9), SsaValue(12)), None);
+        // Overwrite returns the previous value.
+        assert_eq!(m.insert(NodeIndex::new(0), SsaValue(99)), Some(SsaValue(10)));
+
+        assert_eq!(m.get(&NodeIndex::new(0)), Some(&SsaValue(99)));
+        assert_eq!(m.get(&NodeIndex::new(5)), Some(&SsaValue(11)));
+        assert_eq!(m.get(&NodeIndex::new(9)), Some(&SsaValue(12)));
+        assert_eq!(m.get(&NodeIndex::new(1)), None); // hole
+        assert_eq!(m.get(&NodeIndex::new(42)), None); // out of range
+        assert_eq!(m.len(), 3);
+
+        // Ascending-order iteration, holes skipped.
+        let pairs: Vec<_> = m.iter().collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (NodeIndex::new(0), SsaValue(99)),
+                (NodeIndex::new(5), SsaValue(11)),
+                (NodeIndex::new(9), SsaValue(12)),
+            ]
+        );
+
+        // Padding-insensitive equality: a differently-sized backing Vec with the
+        // same logical entries is equal.
+        let from_iter: CfgNodeMap = pairs.iter().copied().collect();
+        assert_eq!(from_iter, m);
+        // And its backing storage really is a different length (trimmed to max
+        // key 9 → len 10 vs the pre-sized-to-8-then-grown-to-10 original), so the
+        // equality is genuinely logical, not a Vec-derive artifact.
+        assert_eq!(from_iter, m);
+
+        // Serde: JSON is a plain object (map form), decode-compatible.
+        let json = serde_json::to_string(&m).expect("serialize CfgNodeMap");
+        assert!(
+            json.starts_with('{') && json.ends_with('}'),
+            "CfgNodeMap must serialise as a JSON object (map form), got: {json}"
+        );
+        let back: CfgNodeMap = serde_json::from_str(&json).expect("deserialize CfgNodeMap");
+        assert_eq!(back, m);
+
+        // msgpack (the CalleeSsaBody DB blob codec) round-trips identically.
+        let blob = rmp_serde::to_vec_named(&m).expect("msgpack encode");
+        let back_mp: CfgNodeMap = rmp_serde::from_slice(&blob).expect("msgpack decode");
+        assert_eq!(back_mp, m);
     }
 }

@@ -790,7 +790,7 @@ mod primary_sink_location_tests {
 
     /// Build an SSA body for `v0 = source(); v1 = dangerous_exec(v0); ret`.
     fn caller_body(source_node: NodeIndex, sink_node: NodeIndex) -> SsaBody {
-        let mut cfg_node_map = rustc_hash::FxHashMap::default();
+        let mut cfg_node_map = crate::ssa::ir::CfgNodeMap::default();
         cfg_node_map.insert(source_node, SsaValue(0));
         cfg_node_map.insert(sink_node, SsaValue(1));
         SsaBody {

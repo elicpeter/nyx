@@ -409,7 +409,7 @@ fn check_value_def_coverage(body: &SsaBody, errors: &mut Vec<String>) {
 }
 
 fn check_cfg_node_map(body: &SsaBody, errors: &mut Vec<String>) {
-    for (&cfg_node, &sv) in body.cfg_node_map.iter() {
+    for (cfg_node, sv) in body.cfg_node_map.iter() {
         let idx = sv.0 as usize;
         if idx >= body.value_defs.len() {
             errors.push(format!(
