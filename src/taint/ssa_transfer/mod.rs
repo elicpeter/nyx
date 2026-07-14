@@ -9786,6 +9786,7 @@ fn collect_tainted_sink_values(
                     }
                 }
             }
+            retain_inner_sink_reaching_uses(&mut result, info, ssa);
             apply_field_aware_suppression(&mut result, inst, info, state, sink_caps, ssa);
             apply_arg_type_safe_suppression(
                 &mut result,
@@ -9823,6 +9824,7 @@ fn collect_tainted_sink_values(
                     }
                 }
             }
+            retain_inner_sink_reaching_uses(&mut result, info, ssa);
             apply_field_aware_suppression(&mut result, inst, info, state, sink_caps, ssa);
             apply_arg_type_safe_suppression(
                 &mut result,
@@ -9846,15 +9848,40 @@ fn collect_tainted_sink_values(
         check_heap_taint(v, &mut result);
     }
 
-    // Inner-nested-sink argument attribution.  When this node's `Sink` label
-    // was contributed by a call nested inside a larger non-sink outer
-    // expression (`Ok(Reader { meta: <tainted>, h: File::open(const) })`,
-    // `str(eval(x))`), only values that syntactically appear inside that
-    // inner sink call are its payload.  A tainted value occupying a DIFFERENT
-    // sub-position of the enclosing aggregate is a sibling that reaches the
-    // aggregate's returned value, not the sink's argument, so drop it.  Named
-    // values outside the set are dropped; unnamed temporaries are kept
-    // (conservative — the inner sink's payload may be an unnamed sub-call).
+    retain_inner_sink_reaching_uses(&mut result, info, ssa);
+
+    apply_field_aware_suppression(&mut result, inst, info, state, sink_caps, ssa);
+    apply_arg_type_safe_suppression(&mut result, sink_caps, transfer.type_facts, inst, info, ssa);
+    result
+}
+
+/// Inner-nested-sink argument attribution.  When this node's `Sink` label was
+/// contributed by a call nested inside a larger non-sink outer expression
+/// (`Ok(Reader { meta: <tainted>, h: File::open(const) })`, `str(eval(x))`),
+/// only values that syntactically appear inside that inner sink call are its
+/// payload.  A tainted value occupying a DIFFERENT sub-position of the
+/// enclosing aggregate is a sibling that reaches the aggregate's returned
+/// value, not the sink's argument, so drop it.  Named values outside the set
+/// are dropped; unnamed temporaries are kept (conservative — the inner sink's
+/// payload may be an unnamed sub-call).
+///
+/// This runs on EVERY priority tier of [`collect_tainted_sink_values`], not
+/// just the Priority-3 aggregate fallback.  A gated file-IO sink
+/// (`sink_payload_args = [0]`, e.g. the Rust `File::open` path-confinement
+/// gate) whose call is ALSO nested inside an `Ok(Struct { … })` aggregate hits
+/// Priority 1, whose `positions` restriction lands on the flattened
+/// aggregate's single `args[0]` — which lumps the path idents together with
+/// every sibling struct field.  Without applying this retain there, the
+/// FileSystem-tainted siblings survive the early return and re-introduce the
+/// self-referential `file_system -> FILE_IO` flow the gate was meant to close
+/// (meilisearch `crates/dump/src/reader/v6/mod.rs:140`).  It is a no-op when
+/// `sink_reaching_uses` is `None` (the common non-nested sink), so the added
+/// call on the Priority-1/2 fast paths never changes their result there.
+fn retain_inner_sink_reaching_uses(
+    result: &mut Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)>,
+    info: &NodeInfo,
+    ssa: &SsaBody,
+) {
     if let Some(reaching) = info.call.sink_reaching_uses.as_deref() {
         result.retain(|(v, _, _)| {
             match ssa
@@ -9867,10 +9894,6 @@ fn collect_tainted_sink_values(
             }
         });
     }
-
-    apply_field_aware_suppression(&mut result, inst, info, state, sink_caps, ssa);
-    apply_arg_type_safe_suppression(&mut result, sink_caps, transfer.type_facts, inst, info, ssa);
-    result
 }
 
 /// Drop tainted argument SSA values from the per-call sink-emission set

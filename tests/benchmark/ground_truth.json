@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 620
+    "corpus_size": 622
   },
   "cases": [
     {
@@ -11244,7 +11244,7 @@
         "negative"
       ],
       "disabled": true,
-      "disabled_reason": "Patched-precision false positive on the default (field-INsensitive) taint model. The fix routes $this->userAgent / $this->ip through $db->escape() before the DELETE, but a tainted write to ANY object field (`$this->ip = <source>`) taints the WHOLE `$this` scalar, and every subsequent `$this->...` reference (the escape/query receiver chain AND the sprintf `$this->configuration->getLanguage()` arg) reads that polluted base, so the escaped value is bypassed and `taint-unsanitised-flow` fires on the base object. Root cause: per-field cells are gated behind NYX_POINTER_ANALYSIS (off by default), so field writes fold into the base object scalar. A clean fix (base-write field-sensitivity: member_access_expression dotted defines + field-write base rebuild + FieldProj field-precise reads) was prototyped this session and DID silence the patched fixture, but zeroing the field-write base scalar is UNSOUND for whole-object reads (`res.send(obj)` where a field is tainted must still fire — regression on ssa_field_base_sink_no_suppression) and the sound alternative needs default-mode per-field cells that whole-object reads aggregate while field reads project — a multi-day core-model change with broad cross-language regression surface. Tracked in nyx-dev-tools/CVE_DEFERRED.md. MPL-2.0",
+      "disabled_reason": "Patched-precision false positive on the default (field-INsensitive) taint model. The fix routes $this->userAgent / $this->ip through $db->escape() before the DELETE, but a tainted write to ANY object field (`$this->ip = <source>`) taints the WHOLE `$this` scalar, and every subsequent `$this->...` reference (the escape/query receiver chain AND the sprintf `$this->configuration->getLanguage()` arg) reads that polluted base, so the escaped value is bypassed and `taint-unsanitised-flow` fires on the base object. Root cause: per-field cells are gated behind NYX_POINTER_ANALYSIS (off by default), so field writes fold into the base object scalar. A clean fix (base-write field-sensitivity: member_access_expression dotted defines + field-write base rebuild + FieldProj field-precise reads) was prototyped this session and DID silence the patched fixture, but zeroing the field-write base scalar is UNSOUND for whole-object reads (`res.send(obj)` where a field is tainted must still fire \u2014 regression on ssa_field_base_sink_no_suppression) and the sound alternative needs default-mode per-field cells that whole-object reads aggregate while field reads project \u2014 a multi-day core-model change with broad cross-language regression surface. Tracked in nyx-dev-tools/CVE_DEFERRED.md. MPL-2.0",
       "notes": "CVE-2026-46364 patched counterpart: escapeQueryValue routes the user-agent header and client IP through $db->escape() before interpolation. MPL-2.0"
     },
     {
@@ -19536,6 +19536,73 @@
       ],
       "disabled": false,
       "notes": "Recall counterpart to rs-safe-022: a tainted request header flows into File::open's path arg while the open/new collision decoys are present. File::open must still resolve to its stdlib FILE_IO sink label, not to the decoy methods."
+    },
+    {
+      "case_id": "rs-safe-023",
+      "file": "rust/safe/safe_dump_reader_sibling_reads.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "real-repo-precision-2026-07-14",
+        "file-io",
+        "self-referential-file-flow",
+        "bucket-1"
+      ],
+      "disabled": false,
+      "notes": "meilisearch dump-reader bucket-1: sibling fs::read(const) calls whose file_system-tainted results bleed into each other's path arg via implicit-trailing SSA uses; every path is constant, nothing must fire (path-argument confinement gate)."
+    },
+    {
+      "case_id": "rs-path-011",
+      "file": "rust/path_traversal/dump_reader_content_as_path.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.file_io.File"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          27,
+          27
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          25,
+          25
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-07-14",
+        "file-io",
+        "recall-guard"
+      ],
+      "disabled": false,
+      "notes": "fs::read_to_string content used directly as fs::read path arg (arg 0): a genuine file-content -> path-traversal flow that the path-argument confinement gate must keep."
     }
   ]
 }

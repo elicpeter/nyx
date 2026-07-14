@@ -379,7 +379,73 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_kwargs: &[],
         activation: GateActivation::ValueMatch,
     },
+    // ── FILE_IO path-argument confinement ────────────────────────────────
+    //
+    // The `fs::*` / `File::*` / `tokio::fs::*` calls are flat
+    // `Sink(Cap::FILE_IO)` labels (see the sink rule above).  A flat label
+    // records no payload position, so the SSA sink scan falls through to the
+    // Priority-3 aggregate that checks EVERY used value — receiver plus every
+    // positional arg, INCLUDING the implicit-trailing uses SSA lowering
+    // appends from the enclosing statement's def-use set.  For a bare
+    // `match fs::read(dump.path().join("x.json")) { Ok(v) => .., .. }` that
+    // trailing set contains a sibling `file_system`-tainted value (a prior
+    // `fs::read` result / a merged phi) that never flows into THIS call's
+    // path argument, producing a spurious `file_system -> FILE_IO` self-flow
+    // (meilisearch `crates/dump/src/reader/v6/mod.rs:104,126`).
+    //
+    // These gates carry the SAME `Sink(FILE_IO)` capability as the flat rule
+    // (deduped, so no double attribution) and exist ONLY to attach the
+    // path-argument position(s) as `payload_args`, confining the sink scan to
+    // the file operation's real destination.  `GateActivation::Destination`
+    // with `object_destination_fields: &[]` fires unconditionally and treats
+    // the whole positional arg at each payload index as the path (mirrors the
+    // Go `http.Get` SSRF gates).  Since the gate matcher suffix-matches the
+    // same callees as the flat sink rule, it never adds a new sink — it only
+    // refines an existing one.  The path is always arg 0; `fs::rename` /
+    // `fs::copy` take two path args (from, to).  `fs::write(path, data)`
+    // confines to arg 0 only — writing tainted DATA to a fixed path is not a
+    // traversal, so arg 1 is intentionally excluded.
+    file_io_path_gate("fs::read"),
+    file_io_path_gate("fs::read_to_string"),
+    file_io_path_gate("fs::write"),
+    file_io_path_gate("fs::remove_file"),
+    file_io_path_gate("fs::remove_dir_all"),
+    file_io_path_gate("fs::remove_dir"),
+    file_io_path_gate("File::open"),
+    file_io_path_gate("File::create"),
+    file_io_path_gate_two("fs::rename"),
+    file_io_path_gate_two("fs::copy"),
 ];
+
+/// A `Sink(FILE_IO)` gate that confines the sink scan to the single
+/// path-argument position (arg 0).  See the `GATED_SINKS` doc block for the
+/// self-flow FP this closes.  `const fn` so it can build the `'static`
+/// `GATED_SINKS` slice literal directly.
+const fn file_io_path_gate(matcher: &'static str) -> SinkGate {
+    SinkGate {
+        callee_matcher: matcher,
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    }
+}
+
+/// Two-path variant of [`file_io_path_gate`] for `fs::rename(from, to)` /
+/// `fs::copy(from, to)`, where both positional args are file paths.
+const fn file_io_path_gate_two(matcher: &'static str) -> SinkGate {
+    SinkGate {
+        payload_args: &[0, 1],
+        ..file_io_path_gate(matcher)
+    }
+}
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {
     // control-flow
@@ -654,6 +720,85 @@ mod tests {
                 .iter()
                 .any(|l| matches!(l, DataLabel::Sanitizer(c) if c.contains(Cap::OPEN_REDIRECT))),
             "expected RequestedPath::resolve to classify as Sanitizer(OPEN_REDIRECT); got {labels:?}"
+        );
+    }
+
+    // ── FILE_IO path-argument confinement gates ──────────────────────────
+    //
+    // The `fs::*` / `File::*` file-IO sinks are also `Source(Cap::all())`, so
+    // a `file_system`-tainted value must only reach the sink through its PATH
+    // argument, not through a receiver / implicit-trailing SSA use appended
+    // from the enclosing statement.  The gate confines the sink scan to the
+    // path position(s); see the `GATED_SINKS` doc block.
+
+    fn payload_of(callee: &str) -> Vec<usize> {
+        let no_arg = |_: usize| None;
+        let no_kw = |_: &str| None;
+        let no_kw_present = |_: &str| false;
+        let result =
+            crate::labels::classify_gated_sink("rust", callee, no_arg, no_kw, no_kw_present);
+        let m = result
+            .iter()
+            .find(|m| m.label == DataLabel::Sink(Cap::FILE_IO))
+            .unwrap_or_else(|| panic!("expected FILE_IO gate for {callee}; got {result:?}"));
+        m.payload_args.to_vec()
+    }
+
+    #[test]
+    fn file_io_single_path_gates_confine_to_arg_zero() {
+        // Every single-path file operation confines to arg 0.  `fs::write(path,
+        // data)` deliberately excludes arg 1 (writing tainted DATA to a fixed
+        // path is not a traversal).
+        for callee in [
+            "fs::read",
+            "fs::read_to_string",
+            "fs::write",
+            "fs::remove_file",
+            "fs::remove_dir",
+            "fs::remove_dir_all",
+            "File::open",
+            "File::create",
+        ] {
+            assert_eq!(payload_of(callee), vec![0], "callee {callee}");
+        }
+    }
+
+    #[test]
+    fn file_io_two_path_gates_confine_to_args_zero_and_one() {
+        // `fs::rename(from, to)` / `fs::copy(from, to)` take two path args.
+        assert_eq!(payload_of("fs::rename"), vec![0, 1]);
+        assert_eq!(payload_of("fs::copy"), vec![0, 1]);
+    }
+
+    #[test]
+    fn file_io_gate_suffix_matches_tokio_and_std_qualified_forms() {
+        // Suffix matching lets one `fs::read` gate cover the `std::fs::read`
+        // and `tokio::fs::read` qualified forms (the async mirror), and
+        // `File::open` cover `tokio::fs::File::open`.
+        assert_eq!(payload_of("std::fs::read"), vec![0]);
+        assert_eq!(payload_of("tokio::fs::read"), vec![0]);
+        assert_eq!(payload_of("tokio::fs::File::open"), vec![0]);
+    }
+
+    #[test]
+    fn file_io_gate_does_not_add_sink_for_non_file_callee() {
+        // The gate only refines callees already carrying the flat FILE_IO
+        // label; an unrelated callee must not gate-match into a FILE_IO sink.
+        let no_arg = |_: usize| None;
+        let no_kw = |_: &str| None;
+        let no_kw_present = |_: &str| false;
+        let result = crate::labels::classify_gated_sink(
+            "rust",
+            "config::read_settings",
+            no_arg,
+            no_kw,
+            no_kw_present,
+        );
+        assert!(
+            !result
+                .iter()
+                .any(|m| m.label == DataLabel::Sink(Cap::FILE_IO)),
+            "config::read_settings must not gate-match a FILE_IO sink; got {result:?}"
         );
     }
 }
