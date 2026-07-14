@@ -72,11 +72,12 @@ use literals::{
     extract_destination_field_pairs, extract_destination_kwarg_pairs, extract_kwargs,
     extract_literal_rhs, extract_object_arg_property, extract_shell_array_payload_idents,
     find_call_node, find_call_node_deep, find_chained_gated_sink_call, find_chained_inner_call,
+    find_orm_query_chain_call,
     has_keyword_arg,
     has_object_arg_property, has_only_literal_args, has_string_interpolation,
     is_object_create_null_call, is_parameterized_query_call, is_rust_format_style_macro,
     java_chain_arg0_kind_for_method, js_chain_arg0_kind_for_method, js_chain_outer_method_for_inner,
-    ruby_chain_arg0_for_method, walk_chain_inner_call_args,
+    js_orm_query_arg0_is_uid_ref, ruby_chain_arg0_for_method, walk_chain_inner_call_args,
 };
 use params::{
     compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
@@ -3572,13 +3573,19 @@ pub(super) fn push_node<'a>(
     //
     // Recognition rule: when the CFG node's classified text reaches a sink
     // with `SQL_QUERY` cap, walk the receiver chain looking for an inner
-    // `*.query(...)` / `*.execute(...)` whose arg 0 is a string literal
-    // and whose result has at least one chained method call appended whose
-    // name is in the ORM-accessor whitelist.  If both hold, synthesise a
-    // same-node `Sanitizer(SQL_QUERY)` mirroring the Java JPA fix.  Bare
-    // `connection.query("SELECT ...")` (no chained method) and
-    // `db.query("UPDATE x SET y=" + name)` (non-literal arg 0) leave the
-    // sink in place, both are genuine SQLi shapes.
+    // `*.query(...)` / `*.execute(...)` whose result has at least one chained
+    // method call appended whose name is in the ORM-accessor whitelist AND
+    // whose arg 0 is a model-UID *reference* (string literal, const / variable
+    // identifier, or member access — see `js_orm_query_arg0_is_uid_ref`).  The
+    // trailing ORM method (`findMany` / `findOne` / …) is the discriminator: a
+    // raw driver's `query(sql)` returns a Promise that cannot chain those
+    // methods, so the chain shape only arises on ORM query builders.  If both
+    // hold, synthesise a same-node `Sanitizer(SQL_QUERY)` mirroring the Java
+    // JPA fix.  Because `dominates()` is reflexive, the same-node sanitizer
+    // also suppresses the parallel structural `cfg-unguarded-sink` finding.
+    // Bare `connection.query("SELECT ...")` (no chained ORM method) and
+    // `db.query(`UPDATE ... ${name}`)` (interpolated arg 0) leave the sink in
+    // place, both are genuine SQLi shapes.
     if (lang == "javascript"
         || lang == "js"
         || lang == "typescript"
@@ -3613,16 +3620,37 @@ pub(super) fn push_node<'a>(
             "aggregate",
             "distinct",
             "save",
+            // Strapi Query Engine relation loader: `db.query(uid).load(entity,
+            // populate)` returns the populated relation, parameterised like the
+            // other accessors.
+            "load",
         ];
         // Fall back to a deeper walk (up to 4 levels) for await/return-
         // wrapped calls (e.g. `const x = await db.query(...).findOne(...)` ,
         // call sits at depth 3 inside lexical_declaration > variable_declarator
         // > await_expression > call_expression).
-        let chain_call = call_ast.or_else(|| find_call_node_deep(ast, lang, 4));
+        // Locate the ORM-accessor call `<recv>.query(UID).<orm_method>(...)`
+        // robustly.  Real strapi code wraps the chain in forms that defeat the
+        // shallow `call_ast` / fixed-depth `find_call_node_deep` lookup:
+        //   * `const x = (await db.query(uid).findMany(...))` — the
+        //     `(await ...)` wrapper pushes the call past the depth budget, so
+        //     both lookups return `None`.
+        //   * `return (await db.query(uid).count(...)) > 0` — a binary wrapper.
+        //   * `Promise.all([ db.query(model).findOne(...) ])` — `find_call_node`
+        //     returns the *outer* `Promise.all` call, whose spine has no
+        //     `.query`, so the ORM chain is invisible.
+        // A bounded subtree DFS for the specific call whose receiver spine holds
+        // an inner `query`/`execute` (via `js_chain_outer_method_for_inner`)
+        // finds the right node regardless of wrapping; fall back to the prior
+        // lookups only if the DFS finds nothing.
+        let mut orm_dfs_budget: u32 = 96;
+        let chain_call = find_orm_query_chain_call(ast, QUERY_TARGETS, code, &mut orm_dfs_budget)
+            .or(call_ast)
+            .or_else(|| find_call_node_deep(ast, lang, 4));
         if let Some(call_node) = chain_call {
             // Outer method must be in the ORM whitelist *and* the chain must
             // have a deeper inner call to a `query`/`execute` whose arg 0 is
-            // a string literal.  Both checks gate the synthesis.
+            // a model-UID reference.  Both checks gate the synthesis.
             let outer_method = js_chain_outer_method_for_inner(call_node, QUERY_TARGETS, code);
             let outer_is_orm = outer_method
                 .as_deref()
@@ -3631,10 +3659,7 @@ pub(super) fn push_node<'a>(
                 && let Some((arg0_kind, has_interp)) =
                     js_chain_arg0_kind_for_method(call_node, QUERY_TARGETS, code)
                 && !has_interp
-                && matches!(
-                    arg0_kind.as_str(),
-                    "string" | "string_fragment" | "template_string"
-                )
+                && js_orm_query_arg0_is_uid_ref(arg0_kind.as_str())
             {
                 labels.push(DataLabel::Sanitizer(Cap::SQL_QUERY));
             }

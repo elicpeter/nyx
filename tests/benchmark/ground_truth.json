@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 642
+    "corpus_size": 644
   },
   "cases": [
     {
@@ -20328,6 +20328,63 @@
       ],
       "disabled": false,
       "notes": "uftpd FIX shape: compose_path confines the realpath()-resolved `rpath` (strncmp(rpath,...)) before returning it; the confinement carries across the compose_abspath-less passthrough to the fopen() sink in handle_RETR() via the summary-level confines_path_return post-condition. Pins interprocedural path-return confinement."
+    },
+    {
+      "case_id": "ts-safe-025",
+      "file": "typescript/safe/safe_strapi_db_query_uid_ref.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-89",
+      "provenance": "real-repo-distilled",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": "NONE",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "real-repo-precision-2026-07-14",
+        "strapi",
+        "orm-chain"
+      ],
+      "disabled": false,
+      "notes": "Strapi ORM accessor `<obj>.db.query(UID).<orm_method>(...)` where the model UID is a variable / const identifier / member access rather than an inline string literal (dominant real-repo shape from strapi repository.ts:331 and release.ts). The trailing ORM method proves the chain is parameterised; the synthesised same-node Sanitizer(SQL_QUERY) suppresses cfg-unguarded-sink and taint-unsanitised-flow. Counterpart ts-sqli-004."
+    },
+    {
+      "case_id": "ts-sqli-004",
+      "file": "typescript/sqli/sqli_db_query_var_raw.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "sqli",
+        "real-repo-precision-2026-07-14",
+        "regression-guard"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for ts-safe-025: a variable holding raw interpolated SQL with NO trailing ORM method (`connection.query(sql)`) must still fire, and a concatenation arg 0 even with an ORM-method chain (`db.query('...'+term).findMany`) is refused by the model-UID-reference gate (binary_expression). Relaxing the ORM-chain recogniser to accept UID references must not blanket-suppress query(variable)."
     }
   ]
 }

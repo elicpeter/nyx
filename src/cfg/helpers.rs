@@ -1320,8 +1320,12 @@ mod source_str_tests {
     /// so the guard covers the actual `Node::start_byte()/end_byte()` offsets.
     #[test]
     fn node_str_matches_checked_over_parsed_tree() {
+        // `\xc3\xa9` is the UTF-8 encoding of `é`; written as an escape because
+        // a raw non-ASCII char is not permitted in a `b"..."` byte-string
+        // literal.  The decoded bytes are identical, so the multi-byte-char
+        // decode path is still exercised.
         let code =
-            b"package main\nfunc handler(w http.ResponseWriter) { fmt.Println(\"héllo\") }\n";
+            b"package main\nfunc handler(w http.ResponseWriter) { fmt.Println(\"h\xc3\xa9llo\") }\n";
         let _g = ValidSourceGuard::new(code.as_slice());
         assert_eq!(
             VALID_SOURCE.with(|c| c.get()),
