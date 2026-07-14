@@ -8489,16 +8489,43 @@ fn collect_block_events(
                     .get(val.0 as usize)
                     .and_then(|vd| vd.var_name.as_deref());
                 if let Some(name) = var_name {
+                    // Require validation on EVERY reaching path
+                    // (intersection-on-join) before suppressing the
+                    // sink.  `validated_may` is the union over
+                    // predecessors (validated on SOME path), so a value
+                    // validated on one branch but bypassable on another
+                    // would be wrongly silenced (`if (valid(x)) {...}
+                    // else {} sink(x)`).  `validated_must` is the sound
+                    // "all paths validated" gate.
                     if let Some(sym) = transfer.interner.get(name) {
-                        // Require validation on EVERY reaching path
-                        // (intersection-on-join) before suppressing the
-                        // sink.  `validated_may` is the union over
-                        // predecessors (validated on SOME path), so a value
-                        // validated on one branch but bypassable on another
-                        // would be wrongly silenced (`if (valid(x)) {...}
-                        // else {} sink(x)`).  `validated_must` is the sound
-                        // "all paths validated" gate.
-                        return state.validated_must.contains(sym);
+                        if state.validated_must.contains(sym) {
+                            return true;
+                        }
+                    }
+                    // Copy-alias-aware validation: the branch guard records
+                    // `validated_must` keyed by the condition's variable name
+                    // (e.g. `uri` in `if !in_array(uri, allow)`), but the
+                    // value reaching the sink can be reported under a must-
+                    // alias name after copy propagation / an elided container
+                    // index (`uri := parts[1]` lowers to `uri = assign(parts)`,
+                    // so the sink taint may surface as `parts`).  Mirror
+                    // `clear_cap_alias_aware`: treat the value as validated when
+                    // any of its copy must-aliases is in `validated_must`.
+                    // Sound because `base_aliases` groups only pure-copy
+                    // must-aliases (the same SSA value under different names).
+                    // Motivated by CVE-2026-21859 (Mailpit `InArray(uri, links)`
+                    // SSRF allowlist reached through a base64/split-derived uri).
+                    if let Some(aliases) =
+                        transfer.base_aliases.and_then(|a| a.aliases_of(name))
+                    {
+                        if aliases.iter().any(|alias| {
+                            transfer
+                                .interner
+                                .get(alias)
+                                .is_some_and(|sym| state.validated_must.contains(sym))
+                        }) {
+                            return true;
+                        }
                     }
                 }
                 false

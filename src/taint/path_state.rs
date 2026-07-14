@@ -743,6 +743,52 @@ fn is_negated_indexof_membership(text: &str) -> bool {
         || compact.contains("<=-1")
 }
 
+/// Value-first membership predicate free functions: `f(value, collection)`
+/// whose TRUE branch proves `value ∈ collection`.  Names are matched case- and
+/// underscore-insensitively (see [`membership_fn_leaf_normalised`]) so the PHP
+/// `in_array`, Go `InArray` / `stringInSlice`, and JS lodash `inArray`
+/// spellings all resolve to the same membership concept.  The existing
+/// `in_array(` / ` in ` / `.contains(` recognisers cover the underscore, `in`
+/// operator, and method spellings; this closes the camelCase free-function
+/// spelling.  Motivated by CVE-2026-21859 (Mailpit `tools.InArray(uri, links)`
+/// SSRF allowlist).
+const VALUE_FIRST_MEMBERSHIP_FNS: &[&str] = &["inarray", "stringinslice", "stringinlist"];
+
+/// If `text` is a bare call to a free function (`InArray(x, list)`,
+/// `!in_array($x, $y)`, `tools.InArray(x, list)`, `not stringInSlice(x, l)`),
+/// return the function's leaf name lowercased with underscores stripped.
+/// Returns `None` for method calls with a value receiver, operators, indexing,
+/// or non-call text, so only simple membership free functions are considered.
+fn membership_fn_leaf_normalised(text: &str) -> Option<String> {
+    let t = text.trim().trim_start_matches(['(', '!', ' ', '\t']);
+    let t = t.strip_prefix("not ").unwrap_or(t).trim();
+    let open = t.find('(')?;
+    let callee = t[..open].trim();
+    // Callee must be a plain identifier or a dotted / scoped path
+    // (`tools.InArray`, `pkg::in_array`) — reject anything with spaces,
+    // operators, or brackets so this never fires on comparisons or receiver
+    // method chains that happen to contain a paren.
+    if callee.is_empty()
+        || !callee
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == ':')
+    {
+        return None;
+    }
+    let leaf = callee.rsplit(['.', ':']).next().unwrap_or(callee);
+    if leaf.is_empty() || !leaf.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(leaf.to_ascii_lowercase().replace('_', ""))
+}
+
+/// True when `text` is a call to a recognised value-first membership free
+/// function (see [`VALUE_FIRST_MEMBERSHIP_FNS`]).
+fn is_value_first_membership_fn(text: &str) -> bool {
+    membership_fn_leaf_normalised(text)
+        .is_some_and(|leaf| VALUE_FIRST_MEMBERSHIP_FNS.contains(&leaf.as_str()))
+}
+
 /// Classify a raw condition text into a [`PredicateKind`].
 ///
 /// # Rules
@@ -872,6 +918,7 @@ pub fn classify_condition(text: &str) -> PredicateKind {
         || lower.contains("in_array(")
         || lower.contains(" in ")
         || is_index_membership_check(text)
+        || is_value_first_membership_fn(text)
     {
         return PredicateKind::AllowlistCheck;
     }
@@ -1398,6 +1445,24 @@ fn extract_allowlist_target(text: &str) -> Option<String> {
             let first_arg = first_arg.strip_prefix('$').unwrap_or(first_arg);
             if !first_arg.is_empty() && is_identifier(first_arg) {
                 return Some(first_arg.to_string());
+            }
+        }
+    }
+
+    // Value-first membership free function: `InArray(value, coll)` /
+    // `stringInSlice(value, list)` — the value under test is the first arg.
+    // Matches the camelCase / package-qualified spellings the `in_array(`
+    // branch above misses (CVE-2026-21859 Mailpit `tools.InArray(uri, links)`).
+    if is_value_first_membership_fn(trimmed) {
+        let t = trimmed.trim_start_matches(['(', '!', ' ', '\t']);
+        let t = t.strip_prefix("not ").unwrap_or(t).trim();
+        if let Some(open) = t.find('(') {
+            let args_part = &t[open + 1..];
+            if let Some(first_arg) = first_call_arg(args_part) {
+                let first_arg = first_arg.strip_prefix('$').unwrap_or(first_arg);
+                if !first_arg.is_empty() && is_identifier(first_arg) {
+                    return Some(first_arg.to_string());
+                }
             }
         }
     }
@@ -2108,6 +2173,43 @@ mod tests {
         let (kind, target) = classify_condition_with_target("(!in_array($cmd, $allowed))");
         assert_eq!(kind, PredicateKind::AllowlistCheck);
         assert_eq!(target.as_deref(), Some("cmd"));
+    }
+
+    #[test]
+    fn classify_value_first_membership_camelcase_in_array() {
+        // CVE-2026-21859: Mailpit's SSRF fix guards with `tools.InArray(uri,
+        // links)`.  The camelCase spelling lowercases to `inarray(` which the
+        // PHP-style `in_array(` (underscore) recogniser misses; the value-first
+        // membership-fn recogniser must classify it as an AllowlistCheck and
+        // extract the value under test (`uri`, arg 0).
+        let (kind, target) = classify_condition_with_target("!InArray(uri, links)");
+        assert_eq!(kind, PredicateKind::AllowlistCheck);
+        assert_eq!(target.as_deref(), Some("uri"));
+    }
+
+    #[test]
+    fn classify_value_first_membership_package_qualified_and_go_idioms() {
+        // Package-qualified callee (`tools.InArray`) resolves on the leaf name.
+        let (k1, t1) = classify_condition_with_target("!tools.InArray(uri, links)");
+        assert_eq!(k1, PredicateKind::AllowlistCheck);
+        assert_eq!(t1.as_deref(), Some("uri"));
+        // Common Go membership idiom `stringInSlice(value, list)`.
+        let (k2, t2) = classify_condition_with_target("!stringInSlice(host, allowed)");
+        assert_eq!(k2, PredicateKind::AllowlistCheck);
+        assert_eq!(t2.as_deref(), Some("host"));
+    }
+
+    #[test]
+    fn value_first_membership_does_not_capture_unrelated_calls() {
+        // `.contains(` is handled by the dedicated method branch, not the
+        // value-first free-function recogniser (its leaf isn't in the set).
+        assert!(!is_value_first_membership_fn("arr.contains(x)"));
+        // An unrelated free function must not classify as membership.
+        assert!(!is_value_first_membership_fn("compute(a, b)"));
+        // A plain comparison is not a membership call.
+        assert!(!is_value_first_membership_fn("x == y"));
+        // Indexing is not a free-function call.
+        assert!(!is_value_first_membership_fn("allowed[cmd]"));
     }
 
     // ── TypeCheck classification ──────────────────────────────────────

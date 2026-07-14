@@ -1657,6 +1657,95 @@ fn go_source_to_sink() {
     );
 }
 
+/// CVE-2026-21859 (Mailpit) regression: an SSRF allowlist guard
+/// `if !InArray(uri, links) { return }` must narrow the taint on the
+/// surviving branch even when the guarded value reaches the sink through an
+/// elided container index (`uri := parts[1]` lowers to a pure copy).  Two
+/// engine capabilities combine: (1) the camelCase `InArray(value, list)` free
+/// function is recognised as a value-first membership AllowlistCheck, and
+/// (2) the sink's `all_validated` gate is copy-alias-aware, so the value
+/// surfacing under the copy-source name (`parts`) is still treated as
+/// validated.
+#[test]
+fn go_inarray_allowlist_narrows_ssrf_through_split_copy() {
+    let src = br#"package main
+import ("encoding/base64"; "net/http"; "strings")
+var stored = map[string][]string{}
+func getAssets(id string) ([]string, error) { return stored[id], nil }
+func InArray(k string, arr []string) bool {
+	for _, v := range arr {
+		if strings.EqualFold(v, k) {
+			return true
+		}
+	}
+	return false
+}
+func ProxyHandler(w http.ResponseWriter, r *http.Request) {
+	encoded := r.URL.Query().Get("data")
+	decoded, _ := base64.StdEncoding.DecodeString(encoded)
+	parts := strings.SplitN(string(decoded), ":", 2)
+	id := parts[0]
+	uri := parts[1]
+	links, _ := getAssets(id)
+	if !InArray(uri, links) {
+		return
+	}
+	resp, _ := http.Get(uri)
+	_ = resp
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
+    let file_cfg = parse_lang(src, "go", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Go,
+        "test.go",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "InArray allowlist guard must narrow the SSRF flow through the split/copy-derived uri; got {findings:?}"
+    );
+}
+
+/// Precision guard for the above: with NO allowlist guard (only a scheme-prefix
+/// predicate, exactly the Mailpit vulnerable shape), the SSRF flow must still
+/// fire.  Recognising `InArray` as an allowlist must not suppress an unguarded
+/// outbound request.
+#[test]
+fn go_ssrf_fires_without_allowlist_guard() {
+    let src = br#"package main
+import ("net/http"; "regexp")
+var linkRe = regexp.MustCompile(`(?i)^https?://`)
+func ProxyHandler(w http.ResponseWriter, r *http.Request) {
+	uri := r.URL.Query().Get("url")
+	if !linkRe.MatchString(uri) {
+		return
+	}
+	resp, _ := http.Get(uri)
+	_ = resp
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
+    let file_cfg = parse_lang(src, "go", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Go,
+        "test.go",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "unguarded SSRF (scheme-prefix predicate only) must still fire; got {findings:?}"
+    );
+}
+
 #[test]
 fn java_source_to_sink() {
     let src = b"class Main {\n  void main() {\n    String x = System.getenv(\"SECRET\");\n    Runtime.exec(x);\n  }\n}\n";
