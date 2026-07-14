@@ -55,8 +55,8 @@ use conditions::{
 };
 use decorators::{extract_auth_decorators, extract_route_path_captures};
 pub(crate) use helpers::{
-    collect_idents, collect_idents_with_paths, find_constructor_type_child, first_call_ident,
-    has_call_descendant, member_expr_text, root_receiver_text, text_of,
+    ValidSourceGuard, collect_idents, collect_idents_with_paths, find_constructor_type_child,
+    first_call_ident, has_call_descendant, member_expr_text, root_receiver_text, slice_str, text_of,
 };
 use imports::{
     extract_import_bindings, extract_local_import_view, extract_promisify_aliases,
@@ -1472,7 +1472,7 @@ fn parse_int_literal(node: Node, code: &[u8]) -> Option<i64> {
     if !is_int {
         return None;
     }
-    let raw = std::str::from_utf8(&code[node.byte_range()]).ok()?.trim();
+    let raw = slice_str(code, node.start_byte(), node.end_byte())?.trim();
     // Strip Java long suffix and digit separators.
     let cleaned: String = raw
         .trim_end_matches(['l', 'L'])
@@ -2034,7 +2034,7 @@ fn extract_bin_op_const(ast: Node, lang: &str, code: &[u8]) -> Option<i64> {
             || kind == "number_literal"
             || kind == "float"
         {
-            let text = std::str::from_utf8(&code[n.byte_range()]).ok()?.trim();
+            let text = slice_str(code, n.start_byte(), n.end_byte())?.trim();
             // Try standard decimal parse first
             if let Ok(v) = text.parse::<i64>() {
                 return Some(v);
@@ -5111,7 +5111,7 @@ fn pp_string_literal_value(n: Node, code: &[u8]) -> Option<String> {
     if !matches!(kind, "string" | "string_literal" | "template_string") {
         return None;
     }
-    let raw = std::str::from_utf8(&code[n.start_byte()..n.end_byte()]).ok()?;
+    let raw = slice_str(code, n.start_byte(), n.end_byte())?;
     if raw.len() < 2 {
         return None;
     }

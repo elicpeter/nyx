@@ -606,6 +606,31 @@ fn bench_ast_queries_large_go(c: &mut Criterion) {
     });
 }
 
+/// Node-text extraction throughput on the large-Go fixture: decode every node's
+/// text via `slice_str` (the `text_of` primitive).  Pre-2026-07-14 every call
+/// re-ran `core::str::from_utf8` (`run_utf8_validation`, `O(range_len)`) over
+/// the node's byte range, ~1.6% of active CPU on mattermost.  The pre-validated
+/// source cache ([`ValidSourceGuard`]) validates the whole file once at parse
+/// time and turns each `slice_str` into an `O(1)` `str::get` boundary slice of
+/// the already-validated bytes.  Single-binary A/B: run once normally (fast
+/// path) and once with `NYX_DISABLE_SRC_STR_CACHE=1` (checked baseline).  A
+/// regression that drops the cache surfaces here proportional to node count.
+fn bench_node_text_walk_large_go(c: &mut Criterion) {
+    let fixture = Path::new("benches/perf_fixtures/large_go_module.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let bytes = std::fs::read(&fixture).expect("read fixture");
+
+    c.bench_function("node_text_walk_large_go", |b| {
+        b.iter(|| {
+            criterion::black_box(nyx_scanner::ast::bench_node_text_walk(
+                criterion::black_box(&bytes),
+                &fixture,
+            ))
+        });
+    });
+}
+
 /// `lower_to_ssa` cost on the large-Go fixture.  This is the CFG→SSA
 /// lowering path: `form_blocks` (basic-block formation over the reachable
 /// node set) plus `rename_variables`/`process_block` (Cytron dominator-tree
@@ -804,5 +829,6 @@ criterion_group!(
     bench_taint_cond_revisit_go,
     bench_cfg_build_large_go,
     bench_ast_queries_large_go,
+    bench_node_text_walk_large_go,
 );
 criterion_main!(benches);

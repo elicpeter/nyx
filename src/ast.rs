@@ -1097,6 +1097,12 @@ struct ParsedSource<'a> {
     bytes: &'a [u8],
     path: &'a Path,
     file_path_str: Cow<'a, str>,
+    /// Registers `bytes` as this thread's validated source (once, on parse) so
+    /// node-text extraction can slice the pre-validated bytes as `&str` instead
+    /// of re-validating each range. Kept last so its `Drop` clears the thread-
+    /// local registration before the borrowed `bytes` can be freed by the
+    /// caller. See [`crate::cfg::ValidSourceGuard`].
+    _valid_source: crate::cfg::ValidSourceGuard,
 }
 
 impl<'a> ParsedSource<'a> {
@@ -1157,6 +1163,10 @@ impl<'a> ParsedSource<'a> {
             return Err(NyxError::Other("tree-sitter failed".into()));
         };
         let file_path_str = path.to_string_lossy();
+        // Validate the whole file as UTF-8 exactly once and register it so the
+        // per-node `slice_str` fast path can skip re-validation. The guard's
+        // registration is torn down when `ParsedSource` drops.
+        let _valid_source = crate::cfg::ValidSourceGuard::new(bytes);
         Ok(Some(Self {
             tree,
             ts_lang,
@@ -1164,6 +1174,7 @@ impl<'a> ParsedSource<'a> {
             bytes,
             path,
             file_path_str,
+            _valid_source,
         }))
     }
 
@@ -2418,6 +2429,32 @@ pub fn bench_run_ast_queries(bytes: &[u8], path: &Path, cfg: &Config) -> Vec<Dia
         Ok(Some(source)) => source.run_ast_queries(cfg),
         _ => Vec::new(),
     }
+}
+
+/// Benchmark hook isolating the node-text extraction path: parse `bytes` (which
+/// installs the [`crate::cfg::ValidSourceGuard`] fast path) then decode every
+/// node's text via `slice_str`, returning a checksum of the total decoded
+/// length. Exercises exactly the `from_utf8` / `str::get` primitive that the
+/// pre-validated source cache optimises. `NYX_DISABLE_SRC_STR_CACHE=1` forces
+/// the checked baseline for a single-binary A/B. Returns 0 for binary /
+/// unsupported files.
+#[doc(hidden)]
+pub fn bench_node_text_walk(bytes: &[u8], path: &Path) -> usize {
+    let Ok(Some(source)) = ParsedSource::try_new(bytes, path) else {
+        return 0;
+    };
+    fn walk(n: tree_sitter::Node, code: &[u8], total: &mut usize) {
+        if let Some(s) = crate::cfg::slice_str(code, n.start_byte(), n.end_byte()) {
+            *total = total.wrapping_add(s.len());
+        }
+        let mut c = n.walk();
+        for child in n.children(&mut c) {
+            walk(child, code, total);
+        }
+    }
+    let mut total = 0usize;
+    walk(source.tree.root_node(), source.bytes, &mut total);
+    total
 }
 
 /// Parse a file and return its `AuthorizationModel` for debug inspection.

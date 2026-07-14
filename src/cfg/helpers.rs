@@ -2,16 +2,117 @@ use super::anon_fn_name;
 use super::conditions::unwrap_parens;
 use crate::labels::{DataLabel, Kind, classify, lookup};
 use smallvec::SmallVec;
+use std::cell::Cell;
 use tree_sitter::Node;
 
 //                      Utility helpers
 
+// ── Pre-validated source fast path ──────────────────────────────────────────
+//
+// Node text extraction (`text_of` + the handful of `from_utf8(&code[range])`
+// sites) is one of the hottest CFG-build primitives — `core::str::from_utf8`
+// (i.e. `run_utf8_validation`) was ~1.6% of active CPU on mattermost/server/
+// channels/app (samply, 2026-07-14), driven by re-validating a fresh byte range
+// on *every* one of the millions of `text_of` calls. Each call re-scans its
+// node's bytes for UTF-8 validity even though the enclosing source file was
+// already whole-file valid UTF-8.
+//
+// Fix (algorithmic, `O(range_len)` → `O(1)` per call): validate the whole file
+// **once** when it is parsed ([`ValidSourceGuard::new`] in `ParsedSource::
+// try_new`) and record its byte span in a thread-local. Any later `slice_str`
+// on that exact slice then reinterprets the already-validated bytes as `&str`
+// for free and takes an `O(1)` char-boundary slice (`str::get`) instead of an
+// `O(range_len)` validation scan. Bit-identical: `str::get` returns `None` for
+// a non-char-boundary / out-of-range slice exactly where `from_utf8` returns
+// `Err` today, and yields identical `&str` content otherwise. Files that are
+// not whole-file valid UTF-8 register nothing → every `slice_str` on them falls
+// back to the original checked `from_utf8`, so behaviour is unchanged there too.
+
+thread_local! {
+    /// Byte span (`ptr`, `len`) of the source file currently being analysed on
+    /// this thread, recorded **only** when the file validated as whole-file
+    /// UTF-8. `None` when no validated source is active (or the active file is
+    /// not valid UTF-8). A live [`ValidSourceGuard`] keeps the referenced bytes
+    /// alive for as long as the entry is set.
+    static VALID_SOURCE: Cell<Option<(*const u8, usize)>> = const { Cell::new(None) };
+}
+
+/// Escape hatch / benchmark A-B toggle: `NYX_DISABLE_SRC_STR_CACHE=1` forces
+/// every [`slice_str`] onto the checked `from_utf8` fallback, so the pre-
+/// validated fast path can be measured against the baseline in a single binary.
+fn src_str_cache_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("NYX_DISABLE_SRC_STR_CACHE").is_ok())
+}
+
+/// RAII guard registering `bytes` as this thread's validated source for the
+/// guard's lifetime. Validates the whole file once (the single `O(file_len)`
+/// scan that replaces the per-node scans) and, if valid, records its span in
+/// [`VALID_SOURCE`]. The previous registration is saved and restored on drop so
+/// nested parses (a parse-within-parse on one thread) compose correctly. Stored
+/// inside `ParsedSource`, so the registered span stays alive exactly as long as
+/// the borrowed file bytes it points at, and is cleared before those bytes can
+/// be freed.
+pub(crate) struct ValidSourceGuard {
+    prev: Option<(*const u8, usize)>,
+}
+
+impl ValidSourceGuard {
+    pub(crate) fn new(bytes: &[u8]) -> Self {
+        let entry = if std::str::from_utf8(bytes).is_ok() {
+            Some((bytes.as_ptr(), bytes.len()))
+        } else {
+            None
+        };
+        let prev = VALID_SOURCE.with(|c| c.replace(entry));
+        ValidSourceGuard { prev }
+    }
+}
+
+impl Drop for ValidSourceGuard {
+    fn drop(&mut self) {
+        VALID_SOURCE.with(|c| c.set(self.prev));
+    }
+}
+
+/// Decode `code[start..end]` as `&str`.
+///
+/// When `code` is exactly the file registered by a live [`ValidSourceGuard`],
+/// this reinterprets the pre-validated bytes as `&str` for free and takes an
+/// `O(1)` char-boundary slice; otherwise it falls back to the original checked
+/// `O(range_len)` `from_utf8`. Both paths return `None` for an out-of-range or
+/// non-char-boundary slice, so the result is bit-identical.
+#[inline]
+pub(crate) fn slice_str(code: &[u8], start: usize, end: usize) -> Option<&str> {
+    if !src_str_cache_disabled()
+        && VALID_SOURCE.with(|c| c.get()) == Some((code.as_ptr(), code.len()))
+    {
+        // SAFETY: the active `ValidSourceGuard` validated this exact live slice
+        // (same ptr + len) as whole-file UTF-8, so viewing it as `&str` is
+        // sound. `str::get` still bounds- and char-boundary-checks the range in
+        // O(1) instead of the O(range_len) `from_utf8` validation scan.
+        let s = unsafe { std::str::from_utf8_unchecked(code) };
+        match s.get(start..end) {
+            Some(sub) => Some(sub),
+            // `str::get` diverges from the checked `from_utf8(&bytes[start..end])`
+            // path only for an empty range landing mid-codepoint: `get` -> None,
+            // but `from_utf8(b"")` -> Some(""). Node byte ranges are always
+            // codepoint boundaries so this never arises for real callers, but
+            // mirror the checked result to stay bit-identical for any range.
+            None if start == end && end <= code.len() => Some(""),
+            None => None,
+        }
+    } else {
+        code.get(start..end)
+            .and_then(|b| std::str::from_utf8(b).ok())
+    }
+}
+
 /// Return the text of a node.
 #[inline]
 pub(crate) fn text_of<'a>(n: Node<'a>, code: &'a [u8]) -> Option<String> {
-    std::str::from_utf8(&code[n.start_byte()..n.end_byte()])
-        .ok()
-        .map(|s| s.to_string())
+    slice_str(code, n.start_byte(), n.end_byte()).map(|s| s.to_string())
 }
 
 /// Walk through chained calls / member accesses to find the root receiver.
@@ -1187,4 +1288,118 @@ pub(crate) fn subscript_components<'a>(n: Node<'a>, code: &'a [u8]) -> Option<(S
     // don't use it for local array identifiers.
     let idx_text = text_of(idx, code)?;
     Some((arr_text, idx_text))
+}
+
+#[cfg(test)]
+mod source_str_tests {
+    use super::{VALID_SOURCE, ValidSourceGuard, slice_str};
+
+    /// Reference decode: exactly what `text_of`/the direct sites did before the
+    /// pre-validated fast path — an unconditional checked `from_utf8` of the
+    /// byte range. Every `slice_str` result must equal this on every range.
+    fn checked(code: &[u8], start: usize, end: usize) -> Option<String> {
+        code.get(start..end)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .map(|s| s.to_string())
+    }
+
+    fn slice_owned(code: &[u8], start: usize, end: usize) -> Option<String> {
+        slice_str(code, start, end).map(|s| s.to_string())
+    }
+
+    #[test]
+    fn fast_path_bit_identical_to_checked_ascii() {
+        let code = b"let handle = File::open(path).unwrap();";
+        let _g = ValidSourceGuard::new(code);
+        // Guard registered this exact slice -> fast path is active.
+        assert_eq!(VALID_SOURCE.with(|c| c.get()), Some((code.as_ptr(), code.len())));
+        for start in 0..=code.len() {
+            for end in start..=code.len() {
+                assert_eq!(
+                    slice_owned(code, start, end),
+                    checked(code, start, end),
+                    "mismatch at {start}..{end}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fast_path_multibyte_boundaries_match_checked() {
+        // Mixed multibyte: `é` (2 bytes), `€` (3 bytes), `𝄞` (4 bytes).
+        let s = "aé b€ c𝄞 d";
+        let code = s.as_bytes();
+        let _g = ValidSourceGuard::new(code);
+        for start in 0..=code.len() {
+            for end in start..=code.len() {
+                // Non-char-boundary ranges must yield None in BOTH paths.
+                assert_eq!(
+                    slice_owned(code, start, end),
+                    checked(code, start, end),
+                    "mismatch at {start}..{end}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_guard_uses_checked_path_and_matches() {
+        // With no active guard, VALID_SOURCE is None -> checked fallback.
+        let code = b"session.query(sql)";
+        VALID_SOURCE.with(|c| c.set(None));
+        assert_ne!(VALID_SOURCE.with(|c| c.get()), Some((code.as_ptr(), code.len())));
+        for start in 0..=code.len() {
+            for end in start..=code.len() {
+                assert_eq!(slice_owned(code, start, end), checked(code, start, end));
+            }
+        }
+    }
+
+    #[test]
+    fn guard_registers_only_valid_utf8() {
+        let good = b"valid ascii";
+        {
+            let _g = ValidSourceGuard::new(good);
+            assert_eq!(
+                VALID_SOURCE.with(|c| c.get()),
+                Some((good.as_ptr(), good.len()))
+            );
+        }
+        // Dropped -> restored to None.
+        assert_eq!(VALID_SOURCE.with(|c| c.get()), None);
+
+        // Invalid UTF-8 registers nothing (None) -> slice_str stays on the
+        // checked path, which returns None for the invalid range.
+        let bad = [b'o', b'k', 0xFF, 0xFE];
+        let _g = ValidSourceGuard::new(&bad);
+        assert_eq!(VALID_SOURCE.with(|c| c.get()), None);
+        assert_eq!(slice_str(&bad, 0, 4), None); // 0xFF 0xFE not valid UTF-8
+        assert_eq!(slice_str(&bad, 0, 2), Some("ok")); // valid prefix still decodes
+    }
+
+    #[test]
+    fn nested_guards_save_and_restore() {
+        let outer = b"outer source file";
+        let inner = b"inner nested snippet";
+        let g_outer = ValidSourceGuard::new(outer);
+        assert_eq!(
+            VALID_SOURCE.with(|c| c.get()),
+            Some((outer.as_ptr(), outer.len()))
+        );
+        {
+            let _g_inner = ValidSourceGuard::new(inner);
+            assert_eq!(
+                VALID_SOURCE.with(|c| c.get()),
+                Some((inner.as_ptr(), inner.len()))
+            );
+        }
+        // Inner dropped -> outer registration restored (composes for
+        // parse-within-parse on one thread).
+        assert_eq!(
+            VALID_SOURCE.with(|c| c.get()),
+            Some((outer.as_ptr(), outer.len()))
+        );
+        drop(g_outer);
+        assert_eq!(VALID_SOURCE.with(|c| c.get()), None);
+    }
 }

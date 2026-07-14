@@ -4834,7 +4834,13 @@ pub fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
 }
 
 pub fn text(node: Node<'_>, bytes: &[u8]) -> String {
-    node.utf8_text(bytes).unwrap_or("").to_string()
+    // `slice_str` takes the pre-validated source fast path (O(1) boundary slice)
+    // when `bytes` is the file registered by the active `ValidSourceGuard`, else
+    // falls back to a checked decode. Bit-identical to `node.utf8_text(bytes)`:
+    // both yield the same `&str` for a valid range and `""` otherwise.
+    crate::cfg::slice_str(bytes, node.start_byte(), node.end_byte())
+        .unwrap_or("")
+        .to_string()
 }
 
 pub fn span(node: Node<'_>) -> (usize, usize) {
