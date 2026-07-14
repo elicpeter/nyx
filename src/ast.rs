@@ -6610,6 +6610,23 @@ pub fn analyse_file_fused(
                         &auth_model,
                         lang_enum,
                     );
+                    // Gitea `web.Router` registers handlers cross-package
+                    // (`r.Get(path, container.GetBlobsUpload)`) under
+                    // closure groups whose trailing ownership-guard
+                    // middleware (`reqPackageAccess`) is colocated with
+                    // the registration.  Harvest route→handler-leaf auth
+                    // edges so pass 2's caller-scope lift authorizes the
+                    // (other-file) handler unit.  A no-op on non-gitea Go
+                    // files (no closure-form groups).
+                    if lang_enum == Lang::Go {
+                        caller_scope_facts.extend(
+                            auth_analysis::extract::gitea::extract_route_handler_auth_edges(
+                                &parsed.source.tree,
+                                parsed.source.bytes,
+                                lang_enum,
+                            ),
+                        );
+                    }
                 }
             }
             let var_types = parsed.collect_file_var_types();

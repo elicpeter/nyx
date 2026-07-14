@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 638
+    "corpus_size": 640
   },
   "cases": [
     {
@@ -20201,6 +20201,65 @@
       ],
       "disabled": false,
       "notes": "real-repo-precision 2026-07-14: fmt.Fprintf into a bytes.NewBuffer writer is not reflected XSS (regression coverage for the Go printf writer-type gate). gitea temp_repo.go."
+    },
+    {
+      "case_id": "go-auth-realrepo-003",
+      "file": "go/safe/safe_gitea_group_ownership_guard.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "go.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "gitea",
+        "closure-group",
+        "safe",
+        "negative",
+        "real-repo-precision-2026-07-14"
+      ],
+      "disabled": false,
+      "notes": "Gitea web.Router closure-group extractor precision: r.Group(path, func(){ r.Get(path, handler) }, reqRepoReader(...)) lifts the trailing ownership-guard middleware (factory closure reads ctx.Repo.Permission.CanRead / ctx.IsUserRepoAdmin / ctx.IsUserSiteAdmin, rejects with ctx.APIError) onto the lexically-nested handler; the id-scoped DAO read must NOT fire missing_ownership_check."
+    },
+    {
+      "case_id": "go-auth-realrepo-004",
+      "file": "go/auth/vuln_gitea_group_feature_gate.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-639",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "go.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "gitea",
+        "closure-group",
+        "positive",
+        "real-repo-precision-2026-07-14"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for the gitea closure-group extractor: trailing middleware reqStarsEnabled() is a FEATURE gate (factory closure reads setting.Repository.DisableStars, a global config field, NOT a ctx.* permission field), so the body-based recogniser must classify it non-authorization and the id-scoped DAO read must STILL fire missing_ownership_check."
     }
   ]
 }
