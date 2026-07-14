@@ -3864,6 +3864,56 @@ mod pointer_lattice_worklist_tests {
         );
     }
 
+    /// Gating `block_exit_states` (the `track_exit_states` flag added
+    /// 2026-07-14 to elide a full `SsaTaintState::clone` per block pop on the
+    /// main taint path) must not change the analysis result.  `run_ssa_taint_full`
+    /// (`track=false`, discards exit states) and `run_ssa_taint_full_with_exits`
+    /// (`track=true`, moves them in) must agree bit-for-bit on the emitted
+    /// events and the converged per-block entry states across a real
+    /// multi-block (diamond) body; only `block_exit_states` differs (populated
+    /// for the tracking variant, unavailable via the non-tracking API).
+    #[test]
+    fn exit_state_tracking_gate_preserves_events_and_block_states() {
+        let (body, cfg, _cache_id, interner) = build_diamond_body(true);
+        let pf = crate::pointer::analyse_body(&body, crate::cfg::BodyId(7));
+        let local_summaries: FuncSummaries = HashMap::new();
+        let transfer = build_transfer(&interner, &local_summaries, &pf);
+
+        let (events_untracked, states_untracked) =
+            crate::taint::ssa_transfer::run_ssa_taint_full(&body, &cfg, &transfer);
+        let (events_tracked, states_tracked, exit_states) =
+            crate::taint::ssa_transfer::run_ssa_taint_full_with_exits(&body, &cfg, &transfer);
+
+        // Converged per-block ENTRY states are identical (SsaTaintState: PartialEq).
+        assert_eq!(
+            states_untracked, states_tracked,
+            "block entry states must be identical regardless of exit-state tracking"
+        );
+
+        // Emitted events are identical (SsaTaintEvent has no PartialEq; compare
+        // count + Debug projection, which covers sink_node/caps/validation).
+        assert_eq!(
+            events_untracked.len(),
+            events_tracked.len(),
+            "event count must be identical regardless of exit-state tracking"
+        );
+        assert_eq!(
+            format!("{events_untracked:?}"),
+            format!("{events_tracked:?}"),
+            "event contents must be identical regardless of exit-state tracking"
+        );
+
+        // The tracking variant populates exit states for every reached block;
+        // reached blocks are exactly those with a converged entry state.
+        for (bid, entry) in states_tracked.iter().enumerate() {
+            assert_eq!(
+                entry.is_some(),
+                exit_states[bid].is_some(),
+                "block {bid}: exit state presence must match entry state presence"
+            );
+        }
+    }
+
     /// A2.b: early-exit branch, only B1 writes, B2 reaches B3 via
     /// an empty body.  After the join, the cell exists (B1 wrote
     /// it), but `validated_must` is `false` (B2 didn't write, the

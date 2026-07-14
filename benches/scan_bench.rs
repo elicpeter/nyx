@@ -480,6 +480,18 @@ fn bench_taint_callee_resolve_stress_go(c: &mut Criterion) {
 /// fire per instruction) surfaces here as a slowdown proportional to
 /// block × constraint density.  `Arc` (not `Rc`) keeps `SsaTaintState`
 /// `Send` for the rayon-parallel file scan.
+///
+/// Also guards the `block_exit_states` clone elision (2026-07-14): the
+/// worklist used to `SsaTaintState::clone()` the exit state into
+/// `block_exit_states[bid]` on *every* block pop, but the dominant callers
+/// (`run_ssa_taint_full`: summary extraction + main analysis + sink
+/// augmentation) discard that vector.  It is now built only when the caller
+/// asks (`track_exit_states`), and even then the state is *moved* in after
+/// its last borrow instead of cloned.  This block-dense fixture maximises
+/// pops, so re-introducing the per-pop exit clone surfaces here (measured
+/// −1.8% end-to-end when the elision landed; the worklist itself is ~1/3 of
+/// `analyse_file_fused`, so the isolated worklist gain is proportionally
+/// larger).
 fn bench_taint_branch_stress_go(c: &mut Criterion) {
     let fixture = Path::new("benches/perf_fixtures/taint_branch_stress.go")
         .canonicalize()

@@ -276,7 +276,11 @@ pub fn run_ssa_taint_full(
     cfg: &Cfg,
     transfer: &SsaTaintTransfer,
 ) -> (Vec<SsaTaintEvent>, Vec<Option<SsaTaintState>>) {
-    let result = run_ssa_taint_internal(ssa, cfg, transfer);
+    // `block_exit_states` is discarded here, so skip building it entirely —
+    // that elides one full `SsaTaintState` clone per block pop on the entire
+    // main taint path (summary extraction + main analysis + sink augmentation,
+    // all 10 languages).  See `run_ssa_taint_internal`'s `track_exit_states`.
+    let result = run_ssa_taint_internal(ssa, cfg, transfer, false);
     (result.events, result.block_states)
 }
 
@@ -291,7 +295,7 @@ pub fn run_ssa_taint_full_with_exits(
     Vec<Option<SsaTaintState>>,
     Vec<Option<SsaTaintState>>,
 ) {
-    let result = run_ssa_taint_internal(ssa, cfg, transfer);
+    let result = run_ssa_taint_internal(ssa, cfg, transfer, true);
     (result.events, result.block_states, result.block_exit_states)
 }
 
@@ -299,6 +303,17 @@ fn run_ssa_taint_internal(
     ssa: &SsaBody,
     cfg: &Cfg,
     transfer: &SsaTaintTransfer,
+    // When `false`, the per-block exit states are never stored into
+    // `block_exit_states` (it stays all-`None`).  The dominant callers
+    // (`run_ssa_taint_full`: summary extraction, main analysis, and
+    // parent/child sink augmentation) discard `block_exit_states`, so
+    // filling it means cloning the full `SsaTaintState` once per block pop
+    // for a value that is thrown away.  Only `run_ssa_taint_full_with_exits`
+    // (the k=1 inline-callee return-shape extractor and the debug endpoint)
+    // consults it, and it passes `true`.  When `true`, the exit state is
+    // *moved* into `block_exit_states` after its last borrow rather than
+    // cloned, so even the tracking path pays no clone here.
+    track_exit_states: bool,
 ) -> SsaTaintRunResult {
     let num_blocks = ssa.blocks.len();
 
@@ -659,7 +674,6 @@ fn run_ssa_taint_internal(
             &induction_vars,
             Some(&pred_states),
         );
-        block_exit_states[bid] = Some(exit_state.clone());
 
         // Build per-successor states (branch-aware for Branch terminators)
         let succ_states = compute_succ_states(block, cfg, ssa, transfer, &exit_state);
@@ -731,6 +745,18 @@ fn run_ssa_taint_internal(
                     worklist.push_back(catch_idx);
                 }
             }
+        }
+
+        // Store the block's exit state ONLY for callers that consult it
+        // (`track_exit_states`).  This is the last use of `exit_state`, so it
+        // is *moved* here rather than cloned — the store used to sit before
+        // `compute_succ_states` / the exception-edge loop and paid a full
+        // `SsaTaintState::clone` on every block pop; those consumers borrow
+        // `exit_state`, so deferring the store past them lets it be moved.
+        // `block_exit_states[bid]` is write-once and read only after the
+        // worklist converges, so this reorder is output-identical.
+        if track_exit_states {
+            block_exit_states[bid] = Some(exit_state);
         }
     }
 
