@@ -644,6 +644,56 @@ fn bench_ssa_lower_large_go(c: &mut Criterion) {
     });
 }
 
+/// Isolates `FuncKey` hashing on the pessimal map: a `std::collections::HashMap`
+/// (SipHash `RandomState`), the exact type used by the interprocedural indices
+/// `ssa_by_key` / `bodies_by_key` / `auth_by_key` in `GlobalSummaries`.
+///
+/// Pre-fix, `FuncKey` derived `Hash`, so every lookup walked all bytes of the
+/// three `String` identity fields (project-relative namespace path ~40-50 B,
+/// container, name) through SipHash's per-byte mixing.  Profiling attributed
+/// 44.7% of all SipHash self-time (~3.8% active CPU) on mattermost's
+/// `server/channels/app` to `FuncKey::hash` — the single largest hashed entity
+/// in the engine (PERF_DEFERRED.md, 2026-07-13).
+///
+/// Post-fix (2026-07-14 perfhunt session-0012), `FuncKey` caches a `u64`
+/// FxHash of its identity computed once at construction; the manual `Hash`
+/// impl writes that single precomputed `u64`, so a lookup mixes 8 bytes
+/// instead of the ~76 B of identity string this fixture uses.  The change is
+/// asymptotic in the identity string length: `O(len)` → `O(1)` per hash.  A
+/// regression that reverts to hashing the string fields surfaces here
+/// proportional to the namespace + name lengths.
+fn bench_funckey_hash_lookup(c: &mut Criterion) {
+    use nyx_scanner::symbol::{FuncKey, Lang};
+    use std::collections::HashMap;
+
+    // Realistic identity shapes: deep namespace paths + service-method names,
+    // mirroring how cross-file callee keys look on a large Go/Java repo.
+    let keys: Vec<FuncKey> = (0..500)
+        .map(|i| {
+            FuncKey::new_function(
+                Lang::Go,
+                format!("server/channels/app/module_group_{}/handler_{:04}.go", i % 16, i),
+                format!("Process{:04}RequestHandler", i),
+                Some((i % 5) + 1),
+            )
+        })
+        .collect();
+    let map: HashMap<FuncKey, usize> =
+        keys.iter().cloned().enumerate().map(|(i, k)| (k, i)).collect();
+
+    c.bench_function("funckey_hash_lookup", |b| {
+        b.iter(|| {
+            let mut hits = 0usize;
+            for k in &keys {
+                if let Some(v) = map.get(k) {
+                    hits += *v & 1;
+                }
+            }
+            hits
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_ast_only_scan,
@@ -659,6 +709,7 @@ criterion_group!(
     bench_const_propagate_large_go,
     bench_ssa_lower_large_go,
     bench_global_summaries_lookup_same_lang_go,
+    bench_funckey_hash_lookup,
     bench_taint_callee_resolve_stress_go,
     bench_taint_branch_stress_go,
     bench_taint_cond_revisit_go,

@@ -10,8 +10,10 @@
 //! methods, closures, and free functions so callers can apply language-specific
 //! resolution heuristics.
 
+use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 /// Supported source-code languages.
@@ -226,27 +228,258 @@ impl FuncKind {
 /// defaults, so JSON summaries written by the old identity model still
 /// deserialise cleanly and land on `FuncKind::Function` with empty
 /// container/disambig.
-#[derive(Clone, Debug, Default, Hash, PartialEq, Eq, Serialize, Deserialize)]
+/// # Precomputed identity hash (perfhunt session-0012, 2026-07-14)
+///
+/// `FuncKey` is the single most-hashed entity in the engine: it keys the
+/// cross-file callee indices (`by_key`, `ssa_by_key`, `bodies_by_key`,
+/// `auth_by_key`), the SCC/topo changed-key sets, and every taint-local
+/// `HashMap<FuncKey, _>`.  A derived `Hash` re-walked all bytes of the three
+/// `String` identity fields on every lookup — measured 44.7% of all SipHash
+/// self-time (~3.8% active CPU) on mattermost.  We now cache a `u64` FxHash of
+/// the seven identity fields, computed once at construction, and the manual
+/// `Hash` impl writes that single `u64`: `O(identity len)` → `O(1)` per hash.
+///
+/// ## Soundness invariant
+///
+/// The cached `hash` MUST stay consistent with the seven identity fields.  It
+/// is recomputed at every construction path ([`FuncKey::from_parts`],
+/// [`FuncKey::new_function`], `Default`, serde `Deserialize`) and after any
+/// identity mutation via the [`FuncKey::set_namespace`] /
+/// [`FuncKey::set_disambig`] / [`FuncKey::set_arity`] setters or the explicit
+/// [`FuncKey::recompute_hash`].  The `hash` field is **private** so the only
+/// way to obtain a value is through a constructor — a struct literal outside
+/// this module fails to compile, which turns "forgot to recompute" from a
+/// silent bucket-collision perf bug into a compile error.  In unit-test builds
+/// (`cfg(test)`) the `Hash` impl `assert_eq!`s the cache against a fresh
+/// recompute, so any stale mutation panics loudly under the test suite.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(into = "FuncKeyData", from = "FuncKeyData")]
 pub struct FuncKey {
     pub lang: Lang,
     /// Project-relative file path (e.g. `"src/lib.rs"`).
     pub namespace: String,
     /// Enclosing container path (class / impl / module / nested function).
     /// Empty for free top-level functions.  Segments joined with `::`.
-    #[serde(default)]
     pub container: String,
     pub name: String,
     pub arity: Option<usize>,
     /// Numeric discriminator for same-name siblings (closures, duplicate defs).
     /// Typically the function node's start byte offset.
-    #[serde(default)]
     pub disambig: Option<u32>,
     /// Structural role, Function, Method, Constructor, Closure, etc.
-    #[serde(default)]
     pub kind: FuncKind,
+    /// Precomputed FxHash of the seven identity fields above.  Never
+    /// serialized (see `FuncKeyData`); recomputed on load.  Kept in sync by
+    /// [`FuncKey::recompute_hash`] — see the type-level soundness note.
+    hash: u64,
+}
+
+/// Wire form of [`FuncKey`] — the seven identity fields, no cached `hash`.
+///
+/// `FuncKey` serializes through this (`#[serde(into/from)]`) so the on-disk /
+/// on-wire JSON is byte-for-byte identical to the old derived form (same field
+/// names, same `#[serde(default)]` back-compat), and the cached `hash` is
+/// recomputed on deserialize rather than persisted.  This keeps existing
+/// SQLite summary blobs loadable without a schema bump.
+#[derive(Serialize, Deserialize)]
+struct FuncKeyData {
+    lang: Lang,
+    namespace: String,
+    #[serde(default)]
+    container: String,
+    name: String,
+    arity: Option<usize>,
+    #[serde(default)]
+    disambig: Option<u32>,
+    #[serde(default)]
+    kind: FuncKind,
+}
+
+impl From<FuncKeyData> for FuncKey {
+    fn from(d: FuncKeyData) -> Self {
+        FuncKey::from_parts(
+            d.lang,
+            d.namespace,
+            d.container,
+            d.name,
+            d.arity,
+            d.disambig,
+            d.kind,
+        )
+    }
+}
+
+impl From<FuncKey> for FuncKeyData {
+    fn from(k: FuncKey) -> Self {
+        FuncKeyData {
+            lang: k.lang,
+            namespace: k.namespace,
+            container: k.container,
+            name: k.name,
+            arity: k.arity,
+            disambig: k.disambig,
+            kind: k.kind,
+        }
+    }
+}
+
+impl Hash for FuncKey {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Integrity check, unit-test builds only (`cfg(test)`): the cache must
+        // equal a fresh recompute.  A mismatch means an identity field was
+        // mutated without going through a setter / `recompute_hash`.  Scoped to
+        // `cfg(test)` so the per-hash recompute never runs on the release
+        // binary, the dev binary, integration scans, or benchmarks — only the
+        // lib unit tests, which directly exercise every mutation path.
+        #[cfg(test)]
+        assert_eq!(
+            self.hash,
+            FuncKey::compute_hash(
+                self.lang,
+                &self.namespace,
+                &self.container,
+                &self.name,
+                self.arity,
+                self.disambig,
+                self.kind,
+            ),
+            "FuncKey identity hash is stale — a field was mutated without recompute_hash()"
+        );
+        state.write_u64(self.hash);
+    }
+}
+
+impl PartialEq for FuncKey {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        // Fast reject on the precomputed hash: equal identity implies equal
+        // hash, so unequal hash implies unequal identity.  The field
+        // comparison then confirms (guards the rare 64-bit collision).
+        self.hash == other.hash
+            && self.lang == other.lang
+            && self.arity == other.arity
+            && self.disambig == other.disambig
+            && self.kind == other.kind
+            && self.name == other.name
+            && self.container == other.container
+            && self.namespace == other.namespace
+    }
+}
+
+impl Eq for FuncKey {}
+
+impl Default for FuncKey {
+    fn default() -> Self {
+        FuncKey::from_parts(
+            Lang::default(),
+            String::new(),
+            String::new(),
+            String::new(),
+            None,
+            None,
+            FuncKind::default(),
+        )
+    }
 }
 
 impl FuncKey {
+    /// Deterministic FxHash of the seven identity fields, in a fixed order.
+    ///
+    /// FxHash (not SipHash) so the precompute is cheap and stable across
+    /// processes — a key reconstructed from a persisted summary hashes
+    /// identically to a freshly-analysed one.  The order here is the single
+    /// source of truth: `recompute_hash`, `from_parts`, and the debug integrity
+    /// check in `Hash` all route through this function.
+    #[inline]
+    fn compute_hash(
+        lang: Lang,
+        namespace: &str,
+        container: &str,
+        name: &str,
+        arity: Option<usize>,
+        disambig: Option<u32>,
+        kind: FuncKind,
+    ) -> u64 {
+        let mut h = FxHasher::default();
+        lang.hash(&mut h);
+        namespace.hash(&mut h);
+        container.hash(&mut h);
+        name.hash(&mut h);
+        arity.hash(&mut h);
+        disambig.hash(&mut h);
+        kind.hash(&mut h);
+        h.finish()
+    }
+
+    /// Construct a fully-specified key, computing the cached identity hash.
+    /// The canonical constructor: every other construction path (including
+    /// `Default` and serde `Deserialize`) funnels through here so the cache is
+    /// always populated.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts(
+        lang: Lang,
+        namespace: impl Into<String>,
+        container: impl Into<String>,
+        name: impl Into<String>,
+        arity: Option<usize>,
+        disambig: Option<u32>,
+        kind: FuncKind,
+    ) -> Self {
+        let namespace = namespace.into();
+        let container = container.into();
+        let name = name.into();
+        let hash =
+            FuncKey::compute_hash(lang, &namespace, &container, &name, arity, disambig, kind);
+        FuncKey {
+            lang,
+            namespace,
+            container,
+            name,
+            arity,
+            disambig,
+            kind,
+            hash,
+        }
+    }
+
+    /// Recompute and store the cached identity hash from the current fields.
+    /// Call after any direct mutation of an identity field that does not go
+    /// through a setter (see the type-level soundness note).
+    #[inline]
+    pub fn recompute_hash(&mut self) {
+        self.hash = FuncKey::compute_hash(
+            self.lang,
+            &self.namespace,
+            &self.container,
+            &self.name,
+            self.arity,
+            self.disambig,
+            self.kind,
+        );
+    }
+
+    /// Set `namespace`, keeping the cached hash consistent.
+    #[inline]
+    pub fn set_namespace(&mut self, namespace: impl Into<String>) {
+        self.namespace = namespace.into();
+        self.recompute_hash();
+    }
+
+    /// Set `disambig`, keeping the cached hash consistent.
+    #[inline]
+    pub fn set_disambig(&mut self, disambig: Option<u32>) {
+        self.disambig = disambig;
+        self.recompute_hash();
+    }
+
+    /// Set `arity`, keeping the cached hash consistent.
+    #[inline]
+    pub fn set_arity(&mut self, arity: Option<usize>) {
+        self.arity = arity;
+        self.recompute_hash();
+    }
+
     /// Construct a plain free-function key (no container, no disambig).
     /// Kept as a convenience for call sites and tests that do not need the
     /// extra discriminators.
@@ -256,15 +489,15 @@ impl FuncKey {
         name: impl Into<String>,
         arity: Option<usize>,
     ) -> Self {
-        FuncKey {
+        FuncKey::from_parts(
             lang,
-            namespace: namespace.into(),
-            container: String::new(),
-            name: name.into(),
+            namespace,
+            String::new(),
+            name,
             arity,
-            disambig: None,
-            kind: FuncKind::Function,
-        }
+            None,
+            FuncKind::Function,
+        )
     }
 
     /// Fully-qualified name like `"Class::method"` or just `"func"` for free

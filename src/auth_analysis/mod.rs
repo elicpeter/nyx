@@ -323,15 +323,15 @@ fn summaries_keyed_by_func(
             continue;
         };
         let leaf = name.rsplit('.').next().unwrap_or(name).to_string();
-        let key = FuncKey {
-            lang: lang_enum,
-            namespace: namespace.clone(),
-            container: String::new(),
-            name: leaf,
-            arity: Some(unit.params.len()),
-            disambig: None,
-            kind: crate::symbol::FuncKind::Function,
-        };
+        let key = FuncKey::from_parts(
+            lang_enum,
+            namespace.clone(),
+            String::new(),
+            leaf,
+            Some(unit.params.len()),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         out.push((key, summary));
     }
     out
@@ -989,6 +989,7 @@ fn synthesise_cross_file_checks_for_unit(
         canonical.disambig = None;
         canonical.container = String::new();
         canonical.kind = crate::symbol::FuncKind::Function;
+        canonical.recompute_hash();
         let Some(summary) = gs.get_auth(&canonical) else {
             continue;
         };

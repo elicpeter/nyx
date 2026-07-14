@@ -1867,13 +1867,15 @@ function consume() {
 
         // Create non-empty global summaries to simulate having run a scan
         let mut global = crate::summary::GlobalSummaries::default();
-        let key = crate::symbol::FuncKey {
-            lang: crate::symbol::Lang::JavaScript,
-            namespace: "src/helper.js".into(),
-            name: "getInput".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let key = crate::symbol::FuncKey::from_parts(
+            crate::symbol::Lang::JavaScript,
+            "src/helper.js",
+            String::new(),
+            "getInput",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         global.insert_ssa(
             key,
             crate::summary::ssa_summary::SsaFuncSummary {

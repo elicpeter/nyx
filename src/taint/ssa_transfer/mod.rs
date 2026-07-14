@@ -13171,15 +13171,15 @@ mod namespace_qualifier_authority_tests {
     use petgraph::graph::NodeIndex;
 
     fn method_key(container: &str, name: &str, arity: usize) -> FuncKey {
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "mod.rs".into(),
-            container: container.into(),
-            name: name.into(),
-            arity: Some(arity),
-            disambig: None,
-            kind: FuncKind::Method,
-        }
+        FuncKey::from_parts(
+            Lang::Rust,
+            "mod.rs",
+            container,
+            name,
+            Some(arity),
+            None,
+            FuncKind::Method,
+        )
     }
 
     fn stub_summary(arity: usize) -> LocalFuncSummary {

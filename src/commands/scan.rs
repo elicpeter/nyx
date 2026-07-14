@@ -3003,19 +3003,15 @@ pub fn scan_with_index_parallel_observer(
                 } else {
                     namespace
                 };
-                let key = crate::symbol::FuncKey {
+                let key = crate::symbol::FuncKey::from_parts(
                     lang,
-                    namespace: ns,
+                    ns,
                     container,
                     name,
-                    arity: if arity >= 0 {
-                        Some(arity as usize)
-                    } else {
-                        None
-                    },
+                    if arity >= 0 { Some(arity as usize) } else { None },
                     disambig,
                     kind,
-                };
+                );
                 gs.insert_ssa(key, ssa_sum);
             }
         }
@@ -3065,19 +3061,15 @@ pub fn scan_with_index_parallel_observer(
                         } else {
                             namespace
                         };
-                        let key = crate::symbol::FuncKey {
+                        let key = crate::symbol::FuncKey::from_parts(
                             lang,
-                            namespace: ns,
+                            ns,
                             container,
                             name,
-                            arity: if arity >= 0 {
-                                Some(arity as usize)
-                            } else {
-                                None
-                            },
+                            if arity >= 0 { Some(arity as usize) } else { None },
                             disambig,
                             kind,
-                        };
+                        );
                         gs.insert_body(key, body);
                     }
                     count
@@ -3123,19 +3115,15 @@ pub fn scan_with_index_parallel_observer(
                 } else {
                     namespace
                 };
-                let key = crate::symbol::FuncKey {
+                let key = crate::symbol::FuncKey::from_parts(
                     lang,
-                    namespace: ns,
+                    ns,
                     container,
                     name,
-                    arity: if arity >= 0 {
-                        Some(arity as usize)
-                    } else {
-                        None
-                    },
+                    if arity >= 0 { Some(arity as usize) } else { None },
                     disambig,
                     kind,
-                };
+                );
                 gs.insert_auth(key, auth_sum);
             }
         }

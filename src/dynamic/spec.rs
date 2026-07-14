@@ -1089,15 +1089,15 @@ pub fn is_entry_point(func: &FuncSummary, callgraph: &CallGraph) -> bool {
         Some(l) => l,
         None => return false,
     };
-    let key = FuncKey {
+    let key = FuncKey::from_parts(
         lang,
-        namespace: func.file_path.clone(),
-        container: func.container.clone(),
-        name: func.name.clone(),
-        arity: Some(func.param_count),
-        disambig: func.disambig,
-        kind: func.kind,
-    };
+        func.file_path.clone(),
+        func.container.clone(),
+        func.name.clone(),
+        Some(func.param_count),
+        func.disambig,
+        func.kind,
+    );
     if let Some(&node) = callgraph.index.get(&key) {
         callgraph
             .graph

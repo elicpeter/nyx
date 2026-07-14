@@ -342,23 +342,19 @@ fn load_global_summaries_from_pool(
         ssa_rows
     {
         let lang = crate::symbol::Lang::from_slug(&lang_str).unwrap_or(crate::symbol::Lang::Rust);
-        let key = crate::symbol::FuncKey {
+        let key = crate::symbol::FuncKey::from_parts(
             lang,
-            namespace: if namespace.is_empty() {
+            if namespace.is_empty() {
                 crate::symbol::normalize_namespace(&_file_path, Some(&root_str))
             } else {
                 namespace
             },
             container,
             name,
-            arity: if arity >= 0 {
-                Some(arity as usize)
-            } else {
-                None
-            },
+            if arity >= 0 { Some(arity as usize) } else { None },
             disambig,
             kind,
-        };
+        );
         global.insert_ssa(key, summary);
     }
 
@@ -684,13 +680,15 @@ mod tests {
         let global = load_global_summaries_from_pool(&scan_root, &pool)
             .expect("debug loader should recover project summaries");
 
-        let key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/lib.rs".into(),
-            name: "helper".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/lib.rs",
+            String::new(),
+            "helper",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
 
         assert!(global.get(&key).is_some());
         assert!(

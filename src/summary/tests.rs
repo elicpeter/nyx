@@ -39,13 +39,15 @@ fn merge_unions_conservatively() {
     };
 
     let merged = merge_summaries(vec![a, b], None);
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "test.rs".into(),
-        name: "foo".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "test.rs",
+        String::new(),
+        "foo",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
     let foo = merged.get(&key).unwrap();
 
     assert_eq!(foo.source_caps, 0x01);
@@ -94,20 +96,24 @@ fn same_lang_different_namespace_no_merge() {
     let global = merge_summaries(vec![a, b], None);
 
     // They should be stored under different FuncKeys
-    let key_a = FuncKey {
-        lang: Lang::Rust,
-        namespace: "file_a.rs".into(),
-        name: "helper".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
-    let key_b = FuncKey {
-        lang: Lang::Rust,
-        namespace: "file_b.rs".into(),
-        name: "helper".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key_a = FuncKey::from_parts(
+        Lang::Rust,
+        "file_a.rs",
+        String::new(),
+        "helper",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
+    let key_b = FuncKey::from_parts(
+        Lang::Rust,
+        "file_b.rs",
+        String::new(),
+        "helper",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
     assert!(global.get(&key_a).is_some());
     assert!(global.get(&key_b).is_some());
     // source_caps NOT merged
@@ -149,13 +155,15 @@ fn same_lang_same_namespace_merges() {
     };
 
     let global = merge_summaries(vec![a, b], None);
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "lib.rs".into(),
-        name: "helper".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "lib.rs",
+        String::new(),
+        "helper",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
     let merged = global.get(&key).unwrap();
     assert_eq!(merged.source_caps, 0x01);
     assert_eq!(merged.sanitizer_caps, 0x02);
@@ -198,20 +206,24 @@ fn cross_lang_name_collision_stays_separate() {
 
     let global = merge_summaries(vec![py, c], None);
 
-    let py_key = FuncKey {
-        lang: Lang::Python,
-        namespace: "handler.py".into(),
-        name: "process_data".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
-    let c_key = FuncKey {
-        lang: Lang::C,
-        namespace: "handler.c".into(),
-        name: "process_data".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let py_key = FuncKey::from_parts(
+        Lang::Python,
+        "handler.py",
+        String::new(),
+        "process_data",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
+    let c_key = FuncKey::from_parts(
+        Lang::C,
+        "handler.c",
+        String::new(),
+        "process_data",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
 
     assert!(global.get(&py_key).is_some());
     assert!(global.get(&c_key).is_some());
@@ -414,13 +426,15 @@ fn merge_propagating_params_union() {
     };
 
     let merged = merge_summaries(vec![a, b], None);
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "test.rs".into(),
-        name: "foo".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "test.rs",
+        String::new(),
+        "foo",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
     let foo = merged.get(&key).unwrap();
     assert_eq!(foo.propagating_params, vec![0, 1]);
     assert!(foo.propagates_any());
@@ -479,13 +493,15 @@ fn snapshot_caps_detects_change() {
     let snap1 = gs.snapshot_caps();
 
     // Mutate one summary by inserting a changed version.
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "test.rs".into(),
-        name: "bar".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "test.rs",
+        String::new(),
+        "bar",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
     let updated = FuncSummary {
         sink_caps: 0x08,
         ..make("bar", 0, 0, 0)
@@ -654,13 +670,15 @@ fn ssa_summary_serde_round_trip_all_variants() {
 #[test]
 fn global_summaries_insert_ssa_exact_key_replacement() {
     let mut gs = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Python,
-        namespace: "app.py".into(),
-        name: "process".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Python,
+        "app.py",
+        String::new(),
+        "process",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
 
     let v1 = SsaFuncSummary {
         param_to_return: vec![(0, TaintTransform::Identity)],
@@ -729,20 +747,24 @@ fn global_summaries_merge_with_ssa_entries() {
     let mut gs1 = GlobalSummaries::new();
     let mut gs2 = GlobalSummaries::new();
 
-    let key_a = FuncKey {
-        lang: Lang::Python,
-        namespace: "a.py".into(),
-        name: "foo".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
-    let key_b = FuncKey {
-        lang: Lang::Python,
-        namespace: "b.py".into(),
-        name: "bar".into(),
-        arity: Some(2),
-        ..Default::default()
-    };
+    let key_a = FuncKey::from_parts(
+        Lang::Python,
+        "a.py",
+        String::new(),
+        "foo",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
+    let key_b = FuncKey::from_parts(
+        Lang::Python,
+        "b.py",
+        String::new(),
+        "bar",
+        Some(2),
+        None,
+        FuncKind::Function,
+    );
 
     let sum_a = SsaFuncSummary {
         param_to_return: vec![(0, TaintTransform::Identity)],
@@ -813,13 +835,15 @@ fn global_summaries_is_empty_considers_ssa() {
     let mut gs = GlobalSummaries::new();
     assert!(gs.is_empty());
 
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "lib.rs".into(),
-        name: "f".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "lib.rs",
+        String::new(),
+        "f",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
     gs.insert_ssa(
         key,
         SsaFuncSummary {
@@ -1318,13 +1342,15 @@ fn callee_body_serde_with_branch_terminator() {
 #[test]
 fn global_summaries_insert_body_exact_key_replacement() {
     let mut gs = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: crate::symbol::Lang::Python,
-        namespace: "helper.py".into(),
-        name: "transform".into(),
-        arity: Some(2),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        crate::symbol::Lang::Python,
+        "helper.py",
+        String::new(),
+        "transform",
+        Some(2),
+        None,
+        FuncKind::Function,
+    );
 
     let body1 = make_callee_body(3, 2);
     let body2 = make_callee_body(5, 2);
@@ -1340,13 +1366,15 @@ fn global_summaries_insert_body_exact_key_replacement() {
 #[test]
 fn global_summaries_get_body_not_found() {
     let gs = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: crate::symbol::Lang::Python,
-        namespace: "missing.py".into(),
-        name: "nope".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        crate::symbol::Lang::Python,
+        "missing.py",
+        String::new(),
+        "nope",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
     assert!(gs.get_body(&key).is_none());
 }
 
@@ -1355,20 +1383,24 @@ fn global_summaries_merge_includes_bodies() {
     let mut gs1 = GlobalSummaries::new();
     let mut gs2 = GlobalSummaries::new();
 
-    let key1 = FuncKey {
-        lang: crate::symbol::Lang::Python,
-        namespace: "a.py".into(),
-        name: "func_a".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
-    let key2 = FuncKey {
-        lang: crate::symbol::Lang::Python,
-        namespace: "b.py".into(),
-        name: "func_b".into(),
-        arity: Some(2),
-        ..Default::default()
-    };
+    let key1 = FuncKey::from_parts(
+        crate::symbol::Lang::Python,
+        "a.py",
+        String::new(),
+        "func_a",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
+    let key2 = FuncKey::from_parts(
+        crate::symbol::Lang::Python,
+        "b.py",
+        String::new(),
+        "func_b",
+        Some(2),
+        None,
+        FuncKind::Function,
+    );
 
     // Need to also insert regular summaries so the by_lang_name index is populated
     gs1.insert(key1.clone(), make("func_a", 0, 0, 0));
@@ -1389,13 +1421,15 @@ fn global_summaries_merge_includes_bodies() {
 fn global_summaries_resolve_callee_body_exact_match() {
     let mut gs = GlobalSummaries::new();
 
-    let key = FuncKey {
-        lang: crate::symbol::Lang::Python,
-        namespace: "util.py".into(),
-        name: "helper".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        crate::symbol::Lang::Python,
+        "util.py",
+        String::new(),
+        "helper",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
 
     gs.insert(key.clone(), make("helper", 0, 0, 0));
     gs.insert_body(key.clone(), make_callee_body(3, 1));
@@ -1420,20 +1454,24 @@ fn global_summaries_resolve_callee_body_ambiguous_returns_none() {
     let mut gs = GlobalSummaries::new();
 
     // Two functions with same name but different namespaces
-    let key1 = FuncKey {
-        lang: crate::symbol::Lang::Python,
-        namespace: "a.py".into(),
-        name: "helper".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
-    let key2 = FuncKey {
-        lang: crate::symbol::Lang::Python,
-        namespace: "b.py".into(),
-        name: "helper".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key1 = FuncKey::from_parts(
+        crate::symbol::Lang::Python,
+        "a.py",
+        String::new(),
+        "helper",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
+    let key2 = FuncKey::from_parts(
+        crate::symbol::Lang::Python,
+        "b.py",
+        String::new(),
+        "helper",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
 
     gs.insert(key1.clone(), make("helper", 0, 0, 0));
     gs.insert_body(key1.clone(), make_callee_body(2, 1));
@@ -1452,20 +1490,24 @@ fn global_summaries_resolve_callee_body_ambiguous_returns_none() {
 fn global_summaries_resolve_callee_body_namespace_disambiguates() {
     let mut gs = GlobalSummaries::new();
 
-    let key1 = FuncKey {
-        lang: crate::symbol::Lang::Python,
-        namespace: "a.py".into(),
-        name: "helper".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
-    let key2 = FuncKey {
-        lang: crate::symbol::Lang::Python,
-        namespace: "b.py".into(),
-        name: "helper".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key1 = FuncKey::from_parts(
+        crate::symbol::Lang::Python,
+        "a.py",
+        String::new(),
+        "helper",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
+    let key2 = FuncKey::from_parts(
+        crate::symbol::Lang::Python,
+        "b.py",
+        String::new(),
+        "helper",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
 
     gs.insert(key1.clone(), make("helper", 0, 0, 0));
     gs.insert_body(key1.clone(), make_callee_body(2, 1));
@@ -1483,13 +1525,15 @@ fn global_summaries_resolve_body_requires_body_present() {
     let mut gs = GlobalSummaries::new();
 
     // Insert summary but no body
-    let key = FuncKey {
-        lang: crate::symbol::Lang::Python,
-        namespace: "util.py".into(),
-        name: "helper".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        crate::symbol::Lang::Python,
+        "util.py",
+        String::new(),
+        "helper",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
     gs.insert(key.clone(), make("helper", 0, 0, 0));
     gs.insert_ssa(
         key.clone(),
@@ -1545,15 +1589,15 @@ fn fs_with(
     disambig: Option<u32>,
     sink_bits: u32,
 ) -> (FuncKey, FuncSummary) {
-    let key = FuncKey {
-        lang: Lang::Java,
-        namespace: namespace.into(),
-        container: container.into(),
-        name: name.into(),
-        arity: Some(arity),
+    let key = FuncKey::from_parts(
+        Lang::Java,
+        namespace,
+        container,
+        name,
+        Some(arity),
         disambig,
         kind,
-    };
+    );
     let summary = FuncSummary {
         name: name.into(),
         file_path: namespace.into(),
@@ -1702,15 +1746,15 @@ fn interop_lookup_tolerates_missing_disambig() {
         0x04,
     );
     // Go summaries are actually keyed with Lang::Go; use a distinct key here.
-    let go_key = FuncKey {
-        lang: Lang::Go,
-        namespace: "lib.go".into(),
-        container: String::new(),
-        name: "fetch_env".into(),
-        arity: Some(0),
-        disambig: Some(7777),
-        kind: FuncKind::Function,
-    };
+    let go_key = FuncKey::from_parts(
+        Lang::Go,
+        "lib.go",
+        String::new(),
+        "fetch_env",
+        Some(0),
+        Some(7777),
+        FuncKind::Function,
+    );
     let go_sum = FuncSummary {
         name: "fetch_env".into(),
         file_path: "lib.go".into(),
@@ -1720,15 +1764,15 @@ fn interop_lookup_tolerates_missing_disambig() {
     gs.insert(go_key, go_sum);
     let _ = k; // unused: only needed for symmetry with fs_with signature
 
-    let interop_query = FuncKey {
-        lang: Lang::Go,
-        namespace: "lib.go".into(),
-        container: String::new(),
-        name: "fetch_env".into(),
-        arity: Some(0),
-        disambig: None,
-        kind: FuncKind::Function,
-    };
+    let interop_query = FuncKey::from_parts(
+        Lang::Go,
+        "lib.go",
+        String::new(),
+        "fetch_env",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
     let hit = gs
         .get_for_interop(&interop_query)
         .expect("interop lookup should tolerate missing disambig");
@@ -1742,15 +1786,15 @@ fn interop_lookup_returns_none_when_disambig_none_matches_many() {
     // return None rather than picking arbitrarily.
     let mut gs = GlobalSummaries::new();
     let mk = |disambig: u32, bits: u32| {
-        let k = FuncKey {
-            lang: Lang::Go,
-            namespace: "lib.go".into(),
-            container: String::new(),
-            name: "dup".into(),
-            arity: Some(0),
-            disambig: Some(disambig),
-            kind: FuncKind::Function,
-        };
+        let k = FuncKey::from_parts(
+            Lang::Go,
+            "lib.go",
+            String::new(),
+            "dup",
+            Some(0),
+            Some(disambig),
+            FuncKind::Function,
+        );
         let s = FuncSummary {
             name: "dup".into(),
             file_path: "lib.go".into(),
@@ -1766,15 +1810,15 @@ fn interop_lookup_returns_none_when_disambig_none_matches_many() {
     gs.insert(k1, s1);
     gs.insert(k2, s2);
 
-    let ambiguous_query = FuncKey {
-        lang: Lang::Go,
-        namespace: "lib.go".into(),
-        container: String::new(),
-        name: "dup".into(),
-        arity: Some(0),
-        disambig: None,
-        kind: FuncKind::Function,
-    };
+    let ambiguous_query = FuncKey::from_parts(
+        Lang::Go,
+        "lib.go",
+        String::new(),
+        "dup",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
     assert!(
         gs.get_for_interop(&ambiguous_query).is_none(),
         "disambig=None must not pick arbitrarily when multiple keys match"
@@ -1977,13 +2021,15 @@ fn rust_use_map_disambiguates_same_name_across_modules() {
 
     let gs = merge_summaries(vec![token, session, caller], Some("/proj"));
     // Pull the token key back out and verify exact-one resolution.
-    let caller_key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "src/main.rs".into(),
-        name: "handler".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let caller_key = FuncKey::from_parts(
+        Lang::Rust,
+        "src/main.rs",
+        String::new(),
+        "handler",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
     let caller_sum = gs.get(&caller_key).expect("caller summary");
     let use_map = crate::rust_resolve::RustUseMap {
         aliases: caller_sum.rust_use_map.clone().unwrap_or_default(),
@@ -2372,10 +2418,15 @@ fn query_namespace_qualifier_resolves_env_var_style_call() {
         0x01,
     );
     // Force the insertion to use Rust lang by shadowing fs_with's Java default.
-    let k_env = FuncKey {
-        lang: Lang::Rust,
-        ..k_env
-    };
+    let k_env = FuncKey::from_parts(
+        Lang::Rust,
+        k_env.namespace,
+        k_env.container,
+        k_env.name,
+        k_env.arity,
+        k_env.disambig,
+        k_env.kind,
+    );
     let s_env = FuncSummary {
         lang: "rust".into(),
         ..s_env
@@ -2389,10 +2440,15 @@ fn query_namespace_qualifier_resolves_env_var_style_call() {
         Some(2),
         0x02,
     );
-    let k_other = FuncKey {
-        lang: Lang::Rust,
-        ..k_other
-    };
+    let k_other = FuncKey::from_parts(
+        Lang::Rust,
+        k_other.namespace,
+        k_other.container,
+        k_other.name,
+        k_other.arity,
+        k_other.disambig,
+        k_other.kind,
+    );
     let s_other = FuncSummary {
         lang: "rust".into(),
         ..s_other
@@ -3281,13 +3337,15 @@ fn insert_body_param_count_mismatch_rekeys() {
     // replacing would lose the first body and mis-route future cross-
     // file symex resolutions to the second.
     let mut gs = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Python,
-        namespace: "mod.py".into(),
-        name: "run".into(),
-        arity: Some(2),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Python,
+        "mod.py",
+        String::new(),
+        "run",
+        Some(2),
+        None,
+        FuncKind::Function,
+    );
     gs.insert_body(key.clone(), make_callee_body(2, 2));
     // Incoming body with a different param_count, must not overwrite.
     gs.insert_body(key.clone(), make_callee_body(5, 4));
@@ -3300,11 +3358,15 @@ fn insert_body_param_count_mismatch_rekeys() {
     // Invariant 2: the conflicting body is preserved under a synthetic
     // disambig at its own arity, not dropped.
     let base = (4u32).wrapping_mul(0x9E37_79B9);
-    let synth_key = FuncKey {
-        arity: Some(4),
-        disambig: Some(0x8000_0000 | (base & 0x7FFF_FFFF)),
-        ..key.clone()
-    };
+    let synth_key = FuncKey::from_parts(
+        key.lang,
+        key.namespace.clone(),
+        key.container.clone(),
+        key.name.clone(),
+        Some(4),
+        Some(0x8000_0000 | (base & 0x7FFF_FFFF)),
+        key.kind,
+    );
     let conflicting = gs
         .get_body(&synth_key)
         .expect("the 4-param body must be preserved under a synthetic disambig key");
@@ -3317,13 +3379,15 @@ fn insert_ssa_arity_overflow_rekeys() {
     // param index 3, structurally impossible for the same function.
     // The fix must split so the key arity invariant is preserved.
     let mut gs = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Python,
-        namespace: "mod.py".into(),
-        name: "f".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Python,
+        "mod.py",
+        String::new(),
+        "f",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
 
     let legit = SsaFuncSummary {
         param_to_return: vec![(0, TaintTransform::Identity)],
@@ -3369,14 +3433,15 @@ fn insert_ssa_arity_overflow_keeps_original_key_when_no_collision() {
     // the synthetic-Param overflow is treated as the function's own
     // signal and lands at the original FuncKey.
     let mut gs = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Java,
-        namespace: "Reader.java".into(),
-        container: "Reader".into(),
-        name: "read".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Java,
+        "Reader.java",
+        "Reader",
+        "read",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
     let summary = SsaFuncSummary {
         // Synthetic Param-0 for the external `close` identifier inside
         // the static `read()` body, `param_count == 0` per the source-
@@ -3406,14 +3471,15 @@ fn insert_ssa_arity_overflow_keeps_original_key_when_no_collision() {
 #[test]
 fn insert_ssa_arity_overflow_iterative_rescan_stays_at_original_key() {
     let mut gs = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Java,
-        namespace: "Reader.java".into(),
-        container: "Reader".into(),
-        name: "read".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Java,
+        "Reader.java",
+        "Reader",
+        "read",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
     let round1 = SsaFuncSummary {
         param_to_return: vec![(0, TaintTransform::Identity)],
         typed_call_receivers: vec![(1, "FileHandle".to_string())],
@@ -3548,13 +3614,15 @@ fn func_summary_deserialize_legacy_param_to_sink_missing_defaults_empty() {
 #[test]
 fn merge_unions_sink_sites_with_dedup() {
     use smallvec::smallvec;
-    let key = FuncKey {
-        lang: Lang::Python,
-        namespace: "svc.py".into(),
-        name: "run".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Python,
+        "svc.py",
+        String::new(),
+        "run",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
 
     let site_a = SinkSite {
         file_rel: "svc.py".into(),
@@ -3797,13 +3865,15 @@ fn cf4_ssa_summary_fits_arity_keeps_out_of_range_path_idx_at_original_key() {
         param_return_paths: vec![(5, smallvec![rpt(TaintTransform::Identity, 1, 0, 0)])],
         ..Default::default()
     };
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "test.rs".into(),
-        name: "helper".into(),
-        arity: Some(2), // too small for idx 5, synthetic-Param marker
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "test.rs",
+        String::new(),
+        "helper",
+        Some(2), // too small for idx 5, synthetic-Param marker
+        None,
+        FuncKind::Function,
+    );
     let mut gs = GlobalSummaries::new();
     gs.insert_ssa(key.clone(), bad);
     let kept = gs
@@ -3875,13 +3945,15 @@ fn cf6_ssa_summary_fits_arity_keeps_out_of_range_points_to_idx_at_original_key()
         points_to: pts,
         ..Default::default()
     };
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "test.rs".into(),
-        name: "helper".into(),
-        arity: Some(2),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "test.rs",
+        String::new(),
+        "helper",
+        Some(2),
+        None,
+        FuncKind::Function,
+    );
     let mut gs = GlobalSummaries::new();
     gs.insert_ssa(key.clone(), bad);
     let kept = gs
@@ -3938,22 +4010,24 @@ fn cross_file_devirt_does_not_union_unrelated_findbyids() {
     let gs = merge_summaries(vec![safe_repo, unsafe_cache], None);
 
     // Two distinct keys must coexist, no merge collision.
-    let repo_key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "src/repo.rs".into(),
-        container: "Repository".into(),
-        name: "findById".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
-    let cache_key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "src/cache.rs".into(),
-        container: "UnsafeCache".into(),
-        name: "findById".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let repo_key = FuncKey::from_parts(
+        Lang::Rust,
+        "src/repo.rs",
+        "Repository",
+        "findById",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
+    let cache_key = FuncKey::from_parts(
+        Lang::Rust,
+        "src/cache.rs",
+        "UnsafeCache",
+        "findById",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
 
     let repo_sum = gs.get(&repo_key).expect("Repository::findById missing");
     let cache_sum = gs.get(&cache_key).expect("UnsafeCache::findById missing");
@@ -4652,15 +4726,15 @@ fn cross_package_imports_round_trip_via_global_summaries() {
     let mut map: std::collections::HashMap<String, FuncKey> = std::collections::HashMap::new();
     map.insert(
         "escape".to_string(),
-        FuncKey {
-            lang: Lang::TypeScript,
-            namespace: "packages/util/src/escape.ts".to_string(),
-            container: String::new(),
-            name: "escape".to_string(),
-            arity: None,
-            disambig: None,
-            kind: FuncKind::Function,
-        },
+        FuncKey::from_parts(
+            Lang::TypeScript,
+            "packages/util/src/escape.ts".to_string(),
+            String::new(),
+            "escape".to_string(),
+            None,
+            None,
+            FuncKind::Function,
+        ),
     );
     let arc = std::sync::Arc::new(map);
     gs.insert_cross_package_imports("apps/api/handler.ts".to_string(), arc.clone());
@@ -4691,15 +4765,15 @@ fn cross_package_imports_merged_across_thread_local_summaries() {
     let mut map_a: std::collections::HashMap<String, FuncKey> = std::collections::HashMap::new();
     map_a.insert(
         "escape".to_string(),
-        FuncKey {
-            lang: Lang::TypeScript,
-            namespace: "packages/util/src/escape.ts".to_string(),
-            container: String::new(),
-            name: "escape".to_string(),
-            arity: None,
-            disambig: None,
-            kind: FuncKind::Function,
-        },
+        FuncKey::from_parts(
+            Lang::TypeScript,
+            "packages/util/src/escape.ts".to_string(),
+            String::new(),
+            "escape".to_string(),
+            None,
+            None,
+            FuncKind::Function,
+        ),
     );
     gs_a.insert_cross_package_imports(
         "apps/api/handler_a.ts".to_string(),
@@ -4710,15 +4784,15 @@ fn cross_package_imports_merged_across_thread_local_summaries() {
     let mut map_b: std::collections::HashMap<String, FuncKey> = std::collections::HashMap::new();
     map_b.insert(
         "format".to_string(),
-        FuncKey {
-            lang: Lang::TypeScript,
-            namespace: "packages/util/src/format.ts".to_string(),
-            container: String::new(),
-            name: "format".to_string(),
-            arity: None,
-            disambig: None,
-            kind: FuncKind::Function,
-        },
+        FuncKey::from_parts(
+            Lang::TypeScript,
+            "packages/util/src/format.ts".to_string(),
+            String::new(),
+            "format".to_string(),
+            None,
+            None,
+            FuncKind::Function,
+        ),
     );
     gs_b.insert_cross_package_imports(
         "apps/api/handler_b.ts".to_string(),

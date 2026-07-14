@@ -7033,15 +7033,15 @@ pub(super) fn build_sub<'a>(
             tainted_sink_params.dedup();
 
             // ── 5) Store summary (entry/exit are body-local) ──────────────────
-            let key = FuncKey {
-                lang: Lang::from_slug(lang).unwrap_or(Lang::Rust),
-                namespace: file_path.to_owned(),
-                container: fn_container.clone(),
-                name: fn_name.clone(),
-                arity: Some(param_count),
-                disambig: fn_disambig,
-                kind: fn_kind,
-            };
+            let key = FuncKey::from_parts(
+                Lang::from_slug(lang).unwrap_or(Lang::Rust),
+                file_path.to_owned(),
+                fn_container.clone(),
+                fn_name.clone(),
+                Some(param_count),
+                fn_disambig,
+                fn_kind,
+            );
             let body_func_key = key.clone();
             summaries.insert(
                 key,

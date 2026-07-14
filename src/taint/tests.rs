@@ -460,13 +460,15 @@ fn cross_file_source_resolved_via_global_summaries() {
 
     // Build global summaries as if file A exported get_dangerous
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "file_a.rs".into(),
-        name: "get_dangerous".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "file_a.rs",
+        String::new(),
+        "get_dangerous",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -515,13 +517,15 @@ fn cross_file_sanitizer_resolved_via_global_summaries() {
     let local_summaries = &file_cfg.summaries;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "file_a.rs".into(),
-        name: "my_sanitize".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "file_a.rs",
+        String::new(),
+        "my_sanitize",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -593,13 +597,15 @@ fn cross_file_sink_resolved_via_global_summaries() {
     let local_summaries = &file_cfg.summaries;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "file_a.rs".into(),
-        name: "dangerous_exec".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "file_a.rs",
+        String::new(),
+        "dangerous_exec",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -651,13 +657,15 @@ fn cross_file_sink_finding_carries_primary_location() {
     let local_summaries = &file_cfg.summaries;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "file_a.rs".into(),
-        name: "dangerous_exec".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "file_a.rs",
+        String::new(),
+        "dangerous_exec",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     // Summary: param 0 (`cmd`) flows to a shell-exec sink at file_a.rs:42:5.
     let sink_site = SinkSite {
         file_rel: "file_a.rs".into(),
@@ -732,13 +740,15 @@ fn cross_file_sink_cap_only_site_leaves_primary_location_none() {
     let local_summaries = &file_cfg.summaries;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "file_a.rs".into(),
-        name: "dangerous_exec".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "file_a.rs",
+        String::new(),
+        "dangerous_exec",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -962,13 +972,15 @@ fn multi_file_passthrough_preserves_taint() {
     // identity() just returns its argument, it propagates taint but has no
     // source/sanitizer/sink caps of its own.
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "lib.rs".into(),
-        name: "identity".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "lib.rs",
+        String::new(),
+        "identity",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -1181,13 +1193,15 @@ fn local_summary_takes_precedence_over_global() {
     "#;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "other.rs".into(),
-        name: "my_func".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "other.rs",
+        String::new(),
+        "my_func",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -1287,13 +1301,15 @@ fn source_and_sink_on_same_function() {
     // Cross-file function that is both source AND sink.
     // Tainted arg hits sink → 1 finding.
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "lib.rs".into(),
-        name: "source_and_sink".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "lib.rs",
+        String::new(),
+        "source_and_sink",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -1347,13 +1363,15 @@ fn multiple_cross_file_sources_one_sanitised() {
 
     let mut global = GlobalSummaries::new();
     // Two cross-file sources
-    let key1 = FuncKey {
-        lang: Lang::Rust,
-        namespace: "lib.rs".into(),
-        name: "get_secret".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key1 = FuncKey::from_parts(
+        Lang::Rust,
+        "lib.rs",
+        String::new(),
+        "get_secret",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key1,
         FuncSummary {
@@ -1372,13 +1390,15 @@ fn multiple_cross_file_sources_one_sanitised() {
             ..Default::default()
         },
     );
-    let key2 = FuncKey {
-        lang: Lang::Rust,
-        namespace: "lib.rs".into(),
-        name: "get_other_secret".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key2 = FuncKey::from_parts(
+        Lang::Rust,
+        "lib.rs",
+        String::new(),
+        "get_other_secret",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key2,
         FuncSummary {
@@ -2155,13 +2175,15 @@ fn cross_lang_python_source_to_js_sink_via_interop() {
             callee_symbol: "get_input".into(),
             ordinal: 0,
         },
-        to: FuncKey {
-            lang: Lang::Python,
-            namespace: "lib.py".into(),
-            name: "get_input".into(),
-            arity: Some(0),
-            ..Default::default()
-        },
+        to: FuncKey::from_parts(
+            Lang::Python,
+            "lib.py",
+            String::new(),
+            "get_input",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
     }];
     let findings = analyse_file(
         &file_cfg,
@@ -2217,13 +2239,15 @@ fn cross_lang_go_source_to_python_sink_via_interop() {
             callee_symbol: "fetch_env".into(),
             ordinal: 0,
         },
-        to: FuncKey {
-            lang: Lang::Go,
-            namespace: "lib.go".into(),
-            name: "fetch_env".into(),
-            arity: Some(0),
-            ..Default::default()
-        },
+        to: FuncKey::from_parts(
+            Lang::Go,
+            "lib.go",
+            String::new(),
+            "fetch_env",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
     }];
     let findings = analyse_file(
         &file_cfg,
@@ -2266,13 +2290,15 @@ fn cross_lang_rust_sanitizer_in_js_via_interop() {
             callee_symbol: "clean_shell".into(),
             ordinal: 0,
         },
-        to: FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "clean_shell".into(),
-            arity: Some(1),
-            ..Default::default()
-        },
+        to: FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "clean_shell",
+            Some(1),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
     }];
     let findings = analyse_file(
         &file_cfg,
@@ -2316,13 +2342,15 @@ fn cross_lang_c_sink_called_from_java_via_interop() {
             callee_symbol: "run_cmd".into(),
             ordinal: 0,
         },
-        to: FuncKey {
-            lang: Lang::C,
-            namespace: "native.c".into(),
-            name: "run_cmd".into(),
-            arity: Some(1),
-            ..Default::default()
-        },
+        to: FuncKey::from_parts(
+            Lang::C,
+            "native.c",
+            String::new(),
+            "run_cmd",
+            Some(1),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
     }];
     let findings = analyse_file(
         &file_cfg,
@@ -2379,13 +2407,15 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 callee_symbol: "get_secret".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::Python,
-                namespace: "source.py".into(),
-                name: "get_secret".into(),
-                arity: Some(0),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::Python,
+                "source.py",
+                String::new(),
+                "get_secret",
+                Some(0),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
         InteropEdge {
             from: CallSiteKey {
@@ -2395,13 +2425,15 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 callee_symbol: "make_safe".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::Rust,
-                namespace: "lib.rs".into(),
-                name: "make_safe".into(),
-                arity: Some(1),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::Rust,
+                "lib.rs",
+                String::new(),
+                "make_safe",
+                Some(1),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
         InteropEdge {
             from: CallSiteKey {
@@ -2411,13 +2443,15 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 callee_symbol: "run_dangerous".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::C,
-                namespace: "native.c".into(),
-                name: "run_dangerous".into(),
-                arity: Some(1),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::C,
+                "native.c",
+                String::new(),
+                "run_dangerous",
+                Some(1),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
     ];
     let findings = analyse_file(
@@ -2468,13 +2502,15 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
                 callee_symbol: "get_secret".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::Python,
-                namespace: "source.py".into(),
-                name: "get_secret".into(),
-                arity: Some(0),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::Python,
+                "source.py",
+                String::new(),
+                "get_secret",
+                Some(0),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
         InteropEdge {
             from: CallSiteKey {
@@ -2484,13 +2520,15 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
                 callee_symbol: "run_dangerous".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::C,
-                namespace: "native.c".into(),
-                name: "run_dangerous".into(),
-                arity: Some(1),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::C,
+                "native.c",
+                String::new(),
+                "run_dangerous",
+                Some(1),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
     ];
     let findings = analyse_file(
@@ -2563,13 +2601,15 @@ fn cross_lang_ruby_passthrough_in_js_via_interop() {
     use crate::summary::FuncSummary;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Ruby,
-        namespace: "helper.rb".into(),
-        name: "transform".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Ruby,
+        "helper.rb",
+        String::new(),
+        "transform",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key.clone(),
         FuncSummary {
@@ -2657,13 +2697,15 @@ fn cross_lang_php_source_to_go_sink_via_interop() {
             callee_symbol: "read_input".into(),
             ordinal: 0,
         },
-        to: FuncKey {
-            lang: Lang::Php,
-            namespace: "input.php".into(),
-            name: "read_input".into(),
-            arity: Some(0),
-            ..Default::default()
-        },
+        to: FuncKey::from_parts(
+            Lang::Php,
+            "input.php",
+            String::new(),
+            "read_input",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
     }];
     let findings = analyse_file(
         &file_cfg,
@@ -2684,13 +2726,15 @@ fn cross_lang_wrong_sanitizer_still_flags_via_interop() {
     use crate::summary::FuncSummary;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Python,
-        namespace: "sanitizers.py".into(),
-        name: "html_clean".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Python,
+        "sanitizers.py",
+        String::new(),
+        "html_clean",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key.clone(),
         FuncSummary {
@@ -2832,13 +2876,15 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
                 callee_symbol: "dangerous_query".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::Python,
-                namespace: "db.py".into(),
-                name: "dangerous_query".into(),
-                arity: Some(0),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::Python,
+                "db.py",
+                String::new(),
+                "dangerous_query",
+                Some(0),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
         InteropEdge {
             from: CallSiteKey {
@@ -2848,13 +2894,15 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
                 callee_symbol: "run_query".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::JavaScript,
-                namespace: "db.js".into(),
-                name: "run_query".into(),
-                arity: Some(1),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::JavaScript,
+                "db.js",
+                String::new(),
+                "run_query",
+                Some(1),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
     ];
     let findings = analyse_file(
@@ -2882,13 +2930,15 @@ fn ambiguous_resolution_returns_none() {
     // Two same-lang functions, same name + arity, different namespaces
     let mut global = GlobalSummaries::new();
     for ns in &["a.rs", "b.rs"] {
-        let key = FuncKey {
-            lang: Lang::Rust,
-            namespace: (*ns).to_string(),
-            name: "helper".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let key = FuncKey::from_parts(
+            Lang::Rust,
+            (*ns).to_string(),
+            String::new(),
+            "helper",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         global.insert(
             key,
             FuncSummary {
@@ -2944,13 +2994,15 @@ fn exact_namespace_match_wins() {
     // Same name in two namespaces, but one matches caller's namespace
     let mut global = GlobalSummaries::new();
     // test.rs version: source
-    let key_local = FuncKey {
-        lang: Lang::Rust,
-        namespace: "test.rs".into(),
-        name: "helper".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key_local = FuncKey::from_parts(
+        Lang::Rust,
+        "test.rs",
+        String::new(),
+        "helper",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key_local,
         FuncSummary {
@@ -2970,13 +3022,15 @@ fn exact_namespace_match_wins() {
         },
     );
     // other.rs version: no caps
-    let key_other = FuncKey {
-        lang: Lang::Rust,
-        namespace: "other.rs".into(),
-        name: "helper".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key_other = FuncKey::from_parts(
+        Lang::Rust,
+        "other.rs",
+        String::new(),
+        "helper",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key_other,
         FuncSummary {
@@ -3030,13 +3084,15 @@ fn interop_edge_wrong_caller_lang_no_match() {
     use crate::summary::FuncSummary;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Python,
-        namespace: "lib.py".into(),
-        name: "get_data".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Python,
+        "lib.py",
+        String::new(),
+        "get_data",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key.clone(),
         FuncSummary {
@@ -3478,13 +3534,15 @@ fn per_arg_propagation_tainted_param_propagates() {
     // transform(a, b) only propagates param 0. Tainted value at param 0 → finding.
     let mut global = GlobalSummaries::new();
     global.insert(
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "transform".into(),
-            arity: Some(2),
-            ..Default::default()
-        },
+        FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "transform",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
         FuncSummary {
             name: "transform".into(),
             file_path: "lib.rs".into(),
@@ -3537,13 +3595,15 @@ fn per_arg_propagation_safe_at_propagating_position() {
     // transform(a, b) only propagates param 0. Tainted value at param 1 (non-propagating) → no finding.
     let mut global = GlobalSummaries::new();
     global.insert(
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "transform".into(),
-            arity: Some(2),
-            ..Default::default()
-        },
+        FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "transform",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
         FuncSummary {
             name: "transform".into(),
             file_path: "lib.rs".into(),
@@ -3597,13 +3657,15 @@ fn per_arg_propagation_legacy_backward_compat() {
     // Should fall back to all-uses propagation.
     let mut global = GlobalSummaries::new();
     global.insert(
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "legacy_pass".into(),
-            arity: Some(2),
-            ..Default::default()
-        },
+        FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "legacy_pass",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
         FuncSummary {
             name: "legacy_pass".into(),
             file_path: "lib.rs".into(),
@@ -3656,13 +3718,15 @@ fn per_arg_propagation_both_params_propagate() {
     // concat(a, b) propagates both params 0 and 1. Tainted at param 1 → finding.
     let mut global = GlobalSummaries::new();
     global.insert(
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "concat".into(),
-            arity: Some(2),
-            ..Default::default()
-        },
+        FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "concat",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
         FuncSummary {
             name: "concat".into(),
             file_path: "lib.rs".into(),
@@ -3716,13 +3780,15 @@ fn per_arg_propagation_literal_first_arg() {
     // The literal arg at position 0 has no identifiers, but positional mapping is still correct.
     let mut global = GlobalSummaries::new();
     global.insert(
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "transform".into(),
-            arity: Some(2),
-            ..Default::default()
-        },
+        FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "transform",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
         FuncSummary {
             name: "transform".into(),
             file_path: "lib.rs".into(),
@@ -3775,13 +3841,15 @@ fn per_arg_propagation_nested_expr_arg() {
     // Nested call in arg 0 doesn't affect arg 1 position.
     let mut global = GlobalSummaries::new();
     global.insert(
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "transform".into(),
-            arity: Some(2),
-            ..Default::default()
-        },
+        FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "transform",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
         FuncSummary {
             name: "transform".into(),
             file_path: "lib.rs".into(),

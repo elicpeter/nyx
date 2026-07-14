@@ -468,15 +468,15 @@ impl FuncSummary {
     /// Build a [`FuncKey`] from this summary, normalizing the namespace
     /// relative to `scan_root`.
     pub fn func_key(&self, scan_root: Option<&str>) -> FuncKey {
-        FuncKey {
-            lang: Lang::from_slug(&self.lang).unwrap_or(Lang::Rust),
-            namespace: normalize_namespace(&self.file_path, scan_root),
-            container: self.container.clone(),
-            name: self.name.clone(),
-            arity: Some(self.param_count),
-            disambig: self.disambig,
-            kind: self.kind,
-        }
+        FuncKey::from_parts(
+            Lang::from_slug(&self.lang).unwrap_or(Lang::Rust),
+            normalize_namespace(&self.file_path, scan_root),
+            self.container.clone(),
+            self.name.clone(),
+            Some(self.param_count),
+            self.disambig,
+            self.kind,
+        )
     }
 
     /// Phase-04 [`FuncKey`] builder that consults a project-wide
@@ -493,19 +493,15 @@ impl FuncSummary {
         scan_root: Option<&str>,
         module_graph: Option<&crate::resolve::ModuleGraph>,
     ) -> FuncKey {
-        FuncKey {
-            lang: Lang::from_slug(&self.lang).unwrap_or(Lang::Rust),
-            namespace: crate::symbol::namespace_with_package(
-                &self.file_path,
-                scan_root,
-                module_graph,
-            ),
-            container: self.container.clone(),
-            name: self.name.clone(),
-            arity: Some(self.param_count),
-            disambig: self.disambig,
-            kind: self.kind,
-        }
+        FuncKey::from_parts(
+            Lang::from_slug(&self.lang).unwrap_or(Lang::Rust),
+            crate::symbol::namespace_with_package(&self.file_path, scan_root, module_graph),
+            self.container.clone(),
+            self.name.clone(),
+            Some(self.param_count),
+            self.disambig,
+            self.kind,
+        )
     }
 }
 
@@ -725,7 +721,7 @@ impl GlobalSummaries {
             match self.by_key.get(&key) {
                 Some(existing) if !summaries_compatible(existing, summary) => {
                     let synth = synthesize_disambig(summary).wrapping_add(probe);
-                    key.disambig = Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT));
+                    key.set_disambig(Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT)));
                     probe = probe.wrapping_add(1);
                     if probe >= 1024 {
                         tracing::warn!(
@@ -763,7 +759,7 @@ impl GlobalSummaries {
                 return key;
             }
             let synth = synthesize_ssa_disambig(summary).wrapping_add(probe);
-            key.disambig = Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT));
+            key.set_disambig(Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT)));
             probe = probe.wrapping_add(1);
             if probe >= 1024 {
                 tracing::warn!(
@@ -801,8 +797,8 @@ impl GlobalSummaries {
             let synth = (body.param_count as u32)
                 .wrapping_mul(0x9E37_79B9)
                 .wrapping_add(probe);
-            key.disambig = Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT));
-            key.arity = Some(body.param_count);
+            key.set_disambig(Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT)));
+            key.set_arity(Some(body.param_count));
             probe = probe.wrapping_add(1);
             if probe >= 1024 {
                 tracing::warn!(
@@ -2308,13 +2304,15 @@ mod arity_leniency_tests {
     use crate::symbol::{FuncKey, Lang};
 
     fn py_func(name: &str, namespace: &str, param_count: usize) -> (FuncKey, FuncSummary) {
-        let key = FuncKey {
-            lang: Lang::Python,
-            namespace: namespace.into(),
-            name: name.into(),
-            arity: Some(param_count),
-            ..Default::default()
-        };
+        let key = FuncKey::from_parts(
+            Lang::Python,
+            namespace,
+            String::new(),
+            name,
+            Some(param_count),
+            None,
+            FuncKind::Function,
+        );
         let summary = FuncSummary {
             name: name.into(),
             file_path: namespace.into(),
@@ -2437,15 +2435,15 @@ mod namespace_qualifier_authority_tests {
     use crate::symbol::{FuncKey, FuncKind, Lang};
 
     fn rs_method(container: &str, name: &str, arity: usize) -> (FuncKey, FuncSummary) {
-        let key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "mod.rs".into(),
-            container: container.into(),
-            name: name.into(),
-            arity: Some(arity),
-            disambig: None,
-            kind: FuncKind::Method,
-        };
+        let key = FuncKey::from_parts(
+            Lang::Rust,
+            "mod.rs",
+            container,
+            name,
+            Some(arity),
+            None,
+            FuncKind::Method,
+        );
         let summary = FuncSummary {
             name: name.into(),
             file_path: "mod.rs".into(),

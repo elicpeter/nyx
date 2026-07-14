@@ -1278,20 +1278,24 @@ mod tests {
         assert_eq!(cg.graph.node_count(), 3);
 
         // Caller is in src/a.rs, so "helper" resolves to src/a.rs::helper
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/a.rs".into(),
-            name: "caller".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
-        let helper_a_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/a.rs".into(),
-            name: "helper".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/a.rs",
+            String::new(),
+            "caller",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
+        let helper_a_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/a.rs",
+            String::new(),
+            "helper",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
 
         let caller_node = cg.index[&caller_key];
         let helper_a_node = cg.index[&helper_a_key];
@@ -1321,20 +1325,24 @@ mod tests {
 
         assert_eq!(cg.graph.node_count(), 3);
 
-        let py_foo_key = FuncKey {
-            lang: Lang::Python,
-            namespace: "handler.py".into(),
-            name: "foo".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
-        let caller_key = FuncKey {
-            lang: Lang::Python,
-            namespace: "app.py".into(),
-            name: "main".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let py_foo_key = FuncKey::from_parts(
+            Lang::Python,
+            "handler.py",
+            String::new(),
+            "foo",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
+        let caller_key = FuncKey::from_parts(
+            Lang::Python,
+            "app.py",
+            String::new(),
+            "main",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
 
         let caller_node = cg.index[&caller_key];
         let py_foo_node = cg.index[&py_foo_key];
@@ -1358,20 +1366,24 @@ mod tests {
         // Two separate nodes (different arity → different FuncKey)
         assert_eq!(cg.graph.node_count(), 2);
 
-        let key1 = FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "helper".into(),
-            arity: Some(1),
-            ..Default::default()
-        };
-        let key2 = FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "helper".into(),
-            arity: Some(2),
-            ..Default::default()
-        };
+        let key1 = FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "helper",
+            Some(1),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
+        let key2 = FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "helper",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         assert!(cg.index.contains_key(&key1));
         assert!(cg.index.contains_key(&key2));
     }
@@ -1391,20 +1403,24 @@ mod tests {
         let analysis = analyse(&cg);
 
         // Both nodes should be in the same SCC
-        let key_a = FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "a".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
-        let key_b = FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "b".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let key_a = FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "a",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
+        let key_b = FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "b",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
 
         let scc_a = analysis.node_to_scc[&cg.index[&key_a]];
         let scc_b = analysis.node_to_scc[&cg.index[&key_b]];
@@ -1464,13 +1480,15 @@ mod tests {
 
         let analysis = analyse(&cg);
 
-        let key = |name: &str| FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: name.into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let key = |name: &str| FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            name,
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
 
         let scc_of = |name: &str| analysis.node_to_scc[&cg.index[&key(name)]];
         let topo_pos = |name: &str| {
@@ -1505,31 +1523,37 @@ mod tests {
                 callee_symbol: "js_func".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::JavaScript,
-                namespace: "util.js".into(),
-                name: "js_func".into(),
-                arity: Some(1),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::JavaScript,
+                "util.js",
+                String::new(),
+                "js_func",
+                Some(1),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         }];
 
         let cg = build_call_graph(&gs, &interop);
 
-        let caller_key = FuncKey {
-            lang: Lang::Python,
-            namespace: "handler.py".into(),
-            name: "process".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
-        let target_key = FuncKey {
-            lang: Lang::JavaScript,
-            namespace: "util.js".into(),
-            name: "js_func".into(),
-            arity: Some(1),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Python,
+            "handler.py",
+            String::new(),
+            "process",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
+        let target_key = FuncKey::from_parts(
+            Lang::JavaScript,
+            "util.js",
+            String::new(),
+            "js_func",
+            Some(1),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
 
         let caller_node = cg.index[&caller_key];
         let target_node = cg.index[&target_key];
@@ -1586,13 +1610,15 @@ mod tests {
         let gs = merge_summaries(vec![source, caller], None);
         let cg = build_call_graph(&gs, &[]);
 
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "util.rs".into(),
-            name: "main".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "util.rs",
+            String::new(),
+            "main",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         let caller_node = cg.index[&caller_key];
 
         let edges: Vec<_> = cg.graph.edges(caller_node).collect();
@@ -1964,20 +1990,24 @@ mod tests {
         let gs = merge_summaries(vec![send_http, send_mail, caller], None);
         let cg = build_call_graph(&gs, &[]);
 
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/main.rs".into(),
-            name: "caller".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
-        let send_http_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/http.rs".into(),
-            name: "send".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/main.rs",
+            String::new(),
+            "caller",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
+        let send_http_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/http.rs",
+            String::new(),
+            "send",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
 
         let caller_node = cg.index[&caller_key];
         let send_http_node = cg.index[&send_http_key];
@@ -2003,13 +2033,15 @@ mod tests {
         let gs = merge_summaries(vec![send_http, send_mail, caller], None);
         let cg = build_call_graph(&gs, &[]);
 
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/main.rs".into(),
-            name: "caller".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/main.rs",
+            String::new(),
+            "caller",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         let caller_node = cg.index[&caller_key];
 
         // Unqualified "send" → still ambiguous (no edge)
@@ -2086,20 +2118,24 @@ mod tests {
         let gs = merge_summaries(vec![encode1, encode2, caller], None);
         let cg = build_call_graph(&gs, &[]);
 
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/main.rs".into(),
-            name: "driver".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
-        let encode2_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/codec.rs".into(),
-            name: "encode".into(),
-            arity: Some(2),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/main.rs",
+            String::new(),
+            "driver",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
+        let encode2_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/codec.rs",
+            String::new(),
+            "encode",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         let caller_node = cg.index[&caller_key];
         let encode2_node = cg.index[&encode2_key];
         let edges: Vec<_> = cg.graph.edges(caller_node).collect();
@@ -2157,21 +2193,24 @@ mod tests {
         let gs = merge_summaries(vec![fs_order, fs_user, caller], None);
         let cg = build_call_graph(&gs, &[]);
 
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/main.rs".into(),
-            name: "main".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
-        let order_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/app.rs".into(),
-            container: "OrderService".into(),
-            name: "process".into(),
-            arity: Some(1),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/main.rs",
+            String::new(),
+            "main",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
+        let order_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/app.rs",
+            "OrderService",
+            "process",
+            Some(1),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         let caller_node = cg.index[&caller_key];
         let order_node = cg.index[&order_key];
         let edges: Vec<_> = cg.graph.edges(caller_node).collect();
@@ -2206,20 +2245,24 @@ mod tests {
         let gs = merge_summaries(vec![var_env, var_local, caller], None);
         let cg = build_call_graph(&gs, &[]);
 
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/main.rs".into(),
-            name: "main".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
-        let env_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/env.rs".into(),
-            name: "var".into(),
-            arity: Some(1),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/main.rs",
+            String::new(),
+            "main",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
+        let env_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/env.rs",
+            String::new(),
+            "var",
+            Some(1),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         let caller_node = cg.index[&caller_key];
         let env_node = cg.index[&env_key];
         let edges: Vec<_> = cg.graph.edges(caller_node).collect();
@@ -2418,13 +2461,15 @@ mod tests {
 
         let mut gs = merge_summaries(vec![repo, cache, caller], None);
 
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/main.rs".into(),
-            name: "lookup".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/main.rs",
+            String::new(),
+            "lookup",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         gs.insert_ssa(
             caller_key.clone(),
             SsaFuncSummary {
@@ -2435,14 +2480,15 @@ mod tests {
 
         let cg = build_call_graph(&gs, &[]);
 
-        let repo_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/repo.rs".into(),
-            container: "Repository".into(),
-            name: "findById".into(),
-            arity: Some(1),
-            ..Default::default()
-        };
+        let repo_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/repo.rs",
+            "Repository",
+            "findById",
+            Some(1),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         let caller_node = cg.index[&caller_key];
         let repo_node = cg.index[&repo_key];
 
@@ -2489,13 +2535,15 @@ mod tests {
 
         let mut gs = merge_summaries(vec![worker, caller], None);
 
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/main.rs".into(),
-            name: "drive".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/main.rs",
+            String::new(),
+            "drive",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         gs.insert_ssa(
             caller_key.clone(),
             SsaFuncSummary {
@@ -2620,13 +2668,15 @@ mod tests {
         );
 
         let mut gs = merge_summaries(vec![user_repo, cache_repo, iface_marker, caller], None);
-        let caller_key = FuncKey {
-            lang: Lang::Java,
-            namespace: "src/main.java".into(),
-            name: "lookup".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Java,
+            "src/main.java",
+            String::new(),
+            "lookup",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         gs.insert_ssa(
             caller_key.clone(),
             SsaFuncSummary {
@@ -2675,13 +2725,15 @@ mod tests {
         );
 
         let mut gs = merge_summaries(vec![base, derived, caller], None);
-        let caller_key = FuncKey {
-            lang: Lang::Java,
-            namespace: "src/main.java".into(),
-            name: "go".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Java,
+            "src/main.java",
+            String::new(),
+            "go",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         gs.insert_ssa(
             caller_key.clone(),
             SsaFuncSummary {
@@ -2736,13 +2788,15 @@ mod tests {
         );
 
         let mut gs = merge_summaries(vec![user_repo, cache_repo, hierarchy_carrier, caller], None);
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/main.rs".into(),
-            name: "lookup".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/main.rs",
+            String::new(),
+            "lookup",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         gs.insert_ssa(
             caller_key.clone(),
             SsaFuncSummary {
@@ -2791,13 +2845,15 @@ mod tests {
         let mut gs = merge_summaries(vec![repo, cache, caller], None);
         // No hierarchy_edges set anywhere, Repository has no
         // sub-types, so devirtualisation collapses to direct match.
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/main.rs".into(),
-            name: "lookup".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/main.rs",
+            String::new(),
+            "lookup",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         gs.insert_ssa(
             caller_key.clone(),
             SsaFuncSummary {
@@ -2847,13 +2903,15 @@ mod tests {
         );
 
         let mut gs = merge_summaries(vec![user_repo, cache_repo, h, caller], None);
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/main.rs".into(),
-            name: "lookup".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/main.rs",
+            String::new(),
+            "lookup",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         // Caller types the receiver as `UserRepo` (concrete).
         // `subs_of(Lang::Rust, "UserRepo")` returns `[]` so the
         // hierarchy expansion is a no-op and only `UserRepo::findById`
@@ -2916,13 +2974,15 @@ mod tests {
         );
 
         let mut gs = merge_summaries(vec![a, b, h1, h2, caller], None);
-        let caller_key = FuncKey {
-            lang: Lang::Java,
-            namespace: "src/main.java".into(),
-            name: "go".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Java,
+            "src/main.java",
+            String::new(),
+            "go",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         gs.insert_ssa(
             caller_key.clone(),
             SsaFuncSummary {
@@ -2977,13 +3037,15 @@ mod tests {
         );
 
         let mut gs = merge_summaries(vec![base, h, caller], None);
-        let caller_key = FuncKey {
-            lang: Lang::Java,
-            namespace: "src/main.java".into(),
-            name: "go".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Java,
+            "src/main.java",
+            String::new(),
+            "go",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         gs.insert_ssa(
             caller_key.clone(),
             SsaFuncSummary {
@@ -3035,13 +3097,15 @@ mod tests {
 
         let mut gs = merge_summaries(vec![helper, caller], None);
 
-        let caller_key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/lib.rs".into(),
-            name: "main".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let caller_key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/lib.rs",
+            String::new(),
+            "main",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         // A typed_call_receivers entry with ordinal=0, but since the
         // site has receiver=None, this MUST be ignored.
         gs.insert_ssa(
@@ -3074,13 +3138,15 @@ mod tests {
         let gs = merge_summaries(vec![handle, process, sink], None);
         let cg = build_call_graph(&gs, &[]);
 
-        let sink_key = FuncKey {
-            lang: Lang::Python,
-            namespace: "helper.py".into(),
-            name: "sink".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let sink_key = FuncKey::from_parts(
+            Lang::Python,
+            "helper.py",
+            String::new(),
+            "sink",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         let transitive = callers_transitive(&cg, &sink_key);
         let caller_names: std::collections::HashSet<String> =
             transitive.iter().map(|k| k.name.clone()).collect();
@@ -3103,13 +3169,15 @@ mod tests {
         let leaf = make_summary("leaf", "a.py", "python", 0, vec![]);
         let gs = merge_summaries(vec![leaf], None);
         let cg = build_call_graph(&gs, &[]);
-        let ghost = FuncKey {
-            lang: Lang::Python,
-            namespace: "nowhere.py".into(),
-            name: "ghost".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let ghost = FuncKey::from_parts(
+            Lang::Python,
+            "nowhere.py",
+            String::new(),
+            "ghost",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         assert!(callers_transitive(&cg, &ghost).is_empty());
     }
 

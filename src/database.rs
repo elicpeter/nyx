@@ -3646,15 +3646,15 @@ fn cross_package_imports_round_trip_via_replace_all_for_file() {
     let mut imports: std::collections::HashMap<String, FuncKey> = std::collections::HashMap::new();
     imports.insert(
         "escape".to_string(),
-        FuncKey {
-            lang: Lang::TypeScript,
-            namespace: "packages/util/src/escape.ts".to_string(),
-            container: String::new(),
-            name: "escape".to_string(),
-            arity: None,
-            disambig: None,
-            kind: FuncKind::Function,
-        },
+        FuncKey::from_parts(
+            Lang::TypeScript,
+            "packages/util/src/escape.ts",
+            String::new(),
+            "escape",
+            None,
+            None,
+            FuncKind::Function,
+        ),
     );
 
     idx.replace_all_for_file(&f, &hash, &[], &[], &[], &[], Some(("caller.ts", &imports)))

@@ -470,15 +470,15 @@ pub fn build_cross_package_func_keys(
             .unwrap_or(caller_lang);
         let abs = resolved_file.to_string_lossy();
         let namespace = crate::symbol::namespace_with_package(&abs, scan_root, module_graph);
-        let key = FuncKey {
-            lang: target_lang,
+        let key = FuncKey::from_parts(
+            target_lang,
             namespace,
-            container: String::new(),
-            name: exported_name.clone(),
-            arity: None,
-            disambig: None,
-            kind: FuncKind::Function,
-        };
+            String::new(),
+            exported_name.clone(),
+            None,
+            None,
+            FuncKind::Function,
+        );
         out.insert(binding.local_name.clone(), key);
     }
     out
@@ -1084,7 +1084,7 @@ fn analyse_body_with_seed(
         && body.meta.kind == crate::cfg::BodyKind::NamedFunction
         && body.meta.func_key.as_ref().is_some_and(|k| {
             let mut k = k.clone();
-            k.namespace = namespace.to_string();
+            k.set_namespace(namespace);
             ssa_summaries
                 .and_then(|m| m.get(&k))
                 .is_some_and(|s| s.entry_kind.is_some())
@@ -1104,7 +1104,7 @@ fn analyse_body_with_seed(
         && body.meta.kind == crate::cfg::BodyKind::NamedFunction
         && body.meta.func_key.as_ref().is_some_and(|k| {
             let mut k = k.clone();
-            k.namespace = namespace.to_string();
+            k.set_namespace(namespace);
             ssa_summaries.and_then(|m| m.get(&k)).is_some_and(|s| {
                 matches!(
                     s.entry_kind,
@@ -1135,7 +1135,7 @@ fn analyse_body_with_seed(
             .any(|captured| *captured)
         && body.meta.func_key.as_ref().is_some_and(|k| {
             let mut k = k.clone();
-            k.namespace = namespace.to_string();
+            k.set_namespace(namespace);
             ssa_summaries.and_then(|m| m.get(&k)).is_some_and(|s| {
                 matches!(
                     s.entry_kind,
@@ -1166,7 +1166,7 @@ fn analyse_body_with_seed(
             .any(|captured| *captured)
         && body.meta.func_key.as_ref().is_some_and(|k| {
             let mut k = k.clone();
-            k.namespace = namespace.to_string();
+            k.set_namespace(namespace);
             ssa_summaries.and_then(|m| m.get(&k)).is_some_and(|s| {
                 matches!(
                     s.entry_kind,
@@ -1200,7 +1200,7 @@ fn analyse_body_with_seed(
             || body.meta.param_types.iter().any(|t| t.is_some()))
         && body.meta.func_key.as_ref().is_some_and(|k| {
             let mut k = k.clone();
-            k.namespace = namespace.to_string();
+            k.set_namespace(namespace);
             ssa_summaries.and_then(|m| m.get(&k)).is_some_and(|s| {
                 matches!(
                     s.entry_kind,
@@ -1245,7 +1245,7 @@ fn analyse_body_with_seed(
             // type-qualified label resolution.
             let body_entry_kind = body.meta.func_key.as_ref().and_then(|k| {
                 let mut k = k.clone();
-                k.namespace = namespace.to_string();
+                k.set_namespace(namespace);
                 ssa_summaries
                     .and_then(|m| m.get(&k))
                     .and_then(|s| s.entry_kind.clone())
@@ -1980,15 +1980,15 @@ fn lookup_canonical_func_key(
     {
         return name_only.clone();
     }
-    FuncKey {
+    FuncKey::from_parts(
         lang,
-        namespace: namespace.to_string(),
-        container: String::new(),
-        name: func_name.to_string(),
-        arity: Some(param_count),
-        disambig: None,
-        kind: FuncKind::Function,
-    }
+        namespace.to_string(),
+        String::new(),
+        func_name.to_string(),
+        Some(param_count),
+        None,
+        FuncKind::Function,
+    )
 }
 
 /// Extract precise SSA function summaries for all functions in a file.
@@ -2246,7 +2246,7 @@ fn lower_all_functions_from_bodies_inner(
         let mut key = body.meta.func_key.clone().unwrap_or_else(|| {
             lookup_canonical_func_key(local_summaries, lang, namespace, &func_name, param_count)
         });
-        key.namespace = namespace.to_string();
+        key.set_namespace(namespace);
 
         // Run the extractor even for zero-param functions so factories
         // (`returns_fresh_alloc = true`) emit a summary the caller can
@@ -2508,7 +2508,7 @@ fn rerun_extraction_with_augmented_summaries(
             continue;
         };
         let mut key = parent_key;
-        key.namespace = namespace.to_string();
+        key.set_namespace(namespace);
 
         let Some(callee) = bodies.get(&key) else {
             continue;
@@ -2686,7 +2686,7 @@ fn augment_summaries_with_child_sinks(
             continue;
         };
         let mut parent_key = parent_key;
-        parent_key.namespace = namespace.to_string();
+        parent_key.set_namespace(namespace);
 
         let Some(parent_callee) = bodies.get(&parent_key) else {
             continue;
@@ -2800,7 +2800,7 @@ fn augment_summaries_with_child_sinks(
                     continue;
                 };
                 let mut child_key = child_key;
-                child_key.namespace = namespace.to_string();
+                child_key.set_namespace(namespace);
                 let Some(child_callee) = bodies.get(&child_key) else {
                     continue;
                 };

@@ -1510,13 +1510,15 @@ mod tests {
     }
 
     fn make_func_key(name: &str, arity: usize) -> FuncKey {
-        FuncKey {
-            lang: Lang::JavaScript,
-            namespace: "helper.js".into(),
-            name: name.into(),
-            arity: Some(arity),
-            ..Default::default()
-        }
+        FuncKey::from_parts(
+            Lang::JavaScript,
+            "helper.js",
+            String::new(),
+            name,
+            Some(arity),
+            None,
+            crate::symbol::FuncKind::Function,
+        )
     }
 
     /// Insert both a regular FuncSummary (for resolve_callee_key lookup) and
@@ -1997,13 +1999,15 @@ mod tests {
         arity: usize,
         ssa: SsaFuncSummary,
     ) {
-        let key = FuncKey {
-            lang: Lang::Java,
-            namespace: namespace.into(),
-            name: name.into(),
-            arity: Some(arity),
-            ..Default::default()
-        };
+        let key = FuncKey::from_parts(
+            Lang::Java,
+            namespace,
+            String::new(),
+            name,
+            Some(arity),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         gs.insert(
             key.clone(),
             FuncSummary {

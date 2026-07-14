@@ -245,10 +245,15 @@ mod inline_cache_epoch_tests {
     use smallvec::SmallVec;
 
     fn key(name: &str) -> FuncKey {
-        FuncKey {
-            name: name.into(),
-            ..Default::default()
-        }
+        FuncKey::from_parts(
+            crate::symbol::Lang::Rust,
+            String::new(),
+            String::new(),
+            name,
+            None,
+            None,
+            crate::symbol::FuncKind::Function,
+        )
     }
 
     fn sig() -> ArgTaintSig {
