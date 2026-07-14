@@ -551,6 +551,80 @@ pub(super) fn classify_param_type<'a>(
         "javascript" | "js" => classify_param_type_ts(param, code),
         "rust" | "rs" => classify_param_type_rust(param, code),
         "python" | "py" => classify_param_type_python(param, code),
+        "go" => classify_param_type_go(param, code),
+        _ => None,
+    }
+}
+
+/// Go: recognise a **generic (non-response) writer** parameter from its
+/// declared static type and tag it [`TypeKind::FileHandle`].
+///
+/// The single motivating consumer is the Go `fmt.Fprintf` XSS gate in
+/// `taint::ssa_transfer` (via
+/// [`crate::ssa::type_facts::GoInterfaceTable::definitely_not`]).
+/// `fmt.Fprintf(w, fmt, args...)` is modelled as an `HTML_ESCAPE` (reflected
+/// XSS) sink because `w` is *often* an `http.ResponseWriter`.  When `w` is
+/// instead declared as a generic byte writer (`io.Writer`, `io.WriteCloser`,
+/// a `*bytes.Buffer`, a `*strings.Builder`, an `*os.File`, a `bufio.Writer`,
+/// ...), the formatted bytes never reach an HTTP client, so the finding is a
+/// false positive.  Tagging the parameter `FileHandle` — which
+/// `GoInterfaceTable::definitely_not(FileHandle, "http.ResponseWriter")`
+/// already reports as provably-not-a-ResponseWriter — makes the existing gate
+/// strip `HTML_ESCAPE` at the sink.
+///
+/// A *real* reflected-XSS handler declares its writer explicitly as
+/// `http.ResponseWriter` (or a framework response type).  Those are left
+/// untyped here so the gate's conservative unknown-type path keeps firing —
+/// i.e. this recogniser only ever *suppresses* the FP family, never the TP.
+///
+/// Precision/recall note: an `io.Writer` parameter *could* dynamically be
+/// bound to an `http.ResponseWriter` at some call site (an interprocedural
+/// XSS via a generic write-helper).  We accept that residual recall loss:
+/// idiomatic Go response handlers take `http.ResponseWriter` directly, and
+/// the FP volume from buffer / pipe / file / doc-gen writers dominates.
+/// `FileHandle` is not in the `Int | Bool` set consulted by
+/// `is_type_safe_for_sink`, and Go has no `FileHandle.*` type-qualified
+/// method rules, so the tag has no effect outside the ResponseWriter gate.
+///
+/// Motivated by prometheus `util/documentcli/documentcli.go`
+/// (`func GenerateMarkdown(model, writer io.Writer)` → `fmt.Fprintf(writer,
+/// ...)`) and the gitea `*bytes.Buffer` / `*os.File` write helpers.
+fn classify_param_type_go<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeKind> {
+    if param.kind() != "parameter_declaration"
+        && param.kind() != "variadic_parameter_declaration"
+    {
+        return None;
+    }
+    let type_node = param.child_by_field_name("type")?;
+    let type_text = text_of(type_node, code)?;
+    go_writer_type_to_kind(&type_text)
+}
+
+/// Map a Go parameter / local type-text to [`TypeKind::FileHandle`] when the
+/// head names a generic byte writer that is provably not an
+/// `http.ResponseWriter`.  Strips a leading pointer marker (`*`) and
+/// surrounding whitespace, then matches the qualified type name.  Returns
+/// `None` for `http.ResponseWriter` and every unrecognised type so the sink
+/// gate stays conservative.
+pub(super) fn go_writer_type_to_kind(t: &str) -> Option<TypeKind> {
+    let head = t.trim().trim_start_matches('*').trim();
+    match head {
+        // Generic writer interfaces — a bare `io.Writer` is written to be
+        // destination-agnostic; a reflected-XSS handler would name
+        // `http.ResponseWriter` explicitly.
+        "io.Writer"
+        | "io.WriteCloser"
+        | "io.ReadWriteCloser"
+        | "io.ReadWriter"
+        // Concrete in-memory / local byte sinks — never an HTTP response.
+        | "bytes.Buffer"
+        | "strings.Builder"
+        | "os.File"
+        | "bufio.Writer"
+        | "bufio.ReadWriter"
+        | "tabwriter.Writer"
+        | "gzip.Writer"
+        | "zlib.Writer" => Some(TypeKind::FileHandle),
         _ => None,
     }
 }

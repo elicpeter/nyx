@@ -901,6 +901,22 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
                 Some(TypeKind::DatabaseConnection)
             } else if callee.contains("os.") && matches!(suffix, "Open" | "Create" | "OpenFile") {
                 Some(TypeKind::FileHandle)
+            } else if callee.contains("bytes.")
+                && matches!(suffix, "NewBuffer" | "NewBufferString")
+            {
+                // In-memory byte buffers (`bytes.NewBuffer(nil)` /
+                // `bytes.NewBufferString("")`).  Tagged `FileHandle` so a
+                // `fmt.Fprintf(buf, ...)` into the buffer is recognised as a
+                // non-response (non-XSS) write by the Go ResponseWriter gate —
+                // same rationale as `classify_param_type_go`.  gitea's
+                // git-index write helpers build a `*bytes.Buffer` and stream
+                // it to `git update-index` stdin.
+                Some(TypeKind::FileHandle)
+            } else if callee.contains("bufio.")
+                && matches!(suffix, "NewWriter" | "NewWriterSize" | "NewReadWriter")
+            {
+                // Buffered writers wrapping an underlying stream/file.
+                Some(TypeKind::FileHandle)
             } else if callee.contains("url.") && suffix == "Parse" {
                 Some(TypeKind::Url)
             } else if callee.contains("ldap.") && matches!(suffix, "Dial" | "DialURL" | "DialTLS") {
