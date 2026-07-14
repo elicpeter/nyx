@@ -532,6 +532,215 @@ fn confined_params_from_collapsed_assert_group(
     result
 }
 
+/// Detect a *return-value path-prefix confiner* (CVE-2020-5221, uftpd).
+///
+/// Recognises a function whose *every* non-null return is guarded by a C
+/// prefix-containment check (`strncmp(rv, prefix, strlen(prefix))`) on the
+/// *returned* value, so any non-null path it returns is provably contained
+/// under a fixed directory prefix.  Consumed at the call site by
+/// `apply_call_return_confinement`, which clears [`Cap::FILE_IO`] from the
+/// call result.
+///
+/// This is the interprocedural analogue of the intra-function
+/// [`crate::taint::path_state::PredicateKind::PathPrefixConfined`] narrowing.
+/// The runtime narrowing clears `FILE_IO` from the confined *value* on the
+/// surviving branch, but in the uftpd shape the returned `rpath` is a `static`
+/// buffer written by a condition-embedded `realpath(dir, rpath)` — which lowers
+/// to a `nop`, so `rpath` never joins the tainted-parameter SSA chain.  The
+/// summary's return-caps then come from the param-taint fallback (the source
+/// parameter's `Cap::all`, re-attributed to the return), which the branch
+/// narrowing on `rpath` never touches.  Recording the confinement as a summary
+/// post-condition carries it across the return into the caller.
+///
+/// The vulnerable uftpd form `strncmp(dir, home, …)` confines a *different* var
+/// (`dir`) than the returned `rpath`, so `subject != return-value name` and
+/// this returns `false` — the exact bug/fix discriminator.  Conservative: a
+/// single non-null return that is not confined means the function can leak an
+/// unconfined path, so it is not a confiner.
+///
+/// A second, *transitive* case handles the thin-wrapper hop the uftpd flow
+/// routes through (`compose_abspath` just `return compose_path(...)`): a
+/// non-null return whose value is a call to a callee that itself
+/// `confines_path_return` is also confined.  This case fires only in the
+/// augmented re-extraction pass (where `ssa_summaries` carries the callee's
+/// first-pass flag); the merge back into the persisted summary is via
+/// `merge_sink_fields`.
+pub(crate) fn detect_path_confined_return(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    ssa_summaries: Option<
+        &HashMap<crate::symbol::FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+    >,
+    lang: Lang,
+) -> bool {
+    use crate::taint::path_state::{PredicateKind, classify_condition_with_target};
+
+    // Confined edges: for each `PathPrefixConfined` branch, the block reached
+    // when the prefix check *passes* (`strncmp == 0`), paired with the confined
+    // subject name.  The passing edge is the FALSE block (the reject sits in the
+    // `if (strncmp(...)) return NULL;` body), inverted under a leading `!`
+    // (`condition_negated`) — mirroring the runtime `apply_branch_predicates`
+    // polarity for `PredicateKind::PathPrefixConfined`.
+    let mut confined_edges: SmallVec<[(crate::ssa::ir::BlockId, String); 4]> = SmallVec::new();
+    for block in &ssa.blocks {
+        let Terminator::Branch {
+            cond,
+            true_blk,
+            false_blk,
+            ..
+        } = &block.terminator
+        else {
+            continue;
+        };
+        let Some(cond_info) = cfg.node_weight(*cond) else {
+            continue;
+        };
+        let Some(text) = cond_info.condition_text.as_deref() else {
+            continue;
+        };
+        let (kind, target) = classify_condition_with_target(text);
+        if kind != PredicateKind::PathPrefixConfined {
+            continue;
+        }
+        let Some(subject) = target else {
+            continue;
+        };
+        let confined_blk = if cond_info.condition_negated {
+            *true_blk
+        } else {
+            *false_blk
+        };
+        confined_edges.push((confined_blk, subject));
+    }
+
+    // NB: do not early-return when `confined_edges` is empty — a thin wrapper
+    // (`return compose_path(...)`) has no `strncmp` branch of its own yet is
+    // still a confiner via the transitive passthrough case below.
+
+    let mut confined_any = false;
+    for block in &ssa.blocks {
+        let Terminator::Return(Some(rv)) = &block.terminator else {
+            continue;
+        };
+        // NULL / constant rejection returns carry no path taint — skip.
+        if rv_traces_to_constant(ssa, *rv, &HashSet::new(), 0, &mut 256) {
+            continue;
+        }
+        // Transitive passthrough: `return confining_helper(...)`.
+        if return_block_is_confining_passthrough(ssa, block, *rv, ssa_summaries, lang) {
+            confined_any = true;
+            continue;
+        }
+        let Some(name) = return_value_subject_name(ssa, *rv) else {
+            return false;
+        };
+        let confined = confined_edges
+            .iter()
+            .any(|(blk, subj)| *blk == block.id && *subj == name);
+        if !confined {
+            return false;
+        }
+        confined_any = true;
+    }
+    confined_any
+}
+
+/// Whether a return block is a thin-wrapper passthrough of a
+/// `confines_path_return` helper (`return compose_path(...)`), resolved against
+/// the intra-file `ssa_summaries` map by same-language bare callee name.  Fires
+/// only in the augmented re-extraction pass (`ssa_summaries` present).
+///
+/// Two forms:
+///  1. the return value traces (through single-operand `Assign` copies) to a
+///     `Call` op — the clean, pre-optimisation shape; and
+///  2. the return value is a disconnected `Nop` (the SSA optimiser rewrites
+///     `v = assign(call_result); return v` to `v = nop; return v`, severing the
+///     use-def link to the call), in which case the return block's body is
+///     scanned for a confining `Call`.  Sound because it always resolves the
+///     *callee's* `confines_path_return` flag: a wrapper of a non-confiner (the
+///     vulnerable uftpd form where `compose_path` confines `dir`, not the
+///     returned `rpath`) stays unconfined.
+fn return_block_is_confining_passthrough(
+    ssa: &SsaBody,
+    block: &crate::ssa::ir::SsaBlock,
+    rv: SsaValue,
+    ssa_summaries: Option<
+        &HashMap<crate::symbol::FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+    >,
+    lang: Lang,
+) -> bool {
+    let Some(map) = ssa_summaries else {
+        return false;
+    };
+    let callee_confines = |callee: &str, callee_text: Option<&str>| -> bool {
+        let bare = crate::labels::bare_method_name(callee_text.unwrap_or(callee));
+        map.iter()
+            .any(|(key, sum)| key.lang == lang && key.name == bare && sum.confines_path_return)
+    };
+
+    // Form 1: return value traces to a Call.
+    let mut cur = rv;
+    let mut hops = 0;
+    loop {
+        match op_for_value(ssa, cur) {
+            Some(SsaOp::Assign(uses)) if uses.len() == 1 && hops < 8 => {
+                cur = uses[0];
+                hops += 1;
+            }
+            Some(SsaOp::Call {
+                callee,
+                callee_text,
+                ..
+            }) => {
+                return callee_confines(callee, callee_text.as_deref());
+            }
+            // Form 2: the return value is a disconnected `Nop` (optimiser
+            // artifact).  Scan this block's body for a confining Call.
+            Some(SsaOp::Nop) | None => {
+                return block.body.iter().any(|inst| {
+                    if let SsaOp::Call {
+                        callee,
+                        callee_text,
+                        ..
+                    } = &inst.op
+                    {
+                        callee_confines(callee, callee_text.as_deref())
+                    } else {
+                        false
+                    }
+                });
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Trace a return value through single-operand `Assign` copies to the name of
+/// the returned storage.  `return rpath` lowers to `Assign(rpath_val)` where
+/// the `rpath` name lives on the copied value, so the first hop reveals it.
+/// Returns the first `var_name` found, or `None` for a bare temporary /
+/// constant return with no name.
+fn return_value_subject_name(ssa: &SsaBody, rv: SsaValue) -> Option<String> {
+    let mut cur = rv;
+    let mut hops = 0;
+    loop {
+        if let Some(name) = ssa
+            .value_defs
+            .get(cur.0 as usize)
+            .and_then(|vd| vd.var_name.as_deref())
+        {
+            return Some(name.to_string());
+        }
+        match op_for_value(ssa, cur) {
+            Some(SsaOp::Assign(uses)) if uses.len() == 1 && hops < 8 => {
+                cur = uses[0];
+                hops += 1;
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// Detect a *relative-URL confiner*: a helper whose return value is provably a
 /// same-origin (relative) URL, so redirecting to it cannot leave the trusted
 /// origin.
@@ -1511,6 +1720,13 @@ pub fn extract_ssa_func_summary_full(
     let sanitizes_open_redirect_return =
         detect_open_redirect_normalizer(ssa, cfg, &param_index_of);
 
+    // Return-value path-prefix confinement (CVE-2020-5221, uftpd): a function
+    // whose every non-null return is guarded by `strncmp(rv, prefix,
+    // strlen(prefix))` on the *returned* value.  Carries the intra-function
+    // `PathPrefixConfined` narrowing across the interprocedural return the
+    // static-buffer/param-fallback shape otherwise defeats.
+    let confines_path_return = detect_path_confined_return(ssa, cfg, ssa_summaries, lang);
+
     SsaFuncSummary {
         param_to_return,
         param_to_sink,
@@ -1542,6 +1758,7 @@ pub fn extract_ssa_func_summary_full(
         confines_path_params,
         asserts_path_confined_params,
         sanitizes_open_redirect_return,
+        confines_path_return,
         // Phase-10 entry-point classification is attached post-extraction
         // by `taint::lower_all_functions_from_bodies` (which has access
         // to `FileCfg::entry_kinds`).  Empty here means the extractor

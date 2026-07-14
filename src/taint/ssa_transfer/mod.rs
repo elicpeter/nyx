@@ -45,6 +45,7 @@ pub(crate) use state::{
     push_origin_bounded, record_engine_note, reset_body_engine_notes, take_body_engine_notes,
 };
 pub use summary_extract::{extract_ssa_func_summary, extract_ssa_func_summary_full};
+pub(crate) use summary_extract::detect_path_confined_return;
 
 use crate::abstract_interp::AbstractState;
 use crate::callgraph::{callee_container_hint, callee_leaf_name};
@@ -1201,6 +1202,11 @@ pub(super) fn transfer_block(
         // clearing lands on the args' current caps, and *before* the same
         // block's later sink call (`streamContent(path, …)`) reads them.
         apply_call_post_confinement(inst, ssa, transfer, &mut state);
+        // Return-value path confinement (CVE-2020-5221): if this call is to a
+        // helper whose summary records `confines_path_return`, strip
+        // `Cap::FILE_IO` from the call *result* so a downstream `fopen(result)`
+        // does not fire.
+        apply_call_return_confinement(inst, transfer, &mut state);
     }
 
     state
@@ -2270,6 +2276,70 @@ fn apply_call_post_confinement(
             {
                 clear_cap_alias_aware(state, name, Cap::FILE_IO, ssa, transfer.base_aliases);
             }
+        }
+    }
+}
+
+/// Whether the callee (by bare name) is a recognised *return-value path-prefix
+/// confiner* whose return value clears [`Cap::FILE_IO`].
+///
+/// Mirrors [`summary_confines_open_redirect`]: looks the callee up in the
+/// intra-file SSA summary map by same-language `FuncKey.name` and returns its
+/// [`SsaFuncSummary::confines_path_return`] flag.  Intra-file only — a
+/// path-composition helper (`compose_path`) lives in the same module as the
+/// handler that consumes its result.  Motivated by CVE-2020-5221 (uftpd).
+fn summary_confines_path_return(transfer: &SsaTaintTransfer, bare_name: &str) -> bool {
+    let Some(map) = transfer.ssa_summaries else {
+        return false;
+    };
+    map.iter().any(|(key, sum)| {
+        key.lang == transfer.lang && key.name == bare_name && sum.confines_path_return
+    })
+}
+
+/// Apply a return-value path confinement as a call post-condition.
+///
+/// When `inst` is a call to a helper whose SSA summary records
+/// `confines_path_return` (its every non-null return is `strncmp`-confined
+/// under a fixed directory prefix — CVE-2020-5221), strip [`Cap::FILE_IO`]
+/// from the call *result*.  This is the interprocedural analogue of the
+/// intra-function `PathPrefixConfined` narrowing: the confinement proven inside
+/// the callee (on a `static` buffer disconnected from the tainted-parameter SSA
+/// chain) is carried across the return that otherwise defeats it.  A no-op when
+/// `transfer.ssa_summaries` is `None` or the callee is not a recognised
+/// return-value confiner.  Runs in both the dataflow (`transfer_block`) and the
+/// event-emission (`collect_block_events`) replays so it affects both the
+/// computed exit state and the emitted sink findings.
+fn apply_call_return_confinement(
+    inst: &SsaInst,
+    transfer: &SsaTaintTransfer,
+    state: &mut SsaTaintState,
+) {
+    let SsaOp::Call {
+        callee,
+        callee_text,
+        ..
+    } = &inst.op
+    else {
+        return;
+    };
+    let bare = crate::labels::bare_method_name(callee_text.as_deref().unwrap_or(callee.as_str()));
+    if !summary_confines_path_return(transfer, bare) {
+        return;
+    }
+    if let Some(taint) = state.get(inst.value).cloned() {
+        let new_caps = taint.caps & !Cap::FILE_IO;
+        if new_caps.is_empty() {
+            state.remove(inst.value);
+        } else {
+            state.set(
+                inst.value,
+                VarTaint {
+                    caps: new_caps,
+                    origins: taint.origins,
+                    uses_summary: taint.uses_summary,
+                },
+            );
         }
     }
 }
@@ -7706,6 +7776,10 @@ fn collect_block_events(
         // (`streamContent(path, …)`) is scanned against un-narrowed taint and
         // re-fires the finding the confinement was meant to suppress.
         apply_call_post_confinement(inst, ssa, transfer, &mut state);
+        // Return-value path confinement (CVE-2020-5221): mirror the call-result
+        // FILE_IO strip so the emitted `fopen(compose_abspath(...))` finding is
+        // suppressed here, not just in the dataflow replay.
+        apply_call_return_confinement(inst, transfer, &mut state);
 
         // Check for sink
         let info = &cfg[inst.cfg_node];

@@ -422,6 +422,41 @@ pub struct SsaFuncSummary {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sanitizes_open_redirect_return: bool,
 
+    /// The function's return value is a *path-prefix confiner*: every non-null
+    /// value it returns is guarded by a C prefix-containment check
+    /// (`strncmp(rv, prefix, strlen(prefix))`) on the *returned* value, so any
+    /// non-null path it returns is provably contained under a fixed directory
+    /// prefix.  A call to it clears [`crate::labels::Cap::FILE_IO`] from the
+    /// call result (`apply_call_return_confinement`).
+    ///
+    /// Distinct from [`Self::confines_path_params`] (a *boolean* return the
+    /// caller must branch on) and [`Self::asserts_path_confined_params`] (an
+    /// assert-guard that confines an *argument*): here the confined thing is
+    /// the *returned value itself*, and the caller needs no branch — the
+    /// function only ever returns NULL or a prefix-confined path.
+    ///
+    /// Recognised structurally by `detect_path_confined_return`: a
+    /// `PathPrefixConfined` branch (`strncmp(rpath, home, strlen(home))`)
+    /// whose confined edge leads to a `return rpath`, where the confined
+    /// subject matches the returned value's name.
+    ///
+    /// Closes the *interprocedural* precision gap behind CVE-2020-5221 (uftpd
+    /// directory traversal): the patched `compose_path` confines the
+    /// `realpath()`-resolved `rpath` before returning it to a `fopen()` sink
+    /// in a *separate* function (`handle_RETR`).  The returned `rpath` is a
+    /// `static` buffer disconnected from the tainted-parameter SSA chain, so
+    /// the intra-function `PathPrefixConfined` narrowing (which clears the
+    /// `rpath` value's `FILE_IO`) does not survive into the summary's return
+    /// caps — the summary's param-taint fallback re-attributes the source
+    /// parameter's `FILE_IO` to the return.  Recording the confinement as a
+    /// summary post-condition carries it across the return.  The vulnerable
+    /// form `strncmp(dir, home, …)` confines a *different* var (`dir`) than the
+    /// returned `rpath`, so subject != return-value name and this stays
+    /// `false` — the exact bug/fix discriminator.  `false` (the default) for
+    /// functions that do not confine their returned path.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub confines_path_return: bool,
+
     /// Phase-10 Next.js entry-point classification.  Mirrors
     /// [`crate::summary::FuncSummary::entry_kind`] — recorded on the
     /// SSA summary so cross-file consumers don't have to consult the

@@ -2430,6 +2430,18 @@ fn lower_all_functions_from_bodies_inner(
     // entries to existing summaries. Existing entries (return
     // transforms, source caps, augment-populated sinks, etc.) are
     // preserved. Strict-additive, cannot regress detection.
+    // ── Path-return confinement fixpoint (CVE-2020-5221, uftpd) ──────────
+    //
+    // A function whose return is `strncmp`-confined under a fixed prefix, or a
+    // thin wrapper of such a function (`compose_abspath` -> `compose_path`),
+    // must be marked `confines_path_return` *before* the sink-lifting re-run
+    // below, so a caller whose FILE_IO sink reads the confined return
+    // (`fopen(compose_abspath(...))`) can strip it.  The first pass has no
+    // `ssa_summaries`, so it only detects the base `strncmp` case; this
+    // fixpoint resolves the transitive passthrough chain over the intra-file
+    // bodies.  Monotonic (`false -> true` only), bounded by the body count.
+    propagate_path_return_confinement(lang, namespace, &bodies, &mut summaries);
+
     let _t_rerun = std::time::Instant::now();
     rerun_extraction_with_augmented_summaries(
         file_cfg,
@@ -2454,12 +2466,106 @@ fn lower_all_functions_from_bodies_inner(
     (summaries, bodies)
 }
 
+/// Compute the transitive closure of `confines_path_return` over the
+/// intra-file bodies (CVE-2020-5221, uftpd).
+///
+/// The first extraction pass runs with no `ssa_summaries`, so it only sets the
+/// flag on functions with a direct `strncmp(rv, prefix, strlen(prefix))` guard
+/// on the returned value (`compose_path`).  A thin wrapper that just returns
+/// such a helper's result (`compose_abspath { return compose_path(...) }`)
+/// needs the callee's flag to be recognised, which requires resolving it via
+/// `ssa_summaries`.  This fixpoint feeds the growing `summaries` map back into
+/// [`ssa_transfer::detect_path_confined_return`] until no body flips, so every
+/// confiner in the passthrough chain is marked before the sink-lifting re-run.
+///
+/// Monotonic: a body's flag only ever moves `false -> true`, so the loop
+/// terminates in at most `bodies.len()` iterations (each iteration that makes
+/// progress flips at least one body).  Strict-additive: never clears a flag.
+fn propagate_path_return_confinement(
+    lang: Lang,
+    _namespace: &str,
+    bodies: &std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
+    summaries: &mut std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+) {
+    // Fast-out: the first extraction pass already flags every *base* confiner
+    // (a direct `strncmp`-return guard needs no `ssa_summaries`).  The transitive
+    // passthrough case can only fire when at least one body is already a
+    // confiner, so a file with none has nothing to propagate — skip the whole
+    // fixpoint (the dominant case for all non-path-composition code).
+    if !summaries.values().any(|s| s.confines_path_return) {
+        return;
+    }
+
+    let max_iters = bodies.len().max(1);
+    for _ in 0..max_iters {
+        // Snapshot the current flags so passthrough resolution sees a stable
+        // view while we mutate `summaries`.
+        let snapshot = summaries.clone();
+        let mut changed = false;
+        for (key, callee) in bodies {
+            if summaries
+                .get(key)
+                .is_some_and(|s| s.confines_path_return)
+            {
+                continue;
+            }
+            let Some(cfg) = callee.body_graph.as_ref() else {
+                continue;
+            };
+            if ssa_transfer::detect_path_confined_return(&callee.ssa, cfg, Some(&snapshot), lang) {
+                summaries
+                    .entry(key.clone())
+                    .or_default()
+                    .confines_path_return = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// Remove `Cap::FILE_IO` sink sites from `dst.param_to_sink` that the
+/// confinement-aware re-extraction (`src`) dropped.
+///
+/// When a body's FILE_IO sink reads a value returned by a
+/// `confines_path_return` helper (`fopen(compose_abspath(...))`), the
+/// confinement-aware re-run strips `Cap::FILE_IO` from the call result, so the
+/// sink no longer appears in `src.param_to_sink`.  The first pass, blind to the
+/// confinement, recorded it; `merge_sink_fields` is add-only and cannot remove
+/// it.  This prune reconciles: for each parameter, drop FILE_IO sites the
+/// re-extraction no longer reports.  Scoped by the caller to bodies that call a
+/// confiner, and touches only FILE_IO sites, so non-path sinks are untouched.
+fn prune_confined_file_io_sinks(
+    dst: &mut crate::summary::ssa_summary::SsaFuncSummary,
+    src: &crate::summary::ssa_summary::SsaFuncSummary,
+) {
+    use crate::labels::Cap;
+    for (idx, sites) in dst.param_to_sink.iter_mut() {
+        let src_sites = src
+            .param_to_sink
+            .iter()
+            .find(|(i, _)| i == idx)
+            .map(|(_, s)| s);
+        sites.retain(|site| {
+            if !site.cap.intersects(Cap::FILE_IO) {
+                return true; // only reconcile FILE_IO sites
+            }
+            // Keep only if the confinement-aware pass still reports it.
+            src_sites.is_some_and(|ss| ss.iter().any(|s| s.dedup_key() == site.dedup_key()))
+        });
+    }
+    dst.param_to_sink.retain(|(_, sites)| !sites.is_empty());
+}
+
 /// Second extraction pass: re-runs `extract_ssa_func_summary_full` for
 /// every body with the augmented `summaries` map plumbed through.
 ///
-/// Only sink-related fields (`param_to_sink`, `param_to_sink_param`)
-/// are merged into existing summaries; other fields stay as-produced
-/// by the first pass.  Bounded: one re-extraction per body.
+/// Only the fields `merge_sink_fields` handles (sink attribution plus the
+/// monotonic `confines_path_return` passthrough flag) are merged into existing
+/// summaries; other fields stay as-produced by the first pass.  Bounded: one
+/// re-extraction per body.
 #[allow(clippy::too_many_arguments)]
 fn rerun_extraction_with_augmented_summaries(
     file_cfg: &FileCfg,
@@ -2573,15 +2679,37 @@ fn rerun_extraction_with_augmented_summaries(
             Some(&callee.opt.alias_result),
         );
 
+        // Whether this body calls a `confines_path_return` helper — the only
+        // case where the confinement-aware re-extraction legitimately drops a
+        // FILE_IO sink the first pass recorded (CVE-2020-5221 uftpd:
+        // `fopen(compose_abspath(...))`).  Scopes the FILE_IO prune below so
+        // an unrelated sink the re-run happens to miss is never removed.
+        let calls_confiner = callee.ssa.blocks.iter().any(|b| {
+            b.body.iter().any(|inst| {
+                if let SsaOp::Call { callee: name, .. } = &inst.op {
+                    augmented_snapshot
+                        .iter()
+                        .any(|(k, s)| k.name == *name && s.confines_path_return)
+                } else {
+                    false
+                }
+            })
+        });
+
         // OR-merge sink-only fields into the existing summary.
         let entry = summaries.entry(key).or_default();
+        if calls_confiner {
+            // Reconcile FILE_IO sinks first: remove first-pass FILE_IO sites
+            // the confinement-aware pass dropped, *then* add-merge the rest.
+            prune_confined_file_io_sinks(entry, &new_summary);
+        }
         merge_sink_fields(entry, &new_summary);
     }
 }
 
-/// OR-merge `param_to_sink`, `param_to_sink_param`, and
-/// `validated_params_to_return` from `src` into `dst`.  Existing entries
-/// are preserved; only NEW entries are added.
+/// OR-merge `param_to_sink`, `param_to_sink_param`,
+/// `validated_params_to_return`, and `confines_path_return` from `src` into
+/// `dst`.  Existing entries are preserved; only NEW entries are added.
 ///
 /// The validated-param list grows monotonically across extraction
 /// rounds: a parameter that proves validated under any extraction
@@ -2619,6 +2747,12 @@ fn merge_sink_fields(
             dst.validated_params_to_return.push(idx);
         }
     }
+    // Return-value path confinement (CVE-2020-5221) is monotonic: the augmented
+    // re-extraction resolves the transitive passthrough case (`return
+    // compose_path(...)` where `compose_path` confines its return) that the
+    // first pass, with no `ssa_summaries`, could not see.  OR it in so a thin
+    // wrapper's confinement survives into its persisted summary.
+    dst.confines_path_return |= src.confines_path_return;
 }
 
 /// Walk lexical-containment children of every parent body and lift

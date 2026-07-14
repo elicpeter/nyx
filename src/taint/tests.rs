@@ -7896,3 +7896,93 @@ const is_relative_url = (url) => {
         "weak is_relative_url (.includes substring form) must not be recognised as a confiner"
     );
 }
+
+/// Extract `compose_path`'s `confines_path_return` flag for a given body.
+/// Shared by the uftpd CVE-2020-5221 return-confinement tests.
+#[cfg(test)]
+fn compose_path_confines_return(src: &[u8]) -> bool {
+    use crate::state::symbol::SymbolInterner;
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    let file_cfg = parse_lang(src, "c", lang);
+    let the_cfg = &file_cfg.first_body().graph;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let func_entries = super::find_function_entries(the_cfg);
+    for (name, entry) in &func_entries {
+        if name != "compose_path" {
+            continue;
+        }
+        let ssa = crate::ssa::lower_to_ssa(the_cfg, *entry, Some(name), false).unwrap();
+        let param_count = ssa
+            .blocks
+            .iter()
+            .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+            .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+            .count();
+        let summary = ssa_transfer::extract_ssa_func_summary(
+            &ssa, the_cfg, summaries, None, Lang::C, "test.c", &interner, param_count, None,
+            None, None, None, None,
+        );
+        return summary.confines_path_return;
+    }
+    panic!("compose_path not found");
+}
+
+/// CVE-2020-5221 (uftpd): the *patched* `compose_path` confines the
+/// `realpath()`-resolved `rpath` with `strncmp(rpath, home, strlen(home))`
+/// before `return rpath`, so `confines_path_return` is set — the summary
+/// post-condition consumed at the `fopen(compose_abspath(...))` call site.
+#[test]
+fn uftpd_patched_compose_path_confines_return() {
+    let patched = br#"
+static char *home = "/srv/ftp";
+typedef struct { int sd; char cwd[4096]; } ctrl_t;
+char *compose_path(ctrl_t *ctrl, char *path)
+{
+	static char rpath[4096];
+	char dir[4096] = { 0 };
+	strlcpy(dir, ctrl->cwd, sizeof(dir));
+	strlcat(dir, path, sizeof(dir));
+	if (!realpath(dir, rpath))
+		return NULL;
+	if (strncmp(rpath, home, strlen(home))) {
+		return NULL;
+	}
+	return rpath;
+}
+"#;
+    assert!(
+        compose_path_confines_return(patched),
+        "strncmp(rpath, ...) on the returned rpath must set confines_path_return"
+    );
+}
+
+/// The *vulnerable* `compose_path` confines the unresolved `dir`
+/// (`strncmp(dir, home, ...)`), a different var than the returned `rpath`, so
+/// `confines_path_return` stays false — the flow to `fopen` still fires.  This
+/// pins the bug/fix discriminator: the confinement subject must match the
+/// returned value's name.
+#[test]
+fn uftpd_vulnerable_compose_path_does_not_confine_return() {
+    let vulnerable = br#"
+static char *home = "/srv/ftp";
+typedef struct { int sd; char cwd[4096]; } ctrl_t;
+char *compose_path(ctrl_t *ctrl, char *path)
+{
+	static char rpath[4096];
+	char dir[4096] = { 0 };
+	strlcpy(dir, ctrl->cwd, sizeof(dir));
+	strlcat(dir, path, sizeof(dir));
+	if (!realpath(dir, rpath))
+		return NULL;
+	if (strncmp(dir, home, strlen(home))) {
+		return NULL;
+	}
+	return rpath;
+}
+"#;
+    assert!(
+        !compose_path_confines_return(vulnerable),
+        "strncmp(dir, ...) confines a different var than the returned rpath — must not confine"
+    );
+}

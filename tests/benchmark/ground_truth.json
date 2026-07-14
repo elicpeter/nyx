@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 640
+    "corpus_size": 642
   },
   "cases": [
     {
@@ -12439,14 +12439,14 @@
       "expected_category": "Security",
       "expected_sink_lines": [
         [
-          77,
-          99
+          84,
+          106
         ]
       ],
       "expected_source_lines": [
         [
-          92,
-          97
+          99,
+          104
         ]
       ],
       "tags": [
@@ -12484,9 +12484,8 @@
         "patched",
         "negative"
       ],
-      "disabled": true,
-      "disabled_reason": "Patched-precision requires INTERPROCEDURAL path-return confinement that the engine does not yet model. The one-line upstream fix moves the confinement check from the unresolved `dir` onto the realpath()-resolved `rpath` (`strncmp(rpath, home, strlen(home))`). This session landed the recognizer for that idiom (PredicateKind::PathPrefixConfined, path_state.rs) and it correctly clears Cap::FILE_IO on the confined branch INTRA-function (verified: a same-function `strncmp` guard silences the fopen). But the CVE's confinement lives in compose_path(), which RETURNS the confined `rpath` to a fopen() sink in handle_RETR(); the summary return-taint (summary_extract.rs run_probe) still reports FILE_IO on compose_path's return despite the branch clearing, so the caller's sink refires. Making the patched fixture silent needs the confinement to survive into the function summary's return caps (a summary-level path-return-confinement, analogous to confines_path_params / asserts_path_confined_params but for the returned value + the strncmp form). Shallow alternatives (name-matching compose_path, dropping the interproc hop, or a blanket strncmp suppressor) are all rejected: the sink genuinely lives in a different function and a blanket suppressor would hide real traversals. Tracked in CVE_DEFERRED.md.",
-      "notes": "CVE-2020-5221 patched counterpart (uftpd, ISC): confinement check moved from the unresolved `dir` onto the realpath()-resolved `rpath`. Disabled pending interprocedural strncmp path-return confinement; the vulnerable counterpart is active and detects."
+      "disabled": false,
+      "notes": "CVE-2020-5221 patched counterpart (uftpd, ISC): confinement check moved from the unresolved `dir` onto the realpath()-resolved `rpath`. Now silent via interprocedural path-return confinement (SsaFuncSummary.confines_path_return + detect_path_confined_return + propagate_path_return_confinement fixpoint + call-result FILE_IO strip + confined-sink prune)."
     },
     {
       "case_id": "cve-cpp-2019-13132-vulnerable",
@@ -20260,6 +20259,75 @@
       ],
       "disabled": false,
       "notes": "Recall guard for the gitea closure-group extractor: trailing middleware reqStarsEnabled() is a FEATURE gate (factory closure reads setting.Repository.DisableStars, a global config field, NOT a ctx.* permission field), so the body-based recogniser must classify it non-authorization and the id-scoped DAO read must STILL fire missing_ownership_check."
+    },
+    {
+      "case_id": "c-path-005",
+      "file": "c/path_traversal/interproc_return_unconfined.c",
+      "language": "c",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          35,
+          44
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          43,
+          43
+        ]
+      ],
+      "tags": [
+        "strncmp",
+        "interproc",
+        "confinement-recall-guard",
+        "uftpd-shape"
+      ],
+      "disabled": false,
+      "notes": "uftpd BUG shape: compose_path confines the unresolved `dir` (strncmp(dir,...)), a different var than the returned `rpath`; the cross-function fopen(compose_path(...)) must still fire. Recall guard for confines_path_return (subject must match the returned value's name)."
+    },
+    {
+      "case_id": "c-safe-020",
+      "file": "c/safe/safe_interproc_path_return_confined.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "strncmp",
+        "interproc",
+        "path-return-confined",
+        "uftpd-fix-shape"
+      ],
+      "disabled": false,
+      "notes": "uftpd FIX shape: compose_path confines the realpath()-resolved `rpath` (strncmp(rpath,...)) before returning it; the confinement carries across the compose_abspath-less passthrough to the fopen() sink in handle_RETR() via the summary-level confines_path_return post-condition. Pins interprocedural path-return confinement."
     }
   ]
 }

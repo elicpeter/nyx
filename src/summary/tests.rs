@@ -548,6 +548,7 @@ fn ssa_summary_serde_round_trip_identity() {
         confines_path_params: smallvec::SmallVec::new(),
         asserts_path_confined_params: Default::default(),
         sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -586,6 +587,7 @@ fn ssa_summary_serde_round_trip_strip_bits() {
         confines_path_params: smallvec::SmallVec::new(),
         asserts_path_confined_params: Default::default(),
         sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -621,6 +623,7 @@ fn ssa_summary_serde_round_trip_add_bits() {
         confines_path_params: smallvec::SmallVec::new(),
         asserts_path_confined_params: Default::default(),
         sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -663,6 +666,7 @@ fn ssa_summary_serde_round_trip_all_variants() {
         confines_path_params: smallvec::SmallVec::new(),
         asserts_path_confined_params: Default::default(),
         sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -709,6 +713,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         confines_path_params: smallvec::SmallVec::new(),
         asserts_path_confined_params: Default::default(),
         sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -741,6 +746,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         confines_path_params: smallvec::SmallVec::new(),
         asserts_path_confined_params: Default::default(),
         sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -797,6 +803,7 @@ fn global_summaries_merge_with_ssa_entries() {
         confines_path_params: smallvec::SmallVec::new(),
         asserts_path_confined_params: Default::default(),
         sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -825,6 +832,7 @@ fn global_summaries_merge_with_ssa_entries() {
         confines_path_params: smallvec::SmallVec::new(),
         asserts_path_confined_params: Default::default(),
         sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -879,6 +887,7 @@ fn global_summaries_is_empty_considers_ssa() {
             confines_path_params: smallvec::SmallVec::new(),
             asserts_path_confined_params: Default::default(),
             sanitizes_open_redirect_return: false,
+            confines_path_return: false,
             param_to_gate_filters: vec![],
             entry_kind: None,
         },
@@ -914,6 +923,7 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
         confines_path_params: smallvec::SmallVec::new(),
         asserts_path_confined_params: Default::default(),
         sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -964,6 +974,7 @@ fn ssa_summary_serde_round_trip_container_fields() {
         confines_path_params: smallvec::SmallVec::new(),
         asserts_path_confined_params: Default::default(),
         sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -1024,6 +1035,7 @@ fn ssa_summary_serde_round_trip_return_abstract() {
         confines_path_params: smallvec::SmallVec::new(),
         asserts_path_confined_params: Default::default(),
         sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
@@ -1574,6 +1586,7 @@ fn global_summaries_resolve_body_requires_body_present() {
             confines_path_params: smallvec::SmallVec::new(),
             asserts_path_confined_params: Default::default(),
             sanitizes_open_redirect_return: false,
+            confines_path_return: false,
             param_to_gate_filters: vec![],
             entry_kind: None,
         },
@@ -3744,6 +3757,7 @@ fn cf4_return_path_transform_serde_round_trip() {
         confines_path_params: smallvec::SmallVec::new(),
         asserts_path_confined_params: Default::default(),
         sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     };
