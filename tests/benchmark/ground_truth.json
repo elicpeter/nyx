@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 618
+    "corpus_size": 620
   },
   "cases": [
     {
@@ -19471,6 +19471,71 @@
       ],
       "disabled": false,
       "notes": "Ok(File::open(&tainted_contents)) \u2014 tainted file contents ARE the inner sink path arg; must fire despite the Ok(...) wrapper (recall guard for the sibling-attribution fix)"
+    },
+    {
+      "case_id": "rs-safe-022",
+      "file": "rust/safe/safe_leaf_name_collision_file_reader.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "real-repo-precision-2026-07-13",
+        "leaf-name-collision",
+        "namespace-qualifier"
+      ],
+      "disabled": false,
+      "notes": "meilisearch dump-reader shape: stdlib File::open/BufReader::new share leaf names open/new with user methods Reader::open / IndexReader::new. The namespace-qualifier authority fix stops the resolver binding File::open to the enclosing impl and BufReader::new to a unique-arity ::new, so no spurious file_system->FILE_IO flow fires on constant paths (deep_engine_fixes: File::open dual Source+Sink self-referential flows)."
+    },
+    {
+      "case_id": "rs-path-010",
+      "file": "rust/path_traversal/leaf_collision_tainted_open.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          16,
+          16
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          15,
+          15
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-07-13",
+        "leaf-name-collision",
+        "recall-guard"
+      ],
+      "disabled": false,
+      "notes": "Recall counterpart to rs-safe-022: a tainted request header flows into File::open's path arg while the open/new collision decoys are present. File::open must still resolve to its stdlib FILE_IO sink label, not to the decoy methods."
     }
   ]
 }

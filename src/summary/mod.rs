@@ -1760,11 +1760,36 @@ impl GlobalSummaries {
             };
         }
 
-        // ── Step 2: namespace_qualifier (non-authoritative) ─────────
-        if let Some(nq) = q.namespace_qualifier
-            && let Some(key) = try_qualified(nq)
-        {
-            return CalleeResolution::Resolved(key);
+        // ── Step 2: namespace_qualifier (authoritative for `::` paths) ──
+        if let Some(nq) = q.namespace_qualifier {
+            if let Some(key) = try_qualified(nq) {
+                return CalleeResolution::Resolved(key);
+            }
+            // A `::`-qualified callee names a concrete type or module.  With
+            // no summary in that container it is an external associated
+            // function (stdlib / third-party crate) or a module-path free
+            // function — never a same-leaf METHOD in an unrelated container.
+            // Refuse the caller-container (step 3) and leaf/arity fallbacks
+            // (steps 4/6) that would bind the stdlib `File::open` to the
+            // enclosing `impl V5Reader { fn open }`, or `BufReader::new` to a
+            // unique-arity `UpdateFile::new`.  Allow only a unique same-leaf
+            // FREE function (`crate::util::sanitize` → top-level `fn
+            // sanitize`).  `Self::` / `self::` is a real self-call and defers
+            // to the caller-container step below.
+            if !matches!(nq, "Self" | "self") {
+                let free: Vec<FuncKey> = self
+                    .lookup_same_lang(q.caller_lang, q.name)
+                    .into_iter()
+                    .map(|(k, _)| k)
+                    .filter(|k| k.container.is_empty() && arity_matches(k))
+                    .cloned()
+                    .collect();
+                return match free.len() {
+                    1 => CalleeResolution::Resolved(free[0].clone()),
+                    0 => CalleeResolution::NotFound,
+                    _ => CalleeResolution::Ambiguous(free),
+                };
+            }
         }
 
         // ── Step 3: caller self-container ───────────────────────────
@@ -2398,5 +2423,123 @@ mod arity_leniency_tests {
             arity: Some(2),
         });
         assert_eq!(resolved, CalleeResolution::NotFound);
+    }
+}
+
+#[cfg(test)]
+mod namespace_qualifier_authority_tests {
+    //! `::`-qualified callee authority in [`GlobalSummaries::resolve_callee`].
+    //! A qualifier that names no local container must not fall through to the
+    //! caller-container / leaf-arity heuristics and bind an unrelated same-leaf
+    //! method (meilisearch dump-reader leaf collisions: `File::open` →
+    //! `Reader::open`, `BufReader::new` → `IndexReader::new`).
+    use super::*;
+    use crate::symbol::{FuncKey, FuncKind, Lang};
+
+    fn rs_method(container: &str, name: &str, arity: usize) -> (FuncKey, FuncSummary) {
+        let key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "mod.rs".into(),
+            container: container.into(),
+            name: name.into(),
+            arity: Some(arity),
+            disambig: None,
+            kind: FuncKind::Method,
+        };
+        let summary = FuncSummary {
+            name: name.into(),
+            file_path: "mod.rs".into(),
+            lang: "rust".into(),
+            container: container.into(),
+            param_count: arity,
+            ..Default::default()
+        };
+        (key, summary)
+    }
+
+    fn rs_free(name: &str, arity: usize) -> (FuncKey, FuncSummary) {
+        let key = FuncKey::new_function(Lang::Rust, "mod.rs", name, Some(arity));
+        let summary = FuncSummary {
+            name: name.into(),
+            file_path: "mod.rs".into(),
+            lang: "rust".into(),
+            param_count: arity,
+            ..Default::default()
+        };
+        (key, summary)
+    }
+
+    fn base_gs() -> GlobalSummaries {
+        let mut gs = GlobalSummaries::new();
+        let (k1, s1) = rs_method("Reader", "open", 1);
+        let (k2, s2) = rs_method("IndexReader", "new", 1);
+        let (k3, s3) = rs_free("sanitize", 1);
+        gs.insert(k1, s1);
+        gs.insert(k2, s2);
+        gs.insert(k3, s3);
+        gs
+    }
+
+    fn query<'a>(
+        name: &'a str,
+        qualifier: Option<&'a str>,
+        caller_container: Option<&'a str>,
+    ) -> CalleeQuery<'a> {
+        CalleeQuery {
+            name,
+            caller_lang: Lang::Rust,
+            caller_namespace: "mod.rs",
+            caller_container,
+            receiver_type: None,
+            namespace_qualifier: qualifier,
+            receiver_var: None,
+            arity: Some(1),
+        }
+    }
+
+    #[test]
+    fn file_open_qualifier_miss_does_not_bind_caller_container() {
+        let gs = base_gs();
+        let r = gs.resolve_callee(&query("open", Some("File"), Some("Reader")));
+        assert_eq!(
+            r,
+            CalleeResolution::NotFound,
+            "File::open must not bind caller-container Reader::open"
+        );
+    }
+
+    #[test]
+    fn bufreader_new_qualifier_miss_does_not_bind_unique_leaf() {
+        let gs = base_gs();
+        let r = gs.resolve_callee(&query("new", Some("BufReader"), Some("Reader")));
+        assert_eq!(
+            r,
+            CalleeResolution::NotFound,
+            "BufReader::new must not bind the unique-arity IndexReader::new"
+        );
+    }
+
+    #[test]
+    fn qualifier_matching_container_resolves() {
+        let gs = base_gs();
+        let (k, _) = rs_method("Reader", "open", 1);
+        let r = gs.resolve_callee(&query("open", Some("Reader"), None));
+        assert_eq!(r, CalleeResolution::Resolved(k));
+    }
+
+    #[test]
+    fn self_qualifier_defers_to_caller_container() {
+        let gs = base_gs();
+        let (k, _) = rs_method("Reader", "open", 1);
+        let r = gs.resolve_callee(&query("open", Some("Self"), Some("Reader")));
+        assert_eq!(r, CalleeResolution::Resolved(k));
+    }
+
+    #[test]
+    fn module_path_qualifier_resolves_free_function() {
+        let gs = base_gs();
+        let (k, _) = rs_free("sanitize", 1);
+        let r = gs.resolve_callee(&query("sanitize", Some("util"), Some("Reader")));
+        assert_eq!(r, CalleeResolution::Resolved(k));
     }
 }

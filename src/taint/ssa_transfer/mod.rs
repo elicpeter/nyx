@@ -11928,6 +11928,32 @@ pub(crate) fn resolve_local_func_key_query(
         if let Some(k) = pick_with_container(nq) {
             return Some(k);
         }
+        // A `::`-qualified callee (`Type::method` / `module::func`) names a
+        // concrete type or module.  When no local definition has
+        // `container == <qualifier>`, the call is an external associated
+        // function (stdlib / third-party crate) or a module-path free
+        // function — never a same-leaf METHOD living in a different,
+        // unrelated container.  Refuse to fall through to the
+        // caller-container / arity-only / receiver-var heuristics below,
+        // which would otherwise bind the stdlib `File::open` to
+        // `impl V5Reader { fn open }` (caller-container self-collision) or
+        // `BufReader::new` to a unique-arity `UpdateFile::new` (arity-only
+        // leaf collision).  The one legitimate fall-through is a unique
+        // same-leaf FREE function (empty container, e.g.
+        // `crate::util::sanitize` → top-level `fn sanitize`).  `Self::` /
+        // `self::` is a genuine self-call and defers to caller_container.
+        if !matches!(nq, "Self" | "self") {
+            let free: Vec<&FuncKey> = all
+                .iter()
+                .copied()
+                .filter(|k| k.container.is_empty() && arity_matches(k))
+                .collect();
+            return if free.len() == 1 {
+                Some(free[0].clone())
+            } else {
+                None
+            };
+        }
     }
 
     if let Some(cc) = q.caller_container {
@@ -13126,5 +13152,135 @@ mod engine_audit_fixes_tests {
         assert!(is_string_safe_for_ssrf(&StringFact::from_prefix(
             "https://api.internal/"
         )));
+    }
+}
+
+#[cfg(test)]
+mod namespace_qualifier_authority_tests {
+    //! Regression pins for the `::`-qualified callee authority rule in
+    //! [`resolve_local_func_key_query`].  Distilled from meilisearch
+    //! `crates/dump/src/reader/v5/mod.rs`, where the stdlib `File::open`
+    //! (leaf `open`) and `BufReader::new` (leaf `new`) share their leaf
+    //! names with the user methods `Reader::open` / `IndexReader::new`.  A
+    //! qualified callee whose qualifier matches no local container must not
+    //! bind a same-leaf method from an unrelated container.
+    use super::*;
+    use crate::cfg::{FuncSummaries, LocalFuncSummary};
+    use crate::summary::CalleeQuery;
+    use crate::symbol::{FuncKey, FuncKind};
+    use petgraph::graph::NodeIndex;
+
+    fn method_key(container: &str, name: &str, arity: usize) -> FuncKey {
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "mod.rs".into(),
+            container: container.into(),
+            name: name.into(),
+            arity: Some(arity),
+            disambig: None,
+            kind: FuncKind::Method,
+        }
+    }
+
+    fn stub_summary(arity: usize) -> LocalFuncSummary {
+        // The query only reads `local_summaries` keys; the value is inert.
+        LocalFuncSummary {
+            entry: NodeIndex::new(0),
+            source_caps: Cap::empty(),
+            sanitizer_caps: Cap::empty(),
+            sink_caps: Cap::empty(),
+            param_count: arity,
+            param_names: Vec::new(),
+            propagating_params: Vec::new(),
+            tainted_sink_params: Vec::new(),
+            callees: Vec::new(),
+            container: String::new(),
+            disambig: None,
+            kind: FuncKind::Method,
+        }
+    }
+
+    fn summaries() -> FuncSummaries {
+        // `Reader::open(dump)` and `IndexReader::new(path)` — both non-empty
+        // containers, both arity 1, plus a free `sanitize(s)` helper.
+        let mut m = FuncSummaries::default();
+        m.insert(method_key("Reader", "open", 1), stub_summary(1));
+        m.insert(method_key("IndexReader", "new", 1), stub_summary(1));
+        m.insert(
+            FuncKey::new_function(Lang::Rust, "mod.rs", "sanitize", Some(1)),
+            stub_summary(1),
+        );
+        m
+    }
+
+    fn q<'a>(
+        name: &'a str,
+        qualifier: Option<&'a str>,
+        caller_container: Option<&'a str>,
+    ) -> CalleeQuery<'a> {
+        CalleeQuery {
+            name,
+            caller_lang: Lang::Rust,
+            caller_namespace: "mod.rs",
+            caller_container,
+            receiver_type: None,
+            namespace_qualifier: qualifier,
+            receiver_var: None,
+            arity: Some(1),
+        }
+    }
+
+    #[test]
+    fn file_open_does_not_bind_caller_container_open_method() {
+        // `File::open(...)` inside `impl Reader { fn open }`: qualifier
+        // `File` has no local container, and the caller-container fallback
+        // must NOT bind the enclosing `Reader::open`.
+        let s = summaries();
+        let r = resolve_local_func_key_query(&s, &q("open", Some("File"), Some("Reader")));
+        assert!(
+            r.is_none(),
+            "File::open must not resolve to caller-container Reader::open, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn bufreader_new_does_not_bind_unique_arity_new_method() {
+        // `BufReader::new(x)` with a unique arity-1 `IndexReader::new`: the
+        // arity-only leaf fallback must not bind it.
+        let s = summaries();
+        let r = resolve_local_func_key_query(&s, &q("new", Some("BufReader"), Some("Reader")));
+        assert!(
+            r.is_none(),
+            "BufReader::new must not resolve to IndexReader::new, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn qualifier_matching_container_still_resolves() {
+        // A genuine `Reader::open(...)` (qualifier == container) resolves.
+        let s = summaries();
+        let r = resolve_local_func_key_query(&s, &q("open", Some("Reader"), None));
+        assert_eq!(r, Some(method_key("Reader", "open", 1)));
+    }
+
+    #[test]
+    fn self_qualifier_defers_to_caller_container() {
+        // `Self::open(...)` inside `impl Reader` is a real self-call and must
+        // still resolve to `Reader::open`.
+        let s = summaries();
+        let r = resolve_local_func_key_query(&s, &q("open", Some("Self"), Some("Reader")));
+        assert_eq!(r, Some(method_key("Reader", "open", 1)));
+    }
+
+    #[test]
+    fn module_path_free_function_still_resolves() {
+        // `crate::util::sanitize(x)` (qualifier `util`) must still bind the
+        // unique same-leaf FREE function.
+        let s = summaries();
+        let r = resolve_local_func_key_query(&s, &q("sanitize", Some("util"), Some("Reader")));
+        assert_eq!(
+            r,
+            Some(FuncKey::new_function(Lang::Rust, "mod.rs", "sanitize", Some(1)))
+        );
     }
 }
