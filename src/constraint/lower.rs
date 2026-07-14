@@ -206,7 +206,10 @@ pub fn lower_condition(
 /// separately via `seed_from_optimization`.
 pub fn lower_condition_with_stacks(
     cond_info: &NodeInfo,
-    var_stacks: &HashMap<String, Vec<SsaValue>>,
+    // `FxHashMap` to match the SSA-lowering `var_stacks` (rustc_hash); probed
+    // by key only (`var_stacks[name].last()`), so the hasher swap is
+    // output-invariant.
+    var_stacks: &rustc_hash::FxHashMap<String, Vec<SsaValue>>,
 ) -> ConditionExpr {
     let text = match cond_info.condition_text.as_deref() {
         Some(t) if !t.is_empty() => t,

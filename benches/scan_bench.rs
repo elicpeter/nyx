@@ -594,6 +594,56 @@ fn bench_ast_queries_large_go(c: &mut Criterion) {
     });
 }
 
+/// `lower_to_ssa` cost on the large-Go fixture.  This is the CFG→SSA
+/// lowering path: `form_blocks` (basic-block formation over the reachable
+/// node set) plus `rename_variables`/`process_block` (Cytron dominator-tree
+/// rename, which pushes/pops per-variable SSA stacks).  Pre-2026-07-13 the
+/// node-keyed maps in `form_blocks` (`successors`, `in_degree`,
+/// `has_branching_in`, `is_leader`, `block_of_node`, and the BFS visited
+/// sets) and the string-keyed `var_stacks` used `std::collections::HashMap`
+/// (SipHash), which profiling showed as ~26% of all SipHash self-time on
+/// mattermost (`process_block` + `lower_to_ssa_inner`).  Post-fix they use
+/// `rustc_hash::FxHashMap`/`FxHashSet`: keys are dense `NodeIndex` integers
+/// or short variable-name strings, none are iterated in an output-observable
+/// order, so the cheaper deterministic hasher is bit-identical.  A
+/// regression that re-introduces SipHash on this path surfaces here.
+fn bench_ssa_lower_large_go(c: &mut Criterion) {
+    use nyx_scanner::ssa;
+
+    let fixture = Path::new("benches/perf_fixtures/large_go_module.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let cfg_obj = Config::default();
+    let (file_cfg, _lang) = nyx_scanner::ast::build_cfg_for_file(&fixture, &cfg_obj)
+        .expect("build cfg")
+        .expect("supported language");
+
+    // Snapshot the (graph, entry, scope) inputs once; the bench loop re-runs
+    // `lower_to_ssa` on each so we measure only lowering cost, not CFG build.
+    let inputs: Vec<(usize, bool)> = file_cfg
+        .bodies
+        .iter()
+        .enumerate()
+        .map(|(i, body)| (i, body.meta.name.is_none()))
+        .collect();
+
+    c.bench_function("ssa_lower_large_go", |b| {
+        b.iter(|| {
+            let mut total_blocks = 0usize;
+            for &(i, scope_all) in &inputs {
+                let body = &file_cfg.bodies[i];
+                let scope = body.meta.name.as_deref();
+                if let Ok(ssa_body) =
+                    ssa::lower_to_ssa(&body.graph, body.entry, scope, scope_all)
+                {
+                    total_blocks += ssa_body.blocks.len();
+                }
+            }
+            total_blocks
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_ast_only_scan,
@@ -607,6 +657,7 @@ criterion_group!(
     bench_extract_authorization_model_shared_go,
     bench_collect_top_level_units_go,
     bench_const_propagate_large_go,
+    bench_ssa_lower_large_go,
     bench_global_summaries_lookup_same_lang_go,
     bench_taint_callee_resolve_stress_go,
     bench_taint_branch_stress_go,
