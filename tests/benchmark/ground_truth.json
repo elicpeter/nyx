@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 622
+    "corpus_size": 624
   },
   "cases": [
     {
@@ -19603,6 +19603,80 @@
       ],
       "disabled": false,
       "notes": "fs::read_to_string content used directly as fs::read path arg (arg 0): a genuine file-content -> path-traversal flow that the path-argument confinement gate must keep."
+    },
+    {
+      "case_id": "cve-ruby-2026-40295-vulnerable",
+      "file": "cve_corpus/ruby/CVE-2026-40295/vulnerable.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "open_redirect",
+      "cwe": "CWE-601",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          31,
+          31
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          23,
+          23
+        ]
+      ],
+      "tags": [
+        "cve",
+        "devise",
+        "open-redirect",
+        "referrer",
+        "disabled"
+      ],
+      "disabled": true,
+      "disabled_reason": "Recall (vulnerable) deferred: multi-layer bare-Ruby-method-call source miss. The upstream flow is `request.referrer` (attacker Referer header) returned from `FailureApp#redirect_url`, handed to the sink `redirect_to redirect_url`. `redirect_url` is a receiver-less bare method call. In the taint findings run, top-level / seedless Ruby bodies are lowered with `scope_all=true` (no `SsaOp::Param` ops), and in that mode a bare-identifier call argument that is an undefined free var is DROPPED entirely: `redirect_to redirect_url` lowers to `redirect_to()` with no argument, so the sink has no value to taint. (`redirect_url`'s own body lowers cleanly to `v = request.referrer()` and its summary carries source_caps, but there is no arg to attach it to at the call.) Two engine layers must change together: (1) scope_all SSA lowering must preserve a bare-identifier call argument as a resolvable value instead of dropping it; (2) the taint layer must resolve that bare Ruby identifier against its same-file zero-arity source-returning summary (Ruby auto-calls bare method names; unsound for JS/TS/Python/Go where a bare identifier is a function reference). A resolve_callee_hinted-based seed on synthetic-external Params was prototyped this session and correctly resolves redirect_url's source_caps, but never fires in the findings run because that run has no Param ops for these bodies (scope_all). Both layers are broad, cross-language SSA-lowering changes; deferred. Tracked in nyx-dev-tools/CVE_DEFERRED.md. MIT.",
+      "notes": "CVE-2026-40295 / GHSA-jp94-3292-c3xv: Devise Timeoutable open-redirect. FailureApp#redirect_url returns the attacker-controlled request.referrer (HTTP Referer) for a non-GET session-timeout request and #redirect passes it to redirect_to. DISABLED (recall deferred) - bare Ruby method-call source dropped by scope_all lowering; see disabled_reason and CVE_DEFERRED.md."
+    },
+    {
+      "case_id": "cve-ruby-2026-40295-patched",
+      "file": "cve_corpus/ruby/CVE-2026-40295/patched.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-open-redirect",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "devise",
+        "open-redirect",
+        "patched",
+        "negative",
+        "disabled"
+      ],
+      "disabled": true,
+      "disabled_reason": "Deferred as the precision counterpart of cve-ruby-2026-40295-vulnerable (see its disabled_reason): the vulnerable recall side does not yet detect (bare-Ruby-method-call source dropped by scope_all lowering), so the patched precision side is not yet exercisable. Once recall lands, this fixture additionally requires recognising extract_path_from_location(request.referrer) (a URL path-component extraction, URI.parse(x).path, that strips the host) as an OPEN_REDIRECT sanitizer so the fixture stays silent. Tracked in nyx-dev-tools/CVE_DEFERRED.md. MIT.",
+      "notes": "CVE-2026-40295 patched counterpart: redirect_url wraps request.referrer in extract_path_from_location (URI path-component extraction, host stripped). DISABLED (precision deferred, pending recall). See disabled_reason and CVE_DEFERRED.md. MIT."
     }
   ]
 }
