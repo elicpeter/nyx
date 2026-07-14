@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 625
+    "corpus_size": 629
   },
   "cases": [
     {
@@ -1562,6 +1562,45 @@
       "notes": "Path traversal via FileInputStream with user-controlled path"
     },
     {
+      "case_id": "java-path_traversal-002",
+      "file": "java/path_traversal/AssertDoesNotContainInsufficient.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "state-resource-leak"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          18,
+          18
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          16,
+          16
+        ]
+      ],
+      "tags": [
+        "assert-guard",
+        "path-traversal",
+        "cve-2021-21234"
+      ],
+      "disabled": false,
+      "notes": "Insufficient blocklist guard Assert.doesNotContain(name, '..') is not a prefix-containment confinement; the interprocedural read must still fire. Recall counterpart to java-safe-assertguard-confinement-001 (CVE-2021-21234)."
+    },
+    {
       "case_id": "java-deser-001",
       "file": "java/deser/DeserOis.java",
       "language": "java",
@@ -1699,6 +1738,33 @@
       ],
       "disabled": false,
       "notes": "Constant string in executeQuery(); no user-controlled data"
+    },
+    {
+      "case_id": "java-safe-assertguard-confinement-001",
+      "file": "java/safe/SafeAssertStartsWithConfinement.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "assert-guard",
+        "path-confinement",
+        "cve-2021-21234"
+      ],
+      "disabled": false,
+      "notes": "Assert.isTrue(canonical.startsWith(base)) getCanonicalPath containment guard confines the path arg for FILE_IO; the guarded interprocedural read is safe. Precision pin for CVE-2021-21234 (asserts_path_confined_params)."
     },
     {
       "case_id": "java-safe-002",
@@ -18607,6 +18673,72 @@
       ],
       "disabled": false,
       "notes": "CVE-2024-39954 patched counterpart: `if (isInvalidUrl(targetUrl)) return false;` guard backed by Apache commons-validator `UrlValidator(http/https)`. Regression guard that Nyx recognises the negative-polarity validator and does not refire."
+    },
+    {
+      "case_id": "cve-java-2021-21234-vulnerable",
+      "file": "cve_corpus/java/CVE-2021-21234/vulnerable.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          62,
+          62
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          52,
+          54
+        ]
+      ],
+      "tags": [
+        "cve",
+        "spring-boot-actuator-logview",
+        "path_traversal",
+        "directory-traversal"
+      ],
+      "disabled": false,
+      "notes": "CVE-2021-21234: spring-boot-actuator-logview directory traversal. @RequestParam `base` -> loggingPath(base)=Paths.get(loggingPath, base) -> fileProvider.streamContent(path, filename, ...) whose FileSystemFileProvider opens new FileInputStream(Paths.get(folder.toString(), filename)) (FILE_IO). securityCheck(filename) validates only filename (Assert.doesNotContain), never base. MIT. Two-hop interproc recall (base->path->streamContent->getFile->FileInputStream)."
+    },
+    {
+      "case_id": "cve-java-2021-21234-patched",
+      "file": "cve_corpus/java/CVE-2021-21234/patched.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "spring-boot-actuator-logview",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2021-21234 patched: securityCheck(Path base, String filename) canonicalises the resolved path and Assert.isTrue(canonicalLoggingPath.startsWith(baseCanonicalPath), errorMessage) \u2014 the canonical Java getCanonicalPath().startsWith(base) assert-guard containment idiom. Regression guard that Nyx recognises this confinement and does not refire. Deep fix: SsaFuncSummary.asserts_path_confined_params + detect_assert_path_confined_params (collapsed-group split at the startsWith method phantom) + apply_call_post_confinement in transfer_block AND collect_block_events."
     },
     {
       "case_id": "java-ssrf-003",

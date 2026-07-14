@@ -1679,6 +1679,83 @@ fn java_source_to_sink() {
     );
 }
 
+/// CVE-2021-21234: an assert-guard containment check
+/// `Assert.isTrue(<param-derived>.getCanonicalPath().startsWith(<fixed base>))`
+/// confines its path argument for FILE_IO, so a downstream (interprocedural)
+/// file read gated behind the guard call does not fire.  Pins the
+/// `asserts_path_confined_params` summary field + `apply_call_post_confinement`
+/// consumer.
+#[test]
+fn java_assert_startswith_confinement_suppresses_file_io() {
+    let src = br#"class LV {
+  private String baseDir = "/var/data";
+  void doGet(javax.servlet.http.HttpServletRequest req, javax.servlet.http.HttpServletResponse resp) throws Exception {
+    String name = req.getParameter("name");
+    confine(name);
+    read(name, resp.getOutputStream());
+  }
+  private void confine(String name) throws java.io.IOException {
+    String canonical = new java.io.File(baseDir, name).getCanonicalPath();
+    String base = new java.io.File(baseDir).getCanonicalPath();
+    org.springframework.util.Assert.isTrue(canonical.startsWith(base), "outside base");
+  }
+  private void read(String name, java.io.OutputStream out) throws java.io.IOException {
+    new java.io.FileInputStream(new java.io.File(baseDir, name)).transferTo(out);
+  }
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
+    let file_cfg = parse_lang(src, "java", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Java,
+        "test.java",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "Java: assert-guard startsWith containment should confine the read, got {findings:#?}"
+    );
+}
+
+/// Recall counterpart: a blocklist assertion `Assert.doesNotContain(name, "..")`
+/// is NOT a prefix-containment confinement (it is bypassable), so the same
+/// interprocedural read must still fire.  Pins that the recogniser keys on the
+/// `startsWith` containment predicate, not on any `Assert.*` call.
+#[test]
+fn java_assert_does_not_contain_still_fires() {
+    let src = br#"class LV {
+  private String baseDir = "/var/data";
+  void doGet(javax.servlet.http.HttpServletRequest req, javax.servlet.http.HttpServletResponse resp) throws Exception {
+    String name = req.getParameter("name");
+    org.springframework.util.Assert.doesNotContain(name, "..");
+    read(name, resp.getOutputStream());
+  }
+  private void read(String name, java.io.OutputStream out) throws java.io.IOException {
+    new java.io.FileInputStream(new java.io.File(baseDir, name)).transferTo(out);
+  }
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
+    let file_cfg = parse_lang(src, "java", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Java,
+        "test.java",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "Java: doesNotContain blocklist must not confine the read"
+    );
+}
+
 #[test]
 fn c_source_to_sink() {
     let src = b"void main() {\n  char* x = getenv(\"SECRET\");\n  system(x);\n}\n";

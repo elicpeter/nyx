@@ -1167,6 +1167,14 @@ pub(super) fn transfer_block(
     // Process body
     for inst in &block.body {
         transfer_inst(inst, cfg, ssa, transfer, &mut state);
+        // Assert-guard path confinement (CVE-2021-21234): if this call is to a
+        // helper whose SSA summary records `asserts_path_confined_params` (a
+        // `void` guard that `Assert.isTrue(p.startsWith(base))`-throws unless
+        // its path arg is contained under a fixed prefix), strip `Cap::FILE_IO`
+        // from the confined arguments.  Runs *after* `transfer_inst` so the
+        // clearing lands on the args' current caps, and *before* the same
+        // block's later sink call (`streamContent(path, …)`) reads them.
+        apply_call_post_confinement(inst, ssa, transfer, &mut state);
     }
 
     state
@@ -2150,6 +2158,81 @@ fn summary_confined_positions<'b>(
         }
     }
     None
+}
+
+/// Confined argument positions for an *assert-guard* path-confinement helper.
+///
+/// Mirrors [`summary_confined_positions`] but reads
+/// [`crate::summary::ssa_summary::SsaFuncSummary::asserts_path_confined_params`]:
+/// the callee is a `void` guard (`Assert.isTrue(p.startsWith(base))`) whose
+/// *normal completion* proves the argument at each returned position is
+/// contained under a fixed prefix.  Intra-file only — a path-check helper lives
+/// in the same class as the handler it guards.  Motivated by CVE-2021-21234.
+fn summary_asserts_confined_positions<'b>(
+    transfer: &'b SsaTaintTransfer,
+    bare_name: &str,
+) -> Option<&'b [usize]> {
+    let map = transfer.ssa_summaries?;
+    for (key, sum) in map.iter() {
+        if key.lang == transfer.lang
+            && key.name == bare_name
+            && !sum.asserts_path_confined_params.is_empty()
+        {
+            return Some(sum.asserts_path_confined_params.as_slice());
+        }
+    }
+    None
+}
+
+/// Apply an assert-guard path confinement as a call post-condition.
+///
+/// When `inst` is a call to a helper whose SSA summary records
+/// `asserts_path_confined_params` (a `void` guard that
+/// `Assert.isTrue(p.startsWith(base))`-style throws unless its path arg is
+/// contained under a fixed prefix — CVE-2021-21234), strip [`Cap::FILE_IO`]
+/// from the SSA values passed at each confined argument position.
+/// **Unconditional**: any normal completion of the callee proves the assertion
+/// held, so no caller branch is needed (unlike
+/// [`apply_summary_confinement_narrowing`], which gates a return-value confiner
+/// on the surviving branch).  A no-op when `transfer.ssa_summaries` is `None`
+/// or the callee is not a recognised assert-guard.
+fn apply_call_post_confinement(
+    inst: &SsaInst,
+    ssa: &SsaBody,
+    transfer: &SsaTaintTransfer,
+    state: &mut SsaTaintState,
+) {
+    let SsaOp::Call {
+        callee,
+        callee_text,
+        args,
+        ..
+    } = &inst.op
+    else {
+        return;
+    };
+    let bare = crate::labels::bare_method_name(callee_text.as_deref().unwrap_or(callee.as_str()));
+    let Some(positions) = summary_asserts_confined_positions(transfer, bare) else {
+        return;
+    };
+    // Copy the positions out so the immutable borrow of `transfer` is released
+    // before `clear_cap_alias_aware` takes `&mut state` (which also reads
+    // `transfer.base_aliases`).
+    let positions: SmallVec<[usize; 2]> = positions.iter().copied().collect();
+    for pos in positions {
+        let Some(group) = args.get(pos) else {
+            continue;
+        };
+        for &v in group {
+            if let Some(name) = ssa
+                .value_defs
+                .get(v.0 as usize)
+                .and_then(|vd| vd.var_name.as_deref())
+            {
+                clear_cap_alias_aware(state, name, Cap::FILE_IO, ssa, transfer.base_aliases);
+            }
+        }
+    }
 }
 
 /// Whether a callee (by bare name) is a recognised relative-URL confiner
@@ -7576,6 +7659,14 @@ fn collect_block_events(
     // Process body with sink detection
     for inst in &block.body {
         transfer_inst(inst, cfg, ssa, transfer, &mut state);
+        // Assert-guard path confinement (CVE-2021-21234).  Mirror the clearing
+        // done in `transfer_block`: this event-collection replay is a distinct
+        // pass over the block body, so the FILE_IO strip on an
+        // `Assert.isTrue(p.startsWith(base))`-style guard's confined args must
+        // be applied here too — otherwise the later sink call in the same block
+        // (`streamContent(path, …)`) is scanned against un-narrowed taint and
+        // re-fires the finding the confinement was meant to suppress.
+        apply_call_post_confinement(inst, ssa, transfer, &mut state);
 
         // Check for sink
         let info = &cfg[inst.cfg_node];
@@ -8391,7 +8482,6 @@ fn collect_block_events(
             if tainted.is_empty() {
                 continue;
             }
-
             // Compute all_validated: check if all tainted vars are validated
             let all_validated = tainted.iter().all(|(val, _, _)| {
                 let var_name = ssa

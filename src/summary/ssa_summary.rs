@@ -376,6 +376,28 @@ pub struct SsaFuncSummary {
     #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
     pub confines_path_params: SmallVec<[usize; 2]>,
 
+    /// Formal-parameter indices confined by an *assert-guard* path check: a
+    /// `void` guard method whose body asserts a fixed-prefix containment on the
+    /// parameter and throws otherwise (`Assert.isTrue(canonical.startsWith(
+    /// base), msg)`, `Preconditions.checkArgument(p.startsWith(dir))`).  Any
+    /// normal return from such a method is a post-condition that the checked
+    /// parameter is contained under a known-safe directory, so a *call* to it
+    /// clears [`crate::labels::Cap::FILE_IO`] from the argument passed at each
+    /// confined position — **unconditionally**, with no caller branch (unlike
+    /// [`Self::confines_path_params`], a return-value boolean confiner the
+    /// caller must branch on).  Consumed by `apply_call_post_confinement` in
+    /// the SSA taint transfer.
+    ///
+    /// Closes the precision gap behind CVE-2021-21234 (spring-boot-actuator-
+    /// logview path traversal): the patched `securityCheck(Path base, String
+    /// filename)` canonicalises the resolved path and
+    /// `Assert.isTrue(canonicalLoggingPath.startsWith(baseCanonicalPath), …)` —
+    /// the canonical Java `getCanonicalPath().startsWith(base)` containment
+    /// idiom — which nyx false-positived on before.  Empty (the default) for
+    /// helpers that do not assert-confine any parameter.
+    #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
+    pub asserts_path_confined_params: SmallVec<[usize; 2]>,
+
     /// The function's return value is a *relative-URL confiner*: it
     /// normalises its input and rejects protocol-relative (`//`) and
     /// absolute-`scheme:` URLs before returning the confined, same-origin

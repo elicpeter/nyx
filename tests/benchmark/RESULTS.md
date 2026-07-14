@@ -43,6 +43,7 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2022-42889 | Java       | Apache Commons Text        | Apache-2.0           | code_exec       | detected |
 | GHSA-h8cj-hpmg-636v | Java  | Appsmith                   | Apache-2.0           | sql_injection   | detected |
 | CVE-2024-39954 | Java       | Apache EventMesh           | Apache-2.0           | SSRF            | detected |
+| CVE-2021-21234 | Java       | spring-boot-actuator-logview | MIT                | path_traversal  | detected |
 | CVE-2013-0156  | Ruby       | Ruby on Rails              | MIT                  | Deserialization | detected |
 | CVE-2020-8130  | Ruby       | Rake                       | MIT                  | CMDI            | detected |
 | CVE-2021-21288 | Ruby       | CarrierWave                | MIT                  | SSRF            | detected |

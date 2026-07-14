@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-07-14T06:51:06Z",
+  "timestamp": "2026-07-14T08:48:58Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:89751d298c79a67e53087b5a5cc31ba920966627757c68e6c0a8807eee200358",
-  "corpus_size": 623,
-  "cases_run": 618,
+  "ground_truth_hash": "sha256:42f25863ac4ed1cda66d75d25846fa4b5590812c4f942aec7242f6fac41dadd9",
+  "corpus_size": 627,
+  "cases_run": 622,
   "cases_skipped": 5,
   "outcomes": [
     {
@@ -1493,6 +1493,43 @@
       ],
       "security_finding_count": 2,
       "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-java-2021-21234-patched",
+      "file": "cve_corpus/java/CVE-2021-21234/patched.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "cfg-resource-leak"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "cve-java-2021-21234-vulnerable",
+      "file": "cve_corpus/java/CVE-2021-21234/vulnerable.java",
+      "language": "java",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 52:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 52:5)",
+        "cfg-resource-leak"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 1
     },
     {
       "case_id": "cve-java-2022-1471-patched",
@@ -4045,6 +4082,25 @@
       "non_security_finding_count": 1
     },
     {
+      "case_id": "java-path_traversal-002",
+      "file": "java/path_traversal/AssertDoesNotContainInsufficient.java",
+      "language": "java",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 16:23)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 16:23)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "java-preauth-001",
       "file": "java/auth/SafePreAuthorize.java",
       "language": "java",
@@ -4261,6 +4317,21 @@
     {
       "case_id": "java-safe-018",
       "file": "java/safe/SafeMultiSinkParamConst.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-safe-assertguard-confinement-001",
+      "file": "java/safe/SafeAssertStartsWithConfinement.java",
       "language": "java",
       "vuln_class": "safe",
       "is_vulnerable": false,
@@ -11017,22 +11088,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 297,
+    "tp": 299,
     "fp": 7,
     "fn_": 7,
-    "tn": 307,
-    "precision": 0.9769736842105263,
-    "recall": 0.9769736842105263,
-    "f1": 0.9769736842105263
+    "tn": 309,
+    "precision": 0.9771241830065359,
+    "recall": 0.9771241830065359,
+    "f1": 0.9771241830065359
   },
   "aggregate_rule_level": {
-    "tp": 297,
+    "tp": 299,
     "fp": 7,
     "fn_": 7,
-    "tn": 307,
-    "precision": 0.9769736842105263,
-    "recall": 0.9769736842105263,
-    "f1": 0.9769736842105263
+    "tn": 309,
+    "precision": 0.9771241830065359,
+    "recall": 0.9771241830065359,
+    "f1": 0.9771241830065359
   },
   "by_language": {
     "c": {
@@ -11063,13 +11134,13 @@
       "f1": 0.9841269841269841
     },
     "java": {
-      "tp": 25,
+      "tp": 27,
       "fp": 1,
       "fn_": 1,
-      "tn": 25,
-      "precision": 0.9615384615384616,
-      "recall": 0.9615384615384616,
-      "f1": 0.9615384615384616
+      "tn": 27,
+      "precision": 0.9642857142857143,
+      "recall": 0.9642857142857143,
+      "f1": 0.9642857142857143
     },
     "javascript": {
       "tp": 27,
@@ -11245,7 +11316,7 @@
       "f1": 1.0
     },
     "path_traversal": {
-      "tp": 41,
+      "tp": 43,
       "fp": 0,
       "fn_": 0,
       "tn": 1,
@@ -11275,7 +11346,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 301,
+      "tn": 303,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -11328,31 +11399,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 95,
-      "fp": 129,
-      "fn_": 209,
-      "tn": 185,
-      "precision": 0.42410714285714285,
-      "recall": 0.3125,
-      "f1": 0.3598484848484849
+      "tp": 91,
+      "fp": 128,
+      "fn_": 215,
+      "tn": 188,
+      "precision": 0.4155251141552511,
+      "recall": 0.2973856209150327,
+      "f1": 0.3466666666666667
     },
     ">=Low": {
-      "tp": 95,
-      "fp": 157,
-      "fn_": 209,
-      "tn": 157,
-      "precision": 0.376984126984127,
-      "recall": 0.3125,
-      "f1": 0.34172661870503596
+      "tp": 91,
+      "fp": 153,
+      "fn_": 215,
+      "tn": 163,
+      "precision": 0.3729508196721312,
+      "recall": 0.2973856209150327,
+      "f1": 0.33090909090909093
     },
     ">=Medium": {
-      "tp": 95,
-      "fp": 133,
-      "fn_": 209,
-      "tn": 181,
-      "precision": 0.4166666666666667,
-      "recall": 0.3125,
-      "f1": 0.35714285714285715
+      "tp": 91,
+      "fp": 132,
+      "fn_": 215,
+      "tn": 184,
+      "precision": 0.4080717488789238,
+      "recall": 0.2973856209150327,
+      "f1": 0.3440453686200378
     }
   }
 }

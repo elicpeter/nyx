@@ -168,7 +168,6 @@ fn detect_path_confining_predicate_params(
     consts: &HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>,
     param_index_of: &HashMap<SsaValue, usize>,
 ) -> SmallVec<[usize; 2]> {
-    use crate::ssa::const_prop::ConstLattice;
     let mut result: SmallVec<[usize; 2]> = SmallVec::new();
     if param_index_of.is_empty() {
         return result;
@@ -203,93 +202,333 @@ fn detect_path_confining_predicate_params(
             continue;
         };
 
-        let method =
-            crate::labels::bare_method_name(callee_text.as_deref().unwrap_or(callee.as_str()));
-        let mlow = method.to_ascii_lowercase();
-        if !matches!(mlow.as_str(), "startswith" | "start_with?" | "hasprefix") {
-            continue;
-        }
-
-        // Resolve (subject operands, prefix value) per call form.
-        //
-        // Method form (`receiver.startsWith(prefix)`): SSA lowering of a
-        // chained-receiver method call puts the *explicit* arguments first
-        // and *appends* the chain's implicit-use operands (the free
-        // identifiers and the real subject param) as later arg groups
-        // (`build_call_args`).  So `args[0]` is the prefix and the subject
-        // param hides in `receiver` + `args[1..]` as an implicit use — the
-        // textual receiver (`normalizePath(id)`) is itself collapsed to a
-        // free-var Param, so the real `id` param is only observable through
-        // those implicit uses.
-        //
-        // Go function form (`strings.HasPrefix(subject, prefix)`): no
-        // receiver, `args[0]` is the subject and `args[1]` the prefix.
-        let (subject_vals, prefix): (SmallVec<[SsaValue; 4]>, Option<SsaValue>) =
-            if let Some(r) = receiver {
-                let prefix = args.first().and_then(|g| g.first()).copied();
-                let mut subs: SmallVec<[SsaValue; 4]> = SmallVec::new();
-                subs.push(*r);
-                for g in args.iter().skip(1) {
-                    subs.extend(g.iter().copied());
-                }
-                (subs, prefix)
-            } else if mlow == "hasprefix" {
-                let prefix = args.get(1).and_then(|g| g.first()).copied();
-                let subs: SmallVec<[SsaValue; 4]> =
-                    args.first().map(|g| g.iter().copied().collect()).unwrap_or_default();
-                (subs, prefix)
-            } else {
-                (SmallVec::new(), None)
-            };
-        let Some(prefix) = prefix else {
-            continue;
-        };
-
-        // Prefix must be a fixed value: a string constant, or not reachable
-        // from any *formal* parameter.  Captured module-scope values
-        // (`depsCacheDir`) appear as free-var Params with no formal index,
-        // so they read as fixed; a real param-derived prefix is
-        // attacker-influenced and proves no confinement.
-        let prefix_is_const = matches!(consts.get(&prefix), Some(ConstLattice::Str(_)));
-        let mut budget = 512u32;
-        let mut prefix_params: SmallVec<[usize; 2]> = SmallVec::new();
-        if !prefix_is_const {
-            let mut pseen = HashSet::new();
-            collect_reaching_params(
-                ssa,
-                prefix,
-                param_index_of,
-                &mut pseen,
-                &mut prefix_params,
-                &mut budget,
-            );
-            if !prefix_params.is_empty() {
-                continue;
-            }
-        }
-
-        // A formal parameter flowing into the subject side of the prefix
-        // check is confined: a `true` result constrains it to start with the
-        // fixed prefix.
-        let mut subj_params: SmallVec<[usize; 2]> = SmallVec::new();
-        for sv in subject_vals {
-            let mut sseen = HashSet::new();
-            collect_reaching_params(
-                ssa,
-                sv,
-                param_index_of,
-                &mut sseen,
-                &mut subj_params,
-                &mut budget,
-            );
-        }
-        for p in subj_params {
-            if !prefix_params.contains(&p) && !result.contains(&p) {
+        for p in prefix_confinement_params(
+            ssa,
+            consts,
+            param_index_of,
+            callee.as_str(),
+            callee_text.as_deref(),
+            *receiver,
+            args,
+        ) {
+            if !result.contains(&p) {
                 result.push(p);
             }
         }
     }
 
+    result
+}
+
+/// Subject/prefix analysis for a resolved prefix-containment call
+/// (`recv.startsWith(prefix)`, `strings.HasPrefix(subject, prefix)`, Python
+/// `.startswith`, Ruby `.start_with?`).  Returns the formal-parameter indices a
+/// `true` result confines: params reaching the *subject* side, provided the
+/// *prefix* operand is a fixed value (a string constant, or not reachable from
+/// any formal parameter).  Empty when the call is not a fixed-prefix
+/// containment check.  Shared by the return-value confiner detector
+/// ([`detect_path_confining_predicate_params`]) and the assert-guard detector
+/// ([`detect_assert_path_confined_params`]).
+fn prefix_confinement_params(
+    ssa: &SsaBody,
+    consts: &HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>,
+    param_index_of: &HashMap<SsaValue, usize>,
+    callee: &str,
+    callee_text: Option<&str>,
+    receiver: Option<SsaValue>,
+    args: &[SmallVec<[SsaValue; 2]>],
+) -> SmallVec<[usize; 2]> {
+    use crate::ssa::const_prop::ConstLattice;
+    let mut result: SmallVec<[usize; 2]> = SmallVec::new();
+
+    let method = crate::labels::bare_method_name(callee_text.unwrap_or(callee));
+    let mlow = method.to_ascii_lowercase();
+    if !matches!(mlow.as_str(), "startswith" | "start_with?" | "hasprefix") {
+        return result;
+    }
+
+    // Resolve (subject operands, prefix value) per call form.
+    //
+    // Method form (`receiver.startsWith(prefix)`): SSA lowering of a
+    // chained-receiver method call puts the *explicit* arguments first
+    // and *appends* the chain's implicit-use operands (the free
+    // identifiers and the real subject param) as later arg groups
+    // (`build_call_args`).  So `args[0]` is the prefix and the subject
+    // param hides in `receiver` + `args[1..]` as an implicit use — the
+    // textual receiver (`normalizePath(id)`) is itself collapsed to a
+    // free-var Param, so the real `id` param is only observable through
+    // those implicit uses.
+    //
+    // Go function form (`strings.HasPrefix(subject, prefix)`): no
+    // receiver, `args[0]` is the subject and `args[1]` the prefix.
+    let (subject_vals, prefix): (SmallVec<[SsaValue; 4]>, Option<SsaValue>) =
+        if let Some(r) = receiver {
+            let prefix = args.first().and_then(|g| g.first()).copied();
+            let mut subs: SmallVec<[SsaValue; 4]> = SmallVec::new();
+            subs.push(r);
+            for g in args.iter().skip(1) {
+                subs.extend(g.iter().copied());
+            }
+            (subs, prefix)
+        } else if mlow == "hasprefix" {
+            let prefix = args.get(1).and_then(|g| g.first()).copied();
+            let subs: SmallVec<[SsaValue; 4]> =
+                args.first().map(|g| g.iter().copied().collect()).unwrap_or_default();
+            (subs, prefix)
+        } else {
+            (SmallVec::new(), None)
+        };
+    let Some(prefix) = prefix else {
+        return result;
+    };
+
+    // Prefix must be a fixed value: a string constant, or not reachable
+    // from any *formal* parameter.  Captured module-scope values
+    // (`depsCacheDir`) appear as free-var Params with no formal index,
+    // so they read as fixed; a real param-derived prefix is
+    // attacker-influenced and proves no confinement.
+    let prefix_is_const = matches!(consts.get(&prefix), Some(ConstLattice::Str(_)));
+    let mut budget = 512u32;
+    let mut prefix_params: SmallVec<[usize; 2]> = SmallVec::new();
+    if !prefix_is_const {
+        let mut pseen = HashSet::new();
+        collect_reaching_params(ssa, prefix, param_index_of, &mut pseen, &mut prefix_params, &mut budget);
+        if !prefix_params.is_empty() {
+            return result;
+        }
+    }
+
+    // A formal parameter flowing into the subject side of the prefix
+    // check is confined: a `true` result constrains it to start with the
+    // fixed prefix.
+    let mut subj_params: SmallVec<[usize; 2]> = SmallVec::new();
+    for sv in subject_vals {
+        let mut sseen = HashSet::new();
+        collect_reaching_params(ssa, sv, param_index_of, &mut sseen, &mut subj_params, &mut budget);
+    }
+    for p in subj_params {
+        if !prefix_params.contains(&p) && !result.contains(&p) {
+            result.push(p);
+        }
+    }
+    result
+}
+
+/// Whether a callee (by lowercased bare name) is a *throw-if-false* assertion
+/// helper: any normal return after it proves its boolean argument held.
+/// Spring `Assert.isTrue`, commons-lang `Validate.isTrue`, Guava
+/// `Preconditions.checkArgument` / `checkState`, Node `assert(...)`.  Bounded
+/// to this small set so a non-guard call whose first argument happens to be a
+/// `startsWith` result cannot mint a spurious confinement.
+fn is_assert_true_callee(bare_lower: &str) -> bool {
+    matches!(
+        bare_lower,
+        "istrue" | "checkargument" | "checkstate" | "require" | "assert"
+    )
+}
+
+/// Detect the *assert-guard* path-confinement form: a guard method whose body
+/// asserts a fixed-prefix containment on a parameter and throws otherwise
+/// (`Assert.isTrue(canonical.startsWith(base), msg)`,
+/// `Preconditions.checkArgument(p.startsWith(dir))`).  Any normal return from
+/// such a method is a post-condition that the checked parameter is confined
+/// under the fixed prefix, so a *call* to it (no caller branch needed) clears
+/// `Cap::FILE_IO` from the confined arguments.  Distinct from
+/// [`detect_path_confining_predicate_params`], which recognises a *return-value*
+/// boolean confiner the caller must branch on.
+///
+/// The confinement is sound only when the assertion throws on a `false`
+/// containment: the recognised callees are all throw-if-false asserts, and the
+/// asserted operand must reduce to a prefix-containment check.  Two shapes:
+///   * Case A (collapsed method form, the dominant Java/Spring shape) — the
+///     chained `x.startsWith(y)` flattens into the assert's arg0 group with the
+///     `startsWith` method name surviving only as a synthetic-param leaf, split
+///     by [`confined_params_from_collapsed_assert_group`].
+///   * Case B (clean Call form, e.g. Go `strings.HasPrefix`) — arg0's def is a
+///     distinct `startsWith`/`hasPrefix` Call, resolved by
+///     [`prefix_confinement_params`].
+///
+/// A negated `Assert.isTrue(!x.startsWith(p))` (assert-NOT-contained) is not a
+/// real containment guard; in Case B its def is a unary-not op, not a
+/// `startsWith` Call, so it is naturally excluded.  This over-recognition is
+/// conservative-to-suppress only in the (non-idiomatic) collapsed-negated
+/// shape, and only ever clears `Cap::FILE_IO`.
+///
+/// Motivated by CVE-2021-21234 (spring-boot-actuator-logview path traversal).
+fn detect_assert_path_confined_params(
+    ssa: &SsaBody,
+    consts: &HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>,
+    param_index_of: &HashMap<SsaValue, usize>,
+) -> SmallVec<[usize; 2]> {
+    let mut result: SmallVec<[usize; 2]> = SmallVec::new();
+    if param_index_of.is_empty() {
+        return result;
+    }
+
+    for block in &ssa.blocks {
+        for inst in &block.body {
+            let SsaOp::Call {
+                callee,
+                callee_text,
+                args,
+                ..
+            } = &inst.op
+            else {
+                continue;
+            };
+            let assert_name = crate::labels::bare_method_name(
+                callee_text.as_deref().unwrap_or(callee.as_str()),
+            )
+            .to_ascii_lowercase();
+            if !is_assert_true_callee(&assert_name) {
+                continue;
+            }
+
+            // The asserted boolean is the assert call's first argument group.
+            let Some(group) = args.first() else {
+                continue;
+            };
+
+            // Case A — collapsed method form (`Assert.isTrue(x.startsWith(dir))`).
+            // SSA lowering flattens the chained receiver-method call into this
+            // arg group: the receiver, the `startsWith` method name (surviving
+            // only as a synthetic-param leaf), and the prefix argument all
+            // appear as ordered leaves.  Split at the method phantom.  This is
+            // the dominant Java/Spring shape; the `startsWith` never survives
+            // as a distinct SSA Call op.
+            let confined = confined_params_from_collapsed_assert_group(
+                ssa,
+                consts,
+                param_index_of,
+                group,
+            );
+            if !confined.is_empty() {
+                for p in confined {
+                    if !result.contains(&p) {
+                        result.push(p);
+                    }
+                }
+                continue;
+            }
+
+            // Case B — clean Call form (function-style, e.g. Go
+            // `strings.HasPrefix(p, dir)`): arg0's def is a distinct
+            // startsWith/hasPrefix Call.  Follow single-operand Assign copies
+            // to it, exactly as the return-value detector follows a return.
+            let Some(&cond_v) = group.first() else {
+                continue;
+            };
+            let mut cur = cond_v;
+            let mut hops = 0;
+            let def = loop {
+                match op_for_value(ssa, cur) {
+                    Some(SsaOp::Assign(uses)) if uses.len() == 1 && hops < 8 => {
+                        cur = uses[0];
+                        hops += 1;
+                    }
+                    other => break other,
+                }
+            };
+            let Some(SsaOp::Call {
+                callee: c2,
+                callee_text: ct2,
+                args: a2,
+                receiver: r2,
+            }) = def
+            else {
+                continue;
+            };
+            for p in prefix_confinement_params(
+                ssa,
+                consts,
+                param_index_of,
+                c2.as_str(),
+                ct2.as_deref(),
+                *r2,
+                a2,
+            ) {
+                if !result.contains(&p) {
+                    result.push(p);
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Reconstruct the confined formal-parameter indices from a *collapsed*
+/// prefix-containment assertion argument group.
+///
+/// When `Assert.isTrue(subject.startsWith(prefix), msg)` lowers, the chained
+/// `subject.startsWith(prefix)` receiver-method call flattens into the assert
+/// call's first argument group as ordered leaves — the subject receiver's
+/// operands, then the `startsWith` method name (as a synthetic-param leaf),
+/// then the prefix operands — with no surviving `startsWith` SSA Call.  Split
+/// the group at the method-name phantom: leaves before it are the *subject*,
+/// leaves after are the *prefix*.  A `true` result confines the formal params
+/// reaching the subject, provided the prefix is fixed (reaches no formal param
+/// — a param-derived prefix is attacker-influenced and proves nothing).
+///
+/// Returns the confined subject params, or empty when the group is not a
+/// collapsed prefix-containment check or the prefix is param-derived.
+fn confined_params_from_collapsed_assert_group(
+    ssa: &SsaBody,
+    consts: &HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>,
+    param_index_of: &HashMap<SsaValue, usize>,
+    group: &[SsaValue],
+) -> SmallVec<[usize; 2]> {
+    use crate::ssa::const_prop::ConstLattice;
+    let mut result: SmallVec<[usize; 2]> = SmallVec::new();
+
+    // Locate the (last) prefix-containment method-name phantom leaf.
+    let is_prefix_method = |v: SsaValue| -> bool {
+        ssa.value_defs
+            .get(v.0 as usize)
+            .and_then(|vd| vd.var_name.as_deref())
+            .map(|n| {
+                matches!(
+                    n.to_ascii_lowercase().as_str(),
+                    "startswith" | "start_with?" | "hasprefix"
+                )
+            })
+            .unwrap_or(false)
+    };
+    let Some(mi) = group.iter().rposition(|&v| is_prefix_method(v)) else {
+        return result;
+    };
+    let subject_vals = &group[..mi];
+    let prefix_vals = &group[mi + 1..];
+
+    let mut budget = 512u32;
+
+    // Prefix must be fixed: no non-const prefix leaf reaches a formal param.
+    let mut prefix_params: SmallVec<[usize; 2]> = SmallVec::new();
+    for &pv in prefix_vals {
+        if matches!(consts.get(&pv), Some(ConstLattice::Str(_))) {
+            continue;
+        }
+        let mut seen = HashSet::new();
+        collect_reaching_params(ssa, pv, param_index_of, &mut seen, &mut prefix_params, &mut budget);
+    }
+    if !prefix_params.is_empty() {
+        return result;
+    }
+
+    // Subject formal params are confined by a `true` result.
+    let mut subj_params: SmallVec<[usize; 2]> = SmallVec::new();
+    for &sv in subject_vals {
+        if is_prefix_method(sv) {
+            continue;
+        }
+        let mut seen = HashSet::new();
+        collect_reaching_params(ssa, sv, param_index_of, &mut seen, &mut subj_params, &mut budget);
+    }
+    for p in subj_params {
+        if !prefix_params.contains(&p) && !result.contains(&p) {
+            result.push(p);
+        }
+    }
     result
 }
 
@@ -1258,6 +1497,13 @@ pub fn extract_ssa_func_summary_full(
     let confines_path_params =
         detect_path_confining_predicate_params(ssa, &probe_const_values, &param_index_of);
 
+    // Assert-guard path confinement (CVE-2021-21234): a `void` guard method
+    // that `Assert.isTrue(p.startsWith(base))`-throws unless its path arg is
+    // contained under a fixed prefix.  Consumed unconditionally at the call
+    // site by `apply_call_post_confinement`.
+    let asserts_path_confined_params =
+        detect_assert_path_confined_params(ssa, &probe_const_values, &param_index_of);
+
     // Behaviour-based open-redirect confiner detection (CVE-2026-42259):
     // a helper that normalises its input then rejects protocol-relative
     // (`//`) and `scheme:` URLs before returning the confined value marks
@@ -1294,6 +1540,7 @@ pub fn extract_ssa_func_summary_full(
         typed_call_receivers: Vec::new(),
         validated_params_to_return,
         confines_path_params,
+        asserts_path_confined_params,
         sanitizes_open_redirect_return,
         // Phase-10 entry-point classification is attached post-extraction
         // by `taint::lower_all_functions_from_bodies` (which has access
