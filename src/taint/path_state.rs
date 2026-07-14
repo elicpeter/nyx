@@ -54,6 +54,19 @@ pub enum PredicateKind {
     /// [`crate::labels::Cap::OPEN_REDIRECT`] only on the validated branch so
     /// non-redirect sinks downstream still fire on residual taint.
     HostAllowlistValidated,
+    /// C path-prefix confinement: `strncmp(x, prefix, strlen(prefix))` /
+    /// `strncmp(x, prefix, N)` (also `strncasecmp`).  `strncmp` returns 0 when
+    /// `x` begins with `prefix`, so the idiomatic guard
+    /// `if (strncmp(x, prefix, strlen(prefix))) reject;` rejects paths that do
+    /// **not** start with the fixed prefix — a directory-confinement check.
+    /// Inverted polarity like [`ShellMetaValidated`](Self::ShellMetaValidated):
+    /// the TRUE (non-zero) branch is the reject path, the FALSE (starts-with)
+    /// branch is confined.  Cap-aware: clears
+    /// [`crate::labels::Cap::FILE_IO`] only on the confined branch so
+    /// non-file sinks downstream still fire on residual taint.  Surfaced by
+    /// CVE-2020-5221 (uftpd), whose fix moved the check from the unresolved
+    /// `dir` onto the `realpath()`-resolved `rpath`.
+    PathPrefixConfined,
     /// Bounded-length rejection: `x.len() > N` / `x.length < N` with N >= 2.
     ///
     /// Commonly paired with `ShellMetaValidated` in OR-chain rejection
@@ -230,6 +243,92 @@ fn is_metachar_regex_class(text: &str) -> bool {
 /// Negation prefixes (`!`, `not`) are NOT stripped, the caller's
 /// classification path handles those uniformly via the predicate
 /// polarity inversion machinery.
+/// Recognise a C prefix-containment guard and return the confined subject.
+///
+/// Matches `strncmp(subject, prefix, strlen(prefix))` / `strncmp(subject,
+/// prefix, <numeric>)` (and the `strncasecmp` variant), the canonical C
+/// idiom for "does `subject` begin with `prefix`".  The length argument must
+/// tie the comparison to the prefix (`strlen(prefix)` or a numeric literal),
+/// which is what distinguishes a genuine prefix check from an arbitrary
+/// `strncmp(a, b, n)` byte comparison.  `subject` must be a bare identifier so
+/// the caller can name-clear its taint.  Best-effort text analysis; scans for
+/// the call anywhere in the (possibly compound) condition text.
+///
+/// Returns `None` when the shape does not match, keeping the classifier out of
+/// this branch for unrelated `strncmp` uses.
+fn path_prefix_confinement_subject(text: &str) -> Option<String> {
+    for fname in ["strncmp(", "strncasecmp("] {
+        let Some(pos) = text.find(fname) else { continue };
+        let args_part = &text[pos + fname.len()..];
+        let args = split_top_level_args(args_part);
+        if args.len() < 3 {
+            continue;
+        }
+        let subject = args[0].trim();
+        let prefix = args[1].trim();
+        let length = args[2].trim();
+
+        // The length must anchor the comparison to the prefix: `strlen(prefix)`
+        // (the uftpd form), or a bare numeric constant.  Reject `sizeof(x)` and
+        // arbitrary expressions so a plain `strncmp(a, b, n)` does not confine.
+        let expected_strlen = format!("strlen({prefix})");
+        let len_anchored = length == expected_strlen
+            || (!length.is_empty() && length.bytes().all(|b| b.is_ascii_digit()));
+        if !len_anchored {
+            continue;
+        }
+
+        if is_identifier(subject) {
+            return Some(subject.to_string());
+        }
+    }
+    None
+}
+
+/// Split the top-level comma-separated arguments of a call, starting from the
+/// substring immediately after its open paren.  Stops at the matching close
+/// paren, respects nested paren/bracket/brace depth, and skips quoted strings.
+fn split_top_level_args(args_part: &str) -> Vec<&str> {
+    let bytes = args_part.as_bytes();
+    let mut out = Vec::new();
+    let mut depth: usize = 1;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    out.push(args_part[start..i].trim());
+                    return out;
+                }
+            }
+            b',' if depth == 1 => {
+                out.push(args_part[start..i].trim());
+                start = i + 1;
+            }
+            b'"' | b'\'' => {
+                let quote = bytes[i];
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i] == quote {
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
 fn is_leading_slash_check(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     // Method-call form: `.startswith("/")` covers JS/TS/Java (`startsWith`
@@ -880,6 +979,16 @@ pub fn classify_condition(text: &str) -> PredicateKind {
         return PredicateKind::HostAllowlistValidated;
     }
 
+    // ── C path-prefix confinement ───────────────────────────────────────
+    //
+    // `strncmp(x, prefix, strlen(prefix))` guarding a reject branch confines
+    // `x` to a fixed directory prefix (uftpd CVE-2020-5221).  Matched here so
+    // the bare `strncmp(...)` call isn't captured by any later comparison /
+    // membership branch.
+    if path_prefix_confinement_subject(text).is_some() {
+        return PredicateKind::PathPrefixConfined;
+    }
+
     // ── Substring-REJECTION with a literal needle (not an allowlist) ─────
     //
     // `x.includes("..")` / `x.contains("<script>")` / `x.indexOf("..")` test
@@ -1151,6 +1260,14 @@ pub fn classify_condition_with_target(text: &str) -> (PredicateKind, Option<Stri
             // Argument of the parse call: `new URL(x).host` → `x`,
             // `urlparse(x).netloc` → `x`.
             let target = extract_host_allowlist_target(text);
+            (kind, target)
+        }
+        PredicateKind::PathPrefixConfined => {
+            // Subject (arg 0) of `strncmp(x, prefix, strlen(prefix))`.  Scoping
+            // the FILE_IO clear to just the subject is what distinguishes the
+            // uftpd fix (`strncmp(rpath, …)`, confines the returned value) from
+            // the bug (`strncmp(dir, …)`, confines an unrelated local).
+            let target = path_prefix_confinement_subject(text);
             (kind, target)
         }
         PredicateKind::Comparison => {
@@ -2812,5 +2929,48 @@ mod ghsa_h8cj_hpmg_636v_tests {
         assert!(!is_negative_polarity_validation_callee("URL_VALIDATOR.isValid(url)"));
         // No call → not a validation callee at all.
         assert!(!is_negative_polarity_validation_callee("x == null"));
+    }
+
+    // ── C path-prefix confinement (uftpd CVE-2020-5221) ──────────────────
+
+    #[test]
+    fn strncmp_prefix_check_is_path_prefix_confined() {
+        // `strncmp(x, prefix, strlen(prefix))` → PathPrefixConfined, subject x.
+        let (kind, target) =
+            classify_condition_with_target("strncmp(rpath, home, strlen(home))");
+        assert_eq!(kind, PredicateKind::PathPrefixConfined);
+        assert_eq!(target.as_deref(), Some("rpath"));
+
+        // strncasecmp variant + numeric length constant.
+        assert_eq!(
+            classify_condition("strncasecmp(p, \"/srv\", 4)"),
+            PredicateKind::PathPrefixConfined
+        );
+
+        // The subject scoping is what distinguishes the uftpd bug from the fix:
+        // the bug checks `dir` (an unrelated local) while returning `rpath`.
+        let (_, bug_target) =
+            classify_condition_with_target("strncmp(dir, home, strlen(home))");
+        assert_eq!(bug_target.as_deref(), Some("dir"));
+    }
+
+    #[test]
+    fn strncmp_without_prefix_length_is_not_confinement() {
+        // A plain byte comparison whose length is not tied to the prefix must
+        // NOT be treated as a prefix confinement (would over-suppress).
+        assert_ne!(
+            classify_condition("strncmp(a, b, n)"),
+            PredicateKind::PathPrefixConfined
+        );
+        // `strlen` of a *different* operand does not anchor the prefix.
+        assert_ne!(
+            classify_condition("strncmp(a, b, strlen(c))"),
+            PredicateKind::PathPrefixConfined
+        );
+        // A non-identifier subject (member/index expression) is not extracted.
+        assert_eq!(
+            classify_condition_with_target("strncmp(buf[0], home, strlen(home))").1,
+            None
+        );
     }
 }

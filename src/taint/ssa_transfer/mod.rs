@@ -1776,6 +1776,19 @@ fn apply_branch_predicates(
         }
     }
 
+    // PathPrefixConfined: inverted polarity, the FALSE (starts-with-prefix)
+    // branch is the confined path; the TRUE (non-zero strncmp) branch is the
+    // rejection path.  Cap-aware: a `strncmp(x, prefix, strlen(prefix))` guard
+    // only proves `x` is confined to the fixed directory prefix, so clear
+    // `Cap::FILE_IO` from the confined variable's taint and let other sink
+    // classes still fire on the residual caps.  `condition_vars` is already
+    // scoped to the strncmp subject via `classify_condition_with_target`.
+    if kind == PredicateKind::PathPrefixConfined && !polarity {
+        for var in condition_vars {
+            clear_cap_alias_aware(state, var, Cap::FILE_IO, ssa, base_aliases);
+        }
+    }
+
     // Whitelisted predicate kinds: update PredicateSummary bits
     if let Some(bit_idx) = predicate_kind_bit(kind) {
         for var in condition_vars {

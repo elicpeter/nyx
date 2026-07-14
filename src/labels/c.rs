@@ -285,6 +285,24 @@ pub static OUTPUT_PARAM_SOURCES: &[(&str, &[usize])] = &[
 ];
 
 /// Arg-to-arg taint propagation for known C functions.
+///
+/// The C standard library builds strings and paths by writing into a
+/// destination buffer passed as an *output* argument rather than through a
+/// return value.  Unlike the arg→return default propagation that
+/// `collect_args_taint` applies to unresolved calls, taint that lands in an
+/// out-param is otherwise lost: `strlcat(dir, userInput, size)` leaves `dir`
+/// clean, so a path assembled from attacker bytes and handed to `fopen()`
+/// reads as untainted.  This under-propagation was the recall gap behind
+/// CVE-2020-5221 (uftpd directory traversal): the FTP command bytes reach
+/// `compose_path()`, which assembles `dir` via `strlcpy`/`strlcat`, resolves
+/// it with `realpath(dir, rpath)`, and returns `rpath` to a `fopen()` sink —
+/// every hop in that chain crosses an out-param the model did not track.
+///
+/// Each rule below propagates conditionally: the destination inherits taint
+/// only when a source argument is already tainted, so constant-source copies
+/// (`strcpy(dst, "literal")`) stay clean and do not manufacture false flows.
+/// `from_args` for the `*printf`-into-buffer forms enumerate the format string
+/// plus a conservative span of trailing variadic slots.
 pub static ARG_PROPAGATIONS: &[super::ArgPropagation] = &[
     super::ArgPropagation {
         callee: "inet_pton",
@@ -296,11 +314,108 @@ pub static ARG_PROPAGATIONS: &[super::ArgPropagation] = &[
         from_args: &[0],
         to_args: &[1],
     },
+    // ── String/buffer builders: dst = arg 0, source(s) = later args ──
+    super::ArgPropagation {
+        callee: "strcpy",
+        from_args: &[1],
+        to_args: &[0],
+    },
+    super::ArgPropagation {
+        callee: "strncpy",
+        from_args: &[1],
+        to_args: &[0],
+    },
+    super::ArgPropagation {
+        callee: "strcat",
+        from_args: &[1],
+        to_args: &[0],
+    },
+    super::ArgPropagation {
+        callee: "strncat",
+        from_args: &[1],
+        to_args: &[0],
+    },
+    super::ArgPropagation {
+        callee: "strlcpy",
+        from_args: &[1],
+        to_args: &[0],
+    },
+    super::ArgPropagation {
+        callee: "strlcat",
+        from_args: &[1],
+        to_args: &[0],
+    },
+    super::ArgPropagation {
+        callee: "stpcpy",
+        from_args: &[1],
+        to_args: &[0],
+    },
+    super::ArgPropagation {
+        callee: "memcpy",
+        from_args: &[1],
+        to_args: &[0],
+    },
+    super::ArgPropagation {
+        callee: "memmove",
+        from_args: &[1],
+        to_args: &[0],
+    },
+    // `snprintf(dst, size, fmt, ...)` / `sprintf(dst, fmt, ...)`: the tainted
+    // bytes may be the format string or any trailing variadic argument.
+    super::ArgPropagation {
+        callee: "snprintf",
+        from_args: &[2, 3, 4, 5, 6, 7],
+        to_args: &[0],
+    },
+    super::ArgPropagation {
+        callee: "sprintf",
+        from_args: &[1, 2, 3, 4, 5, 6],
+        to_args: &[0],
+    },
+    // `realpath(path, resolved)`: canonicalises `path` into `resolved` (arg 1).
+    super::ArgPropagation {
+        callee: "realpath",
+        from_args: &[0],
+        to_args: &[1],
+    },
 ];
 
 #[cfg(test)]
 mod tests {
-    use crate::labels::output_param_source_positions;
+    use crate::labels::{arg_propagation, output_param_source_positions};
+
+    #[test]
+    fn string_builders_propagate_source_into_destination() {
+        // strlcpy/strlcat/strcpy/strncpy/strcat/strncat/stpcpy/memcpy/memmove:
+        // dst is arg 0, source is a later arg.  Motivated by uftpd
+        // CVE-2020-5221 (`strlcat(dir, path, …)` assembling a path from a
+        // tainted argument).
+        for callee in [
+            "strcpy", "strncpy", "strcat", "strncat", "strlcpy", "strlcat", "stpcpy", "memcpy",
+            "memmove",
+        ] {
+            let prop = arg_propagation("c", callee)
+                .unwrap_or_else(|| panic!("{callee} should have an arg propagation"));
+            assert_eq!(prop.to_args, &[0], "{callee} writes its destination at arg 0");
+            assert!(
+                prop.from_args.contains(&1),
+                "{callee} reads its source from arg 1"
+            );
+        }
+    }
+
+    #[test]
+    fn snprintf_and_realpath_propagate_into_out_param() {
+        // snprintf(dst, size, fmt, …): tainted bytes in the format or variadic
+        // slots reach the destination buffer.
+        let snp = arg_propagation("c", "snprintf").expect("snprintf propagation");
+        assert_eq!(snp.to_args, &[0]);
+        assert!(snp.from_args.contains(&2) && snp.from_args.contains(&3));
+        // realpath(path, resolved): canonicalises arg 0 into arg 1.
+        let rp = arg_propagation("c", "realpath").expect("realpath propagation");
+        assert_eq!(rp.from_args, &[0]);
+        assert_eq!(rp.to_args, &[1]);
+    }
 
     #[test]
     fn scanf_family_and_read_taint_output_args() {

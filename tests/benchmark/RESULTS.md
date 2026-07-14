@@ -64,6 +64,7 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2016-3714  | C          | ImageMagick (ImageTragick) | ImageMagick License  | CMDI            | detected |
 | CVE-2017-1000117 | C        | git (ssh:// argv injection)| GPL-2.0              | cmdi (argv-inj) | detected |
 | CVE-2019-18634 | C          | sudo (pwfeedback)          | ISC                  | memory_safety   | detected |
+| CVE-2020-5221  | C          | uftpd                      | ISC                  | path_traversal  | detected (patched precision deferred: interproc strncmp return-confinement) |
 | CVE-2019-13132 | C++        | ZeroMQ libzmq              | MPL-2.0              | memory_safety   | detected |
 | CVE-2022-1941  | C++        | Protocol Buffers           | BSD-3-Clause         | memory_safety   | detected |
 | CVE-2026-25544 | TypeScript | Payload (Drizzle adapter)  | MIT                  | sql_injection   | detected |
