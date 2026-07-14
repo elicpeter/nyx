@@ -2220,6 +2220,15 @@ impl TypeHierarchy {
     }
 }
 
+/// True when a Go `fmt.Fprint*` writer value (positional arg 0) is provably
+/// **not** an `http.ResponseWriter`, so the reflected-XSS (`HTML_ESCAPE`)
+/// sink label does not apply.  Shared by the SSA taint sink gate and the
+/// structural `cfg-unguarded-sink` rule so suppressing the finding on one
+/// path does not surface the twin false positive on the other.
+pub fn go_writer_is_non_response(kind: &TypeKind) -> bool {
+    GoInterfaceTable::definitely_not(kind, "http.ResponseWriter")
+}
+
 // ── Go Interface Satisfaction (bounded, conservative) ────────────────────
 
 /// Go interface satisfaction table for **sink-relevant interfaces only**.
@@ -2890,6 +2899,15 @@ mod tests {
             &TypeKind::HttpResponse,
             "http.ResponseWriter"
         ));
+    }
+
+    #[test]
+    fn go_writer_is_non_response_discriminates_buffer_from_response() {
+        // The shared `fmt.Fprint*` writer-type gate: byte-sink writers are
+        // non-response; an `http.ResponseWriter` (or an unknown writer type)
+        // is not, so the reflected-XSS label is preserved for real handlers.
+        assert!(go_writer_is_non_response(&TypeKind::FileHandle));
+        assert!(!go_writer_is_non_response(&TypeKind::HttpResponse));
     }
 
     // ── GoInterfaceTable::satisfies ──────────────────────────────────────

@@ -4057,6 +4057,9 @@ fn extract_decl_type(
     lang: &str,
     code: &[u8],
 ) -> Option<crate::ssa::type_facts::TypeKind> {
+    if lang == "go" {
+        return extract_decl_type_go(ast, code);
+    }
     if lang != "rust" {
         return None;
     }
@@ -4070,6 +4073,87 @@ fn extract_decl_type(
     let type_node = decl.child_by_field_name("type")?;
     let type_text = text_of(type_node, code)?;
     crate::ssa::type_facts::rust_annotation_type_kind(&type_text)
+}
+
+/// Go local-binding writer-type inference.
+///
+/// A local writer bound to a byte-buffer constructor —
+/// `stdIn := new(bytes.Buffer)`, `buf := &bytes.Buffer{}`,
+/// `sb := new(strings.Builder)` — is a non-response byte sink, exactly like
+/// a `w bytes.Buffer` parameter.  The `new(T)` type argument (and the
+/// `&T{}` composite-literal type) is dropped from the CFG's `arg_uses` (the
+/// type node is not a value use), so the value's `TypeFact` stays `Unknown`
+/// and the Go `fmt.Fprintf` XSS gate cannot recognise the writer as
+/// non-response.  This recovers the type by reading the RHS constructor text
+/// and mapping it through the shared [`params::go_writer_type_to_kind`]
+/// table, so `fmt.Fprintf(stdIn, "0 %s\t%s\x00", ...)` (gitea
+/// `temp_repo.go`) is not flagged as reflected XSS.  Only writer buffer
+/// types resolve; every other constructor returns `None`, so the inference
+/// stays conservative (never suppresses a real `http.ResponseWriter`).
+fn extract_decl_type_go(ast: Node, code: &[u8]) -> Option<crate::ssa::type_facts::TypeKind> {
+    // Resolve the initialiser expression for the binding statement.
+    let rhs = match ast.kind() {
+        // `x := <rhs>` / `x = <rhs>`
+        "short_var_declaration" | "assignment_statement" => {
+            let right = ast.child_by_field_name("right")?;
+            first_go_expr(right)
+        }
+        // `var x = <rhs>` (a var_spec carries the value directly)
+        "var_spec" => ast.child_by_field_name("value").and_then(first_go_expr),
+        _ => None,
+    }?;
+    let ty_text = go_constructor_type_text(rhs, code)?;
+    params::go_writer_type_to_kind(&ty_text)
+}
+
+/// First concrete expression inside an `expression_list` (or the node itself
+/// when it is already a single expression).  Returns `None` for
+/// multi-value RHS lists (`a, b := f()`), where the binding target's type is
+/// ambiguous.
+fn first_go_expr(n: Node) -> Option<Node> {
+    if n.kind() == "expression_list" {
+        let mut cursor = n.walk();
+        let exprs: Vec<Node> = n
+            .children(&mut cursor)
+            .filter(|c| c.is_named())
+            .collect();
+        if exprs.len() == 1 {
+            Some(exprs[0])
+        } else {
+            None
+        }
+    } else {
+        Some(n)
+    }
+}
+
+/// Read the constructed type's text from a Go constructor expression:
+/// `new(T)` → `T`, `&T{}` / `T{}` (composite literals, possibly under a
+/// `&` unary) → `T`.  Returns `None` for any other expression shape.
+fn go_constructor_type_text(expr: Node, code: &[u8]) -> Option<String> {
+    match expr.kind() {
+        "call_expression" => {
+            let func = expr.child_by_field_name("function")?;
+            if text_of(func, code)?.trim() != "new" {
+                return None;
+            }
+            let args = expr.child_by_field_name("arguments")?;
+            let mut cursor = args.walk();
+            let first = args.children(&mut cursor).find(|c| c.is_named())?;
+            text_of(first, code)
+        }
+        // `&T{}` — the address-of a composite literal.
+        "unary_expression" => {
+            let operand = expr.child_by_field_name("operand")?;
+            go_constructor_type_text(operand, code)
+        }
+        // `T{}` composite literal.
+        "composite_literal" => {
+            let ty = expr.child_by_field_name("type")?;
+            text_of(ty, code)
+        }
+        _ => None,
+    }
 }
 
 /// Nearest ancestor of `n` that is a call/method-call expression, or `None`

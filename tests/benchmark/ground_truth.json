@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 632
+    "corpus_size": 633
   },
   "cases": [
     {
@@ -19932,6 +19932,101 @@
       ],
       "disabled": false,
       "notes": "Synthetic (CVE-2026-21859 shape): InArray(uri, links) allowlist confines the outbound URL through a split/copy-derived uri. Pins value-first membership recognition + copy-alias-aware validation."
+    },
+    {
+      "case_id": "go-xss-safe-002",
+      "file": "go/safe/safe_fprintf_new_bytes_buffer.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo-distilled",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "xss",
+        "fmt-fprintf",
+        "bytes-buffer",
+        "new-builtin",
+        "safe",
+        "negative",
+        "real-repo-precision"
+      ],
+      "disabled": false,
+      "notes": "real-repo-precision 2026-07-14: fmt.Fprintf into a new(bytes.Buffer) writer is not reflected XSS; new(T) type arg recovered via extract_decl_type_go. gitea temp_repo.go:152."
+    },
+    {
+      "case_id": "go-xss-safe-003",
+      "file": "go/safe/safe_fprintf_os_file_loop.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo-distilled",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "xss",
+        "fmt-fprintf",
+        "os-file",
+        "loop",
+        "safe",
+        "negative",
+        "real-repo-precision"
+      ],
+      "disabled": false,
+      "notes": "real-repo-precision 2026-07-14: fmt.Fprintf into an os.Create file handle inside a loop is not reflected XSS; writer type read from flow-insensitive TypeFacts (path_env widens across loop head). gitea mock_http.go:103."
+    },
+    {
+      "case_id": "go-xss-safe-004",
+      "file": "go/safe/safe_fprintf_bytes_buffer.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo-distilled",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "xss",
+        "fmt-fprintf",
+        "bytes-buffer",
+        "safe",
+        "negative",
+        "real-repo-precision"
+      ],
+      "disabled": false,
+      "notes": "real-repo-precision 2026-07-14: fmt.Fprintf into a bytes.NewBuffer writer is not reflected XSS (regression coverage for the Go printf writer-type gate). gitea temp_repo.go."
     }
   ]
 }

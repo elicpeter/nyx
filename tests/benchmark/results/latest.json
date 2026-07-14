@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-07-14T11:39:56Z",
+  "timestamp": "2026-07-14T13:00:02Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:8a25256f3043c82460157444aba144b7321011b37cb821ab087b1c9707d2d6d2",
-  "corpus_size": 630,
-  "cases_run": 625,
+  "ground_truth_hash": "sha256:d4c7dbe6b8e8f230edb15c0545e57020773871d7843629b21cc033de71e528ad",
+  "corpus_size": 633,
+  "cases_run": 628,
   "cases_skipped": 5,
   "outcomes": [
     {
@@ -3922,6 +3922,51 @@
         "taint-unsanitised-flow (source 9:10)"
       ],
       "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-xss-safe-002",
+      "file": "go/safe/safe_fprintf_new_bytes_buffer.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-xss-safe-003",
+      "file": "go/safe/safe_fprintf_os_file_loop.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-xss-safe-004",
+      "file": "go/safe/safe_fprintf_bytes_buffer.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -11140,7 +11185,7 @@
     "tp": 300,
     "fp": 7,
     "fn_": 7,
-    "tn": 311,
+    "tn": 314,
     "precision": 0.9771986970684039,
     "recall": 0.9771986970684039,
     "f1": 0.9771986970684039
@@ -11149,7 +11194,7 @@
     "tp": 300,
     "fp": 7,
     "fn_": 7,
-    "tn": 311,
+    "tn": 314,
     "precision": 0.9771986970684039,
     "recall": 0.9771986970684039,
     "f1": 0.9771986970684039
@@ -11177,7 +11222,7 @@
       "tp": 32,
       "fp": 0,
       "fn_": 1,
-      "tn": 40,
+      "tn": 43,
       "precision": 1.0,
       "recall": 0.9696969696969697,
       "f1": 0.9846153846153847
@@ -11395,7 +11440,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 305,
+      "tn": 308,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -11448,31 +11493,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 89,
+      "tp": 91,
       "fp": 133,
-      "fn_": 218,
-      "tn": 185,
-      "precision": 0.4009009009009009,
-      "recall": 0.2899022801302932,
-      "f1": 0.33648393194706994
+      "fn_": 216,
+      "tn": 188,
+      "precision": 0.40625,
+      "recall": 0.2964169381107492,
+      "f1": 0.3427495291902072
     },
     ">=Low": {
-      "tp": 89,
-      "fp": 163,
-      "fn_": 218,
-      "tn": 155,
-      "precision": 0.3531746031746032,
-      "recall": 0.2899022801302932,
-      "f1": 0.31842576028622543
+      "tp": 91,
+      "fp": 161,
+      "fn_": 216,
+      "tn": 160,
+      "precision": 0.3611111111111111,
+      "recall": 0.2964169381107492,
+      "f1": 0.32558139534883723
     },
     ">=Medium": {
-      "tp": 89,
-      "fp": 138,
-      "fn_": 218,
-      "tn": 180,
-      "precision": 0.3920704845814978,
-      "recall": 0.2899022801302932,
-      "f1": 0.3333333333333333
+      "tp": 91,
+      "fp": 135,
+      "fn_": 216,
+      "tn": 186,
+      "precision": 0.4026548672566372,
+      "recall": 0.2964169381107492,
+      "f1": 0.34146341463414637
     }
   }
 }

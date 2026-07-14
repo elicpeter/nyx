@@ -603,6 +603,53 @@ fn sink_args_typed_safe(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) 
     type_facts_suppress(&values, sink_caps, type_facts)
 }
 
+/// Suppress a Go `cfg-unguarded-sink` reflected-XSS finding on
+/// `fmt.Fprintf` / `fmt.Fprint` / `fmt.Fprintln` when the writer (positional
+/// arg 0) is provably not an `http.ResponseWriter` — an in-memory
+/// `*bytes.Buffer`, an `*os.File`, a `bufio.Writer`, an `io.Writer`
+/// parameter, and similar non-response byte sinks.
+///
+/// Mirrors the SSA taint engine's Go printf writer gate
+/// ([`crate::ssa::type_facts::go_writer_is_non_response`]) so the two rules
+/// agree: the taint engine already strips `HTML_ESCAPE` when the writer is a
+/// non-response type, which leaves the sink unconfirmed (`!has_taint`) and
+/// re-opens the structural finding on the identical call.  gitea
+/// `models/unittest/mock_http.go:103` (`fmt.Fprintf(out, "%s: %s\n", …)`
+/// where `out := os.Create(…)`) and `temp_repo.go:152`
+/// (`fmt.Fprintf(stdIn, …)` where `stdIn := new(bytes.Buffer)`) are the
+/// motivating shapes.
+fn go_fprintf_writer_non_response(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) -> bool {
+    if !sink_caps.contains(Cap::HTML_ESCAPE) {
+        return false;
+    }
+    let sink_info = &ctx.cfg[sink];
+    let callee = sink_info.call.callee.as_deref().unwrap_or("");
+    if !matches!(callee, "fmt.Fprintf" | "fmt.Fprint" | "fmt.Fprintln") {
+        return false;
+    }
+    let Some(facts) = ctx.body_const_facts else {
+        return false;
+    };
+    let Some(type_facts) = ctx.type_facts else {
+        return false;
+    };
+    let Some(&sink_val) = facts.ssa.cfg_node_map.get(&sink) else {
+        return false;
+    };
+    let Some(inst) = find_inst(&facts.ssa, sink_val) else {
+        return false;
+    };
+    let SsaOp::Call { args, .. } = &inst.op else {
+        return false;
+    };
+    let Some(&first_val) = args.first().and_then(|g| g.first()) else {
+        return false;
+    };
+    type_facts
+        .get_type(first_val)
+        .is_some_and(crate::ssa::type_facts::go_writer_is_non_response)
+}
+
 /// Suppress a `cfg-unguarded-sink` finding when every real argument to the
 /// sink is a value-use identifier proven *numeric-confined* by the CFG-level
 /// AST walk ([`crate::cfg::NodeInfo::numeric_confined_uses`]): each occurrence
@@ -3304,6 +3351,15 @@ impl CfgAnalysis for UnguardedSink {
             // engine already covers the source→sink flow via type-aware
             // suppression.  Unknown-typed or mixed operands fall through.
             if !has_taint && sink_args_typed_safe(ctx, *sink, sink_caps) {
+                continue;
+            }
+
+            // Go `fmt.Fprint*` reflected-XSS onto a non-response writer
+            // (`*bytes.Buffer`, `*os.File`, `bufio.Writer`, `io.Writer`
+            // param): the taint engine strips `HTML_ESCAPE` for the same
+            // writer type, so the flow is not confirmed here (`!has_taint`)
+            // and the structural finding would be a twin false positive.
+            if !has_taint && go_fprintf_writer_non_response(ctx, *sink, sink_caps) {
                 continue;
             }
 

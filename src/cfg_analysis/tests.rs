@@ -2205,3 +2205,176 @@ fn type_facts_pathbuf_let_annotation_not_suppressed() {
         findings
     );
 }
+
+#[test]
+fn go_fprintf_new_bytes_buffer_writer_not_flagged_unguarded_xss() {
+    // `stdIn := new(bytes.Buffer); fmt.Fprintf(stdIn, "0 %s", name)` — the
+    // writer is a non-response in-memory byte buffer (gitea temp_repo.go
+    // shape), so the reflected-XSS `cfg-unguarded-sink` must be suppressed,
+    // mirroring the SSA taint engine's Go printf writer-type gate.  The
+    // `new(T)` type argument is recovered via `extract_decl_type_go`.
+    let src = br#"package main
+import ("bytes"; "fmt"; "net/http")
+func h(r *http.Request) {
+    name := r.URL.Query().Get("name")
+    stdIn := new(bytes.Buffer)
+    fmt.Fprintf(stdIn, "0 %s", name)
+    _ = stdIn.Bytes()
+}
+"#;
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "go",
+        Language::from(tree_sitter_go::LANGUAGE),
+    );
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "new(bytes.Buffer) writer must not flag cfg-unguarded-sink XSS, got: {:?}",
+        findings
+    );
+}
+
+#[test]
+fn go_fprintf_os_create_writer_not_flagged_unguarded_xss() {
+    // `out, _ := os.Create(path); fmt.Fprintf(out, "%s", name)` — the writer
+    // is an `*os.File` handle (gitea mock_http.go shape), typed FileHandle
+    // via `constructor_type`.  The static-TypeFacts path must recognise it
+    // even though the write sits inside a loop where the flow-sensitive env
+    // widens the type away.
+    let src = br#"package main
+import ("fmt"; "net/http"; "os")
+func h(r *http.Request) {
+    name := r.URL.Query().Get("name")
+    out, _ := os.Create("/tmp/x")
+    for i := 0; i < 3; i++ {
+        fmt.Fprintf(out, "%s\n", name)
+    }
+}
+"#;
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "go",
+        Language::from(tree_sitter_go::LANGUAGE),
+    );
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "os.Create file-handle writer must not flag cfg-unguarded-sink XSS, got: {:?}",
+        findings
+    );
+}
+
+#[test]
+fn go_fprintf_response_writer_still_flagged_unguarded_xss() {
+    // Recall guard: an actual `http.ResponseWriter` writer is a genuine
+    // reflected-XSS sink — the writer-type gate must NOT suppress it.
+    let src = br#"package main
+import ("fmt"; "net/http")
+func h(w http.ResponseWriter, r *http.Request) {
+    name := r.URL.Query().Get("name")
+    fmt.Fprintf(w, "<b>%s</b>", name)
+}
+"#;
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "go",
+        Language::from(tree_sitter_go::LANGUAGE),
+    );
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !unguarded.is_empty(),
+        "http.ResponseWriter fmt.Fprintf must still flag cfg-unguarded-sink, got: {:?}",
+        findings
+    );
+}
+
+#[test]
+fn go_new_bytes_buffer_binding_typed_filehandle() {
+    // `extract_decl_type_go`: a local bound to `new(bytes.Buffer)` types as
+    // FileHandle (the `new(T)` type argument is dropped from the CFG's
+    // arg_uses, so the constructor text is read from the binding).
+    let src = br#"package main
+import ("bytes"; "fmt"; "net/http")
+func h(r *http.Request) {
+    name := r.URL.Query().Get("name")
+    stdIn := new(bytes.Buffer)
+    fmt.Fprintf(stdIn, "0 %s", name)
+    _ = stdIn.Bytes()
+}
+"#;
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_go::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src, None).unwrap();
+    let file_cfg = build_cfg(&tree, src, "go", "test.go", None);
+    let body = file_cfg.first_body();
+    let facts = build_body_const_facts(body, Lang::Go).expect("body const facts");
+    let val = facts
+        .ssa
+        .blocks
+        .iter()
+        .flat_map(|b| b.body.iter())
+        .find(|i| {
+            i.var_name.as_deref() == Some("stdIn")
+                && matches!(i.op, crate::ssa::SsaOp::Call { .. })
+        })
+        .map(|i| i.value)
+        .expect("stdIn := new(bytes.Buffer) call value");
+    assert_eq!(
+        facts.type_facts.get_type(val),
+        Some(&crate::ssa::type_facts::TypeKind::FileHandle),
+        "new(bytes.Buffer) local must type as FileHandle"
+    );
+}
+
+#[test]
+fn go_new_non_writer_struct_binding_not_typed_filehandle() {
+    // Conservative: `new(T)` for a non-writer struct type must NOT type as
+    // FileHandle, so the writer-type gate stays sound (never suppresses a
+    // real `http.ResponseWriter` that happened to be `new`-constructed).
+    let src = br#"package main
+type Payload struct{ X string }
+func h() {
+    p := new(Payload)
+    _ = p.X
+}
+"#;
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_go::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src, None).unwrap();
+    let file_cfg = build_cfg(&tree, src, "go", "test.go", None);
+    let body = file_cfg.first_body();
+    let facts = build_body_const_facts(body, Lang::Go).expect("body const facts");
+    let val = facts
+        .ssa
+        .blocks
+        .iter()
+        .flat_map(|b| b.body.iter())
+        .find(|i| {
+            i.var_name.as_deref() == Some("p")
+                && matches!(i.op, crate::ssa::SsaOp::Call { .. })
+        })
+        .map(|i| i.value)
+        .expect("p := new(Payload) call value");
+    assert_ne!(
+        facts.type_facts.get_type(val),
+        Some(&crate::ssa::type_facts::TypeKind::FileHandle),
+        "new(non-writer-struct) must not type as FileHandle"
+    );
+}

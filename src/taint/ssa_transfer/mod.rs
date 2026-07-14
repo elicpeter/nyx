@@ -8171,20 +8171,42 @@ fn collect_block_events(
         // Go interface satisfaction check.
         // For Go sinks that require http.ResponseWriter (e.g., fmt.Fprintf),
         // skip if the first argument's type is known to NOT satisfy the interface.
-        if transfer.lang == Lang::Go {
-            if let Some(ref env) = state.path_env {
-                if let SsaOp::Call { args, .. } = &inst.op {
-                    if let Some(first_arg_vals) = args.first() {
-                        if let Some(&first_val) = first_arg_vals.first() {
-                            if let Some(kind) = env.get(first_val).types.as_singleton() {
-                                if crate::ssa::type_facts::GoInterfaceTable::definitely_not(
-                                    &kind,
-                                    "http.ResponseWriter",
-                                ) && sink_caps.intersects(Cap::HTML_ESCAPE)
-                                {
-                                    sink_caps &= !Cap::HTML_ESCAPE;
-                                }
-                            }
+        // Go `fmt.Fprint*` reflected-XSS gate: the HTML_ESCAPE label only
+        // applies when the writer (positional arg 0) can be an
+        // `http.ResponseWriter`.  When the writer is provably a non-response
+        // byte sink (`*bytes.Buffer`, `*os.File`, `bufio.Writer`, `io.Writer`
+        // param, …) the call is a stream/buffer write, not response
+        // rendering.  Prefer the flow-insensitive static [`TypeFactResult`]:
+        // the flow-sensitive abstract env widens the writer's type to
+        // `Unknown` inside loops (gitea `mock_http.go` writes to an
+        // `os.Create` handle inside a nested `for`), so consulting only
+        // `path_env` misses the suppression and re-opens the FP.  The env is
+        // a fallback for values the static pass could not type.
+        if transfer.lang == Lang::Go && sink_caps.intersects(Cap::HTML_ESCAPE) {
+            if let SsaOp::Call { args, callee, .. } = &inst.op {
+                // Restricted to the `fmt.Fprint*` family: only there is arg 0
+                // the WRITER whose type decides response-vs-buffer.  For a
+                // `template.HTML(x)` sink arg 0 is the payload, so a
+                // non-response arg type (e.g. a tainted `String`) must NOT
+                // strip the XSS label.
+                let is_fprintf =
+                    matches!(callee.as_str(), "fmt.Fprintf" | "fmt.Fprint" | "fmt.Fprintln");
+                if is_fprintf {
+                    if let Some(&first_val) = args.first().and_then(|g| g.first()) {
+                        let writer_kind = transfer
+                            .type_facts
+                            .and_then(|tf| tf.get_type(first_val).cloned())
+                            .or_else(|| {
+                                state
+                                    .path_env
+                                    .as_ref()
+                                    .and_then(|env| env.get(first_val).types.as_singleton())
+                            });
+                        if writer_kind
+                            .as_ref()
+                            .is_some_and(crate::ssa::type_facts::go_writer_is_non_response)
+                        {
+                            sink_caps &= !Cap::HTML_ESCAPE;
                         }
                     }
                 }
