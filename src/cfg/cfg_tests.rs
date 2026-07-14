@@ -2576,6 +2576,47 @@ func f(userDb int) {
 }
 
 #[test]
+fn go_multi_target_assign_binds_first_ident_as_primary_define() {
+    // `f, err = os.Open(p)` — a bare multi-target `=` assignment whose LHS is
+    // Go's `expression_list` (not a recognised destructure pattern).  The
+    // primary `defines` must be the FIRST target `f` (the acquired resource
+    // handle), with the trailing `err` recorded as an `extra_define` — never
+    // dropped and never made primary.  Before the fix `def_use`'s Assignment
+    // arm used `idents.pop()` (the LAST ident) so `err` became the primary
+    // define: the resource-lifecycle transfer then bound the file handle to
+    // Go's trailing `error` return (never closeable) and every
+    // `handle, err = open()` reported a false resource-leak on `err` while the
+    // real handle went untracked.  Distilled from hugo
+    // internal/js/esbuild/build.go:139 (`contentr, err = hugofs.Os.Open(...)`).
+    let src = br#"package main
+import "os"
+func run(p string) error {
+    var (
+        f   *os.File
+        err error
+    )
+    f, err = os.Open(p)
+    _ = f
+    return err
+}
+"#;
+    let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "go", ts_lang);
+    let node =
+        find_node_with_callee(&cfg, "os.Open").expect("go: os.Open node should be present");
+    assert_eq!(
+        node.taint.defines.as_deref(),
+        Some("f"),
+        "resource handle `f` (first LHS target) must be the primary define, not the trailing `err`"
+    );
+    assert!(
+        node.taint.extra_defines.contains(&"err".to_string()),
+        "trailing `err` must be recorded as an extra define, not dropped: {:?}",
+        node.taint.extra_defines
+    );
+}
+
+#[test]
 fn go_index_expr_read_lowers_to_index_get_call() {
     with_pointer_on(|| {
         let src = br#"package main

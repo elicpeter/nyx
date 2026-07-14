@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 624
+    "corpus_size": 625
   },
   "cases": [
     {
@@ -16084,6 +16084,35 @@
       ],
       "disabled": false,
       "notes": "Recall guard for the inner-call-arg / member-LHS fixes.  Bare-identifier `f := os.OpenFile(...)` with no `f.Close()` anywhere must still fire the resource-leak rule."
+    },
+    {
+      "case_id": "go-safe-realrepo-020",
+      "file": "go/safe/safe_multi_assign_predeclared_defer_close.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "resource",
+      "cwe": "CWE-404",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-resource-leak",
+        "cfg-resource-leak",
+        "state-resource-leak-possible"
+      ],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "resource-lifecycle",
+        "negative",
+        "real-repo-precision-2026-07-14"
+      ],
+      "disabled": false,
+      "notes": "Precision guard for the multi-target `=` assignment resource-attribution fix. Pre-declared `var (f;err)` + `f, err = os.Open(p)` (Go expression_list LHS) with `defer f.Close()`. Resource handle is `f` (first LHS target), not the trailing `err`. Distilled from hugo internal/js/esbuild/build.go:139. Pre-fix bound the resource to `err` (an error is never closeable) so the defer close on `f` never cleared it and a false leak fired on `err`."
     },
     {
       "case_id": "go-auth-realrepo-001",

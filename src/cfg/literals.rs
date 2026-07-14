@@ -2543,8 +2543,29 @@ pub(super) fn def_use(
                     let mut idents = Vec::new();
                     let mut paths = Vec::new();
                     collect_idents_with_paths(lhs, code, &mut idents, &mut paths);
-                    // Prefer dotted path (member expression) over last ident
-                    defs = paths.pop().or_else(|| idents.pop());
+                    if let Some(path) = paths.pop() {
+                        // Member-expression LHS (`obj.field = ...`): the dotted
+                        // path is the sole define; the bare idents it decomposed
+                        // into are receiver components, not defines.
+                        defs = Some(path);
+                    } else if !idents.is_empty() {
+                        // Bare multi-target assignment `a, b = rhs` whose LHS is a
+                        // plain identifier list — Go's `expression_list` (e.g.
+                        // `handle, err = os.Open(p)`). The FIRST identifier is the
+                        // primary define and the rest are `extra_defs`, mirroring
+                        // the `:=` / CallWrapper arm. Picking the LAST ident
+                        // (`idents.pop()`) bound the resource-lifecycle handle to
+                        // Go's trailing `err` return — an error value is never a
+                        // closeable resource, so every `handle, err = open()`
+                        // reported a false `resource-leak` on `err` — and dropped
+                        // the real handle (and any taint on it) from the def set
+                        // entirely (`val, ok = os.LookupEnv(); sink(val)` lost the
+                        // flow to `val`).
+                        defs = Some(idents[0].clone());
+                        for ident in &idents[1..] {
+                            extra_defs.push(ident.clone());
+                        }
+                    }
                 }
             }
             if let Some(rhs) = ast.child_by_field_name("right") {

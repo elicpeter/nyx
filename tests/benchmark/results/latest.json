@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-07-14T05:28:16Z",
+  "timestamp": "2026-07-14T06:51:06Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:96b85515a6141b164d5baf57cfebf5b39ab2fe87c6cb80944923e3032bddd1dc",
-  "corpus_size": 622,
-  "cases_run": 617,
+  "ground_truth_hash": "sha256:89751d298c79a67e53087b5a5cc31ba920966627757c68e6c0a8807eee200358",
+  "corpus_size": 623,
+  "cases_run": 618,
   "cases_skipped": 5,
   "outcomes": [
     {
@@ -3513,6 +3513,21 @@
       "file": "go/safe/safe_dao_helper_id_scalar.go",
       "language": "go",
       "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-realrepo-020",
+      "file": "go/safe/safe_multi_assign_predeclared_defer_close.go",
+      "language": "go",
+      "vuln_class": "resource",
       "is_vulnerable": false,
       "outcome_file_level": "TN",
       "outcome_rule_level": "TN",
@@ -11005,7 +11020,7 @@
     "tp": 297,
     "fp": 7,
     "fn_": 7,
-    "tn": 306,
+    "tn": 307,
     "precision": 0.9769736842105263,
     "recall": 0.9769736842105263,
     "f1": 0.9769736842105263
@@ -11014,7 +11029,7 @@
     "tp": 297,
     "fp": 7,
     "fn_": 7,
-    "tn": 306,
+    "tn": 307,
     "precision": 0.9769736842105263,
     "recall": 0.9769736842105263,
     "f1": 0.9769736842105263
@@ -11042,7 +11057,7 @@
       "tp": 31,
       "fp": 0,
       "fn_": 1,
-      "tn": 37,
+      "tn": 38,
       "precision": 1.0,
       "recall": 0.96875,
       "f1": 0.9841269841269841
@@ -11251,7 +11266,7 @@
       "tp": 0,
       "fp": 0,
       "fn_": 2,
-      "tn": 0,
+      "tn": 1,
       "precision": 1.0,
       "recall": 0.0,
       "f1": 0.0
@@ -11313,31 +11328,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 94,
-      "fp": 128,
-      "fn_": 210,
+      "tp": 95,
+      "fp": 129,
+      "fn_": 209,
       "tn": 185,
-      "precision": 0.42342342342342343,
-      "recall": 0.3092105263157895,
-      "f1": 0.3574144486692016
+      "precision": 0.42410714285714285,
+      "recall": 0.3125,
+      "f1": 0.3598484848484849
     },
     ">=Low": {
-      "tp": 94,
-      "fp": 154,
-      "fn_": 210,
-      "tn": 159,
-      "precision": 0.3790322580645161,
-      "recall": 0.3092105263157895,
-      "f1": 0.34057971014492755
+      "tp": 95,
+      "fp": 157,
+      "fn_": 209,
+      "tn": 157,
+      "precision": 0.376984126984127,
+      "recall": 0.3125,
+      "f1": 0.34172661870503596
     },
     ">=Medium": {
-      "tp": 94,
-      "fp": 134,
-      "fn_": 210,
-      "tn": 179,
-      "precision": 0.41228070175438597,
-      "recall": 0.3092105263157895,
-      "f1": 0.3533834586466166
+      "tp": 95,
+      "fp": 133,
+      "fn_": 209,
+      "tn": 181,
+      "precision": 0.4166666666666667,
+      "recall": 0.3125,
+      "f1": 0.35714285714285715
     }
   }
 }

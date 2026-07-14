@@ -515,6 +515,40 @@ fn go_no_defer_manual_close_clean() {
     assert_no_state_findings("go_no_defer_manual_close.go");
 }
 
+#[test]
+fn go_multi_assign_predeclared_defer_close_no_leak() {
+    // `f, err = os.Open(p)` (pre-declared `var (f; err)`, Go `expression_list`
+    // LHS for a `=` multi-target assignment) + `defer f.Close()`.  The resource
+    // handle is `f` (first LHS target), not the trailing `err`, so the defer
+    // close clears it and NO resource-leak may fire.  Regression guard for the
+    // hugo `contentr, err = Os.Open(...)` false leak that named `err`.
+    assert_no_state_findings("go_multi_assign_predeclared_defer_close.go");
+}
+
+#[test]
+fn go_multi_assign_predeclared_no_close_leaks_on_handle() {
+    // Recall counterpart: the same `=` multi-assign shape with NO close must
+    // still fire the resource-leak rule, and the leaked resource must be the
+    // HANDLE `f` — the first LHS target — not the trailing `err`.  Before the
+    // def-attribution fix the resource was bound to `err` (the last ident), so
+    // this fired on `err` (a false attribution) while the real handle went
+    // untracked.
+    assert_has_prefix("go_multi_assign_predeclared_no_close.go", "state-resource-leak");
+    assert_message_contains(
+        "go_multi_assign_predeclared_no_close.go",
+        "state-resource-leak",
+        "`f`",
+    );
+    // And crucially NOT on the trailing error binding.
+    assert!(
+        !state_diags_for("go_multi_assign_predeclared_no_close.go")
+            .iter()
+            .any(|d| d.id == "state-resource-leak"
+                && d.message.as_deref().unwrap_or("").contains("`err`")),
+        "resource-leak must not be attributed to the trailing `err` binding"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // (9) Auth, unauthed access detection
 // ═══════════════════════════════════════════════════════════════════════
