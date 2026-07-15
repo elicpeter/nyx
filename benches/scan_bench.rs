@@ -303,6 +303,14 @@ fn bench_analyse_file_fused_large_go(c: &mut Criterion) {
 /// `GinExtractor` match by default — pre-hoist this bench measured the
 /// AST being walked twice; regressions here mean the hoist has been
 /// broken or a new Go extractor was added that re-walks the tree.
+///
+/// Also guards the 2026-07-15 (perfhunt session-0051) NextAuth per-unit
+/// walk gate: `body_returns_nextauth_options` scanned every unit body for
+/// JS/TS `object` literal nodes even on Go, where it always returns
+/// `false`.  The gate (`AuthAnalysisRules::is_object_literal_lang`) skips
+/// that fruitless whole-body walk on the ~147 Go functions in this
+/// fixture; a regression that drops the gate re-introduces the per-unit
+/// walk here.  `NYX_DISABLE_AUTH_WALK_GATE=1` reverts to the old path.
 fn bench_extract_authorization_model_go(c: &mut Criterion) {
     use tree_sitter::Parser;
 
@@ -379,6 +387,42 @@ fn bench_extract_authorization_model_shared_go(c: &mut Criterion) {
                 model, &tree, "go", &fixture, &rules, None, None, None,
             );
             (summaries, diags)
+        });
+    });
+}
+
+/// Per-file gitea `extract_route_handler_auth_edges` cost on the realistic
+/// ~1.5k-line Go fixture (gin context.go — no `web.Router` closure groups).
+///
+/// The gitea extractor harvests cross-file route→handler authorization edges
+/// by walking the whole tree of every Go file (`harvest_edges`).  On a file
+/// with no `<r>.Group(...)` / `<r>.PathGroup(...)` closure group the walk emits
+/// nothing, yet pre-2026-07-15 (perfhunt session-0051) it still descended the
+/// entire tree per Go file.  The fix short-circuits on a cheap `Group`
+/// byte-substring pre-filter (a gitea edge is emitted only from inside a
+/// matched `Group` / `PathGroup` call, both of which contain that token), so a
+/// non-gitea Go file skips the walk.  This bench measures that skip; a
+/// regression that drops the pre-filter surfaces here as a ≥10× slowdown.
+fn bench_gitea_route_auth_edges_go(c: &mut Criterion) {
+    use tree_sitter::Parser;
+
+    let fixture = Path::new("benches/perf_fixtures/large_go_module.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let bytes = std::fs::read(&fixture).expect("read fixture");
+
+    let mut parser = Parser::new();
+    let go_lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+    parser.set_language(&go_lang).expect("set go grammar");
+    let tree = parser.parse(&bytes, None).expect("parse fixture");
+
+    c.bench_function("gitea_route_auth_edges_go", |b| {
+        b.iter(|| {
+            nyx_scanner::auth_analysis::extract::gitea::extract_route_handler_auth_edges(
+                &tree,
+                &bytes,
+                nyx_scanner::symbol::Lang::Go,
+            )
         });
     });
 }
@@ -1042,6 +1086,7 @@ criterion_group!(
     bench_analyse_file_fused_large_go,
     bench_extract_authorization_model_go,
     bench_extract_authorization_model_shared_go,
+    bench_gitea_route_auth_edges_go,
     bench_collect_top_level_units_go,
     bench_const_propagate_large_go,
     bench_ssa_lower_large_go,

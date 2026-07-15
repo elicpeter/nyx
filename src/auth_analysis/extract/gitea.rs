@@ -154,6 +154,20 @@ pub fn extract_route_handler_auth_edges(
     bytes: &[u8],
     lang: Lang,
 ) -> Vec<CallerScopeEdge> {
+    // Fast path: a gitea route→handler edge is emitted only from inside a
+    // `<r>.Group(...)` / `<r>.PathGroup(...)` closure group — `harvest_edges`
+    // never pushes an edge until `in_group` is set, which requires a matched
+    // `Group` / `PathGroup` method call (both names contain the substring
+    // `Group`).  A Go file with no `Group` token therefore cannot produce an
+    // edge, so skip the whole-tree walk.  Cheap byte-substring pre-filter,
+    // mirroring the dynamic framework adapters' `file_bytes.windows(..).any(..)`
+    // idiom; a spurious match (e.g. `sync.WaitGroup`) only costs the walk we
+    // would otherwise have done, so this never drops a real edge.
+    if super::common::auth_walk_gate_enabled()
+        && !bytes.windows(b"Group".len()).any(|w| w == b"Group")
+    {
+        return Vec::new();
+    }
     let root = tree.root_node();
     let mut edges = Vec::new();
     harvest_edges(root, root, false, false, bytes, lang, &mut edges);
@@ -845,6 +859,54 @@ func GetPackage(ctx *context.APIContext) {
         assert!(
             !any_route_level,
             "a group with no middleware must not manufacture route-level auth"
+        );
+    }
+
+    #[test]
+    fn group_prefilter_is_output_neutral() {
+        // The `Group` byte pre-filter (perfhunt session-0051) must never drop a
+        // real edge: on a gitea closure-group file it yields exactly the edges
+        // the unconditional `harvest_edges` walk would, and on a Go file with no
+        // `Group` token the walk produces nothing anyway, so skipping it is
+        // sound.
+        fn direct_walk(src: &str) -> Vec<CallerScopeEdge> {
+            let tree = parse_go(src);
+            let root = tree.root_node();
+            let mut edges = Vec::new();
+            harvest_edges(root, root, false, false, src.as_bytes(), Lang::Go, &mut edges);
+            edges
+        }
+        fn gated(src: &str) -> Vec<CallerScopeEdge> {
+            let tree = parse_go(src);
+            extract_route_handler_auth_edges(&tree, src.as_bytes(), Lang::Go)
+        }
+
+        // (a) gitea closure group (`Group` present) → gate does NOT skip; the
+        //     harvested edge set is identical to the unconditional walk.
+        let g = gated(OWNERSHIP_GUARD_SRC);
+        let d = direct_walk(OWNERSHIP_GUARD_SRC);
+        assert!(!g.is_empty(), "expected a harvested route→handler edge");
+        assert_eq!(g.len(), d.len(), "prefilter dropped a gitea edge");
+        assert_eq!(
+            g[0].callee_leaf, d[0].callee_leaf,
+            "prefilter changed the harvested edge"
+        );
+        assert_eq!(g[0].caller_authorized, d[0].caller_authorized);
+
+        // (b) verb routes with no `Group` closure → prefilter skips, and the
+        //     unconditional walk also yields nothing (skip is output-neutral).
+        let no_group = "package p\nfunc Routes() {\n\tr.Get(\"/x\", GetX)\n\tr.Post(\"/y\", PostY)\n}\n";
+        assert!(
+            !no_group
+                .as_bytes()
+                .windows(b"Group".len())
+                .any(|w| w == b"Group"),
+            "fixture must not contain the Group token"
+        );
+        assert!(gated(no_group).is_empty(), "prefilter path must be empty");
+        assert!(
+            direct_walk(no_group).is_empty(),
+            "a no-Group file must yield no edges even unconditionally"
         );
     }
 }

@@ -15,6 +15,18 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tree_sitter::Node;
 
+/// A/B escape hatch: `NYX_DISABLE_AUTH_WALK_GATE=1` forces the applicability
+/// pre-checks in the auth-extraction pass OFF, so the language- / framework-
+/// specific sub-analysis walks run unconditionally (their pre-gate behaviour).
+/// The gates are provably output-neutral — each only skips a walk that could
+/// not have produced any output on the file/language — so this toggle exists
+/// purely to A/B the walk-elision cost on a single binary.  Cached once (the
+/// gate is consulted on the per-unit hot path).
+pub(crate) fn auth_walk_gate_enabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    !*DISABLED.get_or_init(|| std::env::var("NYX_DISABLE_AUTH_WALK_GATE").is_ok())
+}
+
 pub fn collect_top_level_units(
     root: Node<'_>,
     bytes: &[u8],
@@ -718,7 +730,15 @@ pub fn build_function_unit_with_meta(
         .cloned()
         .collect();
 
-    let is_nextauth_options_factory = body_returns_nextauth_options(node, bytes);
+    // `body_returns_nextauth_options` recognises a NextAuth options factory by
+    // scanning the whole body for `object` / `object_expression` literal nodes,
+    // a shape only the JS/TS grammar produces.  On every other auth language it
+    // walks the entire body and returns `false`, so gate it on the language to
+    // skip that fruitless per-unit whole-body walk (bit-identical: the scan's
+    // result is `false` on non-JS/TS regardless).
+    let run_nextauth_scan = !auth_walk_gate_enabled() || rules.is_object_literal_lang();
+    let is_nextauth_options_factory =
+        run_nextauth_scan && body_returns_nextauth_options(node, bytes);
 
     AnalysisUnit {
         kind,
@@ -5897,7 +5917,12 @@ export default function CalComAdapter(client: any) {
 }
 "#;
         let tree = parser.parse(src.as_slice(), None).unwrap();
-        let rules = crate::auth_analysis::config::AuthAnalysisRules::disabled();
+        // Production-faithful TS rules (finding_prefix `js.auth`): the NextAuth
+        // options-factory scan is gated to `is_object_literal_lang()`, which a TS
+        // file always satisfies in the real pipeline.  (`disabled()` rules would
+        // suppress the scan.)
+        let rules =
+            crate::auth_analysis::config::build_auth_rules(&crate::utils::config::Config::default(), "typescript");
         let mut model = crate::auth_analysis::model::AuthorizationModel::default();
         super::collect_top_level_units(tree.root_node(), src, &rules, &mut model);
         let unit = model
@@ -5938,7 +5963,11 @@ export function makeUserRepo() {
 }
 "#;
         let tree = parser.parse(src.as_slice(), None).unwrap();
-        let rules = crate::auth_analysis::config::AuthAnalysisRules::disabled();
+        // Production-faithful TS rules (see the positive test): the recogniser
+        // must genuinely REJECT this generic CRUD repo, not merely be skipped by
+        // the language gate.
+        let rules =
+            crate::auth_analysis::config::build_auth_rules(&crate::utils::config::Config::default(), "typescript");
         let mut model = crate::auth_analysis::model::AuthorizationModel::default();
         super::collect_top_level_units(tree.root_node(), src, &rules, &mut model);
         let unit = model

@@ -96,6 +96,21 @@ impl AuthAnalysisRules {
         }
     }
 
+    /// True for the JavaScript / TypeScript auth family (finding prefix
+    /// `js.auth`).  JS/TS are the only supported auth languages whose
+    /// tree-sitter grammar produces `object` / `object_expression` literal
+    /// nodes.  Per-unit / per-file sub-analyses that scan for object-literal
+    /// shapes (the NextAuth options-factory recogniser) are guaranteed to
+    /// find nothing on Python/Ruby/Go/Java/Rust — those grammars spell object
+    /// literals as `dictionary` / `hash` / `composite_literal` /
+    /// `struct_expression`.  Gating such a scan on this predicate skips a
+    /// fruitless whole-subtree walk without changing output (the scan would
+    /// have returned `false` after walking anyway).
+    #[inline]
+    pub fn is_object_literal_lang(&self) -> bool {
+        self.finding_prefix == "js.auth"
+    }
+
     /// Last path segment of a type name (e.g. `std::collections::HashMap` → `HashMap`).
     /// Accepts either `::` or `.` as the path separator.
     fn type_last_segment(ty: &str) -> &str {
