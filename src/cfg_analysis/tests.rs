@@ -286,6 +286,92 @@ fn ssa_const_prop_preserves_sink_on_dynamic_source_arg() {
     );
 }
 
+/// outline migration idiom (top-level form): the SQL string (arg 0) is a
+/// constant template literal and the options object (arg 1) is a non-constant
+/// identifier.  The `sequelize.query` `payload_args=[0]` gate plus the
+/// syntactic payload-const suppression must silence `cfg-unguarded-sink` even
+/// though the whole-call `is_all_args_constant` rejects the non-const opts.
+#[test]
+fn js_raw_sql_const_payload_suppresses_unguarded_sink() {
+    let src = br#"
+        function migrate(queryInterface, opts) {
+          queryInterface.sequelize.query(`SELECT 1`, opts);
+        }
+    "#;
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+    let guard: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        guard.is_empty(),
+        "constant SQL payload must suppress cfg-unguarded-sink, got {guard:?}"
+    );
+}
+
+/// Recall counterpart: attacker data interpolated INTO the SQL string (arg 0)
+/// is non-constant, so the raw-SQL `payload_args=[0]` gate must NOT suppress
+/// the finding.
+#[test]
+fn js_raw_sql_interpolated_payload_still_flagged() {
+    let src = br#"
+        function migrate(queryInterface, name) {
+          queryInterface.sequelize.query(`SELECT ${name}`, {});
+        }
+    "#;
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+    let guard: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !guard.is_empty(),
+        "an interpolated SQL payload (arg 0) must still fire cfg-unguarded-sink"
+    );
+}
+
+/// Chained-rebind alignment guard: `http.get(target, cb).on('error', cb2)`
+/// rebinds the SSRF sink onto the inner `http.get`, but the node's
+/// `arg_string_literals` still reflect the outer `.on('error', …)` call.  The
+/// `'error'` string literal at the `.on` arg 0 must NOT be mistaken for a
+/// constant SSRF payload by the syntactic payload-const suppression — the
+/// finding must survive.
+#[test]
+fn chained_rebind_sink_not_suppressed_by_misaligned_syntactic_const() {
+    let src = br#"
+        const http = require('http');
+        function proxy(req, res) {
+          const target = req.query.url;
+          http.get(target, r => { res.end(); }).on('error', e => { res.end(); });
+        }
+    "#;
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+    let guard: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !guard.is_empty(),
+        "chained http.get SSRF sink must not be suppressed by the outer \
+         `.on('error', …)` string literal, got {findings:?}"
+    );
+}
+
 // ─── Guard validation tests ───────────────────────────────────────────
 
 #[test]

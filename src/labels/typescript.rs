@@ -946,6 +946,113 @@ pub static GATED_SINKS: &[SinkGate] = &[
             object_destination_fields: &[],
         },
     },
+    // ── Raw-SQL query builders with a trailing bind/options argument ─────
+    //
+    // Mirror of `labels/javascript.rs`.  `sequelize.query(sql, options)`,
+    // `knex.raw(sql, bindings)`, and the mysql/pg driver methods take the SQL
+    // string at arg 0 and a separate bind-params / options / callback at arg
+    // 1+.  Only arg 0 is the injection vector; propagate `payload_args: &[0]`
+    // onto the flat sink so the migration idiom
+    // `queryInterface.sequelize.query(constDDL, { transaction })` (constant
+    // SQL, non-constant options object) no longer FPs `cfg-unguarded-sink`.
+    SinkGate {
+        callee_matcher: "sequelize.query",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "knex.raw",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "connection.query",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "client.query",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "pool.query",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "db.query",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "db.execute",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
     // `nunjucks.renderString(src, ctx)` — Nunjucks SSTI sink.  Only the
     // template *source* (arg 0) lets an attacker drive template
     // execution; the `ctx` data object (arg 1) is rendered via the

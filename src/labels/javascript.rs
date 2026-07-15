@@ -350,8 +350,10 @@ pub static RULES: &[LabelRule] = &[
     // template at arg 0 is the only injection point.  These are modeled as
     // gated sinks below (`payload_args: &[0]`) so taint flowing only into
     // the bind params no longer fires.  `sequelize.query` and `knex.raw`
-    // also accept a separate bind-params object/array but the bind-params
-    // interface is non-positional in those APIs, so they stay flat for now.
+    // also accept a separate bind-params object/array at arg 1 (Sequelize's
+    // `{ replacements, bind, type, transaction }` options object, knex's
+    // positional `?`-binding array), so they are ALSO gated with
+    // `payload_args: &[0]` below to restrict injection to the SQL string.
     LabelRule {
         matchers: &["sequelize.query", "knex.raw", "$queryRaw", "$executeRaw"],
         label: DataLabel::Sink(Cap::SQL_QUERY),
@@ -1161,6 +1163,125 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_prefixes: &[],
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: true,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    // ── Raw-SQL query builders with a trailing bind/options argument ─────
+    //
+    // `sequelize.query(sql, options)`, `knex.raw(sql, bindings)`, and the
+    // mysql/mysql2/pg/better-sqlite3 driver methods `connection.query`,
+    // `client.query`, `pool.query`, `db.query`, `db.execute` all take the SQL
+    // string at arg 0 and a *separate* bind-params / options argument at arg
+    // 1+ (`{ replacements, bind, type, transaction }` for Sequelize, a
+    // positional `?`-binding array for knex, a `values` array / callback for
+    // the drivers).  Only arg 0 (the SQL template) is the injection vector;
+    // the bind params are parameterised, and the options object is inert.
+    // The flat `Sink(SQL_QUERY)` rules above cover the sink, but their
+    // implicit "all args" model FPs on the extremely common migration idiom
+    // `queryInterface.sequelize.query(constDDL, { transaction })`: the
+    // constant SQL is provably non-injectable, yet the non-constant options
+    // object at arg 1 defeats `cfg_analysis::guards::is_all_args_constant`
+    // (whole-call) and re-opens `cfg-unguarded-sink`.  These gates propagate
+    // `payload_args: &[0]` onto the flat sink (mirroring `$queryRawUnsafe`
+    // above) so both the taint scan and the const-arg suppression restrict
+    // to the SQL string.  Suffix-match (no `=` sigil) so
+    // `queryInterface.sequelize.query`, `db.knex.raw`, `this.#db.knex.raw`,
+    // etc. all qualify.
+    SinkGate {
+        callee_matcher: "sequelize.query",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "knex.raw",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "connection.query",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "client.query",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "pool.query",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "db.query",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "db.execute",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
         payload_args: &[0],
         keyword_name: None,
         dangerous_kwargs: &[],

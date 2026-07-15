@@ -2320,6 +2320,25 @@ pub(super) fn extract_arg_string_literals(call_node: Node, code: &[u8]) -> Vec<O
                 let raw = text_of(target, code);
                 raw.and_then(|s| strip_literal_quotes(&s, target, code))
             }
+            // JS/TS backtick template literal.  A constant string only when it
+            // has no `${…}` interpolation (no `template_substitution` child) —
+            // an interpolation-free template is byte-for-byte a string literal
+            // (`\`SELECT * FROM t\``).  Capturing it lets positional-arg-aware
+            // suppressions (SQL-string const check, URL prefix lock) treat the
+            // extremely common `sequelize.query(\`…const DDL…\`, { transaction })`
+            // migration idiom as the constant it is.  A template WITH
+            // interpolation stays `None` (its dynamic parts may carry taint).
+            "template_string" => {
+                let mut tw = target.walk();
+                let has_interp = target
+                    .named_children(&mut tw)
+                    .any(|c| c.kind() == "template_substitution");
+                if has_interp {
+                    None
+                } else {
+                    text_of(target, code).map(|s| s.trim_matches('`').to_string())
+                }
+            }
             // Boolean / null / numeric literal tokens — capture verbatim so
             // downstream pattern-aware analysis (e.g. the XXE config-fact
             // pass that needs to read the boolean polarity arg of

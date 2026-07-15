@@ -228,6 +228,62 @@ fn sink_payload_args_const(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     })
 }
 
+/// CFG-syntactic variant of [`sink_payload_args_const`]: suppress a
+/// `cfg-unguarded-sink` finding when every operand at the sink's
+/// `sink_payload_args` positions is a constant literal recorded on the call
+/// node at CFG-build time (`arg_string_literals`).
+///
+/// Unlike the SSA-backed [`sink_payload_args_const`], this reads the
+/// per-argument literals captured directly from the AST during CFG
+/// construction, so it holds even when the sink lives inside a nested callback
+/// body whose statements the per-function SSA const-facts do not cover.  This
+/// is the dominant real-repo shape for raw-SQL migrations (outline
+/// `server/migrations/*.js`):
+///
+/// ```text
+/// queryInterface.sequelize.transaction(async (transaction) => {
+///   queryInterface.sequelize.query(`ALTER TABLE …`, { transaction });
+/// });
+/// ```
+///
+/// The SQL template (payload arg 0) is a constant, but the sink node is inside
+/// the arrow callback, so `sink_payload_args_const` cannot find its SSA `Call`
+/// inst, and the `{ transaction }` options object (arg 1) defeats the
+/// whole-call `is_all_args_constant`.  A constant payload provably carries no
+/// injection regardless of the non-payload options object, so this is sound
+/// independent of `has_taint`.
+fn sink_payload_args_syntactic_const(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
+    let info = &ctx.cfg[sink];
+    let payload_positions = match &info.call.sink_payload_args {
+        Some(p) if !p.is_empty() => p,
+        _ => return false,
+    };
+    // Only trust the syntactic literals when the sink's callee identity was
+    // NOT overridden by an inner-nested / chained-call rebind.  When
+    // `outer_callee` is set (e.g. `http.get(target, cb).on('error', cb2)`,
+    // where the SSRF sink is rebound to the inner `http.get` but the node's
+    // `arg_string_literals` still reflect the outer `.on('error', …)` call),
+    // `sink_payload_args` and `arg_string_literals` come from DIFFERENT call
+    // nodes and are no longer positionally aligned — the `'error'` string
+    // literal at the `.on` arg 0 would masquerade as a constant SSRF payload.
+    // A direct raw-SQL sink (`sequelize.query(`…`, opts)`) has no override, so
+    // this preserves the migration suppression while refusing the misaligned
+    // rebind case.
+    if info.call.outer_callee.is_some() {
+        return false;
+    }
+    // `arg_string_literals` is aligned with positional arguments (keyword /
+    // named args are skipped during extraction), matching the positional
+    // indices carried in `sink_payload_args`.  Every payload position must
+    // resolve to a captured literal; a position outside the recorded arg list
+    // (empty vec on splat args, arity mismatch) is left unproven → not
+    // suppressed.
+    let lits = &info.call.arg_string_literals;
+    payload_positions
+        .iter()
+        .all(|&pos| matches!(lits.get(pos), Some(Some(_))))
+}
+
 /// Suppress a `cfg-unguarded-sink` SSRF finding when the sink's URL operand
 /// is origin-locked: it is the result of a `new URL(path, base)` /
 /// `urljoin(base, path)` / `url.JoinPath(base, …)` builder whose base
@@ -3340,6 +3396,20 @@ impl CfgAnalysis for UnguardedSink {
             // If sink args are all constants (including one-hop constant bindings)
             // and taint didn't confirm, this is a false positive, skip it.
             if is_all_args_constant(ctx, *sink) && !has_taint {
+                continue;
+            }
+
+            // Syntactic payload-const suppression (scope-robust): when every
+            // operand at the sink's `sink_payload_args` positions is a constant
+            // literal captured on the call node at CFG-build time, the injection
+            // vector is provably non-attacker-controlled.  Unlike the SSA-backed
+            // check below, this holds even when the sink lives inside a nested
+            // callback body the per-function SSA const-facts don't cover — the
+            // dominant raw-SQL migration idiom
+            // `sequelize.transaction(async (t) => { sequelize.query(`…DDL…`, { transaction: t }) })`.
+            // Sound regardless of `has_taint`: a syntactic literal at a payload
+            // position cannot itself carry taint.
+            if sink_payload_args_syntactic_const(ctx, *sink) {
                 continue;
             }
 

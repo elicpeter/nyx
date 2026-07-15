@@ -3564,6 +3564,55 @@ fn js_ternary_branch_subscript_source_classified() {
     );
 }
 
+/// `extract_arg_string_literals` must capture an interpolation-free JS/TS
+/// template literal (backtick) as a constant string, and return `None` for a
+/// template with `${...}` interpolation.  This is what lets the raw-SQL
+/// payload-const suppression recognise `sequelize.query(`…const DDL…`, opts)`.
+#[test]
+fn extract_arg_string_literals_handles_template_literals() {
+    fn first_call<'a>(n: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
+        if n.kind() == "call_expression" {
+            return Some(n);
+        }
+        let mut w = n.walk();
+        for c in n.children(&mut w) {
+            if let Some(f) = first_call(c) {
+                return Some(f);
+            }
+        }
+        None
+    }
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_javascript::LANGUAGE.into())
+        .unwrap();
+
+    // No-interpolation template → captured as a literal.
+    let src_const = b"q(`SELECT * FROM t`, opts);";
+    let tree = parser.parse(src_const.as_ref(), None).unwrap();
+    let call = first_call(tree.root_node()).unwrap();
+    let lits = extract_arg_string_literals(call, src_const);
+    assert_eq!(lits.len(), 2, "two positional args");
+    assert!(
+        lits[0].is_some(),
+        "no-interpolation template literal (arg 0) must be captured, got {lits:?}"
+    );
+    assert!(
+        lits[1].is_none(),
+        "the `opts` identifier (arg 1) is not a literal, got {lits:?}"
+    );
+
+    // Interpolated template → NOT a constant.
+    let src_interp = b"q(`SELECT ${name}`, opts);";
+    let tree = parser.parse(src_interp.as_ref(), None).unwrap();
+    let call = first_call(tree.root_node()).unwrap();
+    let lits = extract_arg_string_literals(call, src_interp);
+    assert!(
+        lits[0].is_none(),
+        "an interpolated template literal must NOT be captured as constant, got {lits:?}"
+    );
+}
+
 /// Regression: Go's `switch` with no `default` arm and an only-case body
 /// that returns must keep post-switch statements reachable from entry.
 ///

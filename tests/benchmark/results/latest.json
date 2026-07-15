@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-07-15T07:58:38Z",
+  "timestamp": "2026-07-15T10:51:42Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:9fdaef76c0a0ec8f9c3657b78c4832e93a7eec418b986332553f1ceb1a184177",
-  "corpus_size": 659,
-  "cases_run": 654,
+  "ground_truth_hash": "sha256:b18b667d26e08eba2a53d46b2a51c169e2ff4c81eb72f613829b002480011d6e",
+  "corpus_size": 661,
+  "cases_run": 656,
   "cases_skipped": 5,
   "outcomes": [
     {
@@ -5639,6 +5639,21 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "js-safe-realrepo-sequelize-migration-001",
+      "file": "javascript/safe/safe_sequelize_migration_const_sql.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "js-safe-ternary-const-branches",
       "file": "javascript/safe/safe_ternary_const_branches.js",
       "language": "javascript",
@@ -5693,6 +5708,25 @@
         "taint-unsanitised-flow (source 4:5)"
       ],
       "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-sqli-realrepo-sequelize-001",
+      "file": "javascript/sqli/sqli_sequelize_interpolated.js",
+      "language": "javascript",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 10:3)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 10:3)"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -11623,22 +11657,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 312,
+    "tp": 313,
     "fp": 7,
     "fn_": 7,
-    "tn": 328,
-    "precision": 0.9780564263322884,
-    "recall": 0.9780564263322884,
-    "f1": 0.9780564263322884
+    "tn": 329,
+    "precision": 0.978125,
+    "recall": 0.978125,
+    "f1": 0.978125
   },
   "aggregate_rule_level": {
-    "tp": 312,
+    "tp": 313,
     "fp": 7,
     "fn_": 7,
-    "tn": 328,
-    "precision": 0.9780564263322884,
-    "recall": 0.9780564263322884,
-    "f1": 0.9780564263322884
+    "tn": 329,
+    "precision": 0.978125,
+    "recall": 0.978125,
+    "f1": 0.978125
   },
   "by_language": {
     "c": {
@@ -11678,10 +11712,10 @@
       "f1": 0.9642857142857143
     },
     "javascript": {
-      "tp": 27,
+      "tp": 28,
       "fp": 0,
       "fn_": 0,
-      "tn": 34,
+      "tn": 35,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -11881,7 +11915,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 319,
+      "tn": 320,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -11905,13 +11939,13 @@
       "f1": 1.0
     },
     "sqli": {
-      "tp": 41,
+      "tp": 42,
       "fp": 0,
       "fn_": 1,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.9761904761904762,
-      "f1": 0.9879518072289156
+      "recall": 0.9767441860465116,
+      "f1": 0.988235294117647
     },
     "ssrf": {
       "tp": 36,
@@ -11934,31 +11968,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 113,
-      "fp": 121,
-      "fn_": 206,
-      "tn": 214,
-      "precision": 0.4829059829059829,
-      "recall": 0.3542319749216301,
-      "f1": 0.40867992766726946
+      "tp": 111,
+      "fp": 124,
+      "fn_": 209,
+      "tn": 212,
+      "precision": 0.4723404255319149,
+      "recall": 0.346875,
+      "f1": 0.4
     },
     ">=Low": {
-      "tp": 114,
-      "fp": 147,
-      "fn_": 205,
+      "tp": 112,
+      "fp": 148,
+      "fn_": 208,
       "tn": 188,
-      "precision": 0.4367816091954023,
-      "recall": 0.3573667711598746,
-      "f1": 0.3931034482758621
+      "precision": 0.4307692307692308,
+      "recall": 0.35,
+      "f1": 0.38620689655172413
     },
     ">=Medium": {
-      "tp": 114,
+      "tp": 112,
       "fp": 126,
-      "fn_": 205,
-      "tn": 209,
-      "precision": 0.475,
-      "recall": 0.3573667711598746,
-      "f1": 0.40787119856887294
+      "fn_": 208,
+      "tn": 210,
+      "precision": 0.47058823529411764,
+      "recall": 0.35,
+      "f1": 0.4014336917562724
     }
   }
 }
