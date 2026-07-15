@@ -311,6 +311,21 @@ fn bench_extract_authorization_model_shared_go(c: &mut Criterion) {
 /// replaced that call with an O(1)-per-node `append_shallow_value_ref`
 /// helper.  A regression that re-introduces the deep walk surfaces
 /// here as a ≥2× slowdown.
+///
+/// Also guards the 2026-07-14 (perfhunt session-0030) `collect_call`
+/// redundancy elimination: `collect_call` was profiled as the single
+/// dominant caller of alloc / memmove / from_utf8 on mm/channels/app.
+/// The fix removed the duplicate per-argument `extract_value_refs` walk
+/// (the old code ran it twice: once for `subjects`, once for
+/// `args_value_refs`), made `subjects` lazy (built only for auth checks /
+/// sensitive operations), borrowed the whole-call text as `&str` instead
+/// of allocating a `String` on every call, and moved `string_args` into
+/// the `CallSite` instead of cloning it when no auth check needs it.
+/// Non-overlapping criterion CIs recorded the elimination (before
+/// [4.3815, 4.4010] ms → after [4.3227, 4.3462] ms, -1.3%); the
+/// isolated win is Amdahl-diluted at whole-scan.  A regression that
+/// re-introduces the duplicate `extract_value_refs` or the eager
+/// `subjects` / `node_text` allocations surfaces here.
 fn bench_collect_top_level_units_go(c: &mut Criterion) {
     use tree_sitter::Parser;
 

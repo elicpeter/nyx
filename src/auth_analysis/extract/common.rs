@@ -1224,44 +1224,32 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
         .child_by_field_name("arguments")
         .map(named_children)
         .unwrap_or_default();
-    let mut subjects: Vec<ValueRef> = call_receiver_subjects(node, bytes);
-    subjects.extend(
-        args.iter()
-            .flat_map(|arg| extract_value_refs(*arg, bytes))
-            .collect::<Vec<_>>(),
-    );
     let line = node.start_position().row + 1;
-    let string_args: Vec<String> = args.iter().map(|arg| text(*arg, bytes)).collect();
+    let mut string_args: Vec<String> = args.iter().map(|arg| text(*arg, bytes)).collect();
+    // Each argument's value-refs, computed exactly once.  `call_sites` stores
+    // this per-argument grouping directly; the auth-check / sensitive-operation
+    // `subjects` (built lazily below) derive from it by cloning.  The previous
+    // form ran the recursive `extract_value_refs` AST walk over every argument
+    // a SECOND time to seed `subjects` — pure duplicate work on the hottest
+    // auth-extraction path (profiled: `collect_call` was the dominant caller of
+    // alloc / memmove / from_utf8 on mm/channels/app).
     let args_value_refs: Vec<Vec<ValueRef>> = args
         .iter()
         .map(|arg| extract_value_refs(*arg, bytes))
         .collect();
-    let node_text = text(node, bytes);
-    state.call_sites.push(CallSite {
-        name: callee.clone(),
-        args: string_args.clone(),
-        span: span(node),
-        args_value_refs,
-    });
 
-    if rules.is_authorization_check(&callee) {
-        state.auth_checks.push(AuthCheck {
-            kind: classify_auth_check(&callee, rules),
-            callee: callee.clone(),
-            subjects: subjects.clone(),
-            span: span(node),
-            line,
-            args: string_args,
-            condition_text: None,
-            is_route_level: false,
-        });
-    }
+    // Borrow the call text.  The classification below reads it as `&str`, and
+    // only a sensitive operation materializes it into an owned `String` (its
+    // `text` field).  Ordinary calls — neither token-lookup nor sink, the
+    // overwhelming majority — never allocate the whole-call text.
+    let node_text: &str =
+        crate::cfg::slice_str(bytes, node.start_byte(), node.end_byte()).unwrap_or("");
 
     // Split classification into OperationKind (what verb?) and
     // SinkClass (what resource?).  The sink class drives the
     // ownership gate; OperationKind is kept for partial-batch / stale-
     // session checks that care about read-vs-mutation semantics.
-    let (op_kind, sink_class) = if rules.is_token_lookup_call(&callee, &node_text) {
+    let (op_kind, sink_class) = if rules.is_token_lookup_call(&callee, node_text) {
         (Some(OperationKind::TokenLookup), None)
     } else if let Some(class) = rules.classify_sink_class(&callee, &state.non_sink_vars) {
         let op = match class {
@@ -1291,6 +1279,50 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
         (None, None)
     };
 
+    let is_auth = rules.is_authorization_check(&callee);
+
+    // `subjects` (call receiver ++ flattened argument value-refs) is consumed
+    // ONLY by an auth check or a sensitive operation.  Build it lazily so
+    // ordinary calls skip the receiver-chain walk and the per-ref clones
+    // entirely.  Order is identical to the old eager form: receiver refs first,
+    // then each argument's refs in argument order.
+    let subjects: Vec<ValueRef> = if is_auth || op_kind.is_some() {
+        let mut subjects = call_receiver_subjects(node, bytes);
+        subjects.reserve(args_value_refs.iter().map(Vec::len).sum());
+        for refs in &args_value_refs {
+            subjects.extend(refs.iter().cloned());
+        }
+        subjects
+    } else {
+        Vec::new()
+    };
+
+    state.call_sites.push(CallSite {
+        name: callee.clone(),
+        // Move `string_args` into the call site; clone only when the auth check
+        // below also needs it (the rare case).
+        args: if is_auth {
+            string_args.clone()
+        } else {
+            std::mem::take(&mut string_args)
+        },
+        span: span(node),
+        args_value_refs,
+    });
+
+    if is_auth {
+        state.auth_checks.push(AuthCheck {
+            kind: classify_auth_check(&callee, rules),
+            callee: callee.clone(),
+            subjects: subjects.clone(),
+            span: span(node),
+            line,
+            args: string_args,
+            condition_text: None,
+            is_route_level: false,
+        });
+    }
+
     if let Some(kind) = op_kind {
         state.operations.push(SensitiveOperation {
             kind,
@@ -1299,7 +1331,7 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
             subjects,
             span: span(node),
             line,
-            text: node_text,
+            text: node_text.to_string(),
         });
     }
 }

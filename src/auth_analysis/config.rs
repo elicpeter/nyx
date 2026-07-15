@@ -494,19 +494,28 @@ impl AuthAnalysisRules {
             return true;
         }
 
+        // Cheap name gate before the whole-call-text `to_ascii_lowercase`
+        // allocation.  The substring fallback only matches read-shaped callees,
+        // and this predicate is evaluated on *every* call node during auth
+        // extraction, so lowercasing the entire call expression for calls whose
+        // name can never qualify is pure waste.  `A && B == B && A` for bools,
+        // so the reordered short-circuit is result-identical to the prior
+        // `looks_like_token_query && read_shaped` form.
+        let read_shaped = self.is_read(name)
+            || matches_name(name, "get")
+            || matches_name(name, "filter")
+            || matches_name(name, "first")
+            || matches_name(name, "one");
+        if !read_shaped {
+            return false;
+        }
+
         let lower = call_text.to_ascii_lowercase();
-        let looks_like_token_query = lower.contains("token=")
+        lower.contains("token=")
             || lower.contains("token =")
             || lower.contains("invite")
             || lower.contains("invitation")
-            || lower.contains("accept_key");
-
-        looks_like_token_query
-            && (self.is_read(name)
-                || matches_name(name, "get")
-                || matches_name(name, "filter")
-                || matches_name(name, "first")
-                || matches_name(name, "one"))
+            || lower.contains("accept_key")
     }
 
     pub fn is_mutation(&self, name: &str) -> bool {
