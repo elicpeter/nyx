@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 661
+    "corpus_size": 663
   },
   "cases": [
     {
@@ -20953,6 +20953,82 @@
       ],
       "disabled": false,
       "notes": "Recall guard for the payload_args=[0] gate: attacker input interpolated INTO the SQL string (arg0) of sequelize.query must still fire taint-unsanitised-flow even though the { type } options object (arg1) is a non-payload position."
+    },
+    {
+      "case_id": "js-safe-realrepo-sequelize-transaction-001",
+      "file": "javascript/safe/safe_sequelize_transaction_const_sql.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-world",
+      "equivalence_tier": "analogue",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "real-repo-precision-2026-07-15",
+        "migration",
+        "constant-sql",
+        "sequelize",
+        "transaction",
+        "hoisted-sink"
+      ],
+      "disabled": false,
+      "notes": "outline migration: constant DDL via sequelize.query inside a sequelize.transaction(async (t)=>{...}) callback. first_member_label hoists the inner query SQL_QUERY Sink onto the outer .transaction node; the recorded HoistedSink provenance (inner payload arg0 const) lets sink_payload_args_syntactic_const suppress the phantom cfg-unguarded-sink on the wrapper. No source => taint must stay silent."
+    },
+    {
+      "case_id": "js-sqli-realrepo-sequelize-transaction-001",
+      "file": "javascript/sqli/vuln_sequelize_transaction_tainted_sql.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "real-world",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          15,
+          15
+        ],
+        [
+          16,
+          16
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          14,
+          14
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-07-15",
+        "sequelize",
+        "transaction",
+        "hoisted-sink",
+        "interpolation"
+      ],
+      "disabled": false,
+      "notes": "Recall counterpart: interpolated ${name} inside the same sequelize.transaction wrapper. Inner query payload arg0 is a non-const template => HoistedSink provenance leaves it non-literal => syntactic payload-const suppression must NOT fire; taint-unsanitised-flow reports req.query.name -> sequelize.query."
     }
   ]
 }

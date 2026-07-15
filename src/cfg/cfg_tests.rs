@@ -1248,6 +1248,10 @@ fn clone_preserves_all_sub_structs() {
             gate_filters: Vec::new(),
             is_constructor: false,
             produces_null_proto: false,
+            hoisted_sink: Some(Box::new(crate::cfg::HoistedSink {
+                payload_args: Some(vec![0]),
+                arg_string_literals: vec![Some("SELECT 1".into())],
+            })),
         },
         taint: TaintMeta {
             labels: {
@@ -4652,4 +4656,89 @@ fn java_borrowed_owner_type_classifier_and_leaf() {
     assert!(!super::is_java_borrowed_connection_owner("DriverManager"));
     assert!(!super::is_java_borrowed_connection_owner("Connection"));
     assert!(!super::is_java_borrowed_connection_owner("BasicDataSource"));
+}
+
+/// `sequelize.transaction(async (t) => { sequelize.query(`const`, {t}) })`:
+/// `first_member_label` hoists the inner query SQL_QUERY Sink onto the outer
+/// `.transaction` wrapper node.  The wrapper must carry `HoistedSink`
+/// provenance recording the INNER call's own payload-arg positions ([0], from
+/// the sequelize.query gate) and per-argument string literals (arg0 = the
+/// constant SQL template), so the cfg-unguarded-sink layer can prove the inner
+/// payload constant and suppress the phantom wrapper finding.
+#[test]
+fn transaction_wrapper_records_hoisted_sink_const_payload() {
+    let src = br#"module.exports = {
+  async up(queryInterface) {
+    await queryInterface.sequelize.transaction(async (transaction) => {
+      await queryInterface.sequelize.query(`DROP VIEW x`, { transaction });
+    });
+  },
+};
+"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let fc = parse_to_file_cfg(src, "javascript", ts_lang);
+    let wrapper = fc
+        .bodies
+        .iter()
+        .flat_map(|b| b.graph.node_indices().map(move |i| &b.graph[i]))
+        .find(|n| {
+            n.call.callee.as_deref() == Some("queryInterface.sequelize.transaction")
+        })
+        .expect("transaction wrapper node");
+    let h = wrapper
+        .call
+        .hoisted_sink
+        .as_ref()
+        .expect("wrapper carries HoistedSink provenance from the callback body");
+    assert_eq!(h.payload_args.as_deref(), Some(&[0usize][..]));
+    assert_eq!(h.arg_string_literals.first(), Some(&Some("DROP VIEW x".to_string())));
+}
+
+/// Interpolated inner SQL: the same wrapper shape but the inner query payload
+/// is a `${…}` template (non-const).  The recorded `HoistedSink` must leave
+/// payload position 0 non-literal so the syntactic payload-const suppression
+/// does NOT fire and a tainted inner flow still reports.
+#[test]
+fn transaction_wrapper_hoisted_sink_interpolated_payload_not_literal() {
+    let src = br#"async function h(name) {
+  await sequelize.transaction(async (transaction) => {
+    await sequelize.query(`SELECT * FROM u WHERE n = '${name}'`, { transaction });
+  });
+}
+"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let fc = parse_to_file_cfg(src, "javascript", ts_lang);
+    let wrapper = fc
+        .bodies
+        .iter()
+        .flat_map(|b| b.graph.node_indices().map(move |i| &b.graph[i]))
+        .find(|n| n.call.callee.as_deref() == Some("sequelize.transaction"))
+        .expect("transaction wrapper node");
+    let h = wrapper
+        .call
+        .hoisted_sink
+        .as_ref()
+        .expect("wrapper carries HoistedSink provenance");
+    assert_eq!(h.payload_args.as_deref(), Some(&[0usize][..]));
+    // Interpolated template => no captured literal at the payload position.
+    assert_eq!(h.arg_string_literals.first(), Some(&None));
+}
+
+/// Ordinary member-source-on-wrapper hoist (no callback body) must NOT be
+/// treated as a hoisted callback sink: `storeInto(req.query.input, items)`
+/// hoists the `req.query.input` Source onto the wrapper, which is not a
+/// callback-nested Sink, so `hoisted_sink` stays `None`.
+#[test]
+fn member_source_wrapper_has_no_hoisted_sink() {
+    let src = b"function h(req, items) { storeInto(req.query.input, items); }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let fc = parse_to_file_cfg(src, "javascript", ts_lang);
+    for b in &fc.bodies {
+        for i in b.graph.node_indices() {
+            assert!(
+                b.graph[i].call.hoisted_sink.is_none(),
+                "no callback sink hoist expected for a member-source wrapper"
+            );
+        }
+    }
 }

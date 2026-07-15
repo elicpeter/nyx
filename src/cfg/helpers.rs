@@ -713,6 +713,63 @@ pub(crate) fn first_member_label(
     None
 }
 
+/// Locate the inner sink CALL node whose `Sink` label [`first_member_label`]
+/// hoisted onto an outer wrapper node from inside a callback-argument function
+/// literal.
+///
+/// This is the dual of [`first_member_label`] for the callback-descent case:
+/// where `first_member_label` returns only the `DataLabel`, this returns the
+/// enclosing `call_expression` so its own payload-arg positions + argument
+/// string literals can be recorded as [`super::HoistedSink`] provenance on the
+/// wrapper.  Motivated by the outline Sequelize-migration idiom
+/// `queryInterface.sequelize.transaction(async (t) => {
+/// queryInterface.sequelize.query(`…const DDL…`, { transaction: t }) })`, whose
+/// `.transaction` wrapper inherits the inner `sequelize.query` `Sink` and then
+/// fires a phantom `cfg-unguarded-sink` because the wrapper's own argument is
+/// the callback, not the constant SQL.
+///
+/// Descent only reports a sink call that lives **inside** a function-literal
+/// boundary (`Kind::Function`): a sink found in `n`'s own non-callback subtree
+/// returns `None`, so the ordinary member-source-on-wrapper hoist is
+/// unaffected.  Returns the FIRST such inner sink call in source order, so the
+/// provenance matches the first `Sink` label `first_member_label` would return.
+pub(crate) fn first_callback_sink_call<'a>(
+    n: Node<'a>,
+    lang: &str,
+    code: &[u8],
+    extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
+) -> Option<Node<'a>> {
+    fn walk<'a>(
+        n: Node<'a>,
+        lang: &str,
+        code: &[u8],
+        extra: Option<&[crate::labels::RuntimeLabelRule]>,
+        inside_fn: bool,
+    ) -> Option<Node<'a>> {
+        // Once inside a callback body, a call whose callee (function-field
+        // member expression) classifies as a `Sink` is the hoisted inner sink.
+        if inside_fn
+            && let Some(callee) = n
+                .child_by_field_name("function")
+                .or_else(|| n.child_by_field_name("method"))
+                .or_else(|| n.child_by_field_name("name"))
+            && let Some(callee_text) = member_expr_text(callee, code).or_else(|| text_of(callee, code))
+            && matches!(classify(lang, &callee_text, extra), Some(DataLabel::Sink(_)))
+        {
+            return Some(n);
+        }
+        let now_inside = inside_fn || lookup(lang, n.kind()) == Kind::Function;
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            if let Some(found) = walk(child, lang, code, extra, now_inside) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(n, lang, code, extra_labels, false)
+}
+
 /// Return the text of the first member expression found in `n`.
 pub(crate) fn first_member_text(n: Node, code: &[u8]) -> Option<String> {
     match n.kind() {
@@ -1460,5 +1517,68 @@ mod source_str_tests {
         );
         drop(g_outer);
         assert_eq!(VALID_SOURCE.with(|c| c.get()), None);
+    }
+}
+
+#[cfg(test)]
+mod callback_sink_tests {
+    use super::{first_callback_sink_call, member_expr_text};
+    use tree_sitter::{Node, Parser};
+
+    fn callee_of(call: Node, code: &[u8]) -> Option<String> {
+        call.child_by_field_name("function")
+            .and_then(|f| member_expr_text(f, code))
+    }
+
+    /// The inner `sequelize.query` sink nested in the `.transaction` callback
+    /// body is located (through the arrow-function boundary), and its enclosing
+    /// call node is returned.
+    #[test]
+    fn finds_inner_sink_call_in_transaction_callback() {
+        let code = br#"function up(q) {
+  return q.sequelize.transaction(async (t) => {
+    return q.sequelize.query(`DROP VIEW x`, { transaction: t });
+  });
+}"#;
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_javascript::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(&code[..], None).unwrap();
+        // Root program → find the transaction call_expression.
+        fn find_transaction<'a>(n: Node<'a>, code: &[u8]) -> Option<Node<'a>> {
+            if n.kind() == "call_expression"
+                && callee_of(n, code).as_deref() == Some("q.sequelize.transaction")
+            {
+                return Some(n);
+            }
+            let mut c = n.walk();
+            for ch in n.children(&mut c) {
+                if let Some(f) = find_transaction(ch, code) {
+                    return Some(f);
+                }
+            }
+            None
+        }
+        let tx = find_transaction(tree.root_node(), &code[..]).expect("transaction call");
+        let inner = first_callback_sink_call(tx, "javascript", &code[..], None)
+            .expect("inner sink call inside the callback");
+        assert_eq!(
+            callee_of(inner, &code[..]).as_deref(),
+            Some("q.sequelize.query")
+        );
+    }
+
+    /// A member-source passed as a plain (non-callback) argument is not a
+    /// callback-nested sink → `None` (the ordinary hoist path is unaffected).
+    #[test]
+    fn ignores_non_callback_member_arg() {
+        let code = b"function h(req) { storeInto(req.query.input, items); }";
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_javascript::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(&code[..], None).unwrap();
+        assert!(first_callback_sink_call(tree.root_node(), "javascript", &code[..], None).is_none());
     }
 }

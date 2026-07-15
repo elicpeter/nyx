@@ -252,8 +252,43 @@ fn sink_payload_args_const(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
 /// whole-call `is_all_args_constant`.  A constant payload provably carries no
 /// injection regardless of the non-payload options object, so this is sound
 /// independent of `has_taint`.
+/// Return true when every payload position of a sink call resolves to a
+/// captured constant string literal.
+///
+/// `payload_args = Some(non-empty)` (a gated sink, e.g. `sequelize.query` with
+/// `payload_args = [0]`): each listed position must be a `Some(literal)`.
+/// `payload_args = None`/empty (an unrestricted sink, every argument is a
+/// payload): every recorded argument must be a `Some(literal)` — mirroring
+/// `is_all_args_constant` — and there must be at least one recorded argument
+/// (an empty list is unproven → not suppressed).
+fn payload_positions_all_literal(
+    payload_args: &Option<Vec<usize>>,
+    lits: &[Option<String>],
+) -> bool {
+    match payload_args {
+        Some(p) if !p.is_empty() => p.iter().all(|&pos| matches!(lits.get(pos), Some(Some(_)))),
+        _ => !lits.is_empty() && lits.iter().all(|l| l.is_some()),
+    }
+}
+
 fn sink_payload_args_syntactic_const(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     let info = &ctx.cfg[sink];
+
+    // Hoisted-callback sink: the `Sink` label on this wrapper node was hoisted
+    // from an inner call nested inside a callback-argument function literal
+    // (`sequelize.transaction(async (t) => { sequelize.query(`…const…`, {t}) })`).
+    // The wrapper's own arguments are the callback, not the SQL payload, so the
+    // syntactic-const check below (keyed on the wrapper's `sink_payload_args` /
+    // `arg_string_literals`) can never see the constant.  Consult the recorded
+    // INNER sink call's payload positions + literals instead.  Sound regardless
+    // of `has_taint`: a syntactic literal at the inner payload position cannot
+    // carry taint, and a tainted inner payload leaves that position non-literal
+    // so the wrapper finding still fires.  (The inner sink call also has its own
+    // CFG node in the nested-callback body, so real detection is never lost.)
+    if let Some(h) = &info.call.hoisted_sink {
+        return payload_positions_all_literal(&h.payload_args, &h.arg_string_literals);
+    }
+
     let payload_positions = match &info.call.sink_payload_args {
         Some(p) if !p.is_empty() => p,
         _ => return false,
@@ -3750,5 +3785,51 @@ mod guard_suffix_boundary_tests {
             "validate"
         ));
         assert!(!suffix_matches_at_leaf_boundary("os.system", "quote"));
+    }
+}
+
+#[cfg(test)]
+mod hoisted_payload_tests {
+    use super::payload_positions_all_literal;
+
+    #[test]
+    fn gated_payload_all_literal_suppresses() {
+        // `sequelize.query(`const DDL`, { transaction })` — gated payload_args=[0],
+        // arg 0 literal, arg 1 non-literal options object. Only position 0 counts.
+        let lits = vec![Some("DROP VIEW x".to_string()), None];
+        assert!(payload_positions_all_literal(&Some(vec![0]), &lits));
+    }
+
+    #[test]
+    fn gated_payload_non_literal_position_does_not_suppress() {
+        // Interpolated inner SQL: payload position 0 is a non-const template.
+        let lits = vec![None, None];
+        assert!(!payload_positions_all_literal(&Some(vec![0]), &lits));
+    }
+
+    #[test]
+    fn gated_payload_position_out_of_range_does_not_suppress() {
+        let lits = vec![Some("x".to_string())];
+        assert!(!payload_positions_all_literal(&Some(vec![1]), &lits));
+    }
+
+    #[test]
+    fn unrestricted_sink_requires_every_arg_literal() {
+        // No gate: every recorded argument must be a constant literal.
+        assert!(payload_positions_all_literal(
+            &None,
+            &[Some("a".to_string()), Some("b".to_string())]
+        ));
+        assert!(!payload_positions_all_literal(
+            &None,
+            &[Some("a".to_string()), None]
+        ));
+    }
+
+    #[test]
+    fn unrestricted_sink_empty_args_unproven() {
+        // Empty literal list is unproven → not suppressed (conservative).
+        assert!(!payload_positions_all_literal(&None, &[]));
+        assert!(!payload_positions_all_literal(&Some(vec![]), &[]));
     }
 }

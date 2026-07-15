@@ -42,7 +42,8 @@ pub mod safe_fields;
 use blocks::{build_begin_rescue, build_switch, build_try};
 use helpers::{
     collect_nested_function_nodes, derive_anon_fn_name_from_context, find_classifiable_inner_call,
-    find_inner_sink_call, first_call_ident_with_span, first_member_label, first_member_text,
+    find_inner_sink_call, first_call_ident_with_span, first_callback_sink_call, first_member_label,
+    first_member_text,
     is_raii_factory,
     is_subscript_kind, root_member_receiver, subscript_components, subscript_lhs_node,
 };
@@ -685,6 +686,38 @@ pub struct CallMeta {
     /// SSA does not need to re-walk the AST.
     #[serde(default)]
     pub produces_null_proto: bool,
+    /// Provenance for a `Sink` label that was HOISTED onto this wrapper call
+    /// from an inner call nested inside a callback-argument function literal.
+    ///
+    /// [`first_member_label`] descends through function literals, so a wrapper
+    /// like `queryInterface.sequelize.transaction(async (t) => {
+    /// queryInterface.sequelize.query(`…const DDL…`, { transaction: t }) })`
+    /// inherits the inner `sequelize.query` `Sink` label — but the wrapper's
+    /// own arguments are the callback, not the SQL payload.  This records the
+    /// INNER sink call's own payload-arg positions + per-argument string
+    /// literals so the `cfg-unguarded-sink` syntactic payload-const check
+    /// (`sink_payload_args_syntactic_const`) can prove the *inner* payload is
+    /// a constant (suppress the phantom wrapper finding) while a tainted inner
+    /// payload still fires.  `None` for the common case (no hoist, or the
+    /// hoisted label did not come from inside a callback body).
+    #[serde(default)]
+    pub hoisted_sink: Option<Box<HoistedSink>>,
+}
+
+/// Recorded provenance of a callback-nested inner sink call whose `Sink` label
+/// was hoisted onto an outer wrapper node by [`first_member_label`].  See
+/// [`CallMeta::hoisted_sink`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HoistedSink {
+    /// The inner sink call's payload-arg positions (its gate's `payload_args`,
+    /// with the dynamic `ALL_ARGS_PAYLOAD` sentinel already expanded to the
+    /// inner call's arity).  `None` when the inner sink carries no gate (an
+    /// unrestricted sink — every argument is a payload position).
+    pub payload_args: Option<Vec<usize>>,
+    /// The inner sink call's per-positional-argument string literals, parallel
+    /// to the inner call's positional arguments (same shape as
+    /// [`CallMeta::arg_string_literals`]).
+    pub arg_string_literals: Vec<Option<String>>,
 }
 
 /// One gate's contribution at a call site whose callee matches multiple
@@ -2487,6 +2520,76 @@ fn iterable_label_text(iter: Node, code: &[u8]) -> Option<String> {
     text_of(iter, code)
 }
 
+/// Build [`HoistedSink`] provenance for `inner_call`, the callback-nested sink
+/// whose `Sink` label [`first_callback_sink_call`] found being hoisted onto an
+/// outer wrapper node.  Mirrors the gate-classification path used for a node's
+/// own `sink_payload_args`: run the gated-sink registry against the inner
+/// callee to recover its payload-arg positions (expanding the dynamic
+/// `ALL_ARGS_PAYLOAD` sentinel to the inner call's arity) and capture the inner
+/// call's per-argument string literals.
+fn compute_hoisted_sink(inner_call: Node, lang: &str, code: &[u8]) -> HoistedSink {
+    let arg_string_literals = extract_arg_string_literals(inner_call, code);
+
+    let callee_text = inner_call
+        .child_by_field_name("function")
+        .or_else(|| inner_call.child_by_field_name("method"))
+        .or_else(|| inner_call.child_by_field_name("name"))
+        .and_then(|f| member_expr_text(f, code).or_else(|| text_of(f, code)))
+        .map(|t| t.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+        .unwrap_or_default();
+
+    let matches = classify_gated_sink(
+        lang,
+        &callee_text,
+        |idx| {
+            extract_const_string_arg(inner_call, idx, code).or_else(|| {
+                if matches!(lang, "c" | "cpp" | "c++" | "php" | "ruby" | "rb") {
+                    extract_const_macro_arg(inner_call, idx, code)
+                } else {
+                    None
+                }
+            })
+        },
+        |kw| {
+            extract_const_keyword_arg(inner_call, kw, code).or_else(|| {
+                if matches!(lang, "javascript" | "typescript") {
+                    extract_object_arg_property(inner_call, 1, kw, code)
+                } else {
+                    None
+                }
+            })
+        },
+        |kw| {
+            has_keyword_arg(inner_call, kw, code)
+                || (matches!(lang, "javascript" | "typescript")
+                    && has_object_arg_property(inner_call, 1, kw, code))
+        },
+    );
+
+    let mut payload: Vec<usize> = Vec::new();
+    for gm in &matches {
+        if gm.payload_args == crate::labels::ALL_ARGS_PAYLOAD {
+            let arity = extract_arg_uses(inner_call, code).len();
+            for p in 0..arity {
+                if !payload.contains(&p) {
+                    payload.push(p);
+                }
+            }
+        } else {
+            for &p in gm.payload_args {
+                if !payload.contains(&p) {
+                    payload.push(p);
+                }
+            }
+        }
+    }
+
+    HoistedSink {
+        payload_args: (!payload.is_empty()).then_some(payload),
+        arg_string_literals,
+    }
+}
+
 /// Create a node in one short borrow and optionally attach a taint label.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn push_node<'a>(
@@ -2989,6 +3092,11 @@ pub(super) fn push_node<'a>(
         }
     }
 
+    // Provenance for a Sink label hoisted onto a wrapper from a callback body
+    // (populated in the hoist block below).  Consumed by the CFG node's
+    // `CallMeta.hoisted_sink`.
+    let mut hoisted_sink: Option<Box<HoistedSink>> = None;
+
     // For declarations/assignments whose RHS is a member expression (not a call),
     // try to classify the member expression text as a source.
     // This handles `var x = process.env.CMD` (JS), `os.environ["KEY"]` (Python),
@@ -3007,7 +3115,21 @@ pub(super) fn push_node<'a>(
         && !rhs_is_function_literal(ast, lang)
         && let Some(found) = first_member_label(ast, lang, code, extra)
     {
+        let hoisted_is_sink = matches!(found, DataLabel::Sink(_));
         labels.push(found);
+        // When the hoisted label is a Sink contributed from inside a
+        // callback-argument function literal (the `sequelize.transaction(async
+        // (t) => { sequelize.query(`…`, opts) })` idiom), record the INNER sink
+        // call's own payload-arg positions + argument string literals.  The
+        // wrapper's own arguments are the callback, not the payload, so
+        // `sink_payload_args_syntactic_const` must check the inner call to
+        // decide whether the phantom `cfg-unguarded-sink` on the wrapper is a
+        // false positive (constant inner payload) or a real flow (tainted).
+        if hoisted_is_sink
+            && let Some(inner) = first_callback_sink_call(ast, lang, code, extra)
+        {
+            hoisted_sink = Some(Box::new(compute_hoisted_sink(inner, lang, code)));
+        }
         // Update text so the callee name reflects the source.
         // Preserve the original callee in outer_callee so inter-procedural
         // summary resolution can still find the wrapping function
@@ -3990,6 +4112,7 @@ pub(super) fn push_node<'a>(
             gate_filters,
             is_constructor,
             produces_null_proto,
+            hoisted_sink,
         },
         taint: TaintMeta {
             labels,
