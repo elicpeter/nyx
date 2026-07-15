@@ -457,6 +457,15 @@ fn bench_collect_top_level_units_go(c: &mut Criterion) {
 /// predicate cut `const_propagate` self-time roughly in half on the
 /// large-Go fixture.  A regression that re-introduces the hash-keyed
 /// inner loop will surface here as a ≥1.4× slowdown.
+///
+/// 2026-07-15 perfhunt session-0048 additionally removed the residual
+/// per-iteration clones from the SCCP worklist: the spurious
+/// `use_sites[val_idx].clone()` (a `SmallVec` heap clone per popped value),
+/// the `let old = lookup(..)` lattice clone before every change-check (now
+/// a borrowing `changed_from`), and the per-phi-operand `lookup` clone (now
+/// a borrowing `lookup_ref` fed straight into `meet`).  Bit-identical;
+/// criterion here 186.5 → 172.8 µs (−6%).  Re-introducing any of those
+/// clones surfaces as a regression on this fixture.
 fn bench_const_propagate_large_go(c: &mut Criterion) {
     use nyx_scanner::ssa;
 

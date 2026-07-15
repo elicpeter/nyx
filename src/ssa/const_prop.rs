@@ -161,9 +161,8 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
             // Evaluate phis
             for phi in &block.phis {
                 if let SsaOp::Phi(operands) = &phi.op {
-                    let old = lookup(&values, phi.value);
                     let new_val = eval_phi(operands, &values, &executable_preds, block_id);
-                    if new_val != old {
+                    if changed_from(&values, phi.value, &new_val) {
                         store(&mut values, phi.value, new_val);
                         ssa_worklist.push_back(phi.value);
                         changed = true;
@@ -173,9 +172,8 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
 
             // Evaluate body instructions
             for inst in &block.body {
-                let old = lookup(&values, inst.value);
                 let new_val = eval_inst(inst, &values);
-                if new_val != old {
+                if changed_from(&values, inst.value, &new_val) {
                     store(&mut values, inst.value, new_val);
                     ssa_worklist.push_back(inst.value);
                     changed = true;
@@ -199,11 +197,14 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
             if val_idx >= use_sites.len() {
                 continue;
             }
-            // Snapshot the use-list so we can borrow `values` mutably
-            // while iterating block ids.  The list is short (typically
-            // 1–3 blocks) so the clone is cheap.
-            let use_blocks = use_sites[val_idx].clone();
-            for block_id in use_blocks {
+            // Iterate the use-list by reference. `use_sites` is built once
+            // before the worklist and never mutated inside it, and it is a
+            // distinct allocation from `values` / `executable_*` / the
+            // worklists, so the borrow checker allows borrowing the block-id
+            // list immutably while `values` is mutated — the previous per-pop
+            // `SmallVec` clone (a heap allocation whenever a value is used in
+            // >2 blocks) was spurious.
+            for &block_id in &use_sites[val_idx] {
                 if !executable_blocks[block_id.0 as usize] {
                     continue;
                 }
@@ -214,9 +215,8 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
                     if let SsaOp::Phi(operands) = &phi.op
                         && operands.iter().any(|(_, v)| *v == val)
                     {
-                        let old = lookup(&values, phi.value);
                         let new_val = eval_phi(operands, &values, &executable_preds, block_id);
-                        if new_val != old {
+                        if changed_from(&values, phi.value, &new_val) {
                             store(&mut values, phi.value, new_val);
                             ssa_worklist.push_back(phi.value);
                             changed = true;
@@ -227,9 +227,8 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
                 // Re-evaluate body instructions using this value
                 for inst in &block.body {
                     if inst_has_use(inst, val) {
-                        let old = lookup(&values, inst.value);
                         let new_val = eval_inst(inst, &values);
-                        if new_val != old {
+                        if changed_from(&values, inst.value, &new_val) {
                             store(&mut values, inst.value, new_val);
                             ssa_worklist.push_back(inst.value);
                             changed = true;
@@ -284,6 +283,31 @@ fn lookup(values: &[ConstLattice], v: SsaValue) -> ConstLattice {
         .unwrap_or(ConstLattice::Top)
 }
 
+/// Borrowing variant of [`lookup`]: returns a reference to the stored
+/// lattice (or a shared `Top` sentinel for out-of-range values) so phi
+/// meet, branch-condition resolution, and change-detection avoid cloning
+/// `ConstLattice::Str` heap data on the hot fixed-point path.
+#[inline]
+fn lookup_ref(values: &[ConstLattice], v: SsaValue) -> &ConstLattice {
+    const TOP: ConstLattice = ConstLattice::Top;
+    values.get(v.0 as usize).unwrap_or(&TOP)
+}
+
+/// True iff `new_val` differs from the value currently stored for `v`,
+/// mirroring `lookup(values, v) != *new_val` WITHOUT cloning the stored
+/// lattice. Out-of-range slots read as `Top` (matching `lookup`'s
+/// `unwrap_or(Top)`), and a store to an out-of-range slot is a no-op either
+/// way, so this is bit-identical to the prior `let old = lookup(..); new !=
+/// old` shape while eliminating a per-instruction clone (a heap allocation
+/// for `Str` values) on every worklist re-evaluation.
+#[inline]
+fn changed_from(values: &[ConstLattice], v: SsaValue, new_val: &ConstLattice) -> bool {
+    match values.get(v.0 as usize) {
+        Some(cur) => cur != new_val,
+        None => *new_val != ConstLattice::Top,
+    }
+}
+
 /// Dense lattice store. Out-of-range writes are silently dropped to
 /// preserve robustness against malformed SSA input — the prior HashMap
 /// path would have inserted a stray entry; the dense path leaves it
@@ -313,8 +337,10 @@ fn eval_phi(
         if !preds.contains(pred_block) {
             continue; // skip non-executable predecessors
         }
-        let operand_val = lookup(values, *val);
-        result = result.meet(&operand_val);
+        // Borrow the operand's stored lattice instead of cloning it; `meet`
+        // only reads `&other`, so a phi over `Str` operands no longer heap-
+        // allocates one clone per incoming edge.
+        result = result.meet(lookup_ref(values, *val));
     }
     result
 }
@@ -451,8 +477,7 @@ fn process_terminator(
             let cond_val = body
                 .cfg_node_map
                 .get(cond)
-                .map(|v| lookup(values, *v))
-                .and_then(|c| c.as_bool());
+                .and_then(|v| lookup_ref(values, *v).as_bool());
 
             match cond_val {
                 Some(true) => {
