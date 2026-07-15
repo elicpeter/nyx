@@ -459,6 +459,15 @@ fn bench_global_summaries_lookup_same_lang_go(c: &mut Criterion) {
 /// extraction, the main analysis, child-sink augmentation).  A regression
 /// that reintroduces the linear scan surfaces here as a large slowdown
 /// that grows quadratically with the fixture's function count.
+///
+/// Also guards the borrow-vs-clone candidate API (session-0036): the four
+/// resolvers above consult the index via `with_indexed_local_candidates`,
+/// which hands them borrowed `&FuncKey`s instead of the former
+/// `indexed_local_candidates`, which deep-cloned every same-name candidate
+/// (three `String` allocations per `FuncKey`) on each resolution only to be
+/// filtered and discarded. The sole surviving clone is the single winning
+/// key each resolver returns. Reintroducing the per-resolution candidate-list
+/// clone regresses here (measured -2.2% cooled on this fixture).
 fn bench_taint_callee_resolve_stress_go(c: &mut Criterion) {
     let fixture = Path::new("benches/perf_fixtures/callee_resolve_stress.go")
         .canonicalize()

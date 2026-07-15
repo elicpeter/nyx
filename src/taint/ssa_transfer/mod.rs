@@ -12297,19 +12297,37 @@ impl Drop for LocalNameIndexGuard {
 ///   result is authoritative: there is no local definition of `name`.
 /// * `None` — no index is published; the caller must fall back to its
 ///   own `local_summaries.keys().filter(...)` scan to preserve behaviour.
-fn indexed_local_candidates(name: &str, lang: Lang) -> Option<SmallVec<[FuncKey; 2]>> {
+/// Runs `f` over the file-local candidates for `name` (lang-filtered) held by
+/// the per-file `FuncNameIndex`, without deep-cloning them out of the
+/// thread-local index. `f` receives borrowed `&FuncKey`s that live only for
+/// the duration of its call, so it extracts what it needs (typically cloning
+/// at most the single winning key) before returning.
+///
+/// Returns `None` when no index is published, so the caller falls back to a
+/// linear `local_summaries` scan (unit-test / probe paths). Returns
+/// `Some(f(&[]))` when an index is published but holds no same-lang candidate
+/// for `name`.
+///
+/// Replaces the former `indexed_local_candidates`, which materialised an owned
+/// `SmallVec<[FuncKey; 2]>` (a full `FuncKey` clone, three `String` allocations
+/// each, per candidate) on every callee resolution, only for the caller to
+/// borrow the copies, filter them, and clone at most one winner. Handing the
+/// borrowed refs through a closure drops that per-resolution candidate-list
+/// clone entirely; the sole remaining `FuncKey` clone is the one winning key
+/// each resolver returns by value.
+fn with_indexed_local_candidates<R>(
+    name: &str,
+    lang: Lang,
+    f: impl FnOnce(&[&FuncKey]) -> R,
+) -> Option<R> {
     LOCAL_NAME_INDEX_TLS.with(|cell| {
         let borrowed = cell.borrow();
         let index = borrowed.as_ref()?;
-        let mut out: SmallVec<[FuncKey; 2]> = SmallVec::new();
-        if let Some(keys) = index.by_name.get(name) {
-            for k in keys {
-                if k.lang == lang {
-                    out.push(k.clone());
-                }
-            }
-        }
-        Some(out)
+        let refs: SmallVec<[&FuncKey; 2]> = match index.by_name.get(name) {
+            Some(keys) => keys.iter().filter(|k| k.lang == lang).collect(),
+            None => SmallVec::new(),
+        };
+        Some(f(&refs))
     })
 }
 
@@ -12320,28 +12338,32 @@ fn caller_container_for(transfer: &SsaTaintTransfer, caller_func: &str) -> Optio
     if caller_func.is_empty() {
         return None;
     }
-    let indexed = indexed_local_candidates(caller_func, transfer.lang);
-    let mut containers: Vec<&str> = match &indexed {
-        Some(keys) => keys
+    // Pick the sole non-empty container shared by every same-name candidate,
+    // or `None` if zero or ambiguous.  Operates on borrowed refs so the
+    // indexed path never clones the candidate list.
+    fn pick(keys: &[&FuncKey]) -> Option<String> {
+        let mut containers: Vec<&str> = keys
             .iter()
             .map(|k| k.container.as_str())
             .filter(|c| !c.is_empty())
-            .collect(),
-        None => transfer
-            .local_summaries
-            .keys()
-            .filter(|k| k.lang == transfer.lang && k.name == caller_func)
-            .map(|k| k.container.as_str())
-            .filter(|c| !c.is_empty())
-            .collect(),
-    };
-    containers.sort();
-    containers.dedup();
-    if containers.len() == 1 {
-        Some(containers[0].to_string())
-    } else {
-        None
+            .collect();
+        containers.sort();
+        containers.dedup();
+        if containers.len() == 1 {
+            Some(containers[0].to_string())
+        } else {
+            None
+        }
     }
+    if let Some(res) = with_indexed_local_candidates(caller_func, transfer.lang, pick) {
+        return res;
+    }
+    let keys: Vec<&FuncKey> = transfer
+        .local_summaries
+        .keys()
+        .filter(|k| k.lang == transfer.lang && k.name == caller_func)
+        .collect();
+    pick(&keys)
 }
 
 /// Query-based equivalent of [`resolve_local_func_key`].
@@ -12354,16 +12376,25 @@ pub(crate) fn resolve_local_func_key_query(
     local_summaries: &FuncSummaries,
     q: &CalleeQuery<'_>,
 ) -> Option<FuncKey> {
-    // Prefer the per-file name index (O(1) probe); fall back to the
-    // linear scan when no index is published (unit-test / probe paths).
-    let indexed = indexed_local_candidates(q.name, q.caller_lang);
-    let all: Vec<&FuncKey> = match &indexed {
-        Some(keys) => keys.iter().collect(),
-        None => local_summaries
-            .keys()
-            .filter(|k| k.name == q.name && k.lang == q.caller_lang)
-            .collect(),
-    };
+    // Prefer the per-file name index (O(1) probe, borrowed candidates → no
+    // clone); fall back to the linear scan when no index is published
+    // (unit-test / probe paths).
+    if let Some(res) =
+        with_indexed_local_candidates(q.name, q.caller_lang, |all| resolve_lfk_query_from(all, q))
+    {
+        return res;
+    }
+    let all: Vec<&FuncKey> = local_summaries
+        .keys()
+        .filter(|k| k.name == q.name && k.lang == q.caller_lang)
+        .collect();
+    resolve_lfk_query_from(&all, q)
+}
+
+/// Qualified-first resolution over an already-collected candidate slice.
+/// Shared by the indexed (borrowed refs) and linear-scan fallback paths of
+/// [`resolve_local_func_key_query`] so neither clones the candidate list.
+fn resolve_lfk_query_from(all: &[&FuncKey], q: &CalleeQuery<'_>) -> Option<FuncKey> {
     if all.is_empty() {
         return None;
     }
@@ -12479,17 +12510,29 @@ pub(crate) fn resolve_local_func_key(
     // `local_summaries` is file-local; every entry shares the same namespace
     // (raw file path from `build_cfg`). We do not filter by namespace here so
     // callers can pass whichever form they have (raw or normalized).
-    let indexed = indexed_local_candidates(leaf_name, lang);
-    let mut candidates: Vec<&FuncKey> = match &indexed {
-        Some(keys) => keys.iter().collect(),
-        None => local_summaries
-            .keys()
-            .filter(|k| k.name == leaf_name && k.lang == lang)
-            .collect(),
-    };
-    if candidates.is_empty() {
+    //
+    // Prefer the per-file name index (borrowed candidates → no clone); fall
+    // back to the linear scan when no index is published.
+    if let Some(res) = with_indexed_local_candidates(leaf_name, lang, |keys| {
+        resolve_lfk_from(keys, container_hint)
+    }) {
+        return res;
+    }
+    let candidates: Vec<&FuncKey> = local_summaries
+        .keys()
+        .filter(|k| k.name == leaf_name && k.lang == lang)
+        .collect();
+    resolve_lfk_from(&candidates, container_hint)
+}
+
+/// Container-hint narrowing over an already-collected candidate slice.  Shared
+/// by the indexed and fallback paths of [`resolve_local_func_key`]; clones
+/// only the single winning key (`&FuncKey` refs are pointer copies).
+fn resolve_lfk_from(all: &[&FuncKey], container_hint: Option<&str>) -> Option<FuncKey> {
+    if all.is_empty() {
         return None;
     }
+    let mut candidates: Vec<&FuncKey> = all.to_vec();
     if candidates.len() > 1 {
         if let Some(container) = container_hint {
             let narrowed: Vec<&FuncKey> = candidates
@@ -13053,15 +13096,16 @@ fn resolve_callee_full(
         // Multiple same-name local candidates with no disambiguating
         // container hint: refuse to pick one rather than fall through to a
         // less precise global summary that might be the wrong definition.
-        let ambiguous_local = match indexed_local_candidates(normalized, transfer.lang) {
-            Some(keys) => keys.len() > 1,
-            None => transfer
-                .local_summaries
-                .keys()
-                .filter(|k| k.name == normalized && k.lang == transfer.lang)
-                .count()
-                > 1,
-        };
+        let ambiguous_local =
+            with_indexed_local_candidates(normalized, transfer.lang, |keys| keys.len() > 1)
+                .unwrap_or_else(|| {
+                    transfer
+                        .local_summaries
+                        .keys()
+                        .filter(|k| k.name == normalized && k.lang == transfer.lang)
+                        .count()
+                        > 1
+                });
         if ambiguous_local {
             return None;
         }
