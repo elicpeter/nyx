@@ -607,6 +607,26 @@ impl CfgAnalysis for ResourceMisuse {
 
         let mut findings = Vec::new();
 
+        // Java: variable names bound to a locally-acquired JDBC `Connection`
+        // (`con = X.getConnection()`).  A `Statement` opened on one of these
+        // receivers (`con.prepareStatement(...)`) is transitively closed /
+        // covered by the connection's own lifecycle, so its standalone leak
+        // is never a unique true positive — see
+        // `rules::jdbc_statement_owning_connection`.  Computed once (structural
+        // CFG property); the empty set on non-Java is a no-op.
+        let local_connection_vars: HashSet<&str> = if ctx.lang == Lang::Java {
+            ctx.cfg
+                .node_weights()
+                .filter(|n| {
+                    n.kind == StmtKind::Call
+                        && rules::is_jdbc_connection_acquire(n.call.callee.as_deref())
+                })
+                .filter_map(|n| n.taint.defines.as_deref())
+                .collect()
+        } else {
+            HashSet::new()
+        };
+
         for pair in pairs {
             let acquire_nodes = find_acquire_nodes(ctx, pair.acquire, pair.exclude_acquire);
             let release_nodes = find_release_nodes(ctx, pair.release);
@@ -641,6 +661,23 @@ impl CfgAnalysis for ResourceMisuse {
                 // Twin of the `state-resource-leak` suppression in
                 // `src/state/facts.rs`.
                 if ctx.lang == Lang::Java && ctx.cfg[acquire].borrowed_resource {
+                    continue;
+                }
+                // Suppress a JDBC `Statement` (`prepareStatement`) leak whose
+                // owning `Connection` is a resource acquired locally in this
+                // body — closing the connection closes its statements, so a
+                // statement derived from a locally-tracked connection (closed,
+                // borrowed/managed, or itself leaking) is never a unique true
+                // positive.  A statement on a field / parameter / pooled
+                // connection this body does not track is KEPT.  Twin of the
+                // `state-resource-leak` suppression in `src/state/facts.rs`;
+                // interior-node sibling of the `result set` leaf gate above.
+                if ctx.lang == Lang::Java
+                    && let Some(owner) = rules::jdbc_statement_owning_connection(
+                        ctx.cfg[acquire].call.callee.as_deref(),
+                    )
+                    && local_connection_vars.contains(owner)
+                {
                     continue;
                 }
                 // Suppress `obj.connect("event-name", callback)` event-

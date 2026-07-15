@@ -283,6 +283,39 @@ pub fn extract_findings(
                 continue;
             }
 
+            // Suppress leaks for a JDBC `Statement` (`PreparedStatement` /
+            // `Statement` / `CallableStatement`) whose owning `Connection` is
+            // itself a resource tracked in THIS body.  Per JDBC, closing a
+            // `Connection` closes every `Statement` it produced, so a
+            // statement derived from a locally-acquired connection — whether
+            // the connection is closed in-body, borrowed/managed, or itself a
+            // leaking local (its own leak is the actionable root) — is never a
+            // unique true positive.  The derivation edge `ps -> con` is read
+            // off the acquire callee (`con.prepareStatement`); the owner is
+            // confirmed to be a locally-acquired `Connection` via its own
+            // acquire node.  A statement on a long-lived / field / parameter
+            // connection this body does not track is KEPT (it genuinely
+            // accumulates).  Java-only; twin of the suppression in
+            // `cfg_analysis::resources`.  Interior-node sibling of the
+            // `ResultSet` leaf suppression above.
+            if lang == Lang::Java
+                && let Some(acq) = acquire_node
+                && let Some(owner) = crate::cfg_analysis::rules::jdbc_statement_owning_connection(
+                    cfg[acq].call.callee.as_deref(),
+                )
+            {
+                let owner_scope = cfg[acq].ast.enclosing_func.as_deref();
+                if let Some(owner_sym) = interner.get_scoped(owner_scope, owner)
+                    && let Some(owner_acq) =
+                        find_acquire_node(cfg, owner_sym, interner, owner_scope)
+                    && crate::cfg_analysis::rules::is_jdbc_connection_acquire(
+                        cfg[owner_acq].call.callee.as_deref(),
+                    )
+                {
+                    continue;
+                }
+            }
+
             // Suppress leaks for variables with a deferred close call
             // (Go `defer f.Close()`). The deferred call guarantees cleanup
             // at function exit even though transfer didn't mark it CLOSED.

@@ -966,6 +966,70 @@ fn java_owned_driver_manager_connection_still_leaks() {
     assert_has_prefix("java_db_connection_leak.java", "state-resource-leak");
 }
 
+// A JDBC `PreparedStatement` opened on a `Connection` acquired locally in the
+// same body (here borrowed from a managed `Session`) is transitively closed
+// by that connection's lifecycle.  The standalone statement leak is a false
+// positive and must be suppressed — even when the statement is released via a
+// static `closeQuietly` helper the release detector does not recognise.
+#[test]
+fn java_statement_from_borrowed_local_connection_no_leak() {
+    assert_no_state_findings("java_statement_from_borrowed_connection_no_leak.java");
+}
+
+// Recall guard for the statement-from-connection suppression: a statement
+// opened on a LONG-LIVED field connection (not a resource acquired in this
+// body) genuinely accumulates, so the `pstmt` leak must still fire.
+#[test]
+fn java_statement_from_field_connection_still_leaks() {
+    let leaks: Vec<&Diag> = state_diags_for("java_statement_from_field_connection_leaks.java")
+        .into_iter()
+        .filter(|d| d.id == "state-resource-leak")
+        .collect();
+    assert!(
+        leaks
+            .iter()
+            .any(|d| d.message.as_deref().unwrap_or("").contains("`pstmt`")),
+        "expected the `pstmt` leak on a long-lived field connection to still fire.\n  Got: {:?}",
+        leaks
+            .iter()
+            .map(|d| d.message.as_deref().unwrap_or("(none)"))
+            .collect::<Vec<_>>()
+    );
+}
+
+// Invariant: an OWNED connection (`DriverManager.getConnection`) that leaks is
+// the single actionable root; the derived statement is redundant.  The `conn`
+// leak must survive (recall preserved) while the derived `ps` statement leak
+// is suppressed.
+#[test]
+fn java_owned_connection_reports_connection_not_derived_statement() {
+    let leaks: Vec<&Diag> =
+        state_diags_for("java_owned_connection_statement_reports_connection_only.java")
+            .into_iter()
+            .filter(|d| d.id == "state-resource-leak")
+            .collect();
+    assert!(
+        leaks
+            .iter()
+            .any(|d| d.message.as_deref().unwrap_or("").contains("`conn`")),
+        "expected the owned `conn` connection leak to still fire.\n  Got: {:?}",
+        leaks
+            .iter()
+            .map(|d| d.message.as_deref().unwrap_or("(none)"))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !leaks
+            .iter()
+            .any(|d| d.message.as_deref().unwrap_or("").contains("`ps`")),
+        "the derived `ps` statement leak should be suppressed (owned by `conn`).\n  Got: {:?}",
+        leaks
+            .iter()
+            .map(|d| d.message.as_deref().unwrap_or("(none)"))
+            .collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn java_server_socket_leak() {
     assert_has_prefix("java_server_socket_leak.java", "state-resource-leak");
