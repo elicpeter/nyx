@@ -8153,11 +8153,56 @@ fn apply_promisify_labels(
                 classify_all(lang, &alias.wrapped, extra)
                     .into_iter()
                     .collect();
-            for gm in
-                classify_gated_sink(lang, &alias.wrapped, |_| None, |_| None, |_| false).iter()
-            {
-                if !wrapped_labels.contains(&gm.label) {
-                    wrapped_labels.push(gm.label);
+            // A promisify alias must inherit not just the wrapped callee's
+            // sink *label* but also its arg-position restriction.
+            // `promisify(execFile)` is a `SHELL_ESCAPE` sink whose only
+            // injectable payload is arg 0 (the binary), exactly like the bare
+            // `=execFile` gate (`payload_args: &[0]`).  Without carrying the
+            // gate's `payload_args`, the alias call was treated as an
+            // unrestricted flat sink, so taint reaching the args array /
+            // options object at arg 1+ spuriously fired — e.g. OneUptime
+            // CVE-2026-27728's patched form `execFileAsync(cmd, [.., dest])`,
+            // where `execFile` no longer spawns a shell and the destination is
+            // a non-injectable argv element.  Union the wrapped gate's
+            // concrete payload positions; bail (leave unrestricted) if any
+            // matching gate declares `ALL_ARGS_PAYLOAD`.
+            let mut wrapped_payload: Vec<usize> = Vec::new();
+            let mut wrapped_has_restricted_sink = false;
+            let mut wrapped_all_args_sink = false;
+            // Gate-match the wrapped callee AND its bare leaf name.  The
+            // exec-family gates use the `=` exact-only sigil (to avoid
+            // `container.exec` collisions at classification time), so
+            // `promisify(child_process.execFile)` — whose wrapped callee is the
+            // qualified `child_process.execFile` — would otherwise miss the
+            // `=execFile` gate.  A payload restriction only ever narrows which
+            // args are taint-checked (it never adds findings), so applying the
+            // leaf's gate is strictly safe-directional.
+            let leaf = alias
+                .wrapped
+                .rsplit(['.', ':'])
+                .next()
+                .unwrap_or(alias.wrapped.as_str());
+            let mut gate_targets: Vec<&str> = vec![alias.wrapped.as_str()];
+            if leaf != alias.wrapped.as_str() {
+                gate_targets.push(leaf);
+            }
+            for target in gate_targets {
+                for gm in classify_gated_sink(lang, target, |_| None, |_| None, |_| false).iter() {
+                    if !wrapped_labels.contains(&gm.label) {
+                        wrapped_labels.push(gm.label);
+                    }
+                    if matches!(gm.label, crate::labels::DataLabel::Sink(_)) {
+                        if gm.payload_args == crate::labels::ALL_ARGS_PAYLOAD {
+                            wrapped_all_args_sink = true;
+                        } else {
+                            wrapped_has_restricted_sink = true;
+                            for &p in gm.payload_args {
+                                if !wrapped_payload.contains(&p) {
+                                    wrapped_payload.push(p);
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if wrapped_labels.is_empty() {
@@ -8167,6 +8212,19 @@ fn apply_promisify_labels(
             for lbl in wrapped_labels {
                 if !info.taint.labels.contains(&lbl) {
                     info.taint.labels.push(lbl);
+                }
+            }
+            if wrapped_has_restricted_sink && !wrapped_all_args_sink && !wrapped_payload.is_empty()
+            {
+                match &mut info.call.sink_payload_args {
+                    Some(existing) => {
+                        for p in wrapped_payload {
+                            if !existing.contains(&p) {
+                                existing.push(p);
+                            }
+                        }
+                    }
+                    None => info.call.sink_payload_args = Some(wrapped_payload),
                 }
             }
         }

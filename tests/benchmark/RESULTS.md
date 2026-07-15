@@ -72,6 +72,7 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2026-25544 | TypeScript | Payload (Drizzle adapter)  | MIT                  | sql_injection   | detected |
 | CVE-2026-42353 | JavaScript | i18next-http-middleware    | MIT                  | path_traversal  | detected |
 | CVE-2026-39365 | TypeScript | Vite                       | MIT                  | path_traversal  | detected |
+| CVE-2026-27728 | TypeScript | OneUptime                  | Apache-2.0           | cmdi            | detected |
 
 CVE-2026-39365 (Vite) is fully resolved (2026-06-12). The recall side
 (`JSON.parse(await fsp.readFile(...))` nested FILE_IO sink surfaced past the
@@ -85,6 +86,19 @@ taint branch-narrowing (`apply_summary_confinement_narrowing`, clears
 (`cond_confinement_helper`). Both ground-truth entries are `disabled: false`;
 pinned by synthetic corpus fixtures `ts-safe-024` (helper gates read → silent)
 and `ts-path_traversal-004` (helper defined-but-unused → still fires).
+
+CVE-2026-27728 (OneUptime NetworkPathMonitor) adds the first TypeScript
+`cmdi` real-CVE: an attacker-configured monitor destination is interpolated
+into a `traceroute` shell command run via `execAsync = promisify(exec)`
+(`req.body.destination → trace() → performTraceroute() → execAsync(command)`).
+The vulnerable side fires `taint-unsanitised-flow` interprocedurally; the
+patched side switches to `execFile(binary, argv-array)` (no shell) plus an
+`isValidDestination` hostname/IP allowlist. Landing the pair surfaced a
+precision fix: a `promisify(exec/execFile)` alias now inherits the wrapped
+callee's gate `payload_args` (arg 0 only), so a tainted argv element or
+`{ cwd/env }` option at arg 1+ of a promisified `execFile`/`exec` no longer
+spuriously fires — `execFile` passes argv without a shell. Pinned by
+`ts-cmdi-003` (interproc recall) and `ts-safe-026` (execFile argv precision).
 
 ### How CVEs get picked
 

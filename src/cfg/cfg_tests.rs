@@ -1774,6 +1774,58 @@ fn js_promisify_labels_carry_to_alias_call() {
 }
 
 #[test]
+fn js_promisify_execfile_alias_carries_payload_args() {
+    // A promisify alias of `execFile` must inherit not only the SHELL_ESCAPE
+    // sink label but also the `=execFile` gate's `payload_args: &[0]`, so that
+    // only arg 0 (the binary) is taint-checked and a tainted argv element at
+    // arg 1 (`execFileAsync(cmd, [.., dest])`) does not spuriously fire.
+    // Regression guard for OneUptime CVE-2026-27728's patched (execFile) form.
+    let src = b"const execFileAsync = util.promisify(child_process.execFile);\n\
+                function f(bin, args) { execFileAsync(bin, args); }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    assert!(file_cfg.promisify_aliases.contains_key("execFileAsync"));
+    let alias_node = file_cfg
+        .bodies
+        .iter()
+        .flat_map(|b| b.graph.node_weights())
+        .find(|n| n.call.callee.as_deref() == Some("execFileAsync"))
+        .expect("execFileAsync call site present");
+    assert!(
+        alias_node.taint.labels.iter().any(|lbl| matches!(
+            lbl,
+            crate::labels::DataLabel::Sink(c) if c.intersects(crate::labels::Cap::SHELL_ESCAPE)
+        )),
+        "promisify(execFile) alias should carry SHELL_ESCAPE sink"
+    );
+    assert_eq!(
+        alias_node.call.sink_payload_args.as_deref(),
+        Some(&[0usize][..]),
+        "promisify(execFile) alias should inherit the =execFile gate's payload_args=[0]"
+    );
+}
+
+#[test]
+fn js_promisify_exec_alias_carries_payload_args() {
+    // `promisify(exec)` (shell string at arg 0) likewise inherits payload_args=[0].
+    let src = b"const execAsync = util.promisify(child_process.exec);\n\
+                function f(cmd, opts) { execAsync(cmd, opts); }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    let alias_node = file_cfg
+        .bodies
+        .iter()
+        .flat_map(|b| b.graph.node_weights())
+        .find(|n| n.call.callee.as_deref() == Some("execAsync"))
+        .expect("execAsync call site present");
+    assert_eq!(
+        alias_node.call.sink_payload_args.as_deref(),
+        Some(&[0usize][..]),
+        "promisify(exec) alias should inherit payload_args=[0]"
+    );
+}
+
+#[test]
 fn js_promisify_ignored_for_non_js_langs() {
     let src = b"const x = util.promisify(exec)";
     let ts_lang = Language::from(tree_sitter_python::LANGUAGE);

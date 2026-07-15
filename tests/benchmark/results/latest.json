@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-07-15T06:19:31Z",
+  "timestamp": "2026-07-15T07:15:07Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:f6f17fb45d17a213a3149455c1aeef8e6ae35ffbf00b4dc5e6d01264975d7cb0",
-  "corpus_size": 655,
-  "cases_run": 650,
+  "ground_truth_hash": "sha256:9fdaef76c0a0ec8f9c3657b78c4832e93a7eec418b986332553f1ceb1a184177",
+  "corpus_size": 659,
+  "cases_run": 654,
   "cases_skipped": 5,
   "outcomes": [
     {
@@ -2953,6 +2953,40 @@
         "taint-unsanitised-flow (source 73:5)"
       ],
       "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-ts-2026-27728-patched",
+      "file": "cve_corpus/typescript/CVE-2026-27728/patched.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-ts-2026-27728-vulnerable",
+      "file": "cve_corpus/typescript/CVE-2026-27728/vulnerable.ts",
+      "language": "typescript",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 61:28)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 61:28)"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -10552,6 +10586,25 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "ts-cmdi-003",
+      "file": "typescript/cmdi/cmdi_interproc_promisify_helper.ts",
+      "language": "typescript",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 25:21)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 25:21)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "ts-code_injection-001",
       "file": "typescript/code_injection/code_exec_eval.ts",
       "language": "typescript",
@@ -11211,6 +11264,21 @@
       "non_security_finding_count": 2
     },
     {
+      "case_id": "ts-safe-026",
+      "file": "typescript/safe/safe_execfile_argv_helper.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "ts-secrets-001",
       "file": "typescript/secrets/fallback_secret.ts",
       "language": "typescript",
@@ -11555,22 +11623,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 310,
+    "tp": 312,
     "fp": 7,
     "fn_": 7,
-    "tn": 326,
-    "precision": 0.9779179810725552,
-    "recall": 0.9779179810725552,
-    "f1": 0.9779179810725552
+    "tn": 328,
+    "precision": 0.9780564263322884,
+    "recall": 0.9780564263322884,
+    "f1": 0.9780564263322884
   },
   "aggregate_rule_level": {
-    "tp": 310,
+    "tp": 312,
     "fp": 7,
     "fn_": 7,
-    "tn": 326,
-    "precision": 0.9779179810725552,
-    "recall": 0.9779179810725552,
-    "f1": 0.9779179810725552
+    "tn": 328,
+    "precision": 0.9780564263322884,
+    "recall": 0.9780564263322884,
+    "f1": 0.9780564263322884
   },
   "by_language": {
     "c": {
@@ -11655,13 +11723,13 @@
       "f1": 0.9807692307692307
     },
     "typescript": {
-      "tp": 39,
+      "tp": 41,
       "fp": 0,
       "fn_": 2,
-      "tn": 31,
+      "tn": 33,
       "precision": 1.0,
-      "recall": 0.9512195121951219,
-      "f1": 0.975
+      "recall": 0.9534883720930233,
+      "f1": 0.9761904761904763
     }
   },
   "by_vuln_class": {
@@ -11684,13 +11752,13 @@
       "f1": 1.0
     },
     "cmdi": {
-      "tp": 58,
+      "tp": 60,
       "fp": 0,
       "fn_": 2,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.9666666666666667,
-      "f1": 0.983050847457627
+      "recall": 0.967741935483871,
+      "f1": 0.9836065573770492
     },
     "code_exec": {
       "tp": 5,
@@ -11813,7 +11881,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 317,
+      "tn": 319,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -11866,31 +11934,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 108,
-      "fp": 125,
-      "fn_": 209,
-      "tn": 208,
-      "precision": 0.463519313304721,
-      "recall": 0.34069400630914826,
-      "f1": 0.39272727272727276
+      "tp": 113,
+      "fp": 121,
+      "fn_": 206,
+      "tn": 214,
+      "precision": 0.4829059829059829,
+      "recall": 0.3542319749216301,
+      "f1": 0.40867992766726946
     },
     ">=Low": {
-      "tp": 109,
-      "fp": 148,
-      "fn_": 208,
-      "tn": 185,
-      "precision": 0.42412451361867703,
-      "recall": 0.3438485804416404,
-      "f1": 0.37979094076655057
+      "tp": 114,
+      "fp": 147,
+      "fn_": 205,
+      "tn": 188,
+      "precision": 0.4367816091954023,
+      "recall": 0.3573667711598746,
+      "f1": 0.3931034482758621
     },
     ">=Medium": {
-      "tp": 109,
-      "fp": 129,
-      "fn_": 208,
-      "tn": 204,
-      "precision": 0.4579831932773109,
-      "recall": 0.3438485804416404,
-      "f1": 0.39279279279279283
+      "tp": 114,
+      "fp": 126,
+      "fn_": 205,
+      "tn": 209,
+      "precision": 0.475,
+      "recall": 0.3573667711598746,
+      "f1": 0.40787119856887294
     }
   }
 }
