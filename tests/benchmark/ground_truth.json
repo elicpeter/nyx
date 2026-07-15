@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 663
+    "corpus_size": 667
   },
   "cases": [
     {
@@ -21029,6 +21029,144 @@
       ],
       "disabled": false,
       "notes": "Recall counterpart: interpolated ${name} inside the same sequelize.transaction wrapper. Inner query payload arg0 is a non-const template => HoistedSink provenance leaves it non-literal => syntactic payload-const suppression must NOT fire; taint-unsanitised-flow reports req.query.name -> sequelize.query."
+    },
+    {
+      "case_id": "cve-php-2025-48882-vulnerable",
+      "file": "cve_corpus/php/CVE-2025-48882/vulnerable.php",
+      "language": "php",
+      "is_vulnerable": true,
+      "vuln_class": "xxe",
+      "cwe": "CWE-611",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-xxe"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          51,
+          51
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          55,
+          55
+        ]
+      ],
+      "tags": [
+        "cve",
+        "phpoffice-math",
+        "xxe",
+        "libxml",
+        "loadxml"
+      ],
+      "disabled": false,
+      "notes": "CVE-2025-48882 / GHSA-42hm-pq2f-3r7m: PHPOffice/Math MathML::read passes attacker-controlled MathML content to DOMDocument->loadXML($content, LIBXML_DTDLOAD); the LIBXML_DTDLOAD option re-enables DTD/external-entity loading (XXE / local file read). MIT."
+    },
+    {
+      "case_id": "cve-php-2025-48882-patched",
+      "file": "cve_corpus/php/CVE-2025-48882/patched.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-xxe",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "phpoffice-math",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2025-48882 patched counterpart: MathML::read routes $content through $this->xmlScanner->scan() and drops the LIBXML_DTDLOAD option so loadXML($content) parses under the libxml >= 2.9 XXE-safe default. Silenced by the presence-aware gate fix (an ABSENT ValueMatch activation arg suppresses instead of firing conservatively). MIT."
+    },
+    {
+      "case_id": "php-xxe-loadxml-dtdload-001",
+      "file": "php/xxe/xxe_loadxml_dtdload.php",
+      "language": "php",
+      "is_vulnerable": true,
+      "vuln_class": "xxe",
+      "cwe": "CWE-611",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-xxe"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "xxe",
+        "loadxml",
+        "libxml-dtdload"
+      ],
+      "disabled": false,
+      "notes": "Recall guard: tainted XML into DOMDocument->loadXML with LIBXML_DTDLOAD fires taint-xxe (companion to the presence-aware gate fix for CVE-2025-48882)."
+    },
+    {
+      "case_id": "php-safe-xxe-loadxml-no-options-001",
+      "file": "php/safe/safe_xxe_loadxml_no_options.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-xxe"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "xxe",
+        "loadxml",
+        "no-options",
+        "safe",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "Precision guard for the presence-aware gate fix (CVE-2025-48882): tainted XML into DOMDocument->loadXML with NO options arg is XXE-safe (libxml >= 2.9 default); an absent ValueMatch activation arg must suppress taint-xxe."
     }
   ]
 }

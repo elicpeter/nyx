@@ -20,7 +20,8 @@ use tracing::{debug, warn};
 use tree_sitter::{Node, Tree};
 
 use crate::labels::{
-    Cap, DataLabel, Kind, LangAnalysisRules, classify, classify_all, classify_gated_sink, lookup,
+    Cap, DataLabel, Kind, LangAnalysisRules, classify, classify_all, classify_gated_sink,
+    classify_gated_sink_with_presence, lookup,
 };
 use crate::summary::FuncSummary;
 use crate::symbol::{FuncKey, Lang};
@@ -67,7 +68,8 @@ use imports::{
 #[cfg(test)]
 use literals::has_sql_placeholders;
 use literals::{
-    arg0_kind_and_interpolation, call_ident_of, def_use, detect_go_replace_call_sanitizer,
+    arg0_kind_and_interpolation, call_has_arg_at, call_ident_of, def_use,
+    detect_go_replace_call_sanitizer,
     detect_rust_replace_chain_sanitizer, extract_arg_callees, extract_arg_string_literals,
     extract_arg_uses, extract_const_keyword_arg, extract_const_macro_arg, extract_const_string_arg,
     extract_destination_field_pairs, extract_destination_kwarg_pairs, extract_kwargs,
@@ -2538,7 +2540,7 @@ fn compute_hoisted_sink(inner_call: Node, lang: &str, code: &[u8]) -> HoistedSin
         .map(|t| t.chars().filter(|c| !c.is_whitespace()).collect::<String>())
         .unwrap_or_default();
 
-    let matches = classify_gated_sink(
+    let matches = classify_gated_sink_with_presence(
         lang,
         &callee_text,
         |idx| {
@@ -2564,6 +2566,7 @@ fn compute_hoisted_sink(inner_call: Node, lang: &str, code: &[u8]) -> HoistedSin
                 || (matches!(lang, "javascript" | "typescript")
                     && has_object_arg_property(inner_call, 1, kw, code))
         },
+        |idx| call_has_arg_at(inner_call, idx),
     );
 
     let mut payload: Vec<usize> = Vec::new();
@@ -3301,7 +3304,7 @@ pub(super) fn push_node<'a>(
             } else {
                 function_field_text.unwrap_or_else(|| text.clone())
             };
-            let matches = classify_gated_sink(
+            let matches = classify_gated_sink_with_presence(
                 lang,
                 &gate_callee_text,
                 |idx| {
@@ -3344,6 +3347,7 @@ pub(super) fn push_node<'a>(
                         || (matches!(lang, "javascript" | "typescript")
                             && has_object_arg_property(cn, 1, kw, code))
                 },
+                |idx| call_has_arg_at(cn, idx),
             );
 
             if !matches.is_empty() {

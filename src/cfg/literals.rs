@@ -501,6 +501,35 @@ pub(super) fn extract_const_macro_arg(
     }
 }
 
+/// Whether `call_node` has a positional argument at `index`.
+///
+/// Used by the gated-sink activation logic (via
+/// [`crate::labels::classify_gated_sink_with_presence`]) to distinguish a
+/// **missing** activation argument from a **present-but-dynamic** one.  A
+/// `ValueMatch` gate whose activation arg is *absent* must not fire
+/// conservatively: the guarded flag / option was never passed, so the call
+/// takes the library's default (safe) behaviour.  For example PHP
+/// `simplexml_load_string($xml)` / `$dom->loadXML($xml)` with no `$options`
+/// literal is XXE-safe (libxml >= 2.9 default), so it should suppress; whereas
+/// `loadXML($xml, $dynamicFlags)` (present but dynamic) still fires because the
+/// runtime flags could enable entity expansion.
+///
+/// Mirrors the argument walk in [`extract_const_string_arg`] /
+/// [`extract_const_macro_arg`] (`child_by_field_name("arguments")`) so
+/// presence stays consistent with the const-extraction those closures do; the
+/// `argument_list` fallback errs toward "present" (never a spurious suppress)
+/// for any grammar that names the container differently.
+pub(super) fn call_has_arg_at(call_node: Node, index: usize) -> bool {
+    let Some(args) = call_node
+        .child_by_field_name("arguments")
+        .or_else(|| call_node.child_by_field_name("argument_list"))
+    else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    args.named_children(&mut cursor).nth(index).is_some()
+}
+
 /// Extract the value of a keyword argument from a call node (e.g. Python `shell=True`).
 /// Walks argument children looking for `keyword_argument` nodes, matches the keyword
 /// name, and extracts the value node text for literals.

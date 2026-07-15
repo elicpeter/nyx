@@ -1667,6 +1667,40 @@ pub fn classify_gated_sink(
     const_keyword_arg: impl Fn(&str) -> Option<String>,
     kwarg_present: impl Fn(&str) -> bool,
 ) -> SmallVec<[GateMatch; 2]> {
+    // Backward-compatible entry point: assume every positional activation arg is
+    // *present* (`|_| true`), which reproduces the historical
+    // conservative-fire-on-unknown behaviour for callers that only know the
+    // callee name (name-based cap lookups, chained-gate guards).  Callers that
+    // hold the actual call node should use
+    // [`classify_gated_sink_with_presence`] so a *missing* activation arg
+    // suppresses rather than fires.
+    classify_gated_sink_with_presence(
+        lang,
+        callee_text,
+        const_arg_at,
+        const_keyword_arg,
+        kwarg_present,
+        |_| true,
+    )
+}
+
+/// Like [`classify_gated_sink`], but takes an `arg_present` predicate so a
+/// positional `ValueMatch` gate whose activation argument is **absent** (never
+/// passed at the call site) suppresses instead of firing conservatively.  A
+/// *present-but-dynamic* activation arg (`arg_present` true, `const_arg_at`
+/// `None`) still fires conservatively, because an attacker-controlled flag /
+/// attribute is itself a vulnerability path.  Motivated by CVE-2025-48882
+/// (PHPOffice/Math): the fix drops the `LIBXML_DTDLOAD` options arg entirely
+/// (`$dom->loadXML($content)`), which is XXE-safe under the libxml >= 2.9
+/// default; the missing options arg must not keep the gate firing.
+pub fn classify_gated_sink_with_presence(
+    lang: &str,
+    callee_text: &str,
+    const_arg_at: impl Fn(usize) -> Option<String>,
+    const_keyword_arg: impl Fn(&str) -> Option<String>,
+    kwarg_present: impl Fn(&str) -> bool,
+    arg_present: impl Fn(usize) -> bool,
+) -> SmallVec<[GateMatch; 2]> {
     let mut out: SmallVec<[GateMatch; 2]> = SmallVec::new();
     let gates = match GATED_REGISTRY.get(lang).or_else(|| {
         let key = lang.to_ascii_lowercase();
@@ -1795,6 +1829,17 @@ pub fn classify_gated_sink(
             // ambiguously-named suffix matchers like bare `extend`).
             None => {
                 if matches!(gate.activation, GateActivation::LiteralOnly) {
+                    continue;
+                }
+                // Positional gate whose activation arg is ABSENT (never passed
+                // at the call site): the guarded flag / attribute cannot hold a
+                // dangerous value, so the call takes the language default and
+                // the gate must not fire.  Only a PRESENT-but-dynamic activation
+                // arg reaches the conservative push below.  Keyword-selected
+                // gates keep their prior semantics (handled by the multi-kwarg
+                // presence path above / single-kwarg lookup).  Motivated by
+                // CVE-2025-48882: `loadXML($content)` (no `$options`) is XXE-safe.
+                if gate.keyword_name.is_none() && !arg_present(gate.arg_index) {
                     continue;
                 }
                 out.push(GateMatch {
@@ -3145,6 +3190,94 @@ mod tests {
             no_kw_present,
         );
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn gated_sink_absent_positional_activation_arg_suppresses() {
+        // CVE-2025-48882 (PHPOffice/Math): the fix drops the `LIBXML_DTDLOAD`
+        // options arg (`$dom->loadXML($content)`), which is XXE-safe under the
+        // libxml >= 2.9 default.  With the options activation arg ABSENT
+        // (const_arg None AND arg_present false) the ValueMatch XXE gate must
+        // NOT fire, rather than firing conservatively on the dynamic-unknown
+        // path.
+        let result = classify_gated_sink_with_presence(
+            "php",
+            "dom.loadXML",
+            |_| None,  // options arg has no resolvable constant value...
+            no_kw,
+            no_kw_present,
+            |_| false, // ...because it is absent entirely
+        );
+        assert!(
+            result.is_empty(),
+            "absent options arg must suppress the XXE gate: {result:?}"
+        );
+
+        // Sibling gates on the same shape: bare `simplexml_load_string($xml)`.
+        let simplexml = classify_gated_sink_with_presence(
+            "php",
+            "simplexml_load_string",
+            |_| None,
+            no_kw,
+            no_kw_present,
+            |_| false,
+        );
+        assert!(simplexml.is_empty(), "{simplexml:?}");
+    }
+
+    #[test]
+    fn gated_sink_present_dynamic_activation_still_fires() {
+        // `$dom->loadXML($content, $runtimeFlags)`: the options arg is PRESENT
+        // but dynamic.  An attacker-controlled flags value could enable entity
+        // expansion, so the gate still fires conservatively (ALL_ARGS_PAYLOAD).
+        let result = classify_gated_sink_with_presence(
+            "php",
+            "dom.loadXML",
+            |_| None,
+            no_kw,
+            no_kw_present,
+            |idx| idx <= 1, // arg 1 (options) IS present
+        );
+        assert_eq!(
+            result.as_slice(),
+            &[GateMatch {
+                label: DataLabel::Sink(Cap::XXE),
+                payload_args: ALL_ARGS_PAYLOAD,
+                object_destination_fields: &[],
+            }]
+        );
+    }
+
+    #[test]
+    fn gated_sink_present_dangerous_positional_fires_restricted() {
+        // `$dom->loadXML($content, LIBXML_DTDLOAD)`: dangerous flag present →
+        // fire, payload restricted to arg 0 (the XML string).
+        let result = classify_gated_sink_with_presence(
+            "php",
+            "dom.loadXML",
+            |idx| (idx == 1).then(|| "LIBXML_DTDLOAD".to_string()),
+            no_kw,
+            no_kw_present,
+            |idx| idx <= 1,
+        );
+        assert_eq!(
+            result.as_slice(),
+            &[GateMatch {
+                label: DataLabel::Sink(Cap::XXE),
+                payload_args: [0usize].as_slice(),
+                object_destination_fields: &[],
+            }]
+        );
+    }
+
+    #[test]
+    fn gated_sink_wrapper_assumes_activation_arg_present() {
+        // The 3-arg `classify_gated_sink` wrapper preserves the historical
+        // conservative-fire-on-unknown behaviour (arg_present = always true) for
+        // name-only callers, so it still fires on an unresolved activation arg.
+        let result = classify_gated_sink("php", "dom.loadXML", |_| None, no_kw, no_kw_present);
+        assert_eq!(result.len(), 1, "{result:?}");
+        assert_eq!(result[0].payload_args, ALL_ARGS_PAYLOAD);
     }
 
     #[test]
