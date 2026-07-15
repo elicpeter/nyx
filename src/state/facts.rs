@@ -266,6 +266,23 @@ pub fn extract_findings(
                 continue;
             }
 
+            // Suppress leaks for a JDBC `Connection` BORROWED from a managed
+            // session / DB abstraction (Liquibase `Database`, Hibernate
+            // `Session`, MyBatis `SqlSession`, JPA `EntityManager`).  The
+            // owner closes the connection as part of its own lifecycle, so
+            // the borrowing body must not — closing it would break the
+            // framework's transaction.  The `borrowed_resource` flag is set
+            // at CFG build by receiver-type discrimination
+            // (`cfg::java_getconnection_receiver_is_borrowed`), so
+            // `DataSource` / static `DriverManager` connections (OWNED) still
+            // fire.  Twin of the suppression in `cfg_analysis::resources`.
+            if lang == Lang::Java
+                && let Some(acq) = acquire_node
+                && cfg[acq].borrowed_resource
+            {
+                continue;
+            }
+
             // Suppress leaks for variables with a deferred close call
             // (Go `defer f.Close()`). The deferred call guarantees cleanup
             // at function exit even though transfer didn't mark it CLOSED.

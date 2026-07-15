@@ -948,6 +948,24 @@ fn java_prepared_stmt_leak_reports_statement_not_resultset() {
     );
 }
 
+// A JDBC `Connection` borrowed from a managed session / DB abstraction
+// (here Liquibase's `Database` argument) is owned and closed by that
+// abstraction, not the borrower.  The engine must not flag the borrowed
+// connection as an independent leak.
+#[test]
+fn java_borrowed_connection_from_managed_session_no_leak() {
+    assert_no_state_findings("java_borrowed_connection_no_leak.java");
+}
+
+// Recall guard for the borrowed-connection suppression: a connection OWNED
+// by the caller — `DriverManager.getConnection(url)`, never closed — must
+// still fire.  The receiver `DriverManager` is not a borrowed owner, so the
+// leak is preserved.
+#[test]
+fn java_owned_driver_manager_connection_still_leaks() {
+    assert_has_prefix("java_db_connection_leak.java", "state-resource-leak");
+}
+
 #[test]
 fn java_server_socket_leak() {
     assert_has_prefix("java_server_socket_leak.java", "state-resource-leak");

@@ -4437,3 +4437,118 @@ fn format_macro_method_idents_records_machinery() {
         sink.format_macro_method_idents
     );
 }
+
+
+// ── Java borrowed-vs-owned JDBC connection classification ───────────────
+// Pins `NodeInfo.borrowed_resource`, set at CFG build by receiver-type
+// discrimination (`java_getconnection_receiver_is_borrowed`).  A connection
+// borrowed from a managed session / DB abstraction (Liquibase `Database`,
+// Hibernate `Session`, MyBatis `SqlSession`, JPA `EntityManager`) is closed
+// by its owner, so leak-at-exit on the borrower is a false positive; an
+// OWNED `DataSource` / static `DriverManager` connection stays a real leak.
+
+fn java_any_borrowed_resource(src: &[u8]) -> bool {
+    let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "java", ts_lang);
+    cfg.node_weights().any(|n| n.borrowed_resource)
+}
+
+#[test]
+fn java_borrowed_connection_from_liquibase_database_param_is_flagged() {
+    // openmrs Liquibase changeset shape: `database` is a `Database` parameter
+    // whose connection Liquibase owns and closes.
+    let src = br#"class C {
+  public void execute(Database database) throws Exception {
+    JdbcConnection connection = (JdbcConnection) database.getConnection();
+    connection.prepareStatement("x");
+  }
+}"#;
+    assert!(java_any_borrowed_resource(src));
+}
+
+#[test]
+fn java_borrowed_connection_from_hibernate_local_session_is_flagged() {
+    // A local `Session` (Hibernate) owns its JDBC connection.
+    let src = br#"class C {
+  void run(SessionFactory sf) {
+    Session s = sf.openSession();
+    java.sql.Connection c = s.getConnection();
+    c.prepareStatement("x");
+  }
+}"#;
+    assert!(java_any_borrowed_resource(src));
+}
+
+#[test]
+fn java_borrowed_connection_from_mybatis_field_is_flagged() {
+    // A `SqlSession` (MyBatis) class field owns its connection.
+    let src = br#"class Dao {
+  private SqlSession dbSession;
+  void run() {
+    java.sql.Connection c = dbSession.getConnection();
+    c.prepareStatement("x");
+  }
+}"#;
+    assert!(java_any_borrowed_resource(src));
+}
+
+#[test]
+fn java_owned_connection_from_driver_manager_static_is_not_flagged() {
+    // `DriverManager.getConnection(...)` returns an OWNED connection: the
+    // receiver `DriverManager` resolves to no local / param / field, so the
+    // leak stays a true positive.
+    let src = br#"class C {
+  void run(String url) throws Exception {
+    java.sql.Connection c = java.sql.DriverManager.getConnection(url);
+    c.prepareStatement("x");
+  }
+}"#;
+    assert!(!java_any_borrowed_resource(src));
+}
+
+#[test]
+fn java_owned_connection_from_datasource_is_not_flagged() {
+    // A `DataSource` connection is OWNED by the caller (must close).
+    let src = br#"class C {
+  private javax.sql.DataSource ds;
+  void run() throws Exception {
+    java.sql.Connection c = ds.getConnection();
+    c.prepareStatement("x");
+  }
+}"#;
+    assert!(!java_any_borrowed_resource(src));
+}
+
+#[test]
+fn java_bare_getconnection_call_is_not_flagged() {
+    // A bare `getConnection()` (self / static helper, no receiver) has no
+    // receiver type to discriminate → stays a real leak.
+    let src = br#"class C {
+  void run() throws Exception {
+    java.sql.Connection c = getConnection();
+    c.prepareStatement("x");
+  }
+}"#;
+    assert!(!java_any_borrowed_resource(src));
+}
+
+#[test]
+fn java_borrowed_owner_type_classifier_and_leaf() {
+    assert_eq!(super::java_type_leaf("liquibase.database.Database"), "Database");
+    assert_eq!(super::java_type_leaf("org.hibernate.Session"), "Session");
+    assert_eq!(super::java_type_leaf("List<Session>"), "List");
+    assert_eq!(super::java_type_leaf("Foo[]"), "Foo");
+    assert!(super::is_java_borrowed_connection_owner("Database"));
+    assert!(super::is_java_borrowed_connection_owner("org.hibernate.Session"));
+    assert!(super::is_java_borrowed_connection_owner("SqlSession"));
+    assert!(super::is_java_borrowed_connection_owner("javax.persistence.EntityManager"));
+    // `*Session` suffix generalises across frameworks (sonarqube `DbSession`
+    // extends MyBatis `SqlSession`; Hibernate `StatelessSession`).
+    assert!(super::is_java_borrowed_connection_owner("org.sonar.db.DbSession"));
+    assert!(super::is_java_borrowed_connection_owner("StatelessSession"));
+    // OWNED-connection receivers must NOT be borrowed owners (recall).
+    assert!(!super::is_java_borrowed_connection_owner("javax.sql.DataSource"));
+    assert!(!super::is_java_borrowed_connection_owner("DriverManager"));
+    assert!(!super::is_java_borrowed_connection_owner("Connection"));
+    assert!(!super::is_java_borrowed_connection_owner("BasicDataSource"));
+}

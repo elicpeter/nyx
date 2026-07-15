@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 649
+    "corpus_size": 650
   },
   "cases": [
     {
@@ -20558,6 +20558,36 @@
       ],
       "disabled": false,
       "notes": "Precision guard for JDBC ResultSet ownership. A ResultSet from stmt.executeQuery() is owned by the Statement; closing the statement (here via try-with-resources) transitively closes the result set (JDBC contract), so no standalone resource-leak should fire. Distilled from openmrs DatabaseUpdater.java:288 and sonarqube ExportLineHashesStep.java:75. A standalone ResultSet leak is never a unique TP: if the statement is closed the RS is closed too, and if the statement leaks that leak already covers the RS."
+    },
+    {
+      "case_id": "java-safe-realrepo-borrowed-connection-001",
+      "file": "java/safe/SafeBorrowedConnectionFromManagedSession.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "resource",
+      "cwe": "CWE-404",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-resource-leak",
+        "cfg-resource-leak",
+        "state-resource-leak-possible"
+      ],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "resource-lifecycle",
+        "negative",
+        "jdbc",
+        "real-repo-precision-2026-07-14"
+      ],
+      "disabled": false,
+      "notes": "Precision guard for JDBC borrowed-vs-owned connection ownership. A Liquibase changeset borrows its Connection from the `Database` argument (`database.getConnection()`); Liquibase owns and closes it at the end of the changelog run, so the changeset must not close it and no resource-leak should fire. Receiver-type discrimination classifies the `Database`-typed receiver as a borrowed owner. Distilled from openmrs BooleanConceptChangeSet.java:71 (and 24 sibling databasechange changesets). Owned `DriverManager`/`DataSource` connections are unaffected and still leak (recall: tests/fixtures/state/java_db_connection_leak.java)."
     }
   ]
 }

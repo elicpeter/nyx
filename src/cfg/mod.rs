@@ -856,6 +856,19 @@ pub struct NodeInfo {
     /// Only meaningful on Call nodes that define a resource variable.
     /// Leak detectors check this flag on the acquire site, not the variable.
     pub managed_resource: bool,
+    /// True when this is a Java `X.getConnection()` acquire whose receiver
+    /// `X` has a statically-declared *borrowed-owner* type — a managed
+    /// session / DB abstraction (Liquibase `Database`, Hibernate `Session`,
+    /// MyBatis `SqlSession`, JPA `EntityManager`) that closes the connection
+    /// as part of its own lifecycle.  The borrowing body must NOT close it,
+    /// so a leak-at-exit finding on such an acquire is a false positive.
+    /// `DataSource` / static `DriverManager` `getConnection(...)` return an
+    /// OWNED connection the caller must close (this stays `false` — those
+    /// leaks are real).  Set only at CFG build for Java (see
+    /// [`java_getconnection_receiver_is_borrowed`]); consumed by the
+    /// `state-resource-leak` and `cfg-resource-leak` passes.
+    #[serde(default)]
+    pub borrowed_resource: bool,
     /// True when this Call node is a deferred release (Go `defer f.Close()`).
     /// Deferred releases are not processed as immediate closes; instead they
     /// suppress leak findings (defer guarantees cleanup at function exit).
@@ -4002,6 +4015,11 @@ pub(super) fn push_node<'a>(
         bin_op: extract_bin_op(ast, lang),
         bin_op_const: extract_bin_op_const(ast, lang, code),
         managed_resource: is_raii_managed || is_ruby_block_managed,
+        borrowed_resource: lang == "java"
+            && code
+                .get(span.0..span.1)
+                .is_some_and(|s| s.windows(13).any(|w| w == b"getConnection"))
+            && java_getconnection_receiver_is_borrowed(ast, code),
         in_defer: false,
         parameterized_query,
         string_prefix,
@@ -4025,6 +4043,216 @@ pub(super) fn push_node<'a>(
         g[idx].taint.labels
     );
     idx
+}
+
+/// Simple leaf name of a Java type text: strip generic arguments
+/// (`Session<T>` → `Session`), array brackets (`Foo[]` → `Foo`), and any
+/// package qualifier (`liquibase.database.Database` → `Database`).
+fn java_type_leaf(type_text: &str) -> &str {
+    let no_generics = type_text.split('<').next().unwrap_or(type_text);
+    let no_array = no_generics.split('[').next().unwrap_or(no_generics);
+    no_array.rsplit('.').next().unwrap_or(no_array).trim()
+}
+
+/// Whether a Java type is a *borrowed-owner* of the JDBC `Connection` it
+/// yields via `getConnection()`: a managed session / DB abstraction that
+/// closes the connection as part of its own lifecycle, so a body that
+/// borrows the connection must NOT close it.  Recognised owners:
+///   * Liquibase `liquibase.database.Database`
+///   * Hibernate `org.hibernate.Session` / `StatelessSession` /
+///     `SharedSessionContract(Implementor)` / `SessionImplementor`
+///   * MyBatis `org.apache.ibatis.session.SqlSession` / `SqlSessionManager`
+///   * JPA `jakarta/javax.persistence.EntityManager`
+///
+/// In contrast a `javax.sql.DataSource` / `java.sql.DriverManager`
+/// `getConnection(...)` returns an OWNED connection the caller must close —
+/// those are NOT in this set (they do not end in `Session` and are not
+/// listed), so their leaks stay true positives.
+///
+/// A leaf name ending in `Session` (Hibernate `Session` / `StatelessSession`,
+/// MyBatis `SqlSession`, sonarqube `DbSession`, …) is treated as a managed
+/// DB session that owns its connection.  This is sound in context: the flag
+/// is consulted only at a `getConnection()` receiver, and the only types that
+/// ever appear there are DB-connection-owning types (a servlet `HttpSession`
+/// has no `getConnection`, so it never matters).  `Database` is matched
+/// exactly (Liquibase's interface) rather than by suffix, to avoid
+/// suppressing a homegrown `*Database` wrapper whose `getConnection()`
+/// freshly opens an OWNED connection.
+fn is_java_borrowed_connection_owner(type_text: &str) -> bool {
+    let leaf = java_type_leaf(type_text);
+    leaf.ends_with("Session")
+        || matches!(
+            leaf,
+            "Database"                          // Liquibase liquibase.database.Database
+                | "SharedSessionContract"       // Hibernate contracts (non-`Session` suffix)
+                | "SharedSessionContractImplementor"
+                | "SessionImplementor"
+                | "SqlSessionManager"           // MyBatis session manager
+                | "EntityManager"               // JPA jakarta/javax.persistence.EntityManager
+        )
+}
+
+/// Whether the acquire statement `ast` is a Java `X.getConnection()` whose
+/// receiver `X` has a statically-declared *borrowed-owner* type (see
+/// [`is_java_borrowed_connection_owner`]).  The receiver's declared type is
+/// resolved from the enclosing method's formal parameters, then a preceding
+/// typed local declaration in the same scope, then the enclosing class's
+/// fields — Java is statically typed so exactly one of these carries the
+/// declaration.
+///
+/// Recall-preserving: returns `true` only when the receiver type is a
+/// positively-recognised borrowed owner.  A static factory call
+/// (`DriverManager.getConnection(...)`, whose receiver `DriverManager`
+/// resolves to no local / parameter / field), a `DataSource` receiver, and a
+/// bare `getConnection()` all return `false`, so those leaks stay reported.
+///
+/// Motivated by the openmrs Liquibase changeset shape
+/// `execute(Database database) { … database.getConnection() }`, where
+/// Liquibase owns and closes the connection.
+fn java_getconnection_receiver_is_borrowed(ast: Node, code: &[u8]) -> bool {
+    let Some(mi) = find_java_getconnection_invocation(ast, code) else {
+        return false;
+    };
+    // No receiver (`getConnection()` bare) → nothing to type.
+    let Some(obj) = mi.child_by_field_name("object") else {
+        return false;
+    };
+    let Some(recv) = java_receiver_var_name(obj, code) else {
+        return false;
+    };
+    match resolve_java_var_declared_type(mi, &recv, code) {
+        Some(ty) => is_java_borrowed_connection_owner(&ty),
+        None => false,
+    }
+}
+
+/// The receiver variable name of a Java method-invocation `object` node.
+/// Plain `identifier` → its text.  `this.field` / `obj.field`
+/// (`field_access`) → the accessed field name.  Any more complex receiver
+/// (chained call, array access, …) → `None`.
+fn java_receiver_var_name(obj: Node, code: &[u8]) -> Option<String> {
+    match obj.kind() {
+        "identifier" => text_of(obj, code),
+        "field_access" => obj
+            .child_by_field_name("field")
+            .and_then(|f| text_of(f, code)),
+        _ => None,
+    }
+}
+
+/// Pre-order search for a `method_invocation` named `getConnection` within
+/// (or equal to) `ast`.  Does not descend into nested method / lambda bodies
+/// (those own their own scope and acquire nodes).  Returns the first match.
+fn find_java_getconnection_invocation<'a>(ast: Node<'a>, code: &[u8]) -> Option<Node<'a>> {
+    if ast.kind() == "method_invocation"
+        && ast
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(code).ok())
+            == Some("getConnection")
+    {
+        return Some(ast);
+    }
+    let mut cursor = ast.walk();
+    for child in ast.children(&mut cursor) {
+        if matches!(child.kind(), "method_declaration" | "lambda_expression") {
+            continue;
+        }
+        if let Some(found) = find_java_getconnection_invocation(child, code) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Resolve the statically-declared type text of Java variable `var` as seen
+/// from `from`, by walking up enclosing scopes: method / constructor / lambda
+/// parameters, block-local declarations, then class / interface / enum
+/// fields.  Returns the raw type text (leaf-simplified by the caller).
+fn resolve_java_var_declared_type(from: Node, var: &str, code: &[u8]) -> Option<String> {
+    let mut cur = from;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "method_declaration" | "constructor_declaration" | "lambda_expression" => {
+                if let Some(t) = java_param_declared_type(parent, var, code) {
+                    return Some(t);
+                }
+            }
+            "block" | "constructor_body" => {
+                if let Some(t) = java_block_local_declared_type(parent, var, code) {
+                    return Some(t);
+                }
+            }
+            "class_body" | "interface_body" | "enum_body" => {
+                if let Some(t) = java_field_declared_type(parent, var, code) {
+                    return Some(t);
+                }
+            }
+            _ => {}
+        }
+        cur = parent;
+    }
+    None
+}
+
+/// Declared type of formal parameter `var` on a Java method / constructor /
+/// lambda node, if present.
+fn java_param_declared_type(method: Node, var: &str, code: &[u8]) -> Option<String> {
+    let params = method.child_by_field_name("parameters")?;
+    let mut cursor = params.walk();
+    for fp in params.named_children(&mut cursor) {
+        if !matches!(fp.kind(), "formal_parameter" | "spread_parameter") {
+            continue;
+        }
+        if fp
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(code).ok())
+            == Some(var)
+        {
+            return fp
+                .child_by_field_name("type")
+                .and_then(|t| text_of(t, code));
+        }
+    }
+    None
+}
+
+/// Declared type of `var` among the direct `local_variable_declaration`
+/// children of a Java block, if declared there.
+fn java_block_local_declared_type(block: Node, var: &str, code: &[u8]) -> Option<String> {
+    let mut cursor = block.walk();
+    for child in block.named_children(&mut cursor) {
+        if child.kind() == "local_variable_declaration"
+            && java_decl_defines_var(child, var, code)
+        {
+            return child.child_by_field_name("type").and_then(|t| text_of(t, code));
+        }
+    }
+    None
+}
+
+/// Declared type of field `var` among the `field_declaration` members of a
+/// Java class / interface / enum body, if declared there.
+fn java_field_declared_type(body: Node, var: &str, code: &[u8]) -> Option<String> {
+    let mut cursor = body.walk();
+    for child in body.named_children(&mut cursor) {
+        if child.kind() == "field_declaration" && java_decl_defines_var(child, var, code) {
+            return child.child_by_field_name("type").and_then(|t| text_of(t, code));
+        }
+    }
+    None
+}
+
+/// Whether a Java declaration node (`local_variable_declaration` /
+/// `field_declaration`) declares a `variable_declarator` named `var`.
+fn java_decl_defines_var(decl: Node, var: &str, code: &[u8]) -> bool {
+    let mut cursor = decl.walk();
+    decl.children(&mut cursor).any(|ch| {
+        ch.kind() == "variable_declarator"
+            && ch
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(code).ok())
+                == Some(var)
+    })
 }
 
 /// Add the same edge (of the same kind) from every node in `froms` to `to`.

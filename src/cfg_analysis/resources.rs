@@ -631,6 +631,18 @@ impl CfgAnalysis for ResourceMisuse {
                 if ctx.lang == Lang::Java && pair.resource_name == "result set" {
                     continue;
                 }
+                // Suppress a JDBC `Connection` BORROWED from a managed
+                // session / DB abstraction — the owner (Liquibase `Database`,
+                // Hibernate `Session`, MyBatis `SqlSession`, JPA
+                // `EntityManager`) closes it, not the borrower.  `DataSource`
+                // / static `DriverManager` connections are OWNED and still
+                // fire.  Flag set at CFG build via receiver-type
+                // discrimination (`cfg::java_getconnection_receiver_is_borrowed`).
+                // Twin of the `state-resource-leak` suppression in
+                // `src/state/facts.rs`.
+                if ctx.lang == Lang::Java && ctx.cfg[acquire].borrowed_resource {
+                    continue;
+                }
                 // Suppress `obj.connect("event-name", callback)` event-
                 // handler registrations that share the `connect` /
                 // `cursor` callee suffix with real DB acquires.  Sphinx
