@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-07-15T00:24:14Z",
+  "timestamp": "2026-07-15T01:31:02Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:c22b33c1339238a32d19e4f1a19b1a0242e8ac1eb3bae179ab6b5790da356192",
-  "corpus_size": 648,
-  "cases_run": 643,
+  "ground_truth_hash": "sha256:c9b200b84c088960341b23471c42bd848896a2dac6b46228ab372f5e943bc828",
+  "corpus_size": 649,
+  "cases_run": 644,
   "cases_skipped": 5,
   "outcomes": [
     {
@@ -4321,11 +4321,10 @@
       ],
       "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "cfg-resource-leak",
         "taint-unsanitised-flow (source 9:25)"
       ],
       "security_finding_count": 1,
-      "non_security_finding_count": 1
+      "non_security_finding_count": 0
     },
     {
       "case_id": "java-interproc-safe-001",
@@ -4688,6 +4687,21 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "java-safe-realrepo-resultset-001",
+      "file": "java/safe/SafeResultSetOwnedByStatement.java",
+      "language": "java",
+      "vuln_class": "resource",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "java-safe-stmt-execute-validated",
       "file": "java/safe/safe_statement_execute_pattern_validated.java",
       "language": "java",
@@ -4718,12 +4732,11 @@
       "unexpected_rule_ids": [],
       "all_finding_ids": [
         "state-resource-leak",
-        "cfg-resource-leak",
         "java.sqli.execute_concat",
         "taint-unsanitised-flow (source 6:21)"
       ],
       "security_finding_count": 2,
-      "non_security_finding_count": 2
+      "non_security_finding_count": 1
     },
     {
       "case_id": "java-sqli-002",
@@ -4740,11 +4753,10 @@
       "unexpected_rule_ids": [],
       "all_finding_ids": [
         "state-resource-leak",
-        "cfg-resource-leak",
         "taint-unsanitised-flow (source 6:21)"
       ],
       "security_finding_count": 1,
-      "non_security_finding_count": 2
+      "non_security_finding_count": 1
     },
     {
       "case_id": "java-sqli-realrepo-keycloak-001",
@@ -4780,12 +4792,11 @@
       "all_finding_ids": [
         "state-resource-leak",
         "java.sqli.execute_concat",
-        "state-resource-leak",
         "taint-unsanitised-flow (source 7:21)",
         "taint-unsanitised-flow (source 7:21)"
       ],
       "security_finding_count": 3,
-      "non_security_finding_count": 2
+      "non_security_finding_count": 1
     },
     {
       "case_id": "java-sqli-stmt-execute-002",
@@ -11449,7 +11460,7 @@
     "tp": 308,
     "fp": 7,
     "fn_": 7,
-    "tn": 321,
+    "tn": 322,
     "precision": 0.9777777777777777,
     "recall": 0.9777777777777777,
     "f1": 0.9777777777777777
@@ -11458,7 +11469,7 @@
     "tp": 308,
     "fp": 7,
     "fn_": 7,
-    "tn": 321,
+    "tn": 322,
     "precision": 0.9777777777777777,
     "recall": 0.9777777777777777,
     "f1": 0.9777777777777777
@@ -11495,7 +11506,7 @@
       "tp": 27,
       "fp": 1,
       "fn_": 1,
-      "tn": 27,
+      "tn": 28,
       "precision": 0.9642857142857143,
       "recall": 0.9642857142857143,
       "f1": 0.9642857142857143
@@ -11695,7 +11706,7 @@
       "tp": 0,
       "fp": 0,
       "fn_": 2,
-      "tn": 1,
+      "tn": 2,
       "precision": 1.0,
       "recall": 0.0,
       "f1": 0.0
@@ -11757,31 +11768,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 104,
-      "fp": 141,
-      "fn_": 211,
-      "tn": 187,
-      "precision": 0.42448979591836733,
-      "recall": 0.33015873015873015,
-      "f1": 0.37142857142857144
+      "tp": 101,
+      "fp": 140,
+      "fn_": 214,
+      "tn": 189,
+      "precision": 0.4190871369294606,
+      "recall": 0.32063492063492066,
+      "f1": 0.36330935251798563
     },
     ">=Low": {
-      "tp": 105,
-      "fp": 163,
-      "fn_": 210,
-      "tn": 165,
-      "precision": 0.3917910447761194,
-      "recall": 0.3333333333333333,
-      "f1": 0.36020583190394506
+      "tp": 102,
+      "fp": 161,
+      "fn_": 213,
+      "tn": 168,
+      "precision": 0.38783269961977185,
+      "recall": 0.3238095238095238,
+      "f1": 0.35294117647058826
     },
     ">=Medium": {
-      "tp": 105,
-      "fp": 142,
-      "fn_": 210,
-      "tn": 186,
-      "precision": 0.4251012145748988,
-      "recall": 0.3333333333333333,
-      "f1": 0.3736654804270462
+      "tp": 102,
+      "fp": 144,
+      "fn_": 213,
+      "tn": 185,
+      "precision": 0.4146341463414634,
+      "recall": 0.3238095238095238,
+      "f1": 0.36363636363636365
     }
   }
 }

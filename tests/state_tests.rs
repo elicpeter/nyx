@@ -908,6 +908,46 @@ fn java_prepared_stmt_clean() {
     assert_no_state_findings("java_prepared_stmt_clean.java");
 }
 
+// A JDBC `ResultSet` is owned by the `Statement` that produced it: closing
+// the statement (here via try-with-resources) transitively closes the
+// result set.  The engine must not flag `resultSet` as an independent leak.
+#[test]
+fn java_resultset_owned_by_statement_no_leak() {
+    assert_no_state_findings("java_resultset_owned_by_statement.java");
+}
+
+// Recall + invariant: in the prepared-statement leak fixture the real leak is
+// `stmt` (a `PreparedStatement` on a caller-supplied `Connection`, never
+// closed).  That leak must still fire, while the redundant `rs` leak (the
+// result set is owned by `stmt`) must be suppressed.
+#[test]
+fn java_prepared_stmt_leak_reports_statement_not_resultset() {
+    let leaks: Vec<&Diag> = state_diags_for("java_prepared_stmt_leak.java")
+        .into_iter()
+        .filter(|d| d.id == "state-resource-leak")
+        .collect();
+    assert!(
+        leaks
+            .iter()
+            .any(|d| d.message.as_deref().unwrap_or("").contains("`stmt`")),
+        "expected the `stmt` PreparedStatement leak to still fire.\n  Got: {:?}",
+        leaks
+            .iter()
+            .map(|d| d.message.as_deref().unwrap_or("(none)"))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !leaks
+            .iter()
+            .any(|d| d.message.as_deref().unwrap_or("").contains("`rs`")),
+        "the `rs` ResultSet leak should be suppressed (owned by `stmt`).\n  Got: {:?}",
+        leaks
+            .iter()
+            .map(|d| d.message.as_deref().unwrap_or("(none)"))
+            .collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn java_server_socket_leak() {
     assert_has_prefix("java_server_socket_leak.java", "state-resource-leak");

@@ -617,6 +617,20 @@ impl CfgAnalysis for ResourceMisuse {
                 if ctx.cfg[acquire].managed_resource {
                     continue;
                 }
+                // Suppress a JDBC `ResultSet` leak: the result set is owned by
+                // the `Statement` that produced it (`stmt.executeQuery()`).
+                // Closing the statement (via try-with-resources / explicit
+                // close) transitively closes the result set, and if the
+                // statement itself leaks that leak already covers the result
+                // set — so a standalone `ResultSet` leak is never a unique
+                // true positive.  Twin of the `state-resource-leak`
+                // suppression in
+                // `src/state/facts.rs::is_jdbc_resultset_acquire`.  The
+                // `result set` pair is Java-only; gate on the language too so
+                // a future same-named pair in another language is unaffected.
+                if ctx.lang == Lang::Java && pair.resource_name == "result set" {
+                    continue;
+                }
                 // Suppress `obj.connect("event-name", callback)` event-
                 // handler registrations that share the `connect` /
                 // `cursor` callee suffix with real DB acquires.  Sphinx
