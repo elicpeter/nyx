@@ -457,6 +457,129 @@ fn detect_assert_path_confined_params(
     result
 }
 
+/// Detect a `Result`-returning *rejection-guard* and the formal parameters it
+/// rejects: parameters that reach an `Err(...)` construction in the body.  Such
+/// a function returns `Err` on (rather than transforms) its argument, so any
+/// *normal* completion of a call to it proves the argument satisfied the
+/// guard.  Recorded name-independently in
+/// [`SsaFuncSummary::result_reject_guard_params`].
+///
+/// Path-specificity is applied later, at the call site, by
+/// `apply_path_validator_confinement`: only a callee whose bare name matches
+/// the path-safety-validator grammar (`ensure_safe_path_component`,
+/// `validate_safe_path`, …) confines `Cap::FILE_IO` on the rejected argument.
+/// This split is forced by SSA reality — the path-traversal sentinels the guard
+/// rejects (`".."`, `'/'`, `'\\'`) are collapsed out of the SSA body by
+/// boolean-expression lowering (a `component == ".." || component.chars().any(
+/// |c| matches!(c, '/' | '\\'))` guard lowers to a single aggregate `Call` with
+/// no surviving string/char constants), and the branch condition text is only
+/// the bound flag (`is_unsafe`), so no structural path token survives.  The
+/// `?`-guarded call (`ensure_safe_path_component(&segment)?`) also never becomes
+/// a branch condition (`?` lowers to a discarded `Call`), so the
+/// `classify_condition` `ValidationCall` machinery never engages.
+///
+/// Motivated by CVE-2026-53956 (rattler package-cache path traversal).
+fn detect_result_reject_guard_params(
+    ssa: &SsaBody,
+    param_index_of: &HashMap<SsaValue, usize>,
+) -> SmallVec<[usize; 2]> {
+    let mut result: SmallVec<[usize; 2]> = SmallVec::new();
+    if param_index_of.is_empty() {
+        return result;
+    }
+
+    let mut budget = 512u32;
+    let mut constructs_err = false;
+    for block in &ssa.blocks {
+        for inst in &block.body {
+            let SsaOp::Call {
+                callee,
+                callee_text,
+                args,
+                ..
+            } = &inst.op
+            else {
+                continue;
+            };
+            if crate::labels::bare_method_name(callee_text.as_deref().unwrap_or(callee.as_str()))
+                != "Err"
+            {
+                continue;
+            }
+            constructs_err = true;
+            // Params reaching the rejected error's operands are the rejected
+            // parameters (`Err(InvalidPathComponentError { value: component
+            // .to_string() })` carries `component`).
+            for group in args {
+                for &u in group {
+                    let mut seen = HashSet::new();
+                    collect_reaching_params(
+                        ssa,
+                        u,
+                        param_index_of,
+                        &mut seen,
+                        &mut result,
+                        &mut budget,
+                    );
+                }
+            }
+        }
+    }
+
+    // A single-parameter rejection guard whose `Err` does not carry the
+    // parameter (`Err("bad component")`) still rejects that sole parameter.
+    if constructs_err && result.is_empty() && param_index_of.len() == 1 {
+        if let Some(&idx) = param_index_of.values().next() {
+            result.push(idx);
+        }
+    }
+
+    result
+}
+
+/// Whether a callee bare name matches the *path-safety-validator* grammar: a
+/// function whose name declares it checks a value is a safe path / path
+/// component / filename (`ensure_safe_path_component`, `validate_safe_path`,
+/// `is_safe_filename`, `check_path_component`, …).  Snake-cased and matched on
+/// token co-occurrence, not a per-callee list, so it generalises across the
+/// naming conventions real path validators use.  Consumed by
+/// `apply_path_validator_confinement`.
+pub(crate) fn is_path_safety_validator_name(bare: &str) -> bool {
+    let snake = crate::taint::path_state::to_snake_lower(bare);
+    // Explicit compound tokens that are unambiguously path-safety validators.
+    if snake.contains("safe_path")
+        || snake.contains("path_component")
+        || snake.contains("safe_component")
+        || snake.contains("safe_filename")
+        || snake.contains("safe_file_name")
+        || snake.contains("safe_segment")
+        || snake.contains("no_traversal")
+        || snake.contains("reject_traversal")
+        || snake.contains("path_traversal")
+    {
+        return true;
+    }
+    // Co-occurrence: a "safe"/validation verb together with a path noun.
+    let has_safe_verb = snake.contains("safe")
+        || snake.contains("valid")
+        || snake.contains("ensure")
+        || snake.contains("check")
+        || snake.contains("sanit");
+    let has_path_noun = snake.contains("path")
+        || snake.contains("component")
+        || snake.contains("filename")
+        || snake.contains("file_name")
+        || snake.contains("basename")
+        || snake.contains("dirname")
+        || snake.contains("segment");
+    // Require a *safe* signal for the noun co-occurrence form: a bare
+    // `validate_component` (no safety word) is too weak, but `safe` + noun, or
+    // `ensure`/`check`/`sanit` + `path`-family noun, is a real validator idiom.
+    has_safe_verb
+        && has_path_noun
+        && (snake.contains("safe") || snake.contains("path") || snake.contains("sanit"))
+}
+
 /// Reconstruct the confined formal-parameter indices from a *collapsed*
 /// prefix-containment assertion argument group.
 ///
@@ -1909,6 +2032,13 @@ pub fn extract_ssa_func_summary_full(
     // site by `apply_call_post_confinement`.
     let asserts_path_confined_params =
         detect_assert_path_confined_params(ssa, &probe_const_values, &param_index_of);
+    // `Result`-returning rejection-guard parameters (`ensure_safe_path_component(
+    // x)?` returning `Err` — rattler CVE-2026-53956).  Kept separate from the
+    // self-proving assert guards above because the confinement is applied only
+    // at a *path-safety-validator-named* call site (`apply_path_validator_
+    // confinement`), not unconditionally.
+    let result_reject_guard_params =
+        detect_result_reject_guard_params(ssa, &param_index_of);
 
     // Behaviour-based open-redirect confiner detection.  Two shapes mark the
     // return as OPEN_REDIRECT-clean:
@@ -1959,6 +2089,7 @@ pub fn extract_ssa_func_summary_full(
         validated_params_to_return,
         confines_path_params,
         asserts_path_confined_params,
+        result_reject_guard_params,
         sanitizes_open_redirect_return,
         confines_path_return,
         // Phase-10 entry-point classification is attached post-extraction
@@ -2446,6 +2577,40 @@ mod tests {
     use super::*;
     use crate::state::symbol::SymbolId;
     use crate::taint::domain::PredicateSummary;
+
+    /// The path-safety-validator name grammar recognises the real path
+    /// validator idioms and rejects non-path validators (CVE-2026-53956).
+    #[test]
+    fn is_path_safety_validator_name_grammar() {
+        // Positive: path-safety validator idioms (snake + camel).
+        for n in [
+            "ensure_safe_path_component",
+            "validate_safe_path",
+            "is_safe_filename",
+            "check_path_component",
+            "sanitize_path",
+            "ensureSafePathComponent",
+            "assert_no_traversal",
+            "reject_path_traversal",
+        ] {
+            assert!(is_path_safety_validator_name(n), "expected path-safety: {n}");
+        }
+        // Negative: non-path validators and unrelated calls must not match.
+        for n in [
+            "ensure_valid_email",
+            "is_authenticated",
+            "validate_component", // has a path noun but no safe/path/sanit signal
+            "check_length",
+            "to_path_buf",        // a path *noun* but not a validator verb
+            "join",
+            "format",
+        ] {
+            assert!(
+                !is_path_safety_validator_name(n),
+                "expected NOT path-safety: {n}"
+            );
+        }
+    }
 
     /// Top state (no predicates, no validated_must) → all-zero sentinel.
     #[test]

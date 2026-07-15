@@ -1202,6 +1202,12 @@ pub(super) fn transfer_block(
         // clearing lands on the args' current caps, and *before* the same
         // block's later sink call (`streamContent(path, …)`) reads them.
         apply_call_post_confinement(inst, ssa, transfer, &mut state);
+        // Path-safety-validator rejection confinement (CVE-2026-53956): if this
+        // call is to a path-safety-named validator whose summary records
+        // `result_reject_guard_params`, strip `Cap::FILE_IO` from the rejected
+        // arguments so a downstream `path.join(segment)` -> `fs::write` does not
+        // fire on the `?`-guarded value.
+        apply_path_validator_confinement(inst, ssa, transfer, &mut state);
         // Return-value path confinement (CVE-2020-5221): if this call is to a
         // helper whose summary records `confines_path_return`, strip
         // `Cap::FILE_IO` from the call *result* so a downstream `fopen(result)`
@@ -2263,6 +2269,86 @@ fn apply_call_post_confinement(
     // Copy the positions out so the immutable borrow of `transfer` is released
     // before `clear_cap_alias_aware` takes `&mut state` (which also reads
     // `transfer.base_aliases`).
+    let positions: SmallVec<[usize; 2]> = positions.iter().copied().collect();
+    for pos in positions {
+        let Some(group) = args.get(pos) else {
+            continue;
+        };
+        for &v in group {
+            if let Some(name) = ssa
+                .value_defs
+                .get(v.0 as usize)
+                .and_then(|vd| vd.var_name.as_deref())
+            {
+                clear_cap_alias_aware(state, name, Cap::FILE_IO, ssa, transfer.base_aliases);
+            }
+        }
+    }
+}
+
+/// Confined argument positions for a *path-safety-validator* rejection guard.
+///
+/// Reads [`crate::summary::ssa_summary::SsaFuncSummary::result_reject_guard_params`]
+/// — the params the callee rejects via a `Result` `Err` — but **only** for a
+/// callee whose bare name matches the path-safety-validator grammar
+/// (`ensure_safe_path_component`, `validate_safe_path`, …).  The structural
+/// summary gate proves the callee is a rejection guard; the call-site name gate
+/// proves it is a *path* rejection guard: the path-traversal sentinels the
+/// guard rejects (`".."`, `'/'`) are collapsed out of the SSA body by
+/// boolean-expression lowering, so the callee name is the only surviving
+/// path-specificity signal (see `detect_result_reject_guard_params`).  Intra-
+/// file only — a path-component validator lives in the same module as the
+/// cache-key builder it guards.  Motivated by CVE-2026-53956 (rattler).
+fn summary_path_validator_confined_positions<'b>(
+    transfer: &'b SsaTaintTransfer,
+    bare_name: &str,
+) -> Option<&'b [usize]> {
+    if !summary_extract::is_path_safety_validator_name(bare_name) {
+        return None;
+    }
+    let map = transfer.ssa_summaries?;
+    for (key, sum) in map.iter() {
+        if key.lang == transfer.lang
+            && key.name == bare_name
+            && !sum.result_reject_guard_params.is_empty()
+        {
+            return Some(sum.result_reject_guard_params.as_slice());
+        }
+    }
+    None
+}
+
+/// Apply a path-safety-validator rejection confinement as a call post-condition.
+///
+/// When `inst` calls a path-safety-named validator whose SSA summary records
+/// `result_reject_guard_params`, strip [`Cap::FILE_IO`] from the SSA values
+/// passed at each rejected position — a normal completion of
+/// `ensure_safe_path_component(&segment)?` proves `segment` is a single safe
+/// path component that cannot escape its parent directory.  The mirror of
+/// [`apply_call_post_confinement`] for the `Result`-guard (`?`-propagated)
+/// shape, which is *not* a branch condition and so bypasses the
+/// `classify_condition` `ValidationCall` narrowing.  Runs in both the dataflow
+/// (`transfer_block`) and event-emission (`collect_block_events`) replays.
+/// Motivated by CVE-2026-53956 (rattler package-cache path traversal).
+fn apply_path_validator_confinement(
+    inst: &SsaInst,
+    ssa: &SsaBody,
+    transfer: &SsaTaintTransfer,
+    state: &mut SsaTaintState,
+) {
+    let SsaOp::Call {
+        callee,
+        callee_text,
+        args,
+        ..
+    } = &inst.op
+    else {
+        return;
+    };
+    let bare = crate::labels::bare_method_name(callee_text.as_deref().unwrap_or(callee.as_str()));
+    let Some(positions) = summary_path_validator_confined_positions(transfer, bare) else {
+        return;
+    };
     let positions: SmallVec<[usize; 2]> = positions.iter().copied().collect();
     for pos in positions {
         let Some(group) = args.get(pos) else {
@@ -7854,6 +7940,11 @@ fn collect_block_events(
         // (`streamContent(path, …)`) is scanned against un-narrowed taint and
         // re-fires the finding the confinement was meant to suppress.
         apply_call_post_confinement(inst, ssa, transfer, &mut state);
+        // Path-safety-validator rejection confinement (CVE-2026-53956): mirror
+        // the `apply_path_validator_confinement` FILE_IO strip so the emitted
+        // `fs::write(path.join(segment), …)` finding is suppressed in the
+        // event-collection replay, not just in the dataflow replay.
+        apply_path_validator_confinement(inst, ssa, transfer, &mut state);
         // Return-value path confinement (CVE-2020-5221): mirror the call-result
         // FILE_IO strip so the emitted `fopen(compose_abspath(...))` finding is
         // suppressed here, not just in the dataflow replay.

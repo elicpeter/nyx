@@ -1902,6 +1902,7 @@ function consume() {
                 validated_params_to_return: smallvec::SmallVec::new(),
                 confines_path_params: smallvec::SmallVec::new(),
                 asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
                 sanitizes_open_redirect_return: false,
                 confines_path_return: false,
                 param_to_gate_filters: vec![],

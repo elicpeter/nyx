@@ -1845,6 +1845,143 @@ fn java_assert_does_not_contain_still_fires() {
     );
 }
 
+/// CVE-2026-53956 (rattler): a `?`-guarded, path-safety-named `Result`
+/// rejection guard (`ensure_safe_path_component(&segment)?`) confines its
+/// argument for FILE_IO, so the downstream `path.join(segment)` -> `fs::write`
+/// does not fire.  Pins the `result_reject_guard_params` summary field +
+/// `apply_path_validator_confinement` consumer.
+#[test]
+fn rust_path_component_guard_confines_file_io() {
+    let src = br#"use std::env;
+use std::path::PathBuf;
+#[derive(Debug)]
+pub struct InvalidPathComponentError { pub value: String }
+impl std::fmt::Display for InvalidPathComponentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.value) }
+}
+impl std::error::Error for InvalidPathComponentError {}
+pub fn ensure_safe_path_component(component: &str) -> Result<(), InvalidPathComponentError> {
+    let is_unsafe = component == "." || component == ".."
+        || component.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0'));
+    if is_unsafe { Err(InvalidPathComponentError { value: component.to_string() }) } else { Ok(()) }
+}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cache_root = PathBuf::from("/tmp/pkgs");
+    let build = env::var("PKG_BUILD").unwrap_or_default();
+    let segment = format!("demo-1.0-{}", build);
+    ensure_safe_path_component(&segment)?;
+    let cache_path = cache_root.join(segment);
+    std::fs::write(cache_path.join("payload"), b"x")?;
+    Ok(())
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_rust::LANGUAGE);
+    let file_cfg = parse_lang(src, "rust", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "Rust: ensure_safe_path_component guard should confine the write, got {findings:#?}"
+    );
+}
+
+/// Recall guard: the same path-safety validator is DEFINED but never called on
+/// the flow, so the tainted build string still reaches `fs::write` and the flow
+/// must still fire.  Pins that defining a path-safety guard does not suppress —
+/// confinement is applied only at an actual guarded call site.
+#[test]
+fn rust_path_validator_defined_unused_still_fires() {
+    let src = br#"use std::env;
+use std::path::PathBuf;
+#[derive(Debug)]
+pub struct InvalidPathComponentError { pub value: String }
+impl std::fmt::Display for InvalidPathComponentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.value) }
+}
+impl std::error::Error for InvalidPathComponentError {}
+pub fn ensure_safe_path_component(component: &str) -> Result<(), InvalidPathComponentError> {
+    let is_unsafe = component == "." || component == ".."
+        || component.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0'));
+    if is_unsafe { Err(InvalidPathComponentError { value: component.to_string() }) } else { Ok(()) }
+}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cache_root = PathBuf::from("/tmp/pkgs");
+    let build = env::var("PKG_BUILD").unwrap_or_default();
+    let segment = format!("demo-1.0-{}", build);
+    let cache_path = cache_root.join(segment);
+    std::fs::write(cache_path.join("payload"), b"x")?;
+    Ok(())
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_rust::LANGUAGE);
+    let file_cfg = parse_lang(src, "rust", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "Rust: an unused path-safety validator must not confine the write"
+    );
+}
+
+/// Soundness guard for the name gate: a `Result` rejection guard whose name is
+/// NOT a path-safety validator (`ensure_valid_email`) must not confine
+/// `Cap::FILE_IO`, even when it is `?`-guarded on the flow — a non-path
+/// validator proves nothing about path traversal.  Pins that
+/// `apply_path_validator_confinement` requires the path-safety-validator name.
+#[test]
+fn rust_non_path_result_guard_does_not_confine() {
+    let src = br#"use std::env;
+use std::path::PathBuf;
+#[derive(Debug)]
+pub struct InvalidEmailError { pub value: String }
+impl std::fmt::Display for InvalidEmailError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.value) }
+}
+impl std::error::Error for InvalidEmailError {}
+pub fn ensure_valid_email(addr: &str) -> Result<(), InvalidEmailError> {
+    if !addr.contains('@') { Err(InvalidEmailError { value: addr.to_string() }) } else { Ok(()) }
+}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cache_root = PathBuf::from("/tmp/pkgs");
+    let build = env::var("PKG_BUILD").unwrap_or_default();
+    let segment = format!("demo-1.0-{}", build);
+    ensure_valid_email(&segment)?;
+    let cache_path = cache_root.join(segment);
+    std::fs::write(cache_path.join("payload"), b"x")?;
+    Ok(())
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_rust::LANGUAGE);
+    let file_cfg = parse_lang(src, "rust", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "Rust: a non-path-named Result guard must not confine FILE_IO"
+    );
+}
+
 #[test]
 fn c_source_to_sink() {
     let src = b"void main() {\n  char* x = getenv(\"SECRET\");\n  system(x);\n}\n";

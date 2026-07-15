@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 650
+    "corpus_size": 654
   },
   "cases": [
     {
@@ -20588,6 +20588,138 @@
       ],
       "disabled": false,
       "notes": "Precision guard for JDBC borrowed-vs-owned connection ownership. A Liquibase changeset borrows its Connection from the `Database` argument (`database.getConnection()`); Liquibase owns and closes it at the end of the changelog run, so the changeset must not close it and no resource-leak should fire. Receiver-type discrimination classifies the `Database`-typed receiver as a borrowed owner. Distilled from openmrs BooleanConceptChangeSet.java:71 (and 24 sibling databasechange changesets). Owned `DriverManager`/`DataSource` connections are unaffected and still leak (recall: tests/fixtures/state/java_db_connection_leak.java)."
+    },
+    {
+      "case_id": "cve-rs-2026-53956-vulnerable",
+      "file": "cve_corpus/rust/CVE-2026-53956/vulnerable.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          54,
+          54
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          40,
+          40
+        ]
+      ],
+      "tags": [
+        "cve",
+        "rattler",
+        "conda",
+        "cache-key"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-53956 / GHSA-h672-p7h7-97v9: rattler_cache package-cache path traversal \u2014 untrusted conda `build` string interpolated into the cache-key path (`path.join(cache_key.to_string())`) then written, with no `..`/separator rejection. BSD-3-Clause."
+    },
+    {
+      "case_id": "cve-rs-2026-53956-patched",
+      "file": "cve_corpus/rust/CVE-2026-53956/patched.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "rattler",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-53956 patched: the cache-key segment is routed through `ensure_safe_path_component(&segment)?`, a Result-returning path-safety guard that rejects `..`/separators. Regression guard that Nyx recognises the `?`-guarded path-component validator (result_reject_guard_params + apply_path_validator_confinement) and does not refire."
+    },
+    {
+      "case_id": "rs-safe-024",
+      "file": "rust/safe/safe_ensure_path_component.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "synthetic",
+        "path_traversal",
+        "negative",
+        "path-validator"
+      ],
+      "disabled": false,
+      "notes": "Pins CVE-2026-53956 confiner: a `..`/separator-rejecting `Result` guard named as a path-safety validator (`ensure_safe_path_component(x)?`) clears FILE_IO on its argument, so the guarded cache-key flow is silent."
+    },
+    {
+      "case_id": "rs-path-012",
+      "file": "rust/path_traversal/path_validator_defined_unused.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          42,
+          42
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          38,
+          38
+        ]
+      ],
+      "tags": [
+        "synthetic",
+        "path_traversal",
+        "path-validator",
+        "recall-guard"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for CVE-2026-53956: the path-safety validator is DEFINED but never called on the flow, so the unguarded build string still reaches fs::write and the flow fires. Merely defining a path-safety-named Result guard must not suppress."
     }
   ]
 }

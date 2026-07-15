@@ -398,6 +398,29 @@ pub struct SsaFuncSummary {
     #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
     pub asserts_path_confined_params: SmallVec<[usize; 2]>,
 
+    /// Formal parameters that reach an `Err(...)` construction in the body of a
+    /// `Result`-returning validator-guard — i.e. parameters this function
+    /// *rejects* (returns `Err` on) rather than transforms.  Recorded
+    /// name-independently by `detect_result_reject_guard_params`.
+    ///
+    /// Unlike [`Self::asserts_path_confined_params`] (self-proving assert
+    /// guards, confined unconditionally), this field is confined **only** at a
+    /// call site whose callee bare name matches the path-safety-validator
+    /// grammar (`ensure_safe_path_component`, `validate_safe_path`, …), via
+    /// `apply_path_validator_confinement`.  The structural gate proves the
+    /// callee is a rejection guard; the call-site name gate proves it is a
+    /// *path* rejection guard — the path-traversal sentinels (`".."`, `'/'`)
+    /// are collapsed out of the SSA by boolean-expression lowering, so the
+    /// callee name is the only surviving path-specificity signal.
+    ///
+    /// Closes the precision gap behind CVE-2026-53956 (rattler package-cache
+    /// path traversal): the patched cache-key path is routed through
+    /// `ensure_safe_path_component(&segment)?`, a `Result` guard that rejects
+    /// `..` / separators — which nyx false-positived on before.  Empty (the
+    /// default) for functions that construct no rejecting `Err`.
+    #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
+    pub result_reject_guard_params: SmallVec<[usize; 2]>,
+
     /// The function's return value is a *relative-URL confiner*: it
     /// normalises its input and rejects protocol-relative (`//`) and
     /// absolute-`scheme:` URLs before returning the confined, same-origin
