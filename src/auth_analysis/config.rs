@@ -1692,12 +1692,53 @@ fn all_tokens_are_predicate_roles(rest: &str) -> bool {
     !tokens.is_empty() && tokens.iter().all(|t| is_predicate_auth_role(t))
 }
 
+/// True iff the canonical form of `pattern` (ascii-alphanumeric only,
+/// lowercased) is non-empty and is a prefix of the canonical form of
+/// `name`.  This streams the canonical bytes of both operands without
+/// allocating, replacing two throwaway `canonical_name` `String`
+/// allocations per comparison.
+///
+/// Bit-identical to `!pattern_norm.is_empty() && (name_norm == pattern_norm
+/// || name_norm.starts_with(&pattern_norm))` where `name_norm` /
+/// `pattern_norm` are `canonical_name(name)` / `canonical_name(pattern)`
+/// (the `==` disjunct is the equal-length case of `starts_with`, so the
+/// whole condition reduces to a non-empty-pattern prefix test).
+///
+/// The byte filter is equivalent to `canonical_name`'s
+/// `chars().filter(char::is_ascii_alphanumeric)`: `canonical_name` keeps
+/// only ASCII-alphanumeric chars (each a single ASCII byte) and every byte
+/// of a multi-byte UTF-8 char is `>= 0x80`, so `u8::is_ascii_alphanumeric`
+/// drops all of them — the surviving byte stream is identical.
+fn canon_has_prefix(name: &str, pattern: &str) -> bool {
+    let mut name_bytes = name.bytes().filter(u8::is_ascii_alphanumeric);
+    let mut saw_pattern = false;
+    for pb in pattern.bytes().filter(u8::is_ascii_alphanumeric) {
+        saw_pattern = true;
+        match name_bytes.next() {
+            Some(nb) if nb.to_ascii_lowercase() == pb.to_ascii_lowercase() => {}
+            _ => return false,
+        }
+    }
+    saw_pattern
+}
+
+/// Escape hatch / single-binary A-B: `NYX_DISABLE_CANON_STREAM=1` forces the
+/// legacy allocating `canonical_name`-based comparison in `matches_name`.
+fn canon_stream_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("NYX_DISABLE_CANON_STREAM").is_ok())
+}
+
 pub fn matches_name(name: &str, pattern: &str) -> bool {
     let name_last = name.rsplit('.').next().unwrap_or(name);
     let pattern_last = pattern.rsplit('.').next().unwrap_or(pattern);
-    let name_norm = canonical_name(name_last);
-    let pattern_norm = canonical_name(pattern_last);
-    !pattern_norm.is_empty() && (name_norm == pattern_norm || name_norm.starts_with(&pattern_norm))
+    if canon_stream_disabled() {
+        let name_norm = canonical_name(name_last);
+        let pattern_norm = canonical_name(pattern_last);
+        return !pattern_norm.is_empty()
+            && (name_norm == pattern_norm || name_norm.starts_with(&pattern_norm));
+    }
+    canon_has_prefix(name_last, pattern_last)
 }
 
 pub fn strip_quotes(input: &str) -> String {
@@ -2295,5 +2336,89 @@ mod tests {
         // role still rejects.
         assert!(!rules.is_authorization_check("check_db_action"));
         assert!(!rules.is_authorization_check("check_session_valid"));
+    }
+
+    /// Reference implementation of the pre-optimization allocating
+    /// `matches_name` body — pins the zero-alloc `canon_has_prefix` stream
+    /// against the original `canonical_name`-based comparison.
+    fn legacy_matches_name(name: &str, pattern: &str) -> bool {
+        use super::canonical_name;
+        let name_last = name.rsplit('.').next().unwrap_or(name);
+        let pattern_last = pattern.rsplit('.').next().unwrap_or(pattern);
+        let name_norm = canonical_name(name_last);
+        let pattern_norm = canonical_name(pattern_last);
+        !pattern_norm.is_empty()
+            && (name_norm == pattern_norm || name_norm.starts_with(&pattern_norm))
+    }
+
+    #[test]
+    fn canon_stream_matches_name_equals_legacy_allocating_path() {
+        use super::matches_name;
+        // A matrix spanning: dotted receivers, case differences, digits,
+        // separators/punctuation (filtered out by canonicalization),
+        // non-ASCII (whole char dropped), empty pattern, prefix vs equal
+        // vs mismatch, and pattern-longer-than-name.
+        let names = [
+            "",
+            "get",
+            "Get",
+            "GET",
+            "get_user",
+            "getUser",
+            "get.user",
+            "user.repo.save",
+            "Model.objects.filter",
+            "require_trip_member",
+            "is_mod_or_admin",
+            "hasRole",
+            "has-role",
+            "has_role_",
+            "PreAuthorize",
+            "preauthorize",
+            "café_check",   // non-ASCII in the middle
+            "naïveGuard",
+            "db.Tx(opts).Query",
+            "12345",
+            "a1b2c3",
+            "___",          // canonical form empty
+            "...",
+            "checkOwnership",
+            "check_ownership",
+        ];
+        let patterns = [
+            "",
+            "get",
+            "Get",
+            "getuser",
+            "get_user",
+            "user",
+            "save",
+            "filter",
+            "PreAuthorize",
+            "preauthorize",
+            "pre",
+            "hasRole",
+            "has_role",
+            "member",
+            "require_trip_member",
+            "is_mod_or_admin",
+            "café",
+            "naive",
+            "query",
+            "123",
+            "a1b2c3d4", // longer than some names
+            "___",      // canonical empty pattern → never matches
+            "ownership",
+            "checkOwnership",
+        ];
+        for n in names {
+            for p in patterns {
+                assert_eq!(
+                    matches_name(n, p),
+                    legacy_matches_name(n, p),
+                    "matches_name(&{n:?}, &{p:?}) diverged from legacy allocating path",
+                );
+            }
+        }
     }
 }

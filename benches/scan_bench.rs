@@ -843,6 +843,98 @@ fn bench_funckey_hash_lookup(c: &mut Criterion) {
     });
 }
 
+/// Isolates the auth-name matcher `matches_name` on a realistic
+/// O(call-names × patterns) matrix — mirroring the auth-extraction pass,
+/// which checks every call node's callee against dozens of guard/auth
+/// patterns per node.  Guards the zero-alloc `canon_has_prefix` stream that
+/// replaced two throwaway `canonical_name` `String` allocations per
+/// comparison (the `matches_name`/`canonical_name` subtree was ~8.8% of
+/// active CPU on mm/channels/app before the fix).  Single-binary A-B via
+/// `NYX_DISABLE_CANON_STREAM=1` (forces the legacy allocating path).
+fn bench_auth_matches_name(c: &mut Criterion) {
+    use nyx_scanner::auth_analysis::config::matches_name;
+
+    // Callee names as they appear on a real Go/JS scan: dotted receiver
+    // chains, mixed case, and a majority that miss every auth pattern
+    // (the common case that still pays the allocation in the old path).
+    let names: Vec<&str> = vec![
+        "s.store.User().Get",
+        "a.srv.Platform().GetUser",
+        "c.App.SessionHasPermissionTo",
+        "web.Handler.ServeHTTP",
+        "model.User.IsValid",
+        "sql.DB.QueryContext",
+        "require_trip_member",
+        "checkOwnership",
+        "isAdmin",
+        "hasWorkspaceMembership",
+        "before_action",
+        "PreAuthorize",
+        "user.repo.save",
+        "Model.objects.filter",
+        "fmt.Sprintf",
+        "strings.HasPrefix",
+        "json.Marshal",
+        "ctx.Done",
+        "r.URL.Query().Get",
+        "db.Tx(opts).Query",
+        "utils.GenerateId",
+        "logger.Debug",
+        "make",
+        "append",
+        "getRandomBytes",
+    ];
+    // The union of literal auth/guard patterns matched per call node.
+    let patterns: Vec<&str> = vec![
+        "PreAuthorize",
+        "Secured",
+        "RolesAllowed",
+        "hasRole",
+        "hasAuthority",
+        "requireRole",
+        "permission_required",
+        "PermissionRequiredMixin",
+        "user_passes_test",
+        "isAuthenticated",
+        "authenticated",
+        "isAdmin",
+        "checkMembership",
+        "hasWorkspaceMembership",
+        "isMember",
+        "requireMembership",
+        "check_membership",
+        "checkOwnership",
+        "isOwner",
+        "requireOwnership",
+        "check_ownership",
+        "is_owner",
+        "owner?",
+        "before_action",
+        "prepend_before_action",
+        "skip_before_action",
+        "method_decorator",
+        "require_http_methods",
+        "get",
+        "filter",
+        "first",
+        "one",
+    ];
+
+    c.bench_function("auth_matches_name", |b| {
+        b.iter(|| {
+            let mut hits = 0usize;
+            for n in &names {
+                for p in &patterns {
+                    if matches_name(criterion::black_box(n), criterion::black_box(p)) {
+                        hits += 1;
+                    }
+                }
+            }
+            hits
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_ast_only_scan,
@@ -860,6 +952,7 @@ criterion_group!(
     bench_cfg_node_map_lookup,
     bench_global_summaries_lookup_same_lang_go,
     bench_funckey_hash_lookup,
+    bench_auth_matches_name,
     bench_taint_callee_resolve_stress_go,
     bench_taint_branch_stress_go,
     bench_taint_cond_revisit_go,
