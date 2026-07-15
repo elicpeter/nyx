@@ -48,6 +48,99 @@ fn is_event_handler_register_shape(info: &crate::cfg::NodeInfo) -> bool {
     !second_uses.is_empty()
 }
 
+/// Match a callee against a resource acquire/release pattern at an identifier
+/// boundary.
+///
+/// A bare-identifier pattern (`connect`, `open`, `alloc`) matches only when the
+/// character immediately preceding the matched suffix in the callee is a name
+/// separator (not an identifier char).  So `disconnect` / `reconnect` do NOT
+/// match `connect`, `register_open` / `_ensure_open` do NOT match `open`, and
+/// Rust's release `dealloc` does NOT match acquire `alloc` — all of which the
+/// old raw `ends_with` conflated.  Patterns that already carry a leading
+/// separator (`.close`, `os.Open`) keep matching by plain suffix.
+fn callee_matches_pattern(callee_lower: &str, pattern_lower: &str) -> bool {
+    if callee_lower == pattern_lower {
+        return true;
+    }
+    if !callee_lower.ends_with(pattern_lower) {
+        return false;
+    }
+    // A pattern whose first char is a separator (`.`, `:`) carries its own
+    // left boundary — no preceding-char check needed (e.g. `f.Close` matches
+    // `.Close`).
+    if pattern_lower
+        .chars()
+        .next()
+        .map(|c| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    // Bare-identifier pattern: require an identifier boundary before the match.
+    let prefix = &callee_lower[..callee_lower.len() - pattern_lower.len()];
+    match prefix.chars().next_back() {
+        Some(c) => !(c.is_ascii_alphanumeric() || c == '_'),
+        None => true,
+    }
+}
+
+/// Recognises Django / blinker / PyDispatcher signal registration —
+/// `post_save.connect(receiver, sender=Model, dispatch_uid="...")` — which
+/// shares the `connect` callee leaf with real DB acquires but registers an
+/// observer (the call returns `None` and holds no resource).  Complements
+/// [`is_event_handler_register_shape`] (the Qt / Sphinx / MQTT
+/// `obj.connect("event-name", handler)` string-event-name form) with the
+/// signal-object form whose first argument is the receiver *callable*, not a
+/// string event name.
+///
+/// The static `exclude_acquire` list (`signal.connect`, `event.connect`) can
+/// only match those two literal receiver names; real Django signals are
+/// dispatched off `post_save`, `pre_save`, `post_delete`, `m2m_changed`,
+/// `setting_changed`, and arbitrary user `Signal()` instances, so a shape
+/// recogniser is the only sound way to cover the family.
+///
+/// Two structural signals, either sufficient (both leaf-gated to `connect` so
+/// a `connection.cursor()` acquire in the same pair is never suppressed):
+///  1. a signal-API keyword argument (`sender`, `dispatch_uid`, `weak`,
+///     `receiver`) is present — no DB driver's `connect()` accepts any of
+///     these, so their presence is decisive; OR
+///  2. the first positional argument is a callable reference (a passed
+///     handler: bare identifier or attribute access, never a string DSN) AND
+///     the call's return value is discarded (not bound to a variable).  A real
+///     DB connect binds its handle (`conn = engine.connect(cfg)`), so the
+///     discarded-return form is never a leak candidate to begin with.
+fn is_signal_registration_shape(info: &crate::cfg::NodeInfo) -> bool {
+    let is_connect_leaf = info.call.callee.as_deref().is_some_and(|callee| {
+        callee
+            .rsplit(['.', ':'])
+            .next()
+            .unwrap_or(callee)
+            .eq_ignore_ascii_case("connect")
+    });
+    if !is_connect_leaf {
+        return false;
+    }
+    // (1) signal-API keyword argument present.
+    const SIGNAL_KWARGS: &[&str] = &["sender", "dispatch_uid", "weak", "receiver"];
+    if info
+        .call
+        .kwargs
+        .iter()
+        .any(|(k, _)| SIGNAL_KWARGS.iter().any(|s| k.eq_ignore_ascii_case(s)))
+    {
+        return true;
+    }
+    // (2) first positional is a callable reference AND the return is discarded.
+    let first_is_callable_ref = info.call.arg_uses.first().is_some_and(|u| !u.is_empty())
+        && info
+            .call
+            .arg_string_literals
+            .first()
+            .map(|s| s.is_none())
+            .unwrap_or(true);
+    first_is_callable_ref && info.taint.defines.is_none()
+}
+
 /// Find nodes matching acquire patterns for a given resource pair,
 /// excluding any that match `exclude_patterns`.
 fn find_acquire_nodes(
@@ -67,17 +160,15 @@ fn find_acquire_nodes(
                 // Check exclusions first, if the callee matches an exclude
                 // pattern, it is NOT an acquire even if it also matches an
                 // acquire pattern (e.g. `freopen` ends with `fopen`).
-                let excluded = exclude_patterns.iter().any(|p| {
-                    let pl = p.to_ascii_lowercase();
-                    callee_lower.ends_with(&pl) || callee_lower == pl
-                });
+                let excluded = exclude_patterns
+                    .iter()
+                    .any(|p| callee_matches_pattern(&callee_lower, &p.to_ascii_lowercase()));
                 if excluded {
                     return false;
                 }
-                acquire_patterns.iter().any(|p| {
-                    let pl = p.to_ascii_lowercase();
-                    callee_lower.ends_with(&pl) || callee_lower == pl
-                })
+                acquire_patterns
+                    .iter()
+                    .any(|p| callee_matches_pattern(&callee_lower, &p.to_ascii_lowercase()))
             } else {
                 false
             }
@@ -94,10 +185,9 @@ fn find_acquire_nodes(
 fn find_release_nodes(ctx: &AnalysisContext, release_patterns: &[&str]) -> Vec<NodeIndex> {
     let matches_release = |callee: &str| -> bool {
         let callee_lower = callee.to_ascii_lowercase();
-        release_patterns.iter().any(|p| {
-            let pl = p.to_ascii_lowercase();
-            callee_lower.ends_with(&pl) || callee_lower == pl
-        })
+        release_patterns
+            .iter()
+            .any(|p| callee_matches_pattern(&callee_lower, &p.to_ascii_lowercase()))
     };
     ctx.cfg
         .node_indices()
@@ -681,17 +771,23 @@ impl CfgAnalysis for ResourceMisuse {
                     continue;
                 }
                 // Suppress `obj.connect("event-name", callback)` event-
-                // handler registrations that share the `connect` /
-                // `cursor` callee suffix with real DB acquires.  Sphinx
-                // app.connect("config-inited", on_init), Flask blueprint
-                // handlers, and MQTT client.connect("topic", on_msg) all
-                // pass a string literal event name plus a callable
-                // identifier; SQLAlchemy `engine.connect()` and
-                // `sqlite3.connect("path.db")` either have no args or a
-                // single string arg.  Gated on the `db connection`
-                // resource name so file/socket/mutex pairs are untouched.
+                // handler registrations AND Django/blinker signal
+                // registrations (`post_save.connect(receiver, sender=Model)`)
+                // that share the `connect` / `cursor` callee suffix with real
+                // DB acquires.  Sphinx app.connect("config-inited", on_init),
+                // Flask blueprint handlers, and MQTT client.connect("topic",
+                // on_msg) pass a string literal event name plus a callable
+                // (`is_event_handler_register_shape`); Django signals pass the
+                // receiver callable plus signal-API kwargs
+                // (`is_signal_registration_shape`).  SQLAlchemy
+                // `engine.connect()` and `sqlite3.connect("path.db")` either
+                // have no args or a single string arg and bind their handle,
+                // so they fall through and the leak check still fires.  Gated
+                // on the `db connection` resource name so file/socket/mutex
+                // pairs are untouched.
                 if pair.resource_name == "db connection"
-                    && is_event_handler_register_shape(&ctx.cfg[acquire])
+                    && (is_event_handler_register_shape(&ctx.cfg[acquire])
+                        || is_signal_registration_shape(&ctx.cfg[acquire]))
                 {
                     continue;
                 }
@@ -858,6 +954,127 @@ mod tests {
         // should also gate it out: first arg is not a string literal.
         let info = call_node(vec![None], vec![vec!["receiver_func".into()]]);
         assert!(!is_event_handler_register_shape(&info));
+    }
+
+    fn connect_node(
+        callee: &str,
+        arg_string_literals: Vec<Option<String>>,
+        arg_uses: Vec<Vec<String>>,
+        kwargs: Vec<(String, Vec<String>)>,
+        defines: Option<String>,
+    ) -> NodeInfo {
+        let mut info = NodeInfo {
+            kind: StmtKind::Call,
+            call: CallMeta {
+                callee: Some(callee.into()),
+                arg_string_literals,
+                arg_uses,
+                kwargs,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        info.taint.defines = defines;
+        info
+    }
+
+    #[test]
+    fn callee_boundary_rejects_disconnect_as_connect_acquire() {
+        // `post_delete.disconnect(...)` shares the `connect` suffix but is a
+        // teardown verb — must NOT match the `connect` acquire pattern.
+        assert!(!callee_matches_pattern("post_delete.disconnect", "connect"));
+        assert!(!callee_matches_pattern("client.reconnect", "connect"));
+        // Real Django signal / DB connects still match at the `.` boundary.
+        assert!(callee_matches_pattern("post_save.connect", "connect"));
+        assert!(callee_matches_pattern("engine.connect", "connect"));
+        assert!(callee_matches_pattern("connect", "connect"));
+    }
+
+    #[test]
+    fn callee_boundary_rejects_within_identifier_open_and_alloc() {
+        // PIL `Image.register_open` and paperless `_ensure_open` end with
+        // `open` but are single identifiers, not the `open` builtin.
+        assert!(!callee_matches_pattern("image.register_open", "open"));
+        assert!(!callee_matches_pattern("obj._ensure_open", "open"));
+        // Rust release `dealloc` must not match acquire `alloc`.
+        assert!(!callee_matches_pattern("dealloc", "alloc"));
+        // Genuine `.open` acquires still match.
+        assert!(callee_matches_pattern("codecs.open", "open"));
+        assert!(callee_matches_pattern("open", "open"));
+        // Separator-led patterns keep matching by plain suffix.
+        assert!(callee_matches_pattern("f.close", ".close"));
+        assert!(callee_matches_pattern("os.open", "os.open"));
+    }
+
+    #[test]
+    fn signal_shape_recognises_django_sender_kwarg() {
+        // pre_save.connect(remove_files_on_change, sender=model)
+        let info = connect_node(
+            "pre_save.connect",
+            vec![None],
+            vec![vec!["remove_files_on_change".into()]],
+            vec![("sender".into(), vec!["model".into()])],
+            None,
+        );
+        assert!(is_signal_registration_shape(&info));
+    }
+
+    #[test]
+    fn signal_shape_recognises_django_dispatch_uid_kwarg() {
+        // signals.post_save.connect(handlers.on_save_any_model,
+        //                           dispatch_uid="events_change")
+        let info = connect_node(
+            "signals.post_save.connect",
+            vec![None],
+            vec![vec!["handlers".into(), "on_save_any_model".into()]],
+            vec![("dispatch_uid".into(), vec![])],
+            None,
+        );
+        assert!(is_signal_registration_shape(&info));
+    }
+
+    #[test]
+    fn signal_shape_recognises_bare_receiver_no_kwargs() {
+        // setting_changed.connect(reload_api_settings) -- callable arg, no
+        // kwargs, return discarded.
+        let info = connect_node(
+            "setting_changed.connect",
+            vec![None],
+            vec![vec!["reload_api_settings".into()]],
+            vec![],
+            None,
+        );
+        assert!(is_signal_registration_shape(&info));
+    }
+
+    #[test]
+    fn signal_shape_rejects_real_db_connect_bound_handle() {
+        // conn = engine.connect(cfg) -- callable-looking ident arg BUT the
+        // handle is bound, so it is a real acquire that must still leak-check.
+        let info = connect_node(
+            "engine.connect",
+            vec![None],
+            vec![vec!["cfg".into()]],
+            vec![],
+            Some("conn".into()),
+        );
+        assert!(!is_signal_registration_shape(&info));
+    }
+
+    #[test]
+    fn signal_shape_rejects_sqlite_string_arg_and_cursor_leaf() {
+        // sqlite3.connect("path.db") -- string DSN, no callable receiver.
+        let info = connect_node(
+            "sqlite3.connect",
+            vec![Some("path.db".into())],
+            vec![vec![]],
+            vec![],
+            None,
+        );
+        assert!(!is_signal_registration_shape(&info));
+        // connection.cursor() shares the pair but is not a `connect` leaf.
+        let cur = connect_node("connection.cursor", vec![], vec![], vec![], None);
+        assert!(!is_signal_registration_shape(&cur));
     }
 
     #[test]

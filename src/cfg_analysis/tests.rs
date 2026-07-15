@@ -1073,6 +1073,67 @@ def process():
 }
 
 #[test]
+fn resource_leak_python_django_signals_not_flagged() {
+    // taiga real-repo shape: Django signal registrations share the `connect`
+    // callee leaf with real DB acquires but register observers (return None,
+    // hold no resource).  `.disconnect` must not suffix-match `connect`; the
+    // signal-kwarg and bare-receiver forms of `.connect` must be recognised.
+    let src = br#"
+def register(model):
+    pre_save.connect(remove_files_on_change, sender=model)
+    post_delete.connect(remove_files_on_delete, sender=model)
+    setting_changed.connect(reload_api_settings)
+    signals.post_save.connect(on_save_any_model, dispatch_uid="events_change")
+    signals.post_save.disconnect(dispatch_uid="events_change")
+    cleanup_post_delete.disconnect(delete_thumbnail_files)
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "python",
+        Language::from(tree_sitter_python::LANGUAGE),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        leak_findings.is_empty(),
+        "Django signal connect/disconnect must not be treated as DB-connection \
+         leaks, got {leak_findings:?}"
+    );
+}
+
+#[test]
+fn resource_leak_python_real_db_connect_still_flagged() {
+    // Recall guard for the signal-registration suppression: a genuine DB
+    // connection acquired and bound but never closed must still leak.
+    let src = br#"
+def get_conn():
+    conn = psycopg2.connect("dbname=test user=admin")
+    rows = conn.execute("SELECT 1")
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "python",
+        Language::from(tree_sitter_python::LANGUAGE),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        !leak_findings.is_empty(),
+        "A bound-but-unclosed psycopg2.connect() must still be flagged as a leak"
+    );
+}
+
+#[test]
 fn resource_leak_php_fopen_without_fclose() {
     let src = br#"<?php
 function read_file() {
