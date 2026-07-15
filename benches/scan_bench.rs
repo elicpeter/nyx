@@ -173,6 +173,92 @@ fn bench_classify(c: &mut Criterion) {
     });
 }
 
+/// Sweep `classify_all` over a realistic per-node Go corpus (a mix of a few
+/// sink/source hits and mostly ordinary non-matching callee/identifier texts —
+/// the true distribution the CFG-build + taint passes classify, where the
+/// overwhelming majority of nodes match nothing).
+///
+/// Isolates the per-node label-matcher loop that the last-byte `LabelIndex`
+/// dispatch replaced: the old path ran `match_suffix_cs` over **every** Go
+/// matcher (~150) for every one of these texts; the index visits only the
+/// handful sharing the text's last byte. A/B a single binary with
+/// `NYX_DISABLE_LABEL_INDEX=1` (forces the pre-index linear scan). A regression
+/// here means the dispatch index stopped pruning.
+fn bench_classify_all_sweep_go(c: &mut Criterion) {
+    // ~60 texts: a handful of real Go sinks/sources + realistic misses
+    // (ordinary method names, chained calls, locals) in registry-diverse
+    // last bytes.
+    let corpus: &[&str] = &[
+        // hits (various last bytes)
+        "os.Getenv",
+        "exec.Command",
+        "exec.CommandContext",
+        "db.Query",
+        "db.QueryRow",
+        "db.Exec",
+        "fmt.Fprintf",
+        "template.HTML",
+        "os.ReadFile",
+        "ioutil.ReadFile",
+        "r.URL.Query().Get",
+        "http.Get",
+        // misses — ordinary code the classifier still scans every node of
+        "handleRequest",
+        "s.doWork",
+        "ctx.Done",
+        "w.WriteHeader",
+        "json.Marshal",
+        "strings.TrimSpace",
+        "append",
+        "make",
+        "len",
+        "buf.String",
+        "logger.Info",
+        "logger.Debugf",
+        "user.Name",
+        "cfg.Load",
+        "srv.Shutdown",
+        "wg.Wait",
+        "mu.Lock",
+        "mu.Unlock",
+        "time.Now",
+        "rand.Intn",
+        "errors.New",
+        "fmt.Errorf",
+        "b.Bytes",
+        "req.Context",
+        "resp.Body.Close",
+        "router.Group",
+        "c.JSON",
+        "c.Param",
+        "svc.repo.FindByID",
+        "helper.normalize",
+        "x",
+        "yy",
+        "totalCount",
+        "isValid",
+        "parsePayload",
+        "computeHash",
+        "sched.next",
+        "conn.readLoop",
+        "p.marshalTo",
+        "node.left",
+        "tree.insert",
+        "cache.evict",
+        "metrics.observe",
+        "span.End",
+    ];
+    c.bench_function("classify_all_sweep_go", |b| {
+        b.iter(|| {
+            let mut n = 0usize;
+            for &t in corpus {
+                n += nyx_scanner::labels::classify_all("go", criterion::black_box(t), None).len();
+            }
+            criterion::black_box(n)
+        });
+    });
+}
+
 /// Per-file fused analysis throughput on a realistic ~1.5k-line Go module
 /// (gin context.go, ~147 fns).  Guards the
 /// `ParsedFile::body_const_facts_cache` optimization that collapses the
@@ -943,6 +1029,7 @@ criterion_group!(
     bench_single_file_parse_and_cfg,
     bench_state_analysis_only,
     bench_classify,
+    bench_classify_all_sweep_go,
     bench_analyse_file_fused_large_go,
     bench_extract_authorization_model_go,
     bench_extract_authorization_model_shared_go,
