@@ -318,6 +318,12 @@ fn run_ssa_taint_internal(
 ) -> SsaTaintRunResult {
     let num_blocks = ssa.blocks.len();
 
+    // Path-confinement gates: computed once for the whole body so the per-call
+    // confinement passes (and their string-grammar name checks) are skipped in
+    // both the worklist and the event-collection replays when the file has no
+    // confiner summary.  See [`ConfinementGates`].
+    let confinement = compute_confinement_gates(transfer);
+
     // Detect induction variables before analysis
     let back_edges = detect_back_edges(ssa);
     let induction_vars = detect_induction_phis(ssa, &back_edges);
@@ -674,6 +680,7 @@ fn run_ssa_taint_internal(
             entry_state,
             &induction_vars,
             Some(&pred_states),
+            confinement,
         );
 
         // Build per-successor states (branch-aware for Branch terminators)
@@ -810,6 +817,7 @@ fn run_ssa_taint_internal(
             &mut events,
             &induction_vars,
             Some(&pred_states),
+            confinement,
         );
     }
 
@@ -844,6 +852,7 @@ pub fn extract_ssa_exit_state(
 ) -> HashMap<BindingKey, VarTaint> {
     // Compute exit states by replaying transfer on converged entry states
     let empty_induction = HashSet::new();
+    let confinement = compute_confinement_gates(transfer);
     let mut joined = SsaTaintState::initial();
     for (bid, entry_state) in block_states.iter().enumerate() {
         if let Some(state) = entry_state {
@@ -855,6 +864,7 @@ pub fn extract_ssa_exit_state(
                 state.clone(),
                 &empty_induction,
                 None,
+                confinement,
             );
             joined = joined.join(&exit_state);
         }
@@ -1050,6 +1060,10 @@ pub(super) fn transfer_block(
     mut state: SsaTaintState,
     induction_vars: &HashSet<SsaValue>,
     pred_states: Option<&PredStates>,
+    // Which path-confinement post-conditions can fire for this body (computed
+    // once per body via `compute_confinement_gates`); skips the per-call string
+    // work when no confiner summary exists.  See [`ConfinementGates`].
+    confinement: ConfinementGates,
 ) -> SsaTaintState {
     // Process phis
     let block_idx = block.id.0 as usize;
@@ -1201,18 +1215,24 @@ pub(super) fn transfer_block(
         // from the confined arguments.  Runs *after* `transfer_inst` so the
         // clearing lands on the args' current caps, and *before* the same
         // block's later sink call (`streamContent(path, …)`) reads them.
-        apply_call_post_confinement(inst, ssa, transfer, &mut state);
+        if confinement.assert {
+            apply_call_post_confinement(inst, ssa, transfer, &mut state);
+        }
         // Path-safety-validator rejection confinement (CVE-2026-53956): if this
         // call is to a path-safety-named validator whose summary records
         // `result_reject_guard_params`, strip `Cap::FILE_IO` from the rejected
         // arguments so a downstream `path.join(segment)` -> `fs::write` does not
         // fire on the `?`-guarded value.
-        apply_path_validator_confinement(inst, ssa, transfer, &mut state);
+        if confinement.path_validator {
+            apply_path_validator_confinement(inst, ssa, transfer, &mut state);
+        }
         // Return-value path confinement (CVE-2020-5221): if this call is to a
         // helper whose summary records `confines_path_return`, strip
         // `Cap::FILE_IO` from the call *result* so a downstream `fopen(result)`
         // does not fire.
-        apply_call_return_confinement(inst, transfer, &mut state);
+        if confinement.return_confiner {
+            apply_call_return_confinement(inst, transfer, &mut state);
+        }
     }
 
     state
@@ -2233,6 +2253,92 @@ fn summary_asserts_confined_positions<'b>(
         }
     }
     None
+}
+
+/// Which of the three per-call *path-confinement* post-conditions can possibly
+/// fire for the body under analysis.
+///
+/// Each of [`apply_call_post_confinement`] (assert-guard, CVE-2021-21234),
+/// [`apply_path_validator_confinement`] (`?`-rejection guard, CVE-2026-53956),
+/// and [`apply_call_return_confinement`] (`strncmp`-return confiner,
+/// CVE-2020-5221) is a *no-op* unless the file's SSA summary map contains a
+/// summary that records the corresponding flag: only a callee whose summary was
+/// proved a confiner can strip `Cap::FILE_IO`.  But each pass was invoked
+/// unconditionally on **every** `Call` instruction in both the dataflow
+/// (`transfer_block`) and event (`collect_block_events`) replays, ~5 passes per
+/// body — and `apply_path_validator_confinement` in particular runs the
+/// `is_path_safety_validator_name` grammar (a `to_snake_lower` allocation plus
+/// ~20 substring `contains` scans) on the callee name of every call before it
+/// even consults the summary map.  On a body whose file has no path-confiner
+/// summary (the overwhelming majority — the whole of Go/most code) that is pure
+/// wasted string work; profiling mm/channels/app attributed ≈1000
+/// `StrSearcher::new` / `is_contained_in` samples to it alone.
+///
+/// This gate hoists the loop-invariant "does any summary confine?" existence
+/// check out of the per-call loops: it is computed **once per body analysis**
+/// by [`compute_confinement_gates`] (a single cheap scan of `ssa_summaries`,
+/// no string work) and each pass is skipped entirely when its flag is `false`.
+/// Bit-identical: when a flag is `false` the pass could only ever have found
+/// nothing (its summary scan returns `None`), so skipping it is output-identical;
+/// when `true` the pass runs exactly as before and the per-call name filter
+/// still selects which calls actually confine.
+#[derive(Clone, Copy, Default)]
+pub(super) struct ConfinementGates {
+    /// A summary records non-empty `asserts_path_confined_params`.
+    assert: bool,
+    /// A summary records non-empty `result_reject_guard_params`.
+    path_validator: bool,
+    /// A summary records `confines_path_return`.
+    return_confiner: bool,
+}
+
+/// Scan `transfer.ssa_summaries` once for path-confiner summaries, producing the
+/// per-body [`ConfinementGates`].  O(number of file summaries) cheap flag reads
+/// (no string classification — the per-call name grammar stays inside the
+/// individual passes and only runs when the gate is open).  All-`false` when
+/// `ssa_summaries` is `None`.
+pub(super) fn compute_confinement_gates(transfer: &SsaTaintTransfer) -> ConfinementGates {
+    // Escape hatch: `NYX_DISABLE_CONFINEMENT_GATE=1` forces all three gates open,
+    // restoring the pre-hoist behaviour where every per-call confinement pass
+    // ran unconditionally.  Used to A/B the gated vs ungated path from a single
+    // binary (criterion baseline, differential-correctness check) and as a
+    // safety toggle.  Bit-identical to the gated path — an open gate only makes
+    // a pass run a scan that finds nothing when no confiner exists.
+    if confinement_gate_disabled() {
+        return ConfinementGates {
+            assert: true,
+            path_validator: true,
+            return_confiner: true,
+        };
+    }
+    let Some(map) = transfer.ssa_summaries else {
+        return ConfinementGates::default();
+    };
+    let mut g = ConfinementGates::default();
+    for (key, sum) in map.iter() {
+        if key.lang != transfer.lang {
+            continue;
+        }
+        g.assert |= !sum.asserts_path_confined_params.is_empty();
+        g.path_validator |= !sum.result_reject_guard_params.is_empty();
+        g.return_confiner |= sum.confines_path_return;
+        if g.assert && g.path_validator && g.return_confiner {
+            break;
+        }
+    }
+    g
+}
+
+/// Whether `NYX_DISABLE_CONFINEMENT_GATE=1` is set (forces all confinement
+/// gates open — the pre-hoist unconditional behaviour).  Cached so the env read
+/// is paid once per process.
+fn confinement_gate_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("NYX_DISABLE_CONFINEMENT_GATE")
+            .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false)
+    })
 }
 
 /// Apply an assert-guard path confinement as a call post-condition.
@@ -3598,6 +3704,7 @@ fn extract_inline_return_taint(
     block_exit_states: &[Option<SsaTaintState>],
     induction_vars: &HashSet<SsaValue>,
 ) -> CachedInlineShape {
+    let confinement = compute_confinement_gates(transfer);
     // Collect all param SSA values to separate from derived values
     let param_values: HashSet<SsaValue> = ssa
         .blocks
@@ -3746,6 +3853,7 @@ fn extract_inline_return_taint(
                 entry_state.clone(),
                 induction_vars,
                 None,
+                confinement,
             );
 
             if let Some(rv) = ret_val {
@@ -3813,6 +3921,7 @@ fn extract_inline_return_taint(
                                 pred_exit.clone(),
                                 induction_vars,
                                 None,
+                                confinement,
                             );
                             if let Some(ref abs) = per_pred_exit.abstract_state {
                                 let fact = abs.get(rv).path;
@@ -7791,6 +7900,9 @@ fn collect_block_events(
     events: &mut Vec<SsaTaintEvent>,
     induction_vars: &HashSet<SsaValue>,
     pred_states: Option<&PredStates>,
+    // See [`transfer_block`]; skips the per-call confinement string work when no
+    // confiner summary exists for this body.
+    confinement: ConfinementGates,
 ) {
     // Replay phis to get accurate state (mirrors transfer_block phi handling)
     let block_idx = block.id.0 as usize;
@@ -7939,16 +8051,22 @@ fn collect_block_events(
         // be applied here too — otherwise the later sink call in the same block
         // (`streamContent(path, …)`) is scanned against un-narrowed taint and
         // re-fires the finding the confinement was meant to suppress.
-        apply_call_post_confinement(inst, ssa, transfer, &mut state);
+        if confinement.assert {
+            apply_call_post_confinement(inst, ssa, transfer, &mut state);
+        }
         // Path-safety-validator rejection confinement (CVE-2026-53956): mirror
         // the `apply_path_validator_confinement` FILE_IO strip so the emitted
         // `fs::write(path.join(segment), …)` finding is suppressed in the
         // event-collection replay, not just in the dataflow replay.
-        apply_path_validator_confinement(inst, ssa, transfer, &mut state);
+        if confinement.path_validator {
+            apply_path_validator_confinement(inst, ssa, transfer, &mut state);
+        }
         // Return-value path confinement (CVE-2020-5221): mirror the call-result
         // FILE_IO strip so the emitted `fopen(compose_abspath(...))` finding is
         // suppressed here, not just in the dataflow replay.
-        apply_call_return_confinement(inst, transfer, &mut state);
+        if confinement.return_confiner {
+            apply_call_return_confinement(inst, transfer, &mut state);
+        }
 
         // Check for sink
         let info = &cfg[inst.cfg_node];

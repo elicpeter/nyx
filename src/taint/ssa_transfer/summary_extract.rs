@@ -1426,6 +1426,7 @@ pub fn extract_ssa_func_summary_full(
         let mut return_abstract: Option<crate::abstract_interp::AbstractValue> = None;
         // Per-return-block observations for per-path transforms.
         let mut per_return: Vec<ReturnBlockObs> = Vec::with_capacity(return_blocks.len());
+        let confinement = crate::taint::ssa_transfer::compute_confinement_gates(&transfer);
         for &bid in &return_blocks {
             if let Some(entry) = &block_states[bid] {
                 let empty_induction = HashSet::new();
@@ -1437,6 +1438,7 @@ pub fn extract_ssa_func_summary_full(
                     entry.clone(),
                     &empty_induction,
                     None,
+                    confinement,
                 );
 
                 let ret_val = match &ssa.blocks[bid].terminator {

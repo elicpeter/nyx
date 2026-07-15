@@ -468,6 +468,18 @@ fn bench_global_summaries_lookup_same_lang_go(c: &mut Criterion) {
 /// filtered and discarded. The sole surviving clone is the single winning
 /// key each resolver returns. Reintroducing the per-resolution candidate-list
 /// clone regresses here (measured -2.2% cooled on this fixture).
+///
+/// Also guards the per-call path-confinement gate hoist (session-0039): this
+/// call-dense fixture has no confiner summary (Go produces none), so before the
+/// hoist the three per-call confinement passes — `apply_call_post_confinement`,
+/// `apply_path_validator_confinement` (a `to_snake_lower` alloc + ~20 substring
+/// `contains` scans of the callee name), `apply_call_return_confinement` — ran
+/// unconditionally on every call in both the dataflow and event replays, ~5
+/// passes per body. `compute_confinement_gates` now computes the "any confiner?"
+/// existence check once per body and skips all three when the gate is closed.
+/// A/B from one binary via `NYX_DISABLE_CONFINEMENT_GATE=1` (forces the gates
+/// open = pre-hoist behaviour); reintroducing the unconditional passes regresses
+/// here proportional to the call density.
 fn bench_taint_callee_resolve_stress_go(c: &mut Criterion) {
     let fixture = Path::new("benches/perf_fixtures/callee_resolve_stress.go")
         .canonicalize()

@@ -4064,3 +4064,126 @@ mod distinct_summary_sink_caps_tests {
         assert!(out.is_empty());
     }
 }
+
+// ── ConfinementGates hoist: gate-flag correctness ────────────────────────
+#[cfg(test)]
+mod confinement_gate_tests {
+    use super::super::*;
+    use crate::summary::ssa_summary::SsaFuncSummary;
+    use crate::symbol::{FuncKey, FuncKind};
+    use petgraph::prelude::*;
+    use smallvec::smallvec;
+
+    /// Build a minimal `SsaTaintTransfer` (Go, no seeds) pointing at `summaries`.
+    fn transfer_with<'a>(
+        interner: &'a SymbolInterner,
+        local_summaries: &'a FuncSummaries,
+        summaries: Option<&'a std::collections::HashMap<FuncKey, SsaFuncSummary>>,
+    ) -> SsaTaintTransfer<'a> {
+        SsaTaintTransfer {
+            lang: Lang::Go,
+            namespace: "",
+            interner,
+            local_summaries,
+            global_summaries: None,
+            interop_edges: &[],
+            owner_body_id: crate::cfg::BodyId(0),
+            parent_body_id: None,
+            global_seed: None,
+            param_seed: None,
+            receiver_seed: None,
+            const_values: None,
+            type_facts: None,
+            xml_parser_config: None,
+            xpath_config: None,
+            ssa_summaries: summaries,
+            extra_labels: None,
+            base_aliases: None,
+            callee_bodies: None,
+            inline_cache: None,
+            context_depth: 0,
+            callback_bindings: None,
+            points_to: None,
+            dynamic_pts: None,
+            import_bindings: None,
+            promisify_aliases: None,
+            module_aliases: None,
+            static_map: None,
+            auto_seed_handler_params: false,
+            cross_file_bodies: None,
+            pointer_facts: None,
+            cross_package_imports: None,
+            entry_kind: None,
+            param_route_capture: None,
+            recording_summary: false,
+        }
+    }
+
+    fn key(name: &str, lang: Lang) -> FuncKey {
+        FuncKey::from_parts(lang, "", "", name, Some(1), None, FuncKind::Function)
+    }
+
+    #[test]
+    fn none_summaries_close_all_gates() {
+        let interner = SymbolInterner::new();
+        let ls: FuncSummaries = std::collections::HashMap::new();
+        let t = transfer_with(&interner, &ls, None);
+        let g = compute_confinement_gates(&t);
+        assert!(!g.assert && !g.path_validator && !g.return_confiner);
+    }
+
+    #[test]
+    fn empty_summaries_close_all_gates() {
+        let interner = SymbolInterner::new();
+        let ls: FuncSummaries = std::collections::HashMap::new();
+        let map: std::collections::HashMap<FuncKey, SsaFuncSummary> =
+            std::collections::HashMap::new();
+        let t = transfer_with(&interner, &ls, Some(&map));
+        let g = compute_confinement_gates(&t);
+        assert!(!g.assert && !g.path_validator && !g.return_confiner);
+    }
+
+    #[test]
+    fn each_flag_opens_only_its_gate() {
+        let interner = SymbolInterner::new();
+        let ls: FuncSummaries = std::collections::HashMap::new();
+
+        // confines_path_return -> return_confiner only.
+        let mut ret = SsaFuncSummary::default();
+        ret.confines_path_return = true;
+        let mut m1 = std::collections::HashMap::new();
+        m1.insert(key("compose_path", Lang::Go), ret);
+        let g = compute_confinement_gates(&transfer_with(&interner, &ls, Some(&m1)));
+        assert!(g.return_confiner && !g.assert && !g.path_validator);
+
+        // asserts_path_confined_params -> assert only.
+        let mut asrt = SsaFuncSummary::default();
+        asrt.asserts_path_confined_params = smallvec![0];
+        let mut m2 = std::collections::HashMap::new();
+        m2.insert(key("check_under", Lang::Go), asrt);
+        let g = compute_confinement_gates(&transfer_with(&interner, &ls, Some(&m2)));
+        assert!(g.assert && !g.return_confiner && !g.path_validator);
+
+        // result_reject_guard_params -> path_validator only.
+        let mut rej = SsaFuncSummary::default();
+        rej.result_reject_guard_params = smallvec![0];
+        let mut m3 = std::collections::HashMap::new();
+        m3.insert(key("ensure_safe_path", Lang::Go), rej);
+        let g = compute_confinement_gates(&transfer_with(&interner, &ls, Some(&m3)));
+        assert!(g.path_validator && !g.assert && !g.return_confiner);
+    }
+
+    #[test]
+    fn different_lang_summary_leaves_gates_closed() {
+        // A confiner summary in another language must not open a same-language
+        // body's gate (the passes filter on `key.lang == transfer.lang`).
+        let interner = SymbolInterner::new();
+        let ls: FuncSummaries = std::collections::HashMap::new();
+        let mut ret = SsaFuncSummary::default();
+        ret.confines_path_return = true;
+        let mut m = std::collections::HashMap::new();
+        m.insert(key("compose_path", Lang::C), ret); // C, transfer is Go
+        let g = compute_confinement_gates(&transfer_with(&interner, &ls, Some(&m)));
+        assert!(!g.return_confiner && !g.assert && !g.path_validator);
+    }
+}
