@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 672
+    "corpus_size": 674
   },
   "cases": [
     {
@@ -10540,6 +10540,66 @@
       ],
       "disabled": false,
       "notes": "CVE-2026-42259 patched counterpart: `normalize_relative_url` normalises backslashes then rejects protocol-relative (`//`) and any `scheme:` URL, returning null on reject; `res.redirect(dest)` runs only when the confined result is non-null. Silenced by behaviour-based open-redirect normalizer recognition (SsaFuncSummary.sanitizes_open_redirect_return)."
+    },
+    {
+      "case_id": "cve-js-2026-41478-vulnerable",
+      "file": "cve_corpus/javascript/CVE-2026-41478/vulnerable.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "saltcorn",
+        "sqli",
+        "express",
+        "interprocedural"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-41478: Saltcorn POST /sync/load_changes reads req.body.syncInfos and, per Object.entries entry, forwards syncInfo to getSyncRows() which interpolates syncInfo.maxLoadedId raw into a db.query() SQL string (CVSS 9.9). Interprocedural + Object.entries + object-field recall path. MIT"
+    },
+    {
+      "case_id": "cve-js-2026-41478-patched",
+      "file": "cve_corpus/javascript/CVE-2026-41478/patched.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "saltcorn",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-41478 patched counterpart: getSyncRows casts syncInfo.maxLoadedId via Number() + Number.isInteger guard and parameterizes it with a $1 placeholder + params array; the bound value flows into db.query arg1 (non-payload position, payload_args=[0]) and arg0 is a constant SQL template, so both taint-unsanitised-flow and cfg-unguarded-sink stay silent."
     },
     {
       "case_id": "js-open_redirect-001",
