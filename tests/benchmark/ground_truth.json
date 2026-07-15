@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 669
+    "corpus_size": 671
   },
   "cases": [
     {
@@ -21225,6 +21225,76 @@
       ],
       "disabled": false,
       "notes": "taiga Django signal registration shape (taiga/base/signals/cleanup_files.py, taiga/events/apps.py). `<signal>.connect(receiver, sender=/dispatch_uid=)` and `.disconnect(...)` share the `connect` callee leaf with real DB acquires but register observers (return None, hold no resource). Engine fix: src/cfg_analysis/resources.rs identifier-boundary matcher (`callee_matches_pattern` -> `disconnect` no longer suffix-matches `connect`) + `is_signal_registration_shape` (signal-API kwargs / bare-receiver+discarded-return). Closes the dominant Python cfg-resource-leak FP cluster (taiga 107->9, netbox, paperless-ngx)."
+    },
+    {
+      "case_id": "cve-ruby-2023-26153-vulnerable",
+      "file": "cve_corpus/ruby/CVE-2023-26153/vulnerable.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "deser",
+      "cwe": "CWE-502",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rb.deser.yaml_load"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          20,
+          20
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          20,
+          20
+        ]
+      ],
+      "tags": [
+        "cve",
+        "geokit-rails",
+        "deserialization",
+        "yaml"
+      ],
+      "disabled": false,
+      "notes": "CVE-2023-26153 (geokit-rails, MIT): the geo_location cookie is passed to YAML.load, enabling deserialization RCE. Index-form source cookies[:geo_location] flows directly into the YAML.load sink on the same line; fires rb.deser.yaml_load."
+    },
+    {
+      "case_id": "cve-ruby-2023-26153-patched",
+      "file": "cve_corpus/ruby/CVE-2023-26153/patched.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rb.deser.yaml_load",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "geokit-rails",
+        "deserialization",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "Patched counterpart of cve-ruby-2023-26153-vulnerable: the fix replaces YAML.load with JSON.parse (safe, data-only), so no deserialization sink fires."
     }
   ]
 }

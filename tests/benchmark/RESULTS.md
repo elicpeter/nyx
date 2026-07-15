@@ -50,6 +50,7 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2020-8130  | Ruby       | Rake                       | MIT                  | CMDI            | detected |
 | CVE-2021-21288 | Ruby       | CarrierWave                | MIT                  | SSRF            | detected |
 | CVE-2023-38337 | Ruby       | rswag                      | MIT                  | path_traversal  | detected |
+| CVE-2023-26153 | Ruby       | geokit-rails               | MIT                  | deserialization | detected (fires rb.deser.yaml_load; patched JSON.parse silent) |
 | CVE-2026-40295 | Ruby       | Devise                     | MIT                  | open_redirect   | deferred (recall+precision: bare Ruby method-call source dropped by scope_all lowering) |
 | CVE-2017-9841  | PHP        | PHPUnit                    | BSD-3-Clause         | code_exec       | detected |
 | CVE-2018-15133 | PHP        | Laravel                    | MIT                  | Deserialization | detected |
