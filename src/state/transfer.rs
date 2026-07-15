@@ -12,6 +12,37 @@ use crate::cfg_analysis::rules::{self, ResourcePair};
 use crate::symbol::Lang;
 use petgraph::graph::NodeIndex;
 
+/// Whether an acquire whose destination `def` is a struct-field / object-property
+/// LHS should be treated as ownership-transfer to the containing object and thus
+/// NOT tracked as a function-local resource.  A resource written directly into a
+/// member-access LHS is owned by the containing struct/object, whose lifetime the
+/// local body cannot observe — it is released in a paired destructor / `Stop()` /
+/// `free_*()` method, or transferred to the caller when the object is a parameter.
+/// Tracking the field as a local handle is a guaranteed leak FP at function exit.
+///
+/// Real-repo shapes this covers (RHS is a call, so this is the `apply_call`
+/// sibling of the `apply_assignment` field-LHS gate that handles the RHS-is-a-var
+/// downstream store):
+///   - C:   `c->connect_timeout = hi_malloc(...)` (redis/hiredis net.c),
+///          `s->buf = malloc(size)` (redis lua strbuf.c), `pq->items = calloc(...)`.
+///   - Go:  `b.cpuprof = os.Create(...)` (prometheus tsdb.go::startProfiling).
+///
+/// Language policy:
+///   - C / C++: `.` (struct value member) OR `->` (pointer member).  A C++
+///     `this->fd = fopen(...)` is owned by the object's destructor (RAII), so the
+///     arrow form is suppressed exactly like the C struct case.
+///   - Go: `.` (struct field).
+///   - JS / TS (and all others): NOT suppressed — the class-field acquire
+///     `this.fd = fs.openSync(...)` IS the expected leak pattern the TS state
+///     fixtures rely on (`tests/fixtures/.../typescript/state/resource_class.ts`).
+pub(crate) fn acquire_into_field_transfers_ownership(lang: Lang, def: &str) -> bool {
+    match lang {
+        Lang::C | Lang::Cpp => def.contains("->") || def.contains('.'),
+        Lang::Go => def.contains('.'),
+        _ => false,
+    }
+}
+
 /// Decompose a textual callee like `"c.mu.Lock"` into
 /// `(chain_receiver_text, method_suffix)`.  Returns `None` when the
 /// callee isn't a clean dotted member chain (parens, brackets, `::`,
@@ -318,25 +349,28 @@ impl DefaultTransfer<'_> {
         }
 
         // ── Resource acquire ─────────────────────────────────────────────
-        // SAFE-FOR-FIELD-LHS (Go only): skip member-expression LHS
-        // acquires.  A `b.cpuprof = os.Create(...)` pattern transfers
-        // ownership to the containing struct; the local function body
-        // cannot observe the closure (which lives in a paired
-        // Stop()/dispose() method), so tracking `b.cpuprof` as a local
-        // resource is a guaranteed FP at function exit.  Mirrors the
-        // gate in src/cfg_analysis/resources.rs::run.  Production
-        // trigger: prometheus cmd/promtool/tsdb.go::startProfiling
-        // cluster (b.cpuprof, b.memprof, b.blockprof, b.mtxprof).
-        // Restricted to Go because TS/JS class-field acquires
-        // (`this.fd = fs.openSync(...)`) are still expected to be
-        // tracked — the leak fixtures rely on it.
+        // SAFE-FOR-FIELD-LHS: skip member-expression LHS acquires.  A
+        // `b.cpuprof = os.Create(...)` (Go) / `c->connect_timeout =
+        // hi_malloc(...)` (C) pattern transfers ownership to the containing
+        // struct; the local function body cannot observe the release (which
+        // lives in a paired Stop()/dispose()/free_*() method, or in the
+        // caller when the struct is a parameter), so tracking the field as a
+        // local resource is a guaranteed FP at function exit.  Mirrors the
+        // ownership-transfer suppression in
+        // src/cfg_analysis::resources::is_ownership_transferred (cfg twin).
+        // Production triggers: prometheus cmd/promtool/tsdb.go::startProfiling
+        // (b.cpuprof, b.memprof, ...); redis/hiredis net.c
+        // redisContextUpdateConnectTimeout (c->connect_timeout), lua strbuf.c
+        // (s->buf).  Excludes JS/TS (see
+        // `acquire_into_field_transfers_ownership`) because the class-field
+        // acquire `this.fd = fs.openSync(...)` IS the expected leak pattern
+        // the TS state fixtures rely on.
         let mut direct_acquire = false;
-        let define_is_field_lhs = self.lang == Lang::Go
-            && info
-                .taint
-                .defines
-                .as_deref()
-                .is_some_and(|d| d.contains('.'));
+        let define_is_field_lhs = info
+            .taint
+            .defines
+            .as_deref()
+            .is_some_and(|d| acquire_into_field_transfers_ownership(self.lang, d));
         let resource_pairs_iter: &[ResourcePair] = if define_is_field_lhs {
             &[]
         } else {
@@ -931,6 +965,43 @@ mod tests {
     fn callee_matches_dot_prefix() {
         assert!(callee_matches("file.close", ".close"));
         assert!(!callee_matches("file.close", ".open"));
+    }
+
+    #[test]
+    fn acquire_into_field_transfers_ownership_c_cpp_arrow_and_dot() {
+        // C/C++: both pointer-member (`->`) and value-member (`.`) LHS transfer
+        // ownership to the containing struct/object.
+        assert!(acquire_into_field_transfers_ownership(
+            Lang::C,
+            "c->connect_timeout"
+        ));
+        assert!(acquire_into_field_transfers_ownership(Lang::C, "s->buf"));
+        assert!(acquire_into_field_transfers_ownership(Lang::C, "cfg.handle"));
+        assert!(acquire_into_field_transfers_ownership(Lang::Cpp, "this->fd"));
+        // Plain locals are still tracked (real leaks).
+        assert!(!acquire_into_field_transfers_ownership(Lang::C, "p"));
+        assert!(!acquire_into_field_transfers_ownership(Lang::C, "orphan"));
+    }
+
+    #[test]
+    fn acquire_into_field_transfers_ownership_go_dot_only() {
+        // Go uses `.` field access; it has no `->` operator.
+        assert!(acquire_into_field_transfers_ownership(Lang::Go, "b.cpuprof"));
+        assert!(!acquire_into_field_transfers_ownership(Lang::Go, "profile"));
+    }
+
+    #[test]
+    fn acquire_into_field_transfers_ownership_js_ts_never() {
+        // JS/TS: the class-field acquire `this.fd = fs.openSync(...)` IS the
+        // expected leak pattern the TS state fixtures rely on — never suppress.
+        assert!(!acquire_into_field_transfers_ownership(
+            Lang::JavaScript,
+            "this.fd"
+        ));
+        assert!(!acquire_into_field_transfers_ownership(
+            Lang::TypeScript,
+            "this.socket"
+        ));
     }
 
     #[test]

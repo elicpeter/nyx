@@ -791,20 +791,28 @@ impl CfgAnalysis for ResourceMisuse {
                 {
                     continue;
                 }
-                // SAFE-FOR-FIELD-LHS (Go only): skip member-expression
-                // LHS acquires.  `b.cpuprof = os.Create(...)` transfers
-                // ownership to the containing struct; closure
-                // responsibility belongs to a paired Stop()/Release()
-                // method on the struct's lifecycle.  Mirrors the gate
-                // in src/state/transfer.rs::apply_call.  Production
-                // trigger: prometheus
-                // cmd/promtool/tsdb.go::startProfiling cluster.
-                // Restricted to Go because TS/JS class-field acquires
-                // (`this.fd = fs.openSync(...)`) are still expected to
-                // be tracked — the leak fixtures rely on it.
-                if ctx.lang == Lang::Go
-                    && let Some(acquired_var) = ctx.cfg[acquire].taint.defines.as_deref()
-                    && acquired_var.contains('.')
+                // SAFE-FOR-FIELD-LHS: skip member-expression LHS acquires.
+                // `b.cpuprof = os.Create(...)` (Go) / `c->connect_timeout =
+                // hi_malloc(...)` (C) transfers ownership to the containing
+                // struct; release belongs to a paired Stop()/Release()/
+                // free_*() method, or to the caller when the struct is a
+                // parameter.  Same-node twin of the acquire-time gate in
+                // src/state/transfer.rs::apply_call — without this, clearing
+                // the state-resource-leak on such an acquire unmasks the
+                // cfg-resource-leak here (the two passes dedup per line).
+                // `is_ownership_transferred` below only catches the
+                // *downstream* store shape (`ptr=malloc(); mem->buf=ptr;`), not
+                // the same-node `x->field = malloc(...)` acquire.  Production
+                // triggers: prometheus tsdb.go::startProfiling; redis/hiredis
+                // net.c (c->connect_timeout), lua strbuf.c (s->buf).  Excludes
+                // JS/TS (see `acquire_into_field_transfers_ownership`) — the
+                // class-field acquire `this.fd = fs.openSync(...)` IS the
+                // expected leak pattern the TS leak fixtures rely on.
+                if let Some(acquired_var) = ctx.cfg[acquire].taint.defines.as_deref()
+                    && crate::state::transfer::acquire_into_field_transfers_ownership(
+                        ctx.lang,
+                        acquired_var,
+                    )
                 {
                     continue;
                 }

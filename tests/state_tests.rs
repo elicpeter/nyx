@@ -130,6 +130,30 @@ fn clean_usage_no_state_findings() {
 }
 
 #[test]
+fn c_struct_field_call_acquire_transfers_ownership_but_local_still_leaks() {
+    // A malloc/calloc assigned DIRECTLY into a struct-field LHS
+    // (`b->buf = malloc(...)`, `s->buf = malloc(...)`) transfers ownership to
+    // the containing struct — the field must NOT be tracked as a
+    // function-local resource, so no `state-resource-leak` on `b->buf`.
+    let file = "c_struct_field_call_alloc.c";
+    let leak_msgs: Vec<String> = state_diags_for(file)
+        .into_iter()
+        .filter(|d| d.id == "state-resource-leak")
+        .map(|d| d.message.clone().unwrap_or_default())
+        .collect();
+    assert!(
+        leak_msgs.iter().all(|m| !m.contains("buf")),
+        "struct-field acquire `b->buf` must not leak (ownership transfers to the struct).\n  Got: {leak_msgs:?}"
+    );
+    // Recall guard: a genuinely orphaned plain-local malloc in the same file
+    // still fires the leak — the field-LHS gate must not over-suppress.
+    assert!(
+        leak_msgs.iter().any(|m| m.contains("orphan")),
+        "plain-local `orphan` malloc should still fire state-resource-leak.\n  Got: {leak_msgs:?}"
+    );
+}
+
+#[test]
 fn state_analysis_disabled_via_flag() {
     let mut cfg = common::test_config(AnalysisMode::Full);
     cfg.scanner.enable_state_analysis = false;
