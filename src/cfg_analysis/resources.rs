@@ -717,6 +717,17 @@ impl CfgAnalysis for ResourceMisuse {
             HashSet::new()
         };
 
+        // C/C++: struct-value container base names whose field-acquire
+        // (`c.buf = malloc()`) provably does NOT transfer ownership — the
+        // container is a locally-declared value struct that never escapes
+        // the function, so the acquire genuinely leaks and the field-LHS
+        // ownership-transfer suppression below must be LIFTED for it.
+        // Twin of the `state-resource-leak` lift in
+        // `src/state/transfer.rs::nonescaping_local_field_containers`.
+        // Empty (no-op) for non-C/C++.
+        let nonescaping_field_containers =
+            crate::state::transfer::nonescaping_local_field_containers(ctx.cfg, ctx.lang);
+
         for pair in pairs {
             let acquire_nodes = find_acquire_nodes(ctx, pair.acquire, pair.exclude_acquire);
             let release_nodes = find_release_nodes(ctx, pair.release);
@@ -811,6 +822,10 @@ impl CfgAnalysis for ResourceMisuse {
                 if let Some(acquired_var) = ctx.cfg[acquire].taint.defines.as_deref()
                     && crate::state::transfer::acquire_into_field_transfers_ownership(
                         ctx.lang,
+                        acquired_var,
+                    )
+                    && !crate::state::transfer::field_container_is_nonescaping(
+                        &nonescaping_field_containers,
                         acquired_var,
                     )
                 {

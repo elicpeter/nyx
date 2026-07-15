@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 671
+    "corpus_size": 672
   },
   "cases": [
     {
@@ -14811,6 +14811,35 @@
       ],
       "disabled": false,
       "notes": "redis/hiredis net.c::redisContextUpdateConnectTimeout (c->connect_timeout = malloc(...)) + lua strbuf.c (s->buf = malloc(size)) shape.  Acquire call assigned DIRECTLY into a struct-field LHS transfers ownership to the containing struct (freed by the paired free_*() / in the caller for a param receiver).  Engine fix: src/state/transfer.rs::apply_call SAFE-FOR-FIELD-LHS gate (acquire_into_field_transfers_ownership), the RHS-is-a-call sibling of the apply_assignment gate (c-safe-realrepo-019).  Closes the dominant state-resource-leak FP cluster on redis/git (~165 findings)."
+    },
+    {
+      "case_id": "c-safe-realrepo-026",
+      "file": "c/safe/safe_struct_field_escaping_containers.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo-precision-2026-07-15",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-resource-leak",
+        "state-resource-leak-possible",
+        "cfg-resource-leak"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "resource-lifecycle",
+        "negative",
+        "real-repo-precision-2026-07-15"
+      ],
+      "disabled": false,
+      "notes": "Container escape analysis precision guard.  The struct-field-acquire ownership-transfer suppression is lifted ONLY for a provably non-escaping local value struct; an escaping container (parameter arrow b->buf, address-taken &b passed to box_register, returned constructor box_new) stays suppressed.  Engine: src/state/transfer.rs::nonescaping_local_field_containers + twin src/cfg_analysis::resources.rs.  Resolves the session-0049 deferred deep fix; sibling of c-safe-realrepo-025."
     },
     {
       "case_id": "c-vuln-realrepo-019",

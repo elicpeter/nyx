@@ -43,6 +43,135 @@ pub(crate) fn acquire_into_field_transfers_ownership(lang: Lang, def: &str) -> b
     }
 }
 
+/// Decompose a field-LHS define `"c.buf"` into its single-identifier
+/// container base `"c"`.  Returns `None` for shapes that are NOT a plain
+/// value-struct member on a bare identifier:
+///   - pointer member (`c->buf`) — the container is a pointer, whose
+///     pointee lives on the heap or in the caller; ownership escapes.
+///   - subscript (`arr[i].buf`) — array element, container decays to a
+///     pointer when passed and is hard to prove local.
+///   - sub-object (`c.inner.buf`) — the container `c.inner` is itself a
+///     field, not a bare stack local.
+///   - non-identifier base.
+fn single_ident_dot_container(def: &str) -> Option<&str> {
+    if def.contains("->") || def.contains('[') || def.contains(']') {
+        return None;
+    }
+    let dot = def.find('.')?;
+    let base = &def[..dot];
+    let field = &def[dot + 1..];
+    if base.is_empty() || field.is_empty() || field.contains('.') {
+        return None;
+    }
+    let mut chars = base.chars();
+    let first_ok = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    if !first_ok || !base.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(base)
+}
+
+/// Container-escape analysis for the struct-field-acquire ownership-transfer
+/// suppression (C/C++ only).
+///
+/// The blanket [`acquire_into_field_transfers_ownership`] gate suppresses
+/// EVERY `c.buf = malloc(...)` acquire on the theory that a struct field is
+/// owned by its container (released in a paired destructor / by the caller
+/// when the container is a parameter).  That is correct when the container
+/// escapes the function — but a false negative for a genuinely non-escaping
+/// STACK struct: `struct Ctx c; c.buf = malloc(10);` where `c` dies at
+/// function exit and `c.buf` is never freed is a real leak.
+///
+/// This returns the set of single-identifier value-struct container base
+/// names (`c`) whose field-acquire provably does NOT transfer ownership,
+/// so the caller can lift the suppression for those (and only those)
+/// containers.  A container qualifies iff, within this single-body CFG:
+///   1. it is DECLARED locally as a value struct — there is a node
+///      `struct Ctx c;` (`Seq`, no callee, `defines=None`, `uses=["c"]`)
+///      or `struct Ctx c = {…};` (`Seq`, no callee, `defines=Some("c")`,
+///      `uses` empty).  A parameter or a global has no such body decl, so
+///      requiring one excludes both (a parameter's struct is caller-owned;
+///      a global's field allocation is program-lifetime state, not a leak).
+///   2. it NEVER escapes — the bare identifier `c` appears in NO other
+///      node's `uses` or `arg_uses`.  That covers being passed to a call
+///      (`foo(c)`), address-taken (`init(&c)` surfaces bare `c` in
+///      `arg_uses`), stored (`x = c`), returned (`return c`), or having a
+///      field read out and passed (`log_it(c.tag)` surfaces bare `c`,
+///      treated conservatively as an escape).
+///
+/// Conservative toward SUPPRESSION: any container reference we cannot rule
+/// out keeps `c` OUT of the result, so the pre-existing ownership-transfer
+/// suppression stands and no field-acquire FP (the redis/git cluster from
+/// session-0049) can be re-introduced.  The analysis only ever ADDS a leak
+/// for a provably-dead local value struct.  Empty for non-C/C++.
+pub(crate) fn nonescaping_local_field_containers(
+    cfg: &crate::cfg::Cfg,
+    lang: Lang,
+) -> std::collections::HashSet<String> {
+    let mut result = std::collections::HashSet::new();
+    if !matches!(lang, Lang::C | Lang::Cpp) {
+        return result;
+    }
+
+    // 1. Candidate container bases: single-ident DOT-form field defines.
+    let mut candidates: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for info in cfg.node_weights() {
+        if let Some(def) = info.taint.defines.as_deref()
+            && let Some(base) = single_ident_dot_container(def)
+        {
+            candidates.insert(base.to_string());
+        }
+    }
+    if candidates.is_empty() {
+        return result;
+    }
+
+    // 2. Each candidate: require a local value-struct decl + prove non-escape.
+    for cand in &candidates {
+        let mut has_decl = false;
+        let mut escapes = false;
+        for info in cfg.node_weights() {
+            let is_decl = info.kind == StmtKind::Seq
+                && info.call.callee.is_none()
+                && ((info.taint.defines.is_none()
+                    && info.taint.uses.len() == 1
+                    && info.taint.uses[0] == *cand)
+                    || (info.taint.defines.as_deref() == Some(cand.as_str())
+                        && info.taint.uses.is_empty()));
+            if is_decl {
+                has_decl = true;
+                continue; // the decl node's own bare-`c` mention is not an escape
+            }
+            let bare_in_uses = info.taint.uses.iter().any(|u| u == cand);
+            let bare_in_args = info
+                .call
+                .arg_uses
+                .iter()
+                .any(|arg| arg.iter().any(|u| u == cand));
+            if bare_in_uses || bare_in_args {
+                escapes = true;
+                break;
+            }
+        }
+        if has_decl && !escapes {
+            result.insert(cand.clone());
+        }
+    }
+    result
+}
+
+/// True when `def` is a field-acquire (`c.buf`) whose container base `c` is
+/// in the provably-non-escaping-local set — the ownership-transfer
+/// suppression must be LIFTED (the acquire genuinely leaks).
+pub(crate) fn field_container_is_nonescaping(
+    nonescaping: &std::collections::HashSet<String>,
+    def: &str,
+) -> bool {
+    single_ident_dot_container(def).is_some_and(|base| nonescaping.contains(base))
+}
+
 /// Decompose a textual callee like `"c.mu.Lock"` into
 /// `(chain_receiver_text, method_suffix)`.  Returns `None` when the
 /// callee isn't a clean dotted member chain (parens, brackets, `::`,
@@ -217,6 +346,15 @@ pub struct DefaultTransfer<'a> {
     /// pointer-unaware fallback exactly.
     pub ptr_proxy_hints:
         Option<&'a std::collections::HashMap<String, crate::pointer::PtrProxyHint>>,
+    /// Optional set of C/C++ struct-value container base names whose
+    /// field-acquire (`c.buf = malloc()`) provably does NOT transfer
+    /// ownership — the container is a locally-declared value struct that
+    /// never escapes the function, so the acquire genuinely leaks and the
+    /// [`acquire_into_field_transfers_ownership`] suppression must be lifted.
+    /// Computed once per body by
+    /// [`nonescaping_local_field_containers`] in `run_state_analysis`.
+    /// Strict-additive: when `None`, the blanket suppression stands.
+    pub nonescaping_field_containers: Option<&'a std::collections::HashSet<String>>,
 }
 
 impl Transfer<ProductState> for DefaultTransfer<'_> {
@@ -366,11 +504,16 @@ impl DefaultTransfer<'_> {
         // acquire `this.fd = fs.openSync(...)` IS the expected leak pattern
         // the TS state fixtures rely on.
         let mut direct_acquire = false;
-        let define_is_field_lhs = info
-            .taint
-            .defines
-            .as_deref()
-            .is_some_and(|d| acquire_into_field_transfers_ownership(self.lang, d));
+        // Field-LHS ownership-transfer suppression, LIFTED for a provably
+        // non-escaping local value struct (`struct Ctx c; c.buf = malloc()`
+        // where `c` dies at function exit and is never freed — a real leak).
+        // See `nonescaping_local_field_containers`.
+        let define_is_field_lhs = info.taint.defines.as_deref().is_some_and(|d| {
+            acquire_into_field_transfers_ownership(self.lang, d)
+                && !self
+                    .nonescaping_field_containers
+                    .is_some_and(|set| field_container_is_nonescaping(set, d))
+        });
         let resource_pairs_iter: &[ResourcePair] = if define_is_field_lhs {
             &[]
         } else {
@@ -991,6 +1134,150 @@ mod tests {
     }
 
     #[test]
+    fn single_ident_dot_container_shapes() {
+        assert_eq!(single_ident_dot_container("c.buf"), Some("c"));
+        assert_eq!(single_ident_dot_container("cfg.handle"), Some("cfg"));
+        // Pointer member → container escapes; subscript / sub-object / no-dot
+        // are all out of scope for the local-value-struct recovery.
+        assert_eq!(single_ident_dot_container("c->buf"), None);
+        assert_eq!(single_ident_dot_container("arr[i].buf"), None);
+        assert_eq!(single_ident_dot_container("c.inner.buf"), None);
+        assert_eq!(single_ident_dot_container("buf"), None);
+        assert_eq!(single_ident_dot_container(".buf"), None);
+        assert_eq!(single_ident_dot_container("c."), None);
+    }
+
+    fn seq_decl(name: &str) -> NodeInfo {
+        NodeInfo {
+            kind: StmtKind::Seq,
+            taint: TaintMeta {
+                uses: vec![name.to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn field_malloc(def: &str) -> NodeInfo {
+        NodeInfo {
+            kind: StmtKind::Call,
+            taint: TaintMeta {
+                defines: Some(def.to_string()),
+                uses: vec!["malloc".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("malloc".into()),
+                arg_uses: vec![vec![]],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn nonescaping_local_field_containers_escape_analysis() {
+        use crate::cfg::Cfg;
+        use petgraph::graph::Graph;
+        let mut cfg: Cfg = Graph::new();
+        // `struct Ctx c; c.buf = malloc();`  → non-escaping local (fires)
+        cfg.add_node(seq_decl("c"));
+        cfg.add_node(field_malloc("c.buf"));
+        // `struct Ctx h = {0}; h.buf = malloc();`  → initializer-decl local
+        cfg.add_node(NodeInfo {
+            kind: StmtKind::Seq,
+            taint: TaintMeta {
+                defines: Some("h".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        cfg.add_node(field_malloc("h.buf"));
+        // `struct Ctx e; e.buf = malloc(); init(&e);` → address-taken escape
+        cfg.add_node(seq_decl("e"));
+        cfg.add_node(field_malloc("e.buf"));
+        cfg.add_node(NodeInfo {
+            kind: StmtKind::Call,
+            taint: TaintMeta {
+                uses: vec!["init".into(), "e".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("init".into()),
+                arg_uses: vec![vec!["e".into()]],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let set = nonescaping_local_field_containers(&cfg, Lang::C);
+        assert!(set.contains("c"), "non-escaping `c` must be present: {set:?}");
+        assert!(
+            set.contains("h"),
+            "initializer-decl local `h` must be present: {set:?}"
+        );
+        assert!(
+            !set.contains("e"),
+            "address-taken `e` must be absent: {set:?}"
+        );
+
+        assert!(field_container_is_nonescaping(&set, "c.buf"));
+        assert!(field_container_is_nonescaping(&set, "h.buf"));
+        assert!(!field_container_is_nonescaping(&set, "e.buf"));
+        // Arrow form is never a candidate, even if the base were in the set.
+        assert!(!field_container_is_nonescaping(&set, "c->buf"));
+
+        // Non-C/C++ languages are unaffected (Go/JS keep prior behaviour).
+        assert!(nonescaping_local_field_containers(&cfg, Lang::Go).is_empty());
+        assert!(nonescaping_local_field_containers(&cfg, Lang::JavaScript).is_empty());
+    }
+
+    #[test]
+    fn nonescaping_requires_local_decl_excludes_param_and_global() {
+        use crate::cfg::Cfg;
+        use petgraph::graph::Graph;
+        // `g.buf = malloc()` with NO body declaration for `g` — `g` is a
+        // parameter or a global, whose field allocation is not a
+        // function-local leak.  Must NOT fire.
+        let mut cfg: Cfg = Graph::new();
+        cfg.add_node(field_malloc("g.buf"));
+        let set = nonescaping_local_field_containers(&cfg, Lang::C);
+        assert!(
+            !set.contains("g"),
+            "container without a body decl must be absent: {set:?}"
+        );
+    }
+
+    #[test]
+    fn nonescaping_field_read_passed_to_call_is_escape() {
+        use crate::cfg::Cfg;
+        use petgraph::graph::Graph;
+        // `struct Ctx c; c.buf = malloc(); log_it(c.tag);` — passing a field
+        // read surfaces bare `c`, conservatively treated as an escape.
+        let mut cfg: Cfg = Graph::new();
+        cfg.add_node(seq_decl("c"));
+        cfg.add_node(field_malloc("c.buf"));
+        cfg.add_node(NodeInfo {
+            kind: StmtKind::Call,
+            taint: TaintMeta {
+                uses: vec!["c.tag".into(), "log_it".into(), "c".into(), "tag".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("log_it".into()),
+                arg_uses: vec![vec!["c.tag".into(), "c".into(), "tag".into()]],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let set = nonescaping_local_field_containers(&cfg, Lang::C);
+        assert!(
+            !set.contains("c"),
+            "field read passed to a call must be treated as escape: {set:?}"
+        );
+    }
+
+    #[test]
     fn acquire_into_field_transfers_ownership_js_ts_never() {
         // JS/TS: the class-field acquire `this.fd = fs.openSync(...)` IS the
         // expected leak pattern the TS state fixtures rely on — never suppress.
@@ -1036,6 +1323,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let info = NodeInfo {
@@ -1072,6 +1360,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let mut state = ProductState::initial();
@@ -1110,6 +1399,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let mut state = ProductState::initial();
@@ -1149,6 +1439,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let mut state = ProductState::initial();
@@ -1201,6 +1492,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let mut state = ProductState::initial();
@@ -1251,6 +1543,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let mut state = ProductState::initial();
@@ -1315,6 +1608,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let mut state = ProductState::initial();
@@ -1370,6 +1664,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let mut state = ProductState::initial();
@@ -1730,6 +2025,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: std::slice::from_ref(&lock),
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let info = NodeInfo {
@@ -1799,6 +2095,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &summaries,
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let lock_info = NodeInfo {
@@ -1860,6 +2157,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: std::slice::from_ref(&lock),
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let mk_call = |callee: &str| NodeInfo {
@@ -1915,6 +2213,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: std::slice::from_ref(&acquire),
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
         let info = NodeInfo {
             kind: StmtKind::Call,
@@ -1966,6 +2265,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: std::slice::from_ref(&lock),
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
         for callee in ["c.writer.header().Lock", "Foo::bar::Lock", "c[i].mu.Lock"] {
             let info = NodeInfo {
@@ -2086,6 +2386,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: std::slice::from_ref(&acquire),
             ptr_proxy_hints: Some(&hints),
+            nonescaping_field_containers: None,
         };
 
         let info = NodeInfo {
@@ -2153,6 +2454,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &summaries,
             ptr_proxy_hints: Some(&hints),
+            nonescaping_field_containers: None,
         };
 
         let lock_info = NodeInfo {
@@ -2206,6 +2508,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: std::slice::from_ref(&acquire),
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
         let info = NodeInfo {
             kind: StmtKind::Call,
@@ -2248,6 +2551,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: std::slice::from_ref(&acquire),
             ptr_proxy_hints: Some(&hints),
+            nonescaping_field_containers: None,
         };
         let info = NodeInfo {
             kind: StmtKind::Call,
@@ -2274,6 +2578,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let mut state = ProductState::initial();
@@ -2313,6 +2618,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let mut state = ProductState::initial();
@@ -2351,6 +2657,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let mut state = ProductState::initial();
@@ -2389,6 +2696,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let info = NodeInfo {
@@ -2423,6 +2731,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let info = NodeInfo {

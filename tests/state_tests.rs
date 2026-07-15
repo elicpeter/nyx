@@ -154,6 +154,34 @@ fn c_struct_field_call_acquire_transfers_ownership_but_local_still_leaks() {
 }
 
 #[test]
+fn c_struct_field_nonescaping_local_leaks_but_escaping_stays_suppressed() {
+    // Container escape analysis (deferred deep fix from session-0049).
+    // A field-acquire into a provably NON-escaping local value struct
+    // (`struct Ctx c; c.buf = malloc();`, never freed) genuinely leaks —
+    // the blanket ownership-transfer suppression is lifted for it.  A
+    // field-acquire into an ESCAPING container (parameter arrow, address-
+    // taken, freed in-body) stays suppressed.
+    let file = "c_struct_field_nonescaping_local_leaks.c";
+    let leak_msgs: Vec<String> = state_diags_for(file)
+        .into_iter()
+        .filter(|d| d.id == "state-resource-leak")
+        .map(|d| d.message.clone().unwrap_or_default())
+        .collect();
+    // RECALL: the non-escaping `c.buf` leak IS reported.
+    assert!(
+        leak_msgs.iter().any(|m| m.contains("c.buf")),
+        "non-escaping local `c.buf` must fire state-resource-leak.\n  Got: {leak_msgs:?}"
+    );
+    // PRECISION: none of the escaping containers fire.
+    for esc in ["p->buf", "e.buf", "g.buf"] {
+        assert!(
+            leak_msgs.iter().all(|m| !m.contains(esc)),
+            "escaping container `{esc}` must stay suppressed.\n  Got: {leak_msgs:?}"
+        );
+    }
+}
+
+#[test]
 fn state_analysis_disabled_via_flag() {
     let mut cfg = common::test_config(AnalysisMode::Full);
     cfg.scanner.enable_state_analysis = false;

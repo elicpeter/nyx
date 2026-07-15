@@ -254,6 +254,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -325,6 +326,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -543,6 +545,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -582,6 +585,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -615,6 +619,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -658,6 +663,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
