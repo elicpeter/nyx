@@ -44,9 +44,8 @@ use blocks::{build_begin_rescue, build_switch, build_try};
 use helpers::{
     collect_nested_function_nodes, derive_anon_fn_name_from_context, find_classifiable_inner_call,
     find_inner_sink_call, first_call_ident_with_span, first_callback_sink_call, first_member_label,
-    first_member_text,
-    is_raii_factory,
-    is_subscript_kind, root_member_receiver, subscript_components, subscript_lhs_node,
+    first_member_text, is_raii_factory, is_subscript_kind, root_member_receiver,
+    subscript_components, subscript_lhs_node,
 };
 // Re-exports so sibling submodules can keep using `super::name` for
 // helpers that physically live in `helpers.rs`.
@@ -69,18 +68,17 @@ use imports::{
 use literals::has_sql_placeholders;
 use literals::{
     arg0_kind_and_interpolation, call_has_arg_at, call_ident_of, def_use,
-    detect_go_replace_call_sanitizer,
-    detect_rust_replace_chain_sanitizer, extract_arg_callees, extract_arg_string_literals,
-    extract_arg_uses, extract_const_keyword_arg, extract_const_macro_arg, extract_const_string_arg,
-    extract_destination_field_pairs, extract_destination_kwarg_pairs, extract_kwargs,
-    extract_literal_rhs, extract_object_arg_property, extract_shell_array_payload_idents,
-    find_call_node, find_call_node_deep, find_chained_gated_sink_call, find_chained_inner_call,
-    find_orm_query_chain_call,
-    has_keyword_arg,
-    has_object_arg_property, has_only_literal_args, has_string_interpolation,
-    is_object_create_null_call, is_parameterized_query_call, is_rust_format_style_macro,
-    java_chain_arg0_kind_for_method, js_chain_arg0_kind_for_method, js_chain_outer_method_for_inner,
-    js_orm_query_arg0_is_uid_ref, ruby_chain_arg0_for_method, walk_chain_inner_call_args,
+    detect_go_replace_call_sanitizer, detect_rust_replace_chain_sanitizer, extract_arg_callees,
+    extract_arg_string_literals, extract_arg_uses, extract_const_keyword_arg,
+    extract_const_macro_arg, extract_const_string_arg, extract_destination_field_pairs,
+    extract_destination_kwarg_pairs, extract_kwargs, extract_literal_rhs,
+    extract_object_arg_property, extract_shell_array_payload_idents, find_call_node,
+    find_call_node_deep, find_chained_gated_sink_call, find_chained_inner_call,
+    find_orm_query_chain_call, has_keyword_arg, has_object_arg_property, has_only_literal_args,
+    has_string_interpolation, is_object_create_null_call, is_parameterized_query_call,
+    is_rust_format_style_macro, java_chain_arg0_kind_for_method, js_chain_arg0_kind_for_method,
+    js_chain_outer_method_for_inner, js_orm_query_arg0_is_uid_ref, ruby_chain_arg0_for_method,
+    walk_chain_inner_call_args,
 };
 use params::{
     compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
@@ -3128,9 +3126,16 @@ pub(super) fn push_node<'a>(
         // `sink_payload_args_syntactic_const` must check the inner call to
         // decide whether the phantom `cfg-unguarded-sink` on the wrapper is a
         // false positive (constant inner payload) or a real flow (tainted).
-        if hoisted_is_sink
-            && let Some(inner) = first_callback_sink_call(ast, lang, code, extra)
-        {
+        //
+        // `first_callback_sink_call` descends argument positions only, never a
+        // call's callee/receiver side, so provenance can only come from a
+        // callback this node actually passes.  Without that restriction a
+        // chained call picked up a sink nested in the RECEIVER's callback:
+        // `http.get(target, cb).on('error', cb2)` recorded `res.send('ok')`
+        // from inside `http.get`'s callback as provenance for the `.on` node,
+        // and that unrelated `'ok'` literal then masqueraded as a constant
+        // payload and suppressed a real SSRF finding.
+        if hoisted_is_sink && let Some(inner) = first_callback_sink_call(ast, lang, code, extra) {
             hoisted_sink = Some(Box::new(compute_hoisted_sink(inner, lang, code)));
         }
         // Update text so the callee name reflects the source.
@@ -4215,7 +4220,7 @@ fn is_java_borrowed_connection_owner(type_text: &str) -> bool {
                 | "SharedSessionContractImplementor"
                 | "SessionImplementor"
                 | "SqlSessionManager"           // MyBatis session manager
-                | "EntityManager"               // JPA jakarta/javax.persistence.EntityManager
+                | "EntityManager" // JPA jakarta/javax.persistence.EntityManager
         )
 }
 
@@ -4348,10 +4353,10 @@ fn java_param_declared_type(method: Node, var: &str, code: &[u8]) -> Option<Stri
 fn java_block_local_declared_type(block: Node, var: &str, code: &[u8]) -> Option<String> {
     let mut cursor = block.walk();
     for child in block.named_children(&mut cursor) {
-        if child.kind() == "local_variable_declaration"
-            && java_decl_defines_var(child, var, code)
-        {
-            return child.child_by_field_name("type").and_then(|t| text_of(t, code));
+        if child.kind() == "local_variable_declaration" && java_decl_defines_var(child, var, code) {
+            return child
+                .child_by_field_name("type")
+                .and_then(|t| text_of(t, code));
         }
     }
     None
@@ -4363,7 +4368,9 @@ fn java_field_declared_type(body: Node, var: &str, code: &[u8]) -> Option<String
     let mut cursor = body.walk();
     for child in body.named_children(&mut cursor) {
         if child.kind() == "field_declaration" && java_decl_defines_var(child, var, code) {
-            return child.child_by_field_name("type").and_then(|t| text_of(t, code));
+            return child
+                .child_by_field_name("type")
+                .and_then(|t| text_of(t, code));
         }
     }
     None
@@ -4494,10 +4501,7 @@ fn extract_decl_type_go(ast: Node, code: &[u8]) -> Option<crate::ssa::type_facts
 fn first_go_expr(n: Node) -> Option<Node> {
     if n.kind() == "expression_list" {
         let mut cursor = n.walk();
-        let exprs: Vec<Node> = n
-            .children(&mut cursor)
-            .filter(|c| c.is_named())
-            .collect();
+        let exprs: Vec<Node> = n.children(&mut cursor).filter(|c| c.is_named()).collect();
         if exprs.len() == 1 {
             Some(exprs[0])
         } else {
@@ -4692,7 +4696,10 @@ fn count_rust_format_macro_confined(
     let Some(macro_text) = text_of(name_node, code) else {
         return false;
     };
-    let leaf = macro_text.rsplit("::").next().unwrap_or(macro_text.as_str());
+    let leaf = macro_text
+        .rsplit("::")
+        .next()
+        .unwrap_or(macro_text.as_str());
     if !is_rust_format_style_macro(leaf) {
         return false;
     }
@@ -4827,7 +4834,10 @@ fn collect_format_macro_method_idents(ast: Node, code: &[u8]) -> Vec<String> {
         let Some(macro_text) = text_of(name_node, code) else {
             continue;
         };
-        let leaf = macro_text.rsplit("::").next().unwrap_or(macro_text.as_str());
+        let leaf = macro_text
+            .rsplit("::")
+            .next()
+            .unwrap_or(macro_text.as_str());
         if !is_rust_format_style_macro(leaf) {
             continue;
         }

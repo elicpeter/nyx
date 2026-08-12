@@ -753,14 +753,32 @@ pub(crate) fn first_callback_sink_call<'a>(
                 .child_by_field_name("function")
                 .or_else(|| n.child_by_field_name("method"))
                 .or_else(|| n.child_by_field_name("name"))
-            && let Some(callee_text) = member_expr_text(callee, code).or_else(|| text_of(callee, code))
-            && matches!(classify(lang, &callee_text, extra), Some(DataLabel::Sink(_)))
+            && let Some(callee_text) =
+                member_expr_text(callee, code).or_else(|| text_of(callee, code))
+            && matches!(
+                classify(lang, &callee_text, extra),
+                Some(DataLabel::Sink(_))
+            )
         {
             return Some(n);
         }
         let now_inside = inside_fn || lookup(lang, n.kind()) == Kind::Function;
+        // Never descend a call's callee/receiver side.  On a chained call
+        // (`http.get(target, cb).on('error', cb2)`) the receiver — including
+        // its own callback argument — hangs off the `function` field, so
+        // descending it would return a sink belonging to the RECEIVER call and
+        // hand the caller provenance for a call it does not own.  Argument
+        // positions are the only place a callback this node passes can live.
+        let callee_side = n
+            .child_by_field_name("function")
+            .or_else(|| n.child_by_field_name("method"))
+            .or_else(|| n.child_by_field_name("name"))
+            .map(|c| c.id());
         let mut cursor = n.walk();
         for child in n.children(&mut cursor) {
+            if Some(child.id()) == callee_side {
+                continue;
+            }
             if let Some(found) = walk(child, lang, code, extra, now_inside) {
                 return Some(found);
             }
@@ -1428,7 +1446,10 @@ mod source_str_tests {
         let code = b"let handle = File::open(path).unwrap();";
         let _g = ValidSourceGuard::new(code);
         // Guard registered this exact slice -> fast path is active.
-        assert_eq!(VALID_SOURCE.with(|c| c.get()), Some((code.as_ptr(), code.len())));
+        assert_eq!(
+            VALID_SOURCE.with(|c| c.get()),
+            Some((code.as_ptr(), code.len()))
+        );
         for start in 0..=code.len() {
             for end in start..=code.len() {
                 assert_eq!(
@@ -1463,7 +1484,10 @@ mod source_str_tests {
         // With no active guard, VALID_SOURCE is None -> checked fallback.
         let code = b"session.query(sql)";
         VALID_SOURCE.with(|c| c.set(None));
-        assert_ne!(VALID_SOURCE.with(|c| c.get()), Some((code.as_ptr(), code.len())));
+        assert_ne!(
+            VALID_SOURCE.with(|c| c.get()),
+            Some((code.as_ptr(), code.len()))
+        );
         for start in 0..=code.len() {
             for end in start..=code.len() {
                 assert_eq!(slice_owned(code, start, end), checked(code, start, end));
@@ -1579,6 +1603,8 @@ mod callback_sink_tests {
             .set_language(&tree_sitter_javascript::LANGUAGE.into())
             .unwrap();
         let tree = parser.parse(&code[..], None).unwrap();
-        assert!(first_callback_sink_call(tree.root_node(), "javascript", &code[..], None).is_none());
+        assert!(
+            first_callback_sink_call(tree.root_node(), "javascript", &code[..], None).is_none()
+        );
     }
 }

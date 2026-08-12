@@ -163,7 +163,8 @@ fn ruby_inner_call_fallback_classifies_bare_outer_around_file_read() {
 /// recurses PAST the non-sink outer call.  Motivated by vite CVE-2026-39365.
 #[test]
 fn js_sanitizer_shadow_surfaces_inner_file_io_sink() {
-    let src = b"function f(x) {\n  const m = JSON.parse(fs.readFileSync(x, 'utf-8'));\n  return m;\n}\n";
+    let src =
+        b"function f(x) {\n  const m = JSON.parse(fs.readFileSync(x, 'utf-8'));\n  return m;\n}\n";
     let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
     let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
 
@@ -2658,8 +2659,7 @@ func run(p string) error {
 "#;
     let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
     let (cfg, _entry) = parse_and_build(src, "go", ts_lang);
-    let node =
-        find_node_with_callee(&cfg, "os.Open").expect("go: os.Open node should be present");
+    let node = find_node_with_callee(&cfg, "os.Open").expect("go: os.Open node should be present");
     assert_eq!(
         node.taint.defines.as_deref(),
         Some("f"),
@@ -4372,12 +4372,7 @@ class C {
 fn confined_uses_of<'a>(cfg: &'a Cfg, needle: &str) -> Option<&'a Vec<String>> {
     cfg.node_indices()
         .map(|i| &cfg[i])
-        .find(|n| {
-            n.call
-                .callee
-                .as_deref()
-                .is_some_and(|c| c.contains(needle))
-        })
+        .find(|n| n.call.callee.as_deref().is_some_and(|c| c.contains(needle)))
         .map(|n| &n.numeric_confined_uses)
 }
 
@@ -4526,7 +4521,12 @@ fn format_macro_method_idents_records_machinery() {
     let sink = cfg
         .node_indices()
         .map(|i| &cfg[i])
-        .find(|n| n.call.callee.as_deref().is_some_and(|c| c.contains("fs::read")))
+        .find(|n| {
+            n.call
+                .callee
+                .as_deref()
+                .is_some_and(|c| c.contains("fs::read"))
+        })
         .expect("sink node present");
     for name in ["format", "parse", "unwrap"] {
         assert!(
@@ -4542,7 +4542,6 @@ fn format_macro_method_idents_records_machinery() {
         sink.format_macro_method_idents
     );
 }
-
 
 // ── Java borrowed-vs-owned JDBC connection classification ───────────────
 // Pins `NodeInfo.borrowed_resource`, set at CFG build by receiver-type
@@ -4639,20 +4638,31 @@ fn java_bare_getconnection_call_is_not_flagged() {
 
 #[test]
 fn java_borrowed_owner_type_classifier_and_leaf() {
-    assert_eq!(super::java_type_leaf("liquibase.database.Database"), "Database");
+    assert_eq!(
+        super::java_type_leaf("liquibase.database.Database"),
+        "Database"
+    );
     assert_eq!(super::java_type_leaf("org.hibernate.Session"), "Session");
     assert_eq!(super::java_type_leaf("List<Session>"), "List");
     assert_eq!(super::java_type_leaf("Foo[]"), "Foo");
     assert!(super::is_java_borrowed_connection_owner("Database"));
-    assert!(super::is_java_borrowed_connection_owner("org.hibernate.Session"));
+    assert!(super::is_java_borrowed_connection_owner(
+        "org.hibernate.Session"
+    ));
     assert!(super::is_java_borrowed_connection_owner("SqlSession"));
-    assert!(super::is_java_borrowed_connection_owner("javax.persistence.EntityManager"));
+    assert!(super::is_java_borrowed_connection_owner(
+        "javax.persistence.EntityManager"
+    ));
     // `*Session` suffix generalises across frameworks (sonarqube `DbSession`
     // extends MyBatis `SqlSession`; Hibernate `StatelessSession`).
-    assert!(super::is_java_borrowed_connection_owner("org.sonar.db.DbSession"));
+    assert!(super::is_java_borrowed_connection_owner(
+        "org.sonar.db.DbSession"
+    ));
     assert!(super::is_java_borrowed_connection_owner("StatelessSession"));
     // OWNED-connection receivers must NOT be borrowed owners (recall).
-    assert!(!super::is_java_borrowed_connection_owner("javax.sql.DataSource"));
+    assert!(!super::is_java_borrowed_connection_owner(
+        "javax.sql.DataSource"
+    ));
     assert!(!super::is_java_borrowed_connection_owner("DriverManager"));
     assert!(!super::is_java_borrowed_connection_owner("Connection"));
     assert!(!super::is_java_borrowed_connection_owner("BasicDataSource"));
@@ -4681,9 +4691,7 @@ fn transaction_wrapper_records_hoisted_sink_const_payload() {
         .bodies
         .iter()
         .flat_map(|b| b.graph.node_indices().map(move |i| &b.graph[i]))
-        .find(|n| {
-            n.call.callee.as_deref() == Some("queryInterface.sequelize.transaction")
-        })
+        .find(|n| n.call.callee.as_deref() == Some("queryInterface.sequelize.transaction"))
         .expect("transaction wrapper node");
     let h = wrapper
         .call
@@ -4691,7 +4699,10 @@ fn transaction_wrapper_records_hoisted_sink_const_payload() {
         .as_ref()
         .expect("wrapper carries HoistedSink provenance from the callback body");
     assert_eq!(h.payload_args.as_deref(), Some(&[0usize][..]));
-    assert_eq!(h.arg_string_literals.first(), Some(&Some("DROP VIEW x".to_string())));
+    assert_eq!(
+        h.arg_string_literals.first(),
+        Some(&Some("DROP VIEW x".to_string()))
+    );
 }
 
 /// Interpolated inner SQL: the same wrapper shape but the inner query payload
@@ -4738,6 +4749,53 @@ fn member_source_wrapper_has_no_hoisted_sink() {
             assert!(
                 b.graph[i].call.hoisted_sink.is_none(),
                 "no callback sink hoist expected for a member-source wrapper"
+            );
+        }
+    }
+}
+
+/// A chained call must not inherit `HoistedSink` provenance from a sink nested
+/// in its RECEIVER's callback.  In
+/// `http.get(target, res => { res.send('ok') }).on('error', cb)` the `.on` node
+/// owns only `'error'` and `cb`; `res.send('ok')` belongs to the `http.get`
+/// receiver.  Recording it made the unrelated `'ok'` literal look like a
+/// constant payload for the `.on` node, and `sink_payload_args_syntactic_const`
+/// then suppressed a real SSRF finding (benchmark case `js-ssrf-003`).
+#[test]
+fn chained_call_takes_no_hoisted_sink_from_receiver_callback() {
+    let src = br#"const http = require('http');
+app.get('/probe', (req, res) => {
+    const target = req.query.url;
+    http.get(target, response => {
+        res.send('ok');
+    }).on('error', e => {
+        res.status(500).send(e.message);
+    });
+});
+"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let fc = parse_to_file_cfg(src, "javascript", ts_lang);
+    let on_node = fc
+        .bodies
+        .iter()
+        .flat_map(|b| b.graph.node_indices().map(move |i| &b.graph[i]))
+        .find(|n| {
+            n.call
+                .outer_callee
+                .as_deref()
+                .is_some_and(|c| c.ends_with(".on"))
+        });
+    if let Some(n) = on_node {
+        // Provenance may be absent, or present only from the `.on` node's own
+        // argument callback (`res.status(500).send(e.message)`), whose payload
+        // is NOT a literal.  What must never happen is inheriting the
+        // receiver's constant `'ok'`.
+        if let Some(h) = &n.call.hoisted_sink {
+            assert!(
+                !h.arg_string_literals
+                    .iter()
+                    .any(|l| l.as_deref() == Some("ok")),
+                "chained `.on` node inherited `'ok'` from the receiver's callback: {h:?}"
             );
         }
     }

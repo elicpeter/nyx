@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-07-15T19:31:10Z",
+  "timestamp": "2026-08-12T22:14:49Z",
   "scanner_version": "0.8.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:8a2a0f77ecb2b7b403cd8869a45996f30068715391691af55174c025862e6c21",
-  "corpus_size": 671,
-  "cases_run": 666,
+  "ground_truth_hash": "sha256:6f7a1689c27b461d6310c37e3c51176d734a77b669326ed4db403f204a384891",
+  "corpus_size": 674,
+  "cases_run": 669,
   "cases_skipped": 5,
   "outcomes": [
     {
@@ -590,6 +590,21 @@
     {
       "case_id": "c-safe-realrepo-025",
       "file": "c/safe/safe_struct_field_call_alloc.c",
+      "language": "c",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "c-safe-realrepo-026",
+      "file": "c/safe/safe_struct_field_escaping_containers.c",
       "language": "c",
       "vuln_class": "safe",
       "is_vulnerable": false,
@@ -1948,6 +1963,42 @@
         "taint-unsanitised-flow (source 52:30)"
       ],
       "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-js-2026-41478-patched",
+      "file": "cve_corpus/javascript/CVE-2026-41478/patched.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-js-2026-41478-vulnerable",
+      "file": "cve_corpus/javascript/CVE-2026-41478/vulnerable.js",
+      "language": "javascript",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow (source 39:30)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow (source 39:30)"
+      ],
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -5894,13 +5945,17 @@
       "language": "javascript",
       "vuln_class": "ssrf",
       "is_vulnerable": true,
-      "outcome_file_level": "FN",
-      "outcome_rule_level": "FN",
-      "outcome_location_level": "FN",
-      "matched_rule_ids": [],
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
       "unexpected_rule_ids": [],
-      "all_finding_ids": [],
-      "security_finding_count": 0,
+      "all_finding_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -11823,29 +11878,29 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 316,
+    "tp": 318,
     "fp": 7,
-    "fn_": 8,
-    "tn": 335,
-    "precision": 0.978328173374613,
-    "recall": 0.9753086419753086,
-    "f1": 0.9768160741885625
+    "fn_": 7,
+    "tn": 337,
+    "precision": 0.9784615384615385,
+    "recall": 0.9784615384615385,
+    "f1": 0.9784615384615385
   },
   "aggregate_rule_level": {
-    "tp": 316,
+    "tp": 318,
     "fp": 7,
-    "fn_": 8,
-    "tn": 335,
-    "precision": 0.978328173374613,
-    "recall": 0.9753086419753086,
-    "f1": 0.9768160741885625
+    "fn_": 7,
+    "tn": 337,
+    "precision": 0.9784615384615385,
+    "recall": 0.9784615384615385,
+    "f1": 0.9784615384615385
   },
   "by_language": {
     "c": {
       "tp": 20,
       "fp": 0,
       "fn_": 2,
-      "tn": 22,
+      "tn": 23,
       "precision": 1.0,
       "recall": 0.9090909090909091,
       "f1": 0.9523809523809523
@@ -11878,13 +11933,13 @@
       "f1": 0.9642857142857143
     },
     "javascript": {
-      "tp": 28,
+      "tp": 30,
       "fp": 0,
-      "fn_": 1,
-      "tn": 36,
+      "fn_": 0,
+      "tn": 37,
       "precision": 1.0,
-      "recall": 0.9655172413793104,
-      "f1": 0.9824561403508771
+      "recall": 1.0,
+      "f1": 1.0
     },
     "php": {
       "tp": 26,
@@ -12081,7 +12136,7 @@
       "tp": 0,
       "fp": 7,
       "fn_": 0,
-      "tn": 326,
+      "tn": 328,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -12105,22 +12160,22 @@
       "f1": 1.0
     },
     "sqli": {
-      "tp": 43,
+      "tp": 44,
       "fp": 0,
       "fn_": 1,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.9772727272727273,
-      "f1": 0.9885057471264368
+      "recall": 0.9777777777777777,
+      "f1": 0.9887640449438202
     },
     "ssrf": {
-      "tp": 35,
+      "tp": 36,
       "fp": 0,
-      "fn_": 1,
+      "fn_": 0,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.9722222222222222,
-      "f1": 0.9859154929577464
+      "recall": 1.0,
+      "f1": 1.0
     },
     "xss": {
       "tp": 26,
@@ -12143,31 +12198,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 116,
-      "fp": 123,
-      "fn_": 208,
-      "tn": 219,
-      "precision": 0.48535564853556484,
-      "recall": 0.35802469135802467,
-      "f1": 0.41207815275310833
+      "tp": 108,
+      "fp": 136,
+      "fn_": 217,
+      "tn": 208,
+      "precision": 0.4426229508196721,
+      "recall": 0.3323076923076923,
+      "f1": 0.3796133567662566
     },
     ">=Low": {
-      "tp": 118,
-      "fp": 152,
-      "fn_": 206,
-      "tn": 190,
-      "precision": 0.43703703703703706,
-      "recall": 0.36419753086419754,
-      "f1": 0.3973063973063973
+      "tp": 110,
+      "fp": 161,
+      "fn_": 215,
+      "tn": 183,
+      "precision": 0.4059040590405904,
+      "recall": 0.3384615384615385,
+      "f1": 0.36912751677852357
     },
     ">=Medium": {
-      "tp": 117,
-      "fp": 129,
-      "fn_": 207,
-      "tn": 213,
-      "precision": 0.47560975609756095,
-      "recall": 0.3611111111111111,
-      "f1": 0.41052631578947363
+      "tp": 109,
+      "fp": 140,
+      "fn_": 216,
+      "tn": 204,
+      "precision": 0.43775100401606426,
+      "recall": 0.3353846153846154,
+      "f1": 0.37979094076655057
     }
   }
 }
