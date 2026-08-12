@@ -510,6 +510,17 @@ fn bench_collect_top_level_units_go(c: &mut Criterion) {
 /// a borrowing `lookup_ref` fed straight into `meet`).  Bit-identical;
 /// criterion here 186.5 → 172.8 µs (−6%).  Re-introducing any of those
 /// clones surfaces as a regression on this fixture.
+///
+/// 2026-07-15 perfhunt session-0054 landed the last structural residual: the
+/// public `ConstPropResult.values` (and `OptimizeResult.const_values`) is now
+/// a dense `ConstValues(Vec<ConstLattice>)` newtype into which `const_propagate`
+/// **moves** its internal `Vec` — eliminating the old `O(num_values)` per-body
+/// `HashMap<SsaValue, ConstLattice>` build (one SipHash insert per value,
+/// discarded next scan) and turning every downstream `.get(&v)` into a
+/// bounds-checked array index.  Single-binary A/B: run once normally and once
+/// with `NYX_CONST_VALUES_LEGACY_BUILD=1` (which reproduces the old per-value
+/// hashed build).  A regression that re-materialises the result HashMap
+/// surfaces here proportional to value count.
 fn bench_const_propagate_large_go(c: &mut Criterion) {
     use nyx_scanner::ssa;
 

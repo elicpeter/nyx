@@ -165,7 +165,7 @@ fn collect_reaching_params(
 /// Motivated by CVE-2026-39365 (Vite dev-server sourcemap path traversal).
 fn detect_path_confining_predicate_params(
     ssa: &SsaBody,
-    consts: &HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>,
+    consts: &crate::ssa::const_prop::ConstValues,
     param_index_of: &HashMap<SsaValue, usize>,
 ) -> SmallVec<[usize; 2]> {
     let mut result: SmallVec<[usize; 2]> = SmallVec::new();
@@ -231,7 +231,7 @@ fn detect_path_confining_predicate_params(
 /// ([`detect_assert_path_confined_params`]).
 fn prefix_confinement_params(
     ssa: &SsaBody,
-    consts: &HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>,
+    consts: &crate::ssa::const_prop::ConstValues,
     param_index_of: &HashMap<SsaValue, usize>,
     callee: &str,
     callee_text: Option<&str>,
@@ -357,7 +357,7 @@ fn is_assert_true_callee(bare_lower: &str) -> bool {
 /// Motivated by CVE-2021-21234 (spring-boot-actuator-logview path traversal).
 fn detect_assert_path_confined_params(
     ssa: &SsaBody,
-    consts: &HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>,
+    consts: &crate::ssa::const_prop::ConstValues,
     param_index_of: &HashMap<SsaValue, usize>,
 ) -> SmallVec<[usize; 2]> {
     let mut result: SmallVec<[usize; 2]> = SmallVec::new();
@@ -597,7 +597,7 @@ pub(crate) fn is_path_safety_validator_name(bare: &str) -> bool {
 /// collapsed prefix-containment check or the prefix is param-derived.
 fn confined_params_from_collapsed_assert_group(
     ssa: &SsaBody,
-    consts: &HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>,
+    consts: &crate::ssa::const_prop::ConstValues,
     param_index_of: &HashMap<SsaValue, usize>,
     group: &[SsaValue],
 ) -> SmallVec<[usize; 2]> {
@@ -1272,7 +1272,7 @@ pub fn extract_ssa_func_summary_full(
     // `Statement s = conn.createStatement(); s.execute(q);` to type `s`
     // as `DatabaseConnection`.
     let local_type_facts: Option<TypeFactResult> = param_types.map(|pt| {
-        let empty_consts: HashMap<SsaValue, crate::ssa::const_prop::ConstLattice> = HashMap::new();
+        let empty_consts = crate::ssa::const_prop::ConstValues::default();
         analyze_types_with_param_types(ssa, cfg, &empty_consts, Some(lang), pt)
     });
     let local_type_facts_ref: Option<&TypeFactResult> = local_type_facts.as_ref();

@@ -3629,7 +3629,7 @@ fn make_test_callee_body(
             slot_scoped_assigns: Default::default(),
         },
         opt: crate::ssa::OptimizeResult {
-            const_values: std::collections::HashMap::new(),
+            const_values: crate::ssa::const_prop::ConstValues::default(),
             type_facts: crate::ssa::type_facts::TypeFactResult {
                 facts: std::collections::HashMap::new(),
             },

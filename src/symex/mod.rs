@@ -30,9 +30,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::cfg::Cfg;
 use crate::evidence::{SymbolicVerdict, Verdict};
-use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::const_prop::ConstValues;
 use crate::ssa::heap::PointsToResult;
-use crate::ssa::ir::{BlockId, SsaBody, SsaValue};
+use crate::ssa::ir::{BlockId, SsaBody};
 use crate::ssa::type_facts::TypeFactResult;
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
@@ -46,7 +46,7 @@ use crate::taint::Finding;
 pub struct SymexContext<'a> {
     pub ssa: &'a SsaBody,
     pub cfg: &'a Cfg,
-    pub const_values: &'a HashMap<SsaValue, ConstLattice>,
+    pub const_values: &'a ConstValues,
     pub type_facts: &'a TypeFactResult,
     /// Cross-file summaries for interprocedural symbolic modeling.
     /// When `Some`, callee calls can be modeled via `SsaFuncSummary`
@@ -492,7 +492,7 @@ mod tests {
         let ctx = SymexContext {
             ssa: &ssa,
             cfg: &Cfg::new(),
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
@@ -564,7 +564,7 @@ mod tests {
         let ctx = SymexContext {
             ssa: &ssa,
             cfg: &Cfg::new(),
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
@@ -627,7 +627,7 @@ mod tests {
         let ctx = SymexContext {
             ssa: &ssa,
             cfg: &Cfg::new(),
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,

@@ -9,7 +9,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
-use super::const_prop::ConstLattice;
+use super::const_prop::{ConstLattice, ConstValues};
 use super::ir::*;
 use crate::cfg::{BinOp, Cfg};
 use crate::symbol::Lang;
@@ -558,7 +558,7 @@ fn arg_aware_call_type(
     lang: Lang,
     callee: &str,
     _args: &[SmallVec<[SsaValue; 2]>],
-    _consts: &HashMap<SsaValue, ConstLattice>,
+    _consts: &ConstValues,
 ) -> Option<TypeKind> {
     if !matches!(lang, Lang::Java) {
         return None;
@@ -1674,7 +1674,7 @@ pub fn classify_input_validator_callee(callee: &str) -> Option<InputValidatorPol
 pub fn analyze_types(
     body: &SsaBody,
     cfg: &Cfg,
-    consts: &HashMap<SsaValue, ConstLattice>,
+    consts: &ConstValues,
     lang: Option<Lang>,
 ) -> TypeFactResult {
     analyze_types_with_param_types(body, cfg, consts, lang, &[])
@@ -1687,7 +1687,7 @@ pub fn analyze_types(
 pub fn analyze_types_with_param_types(
     body: &SsaBody,
     cfg: &Cfg,
-    consts: &HashMap<SsaValue, ConstLattice>,
+    consts: &ConstValues,
     lang: Option<Lang>,
     param_types: &[Option<TypeKind>],
 ) -> TypeFactResult {
@@ -2391,10 +2391,12 @@ mod tests {
             slot_scoped_assigns: Default::default(),
         };
 
-        let consts = HashMap::from([
+        let consts: ConstValues = [
             (SsaValue(0), ConstLattice::Int(42)),
             (SsaValue(1), ConstLattice::Str("hello".into())),
-        ]);
+        ]
+        .into_iter()
+        .collect();
 
         let cfg: crate::cfg::Cfg = Graph::new();
         let result = analyze_types(&body, &cfg, &consts, None);
@@ -2507,7 +2509,7 @@ mod tests {
             slot_scoped_assigns: Default::default(),
         };
 
-        let consts = HashMap::new();
+        let consts = ConstValues::default();
         let cfg: crate::cfg::Cfg = Graph::new();
         let result = analyze_types(&body, &cfg, &consts, Some(Lang::Java));
 
@@ -2827,7 +2829,7 @@ mod tests {
             slot_scoped_assigns: Default::default(),
         };
 
-        let consts = HashMap::new();
+        let consts = ConstValues::default();
         let cfg: Cfg = petgraph::Graph::new();
         let param_types = vec![Some(TypeKind::Int)];
 
@@ -3600,7 +3602,7 @@ mod tests {
     #[test]
     fn arg_aware_call_type_jpa_criteria_builder_recogniser() {
         let no_args: Vec<SmallVec<[SsaValue; 2]>> = vec![];
-        let consts: HashMap<SsaValue, ConstLattice> = HashMap::new();
+        let consts = ConstValues::default();
         // Receiver hint: bare `cb` ident.
         assert_eq!(
             arg_aware_call_type(Lang::Java, "cb.createQuery", &no_args, &consts),

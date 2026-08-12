@@ -23,7 +23,7 @@ use smallvec::SmallVec;
 use crate::cfg::Cfg;
 use crate::constraint;
 use crate::evidence::{SymbolicVerdict, Verdict};
-use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::const_prop::ConstValues;
 use crate::ssa::ir::{BlockId, SsaBody, SsaValue, Terminator};
 use crate::taint::Finding;
 
@@ -382,7 +382,7 @@ fn run_path(
     state: &mut ExplorationState,
     ssa: &SsaBody,
     cfg: &Cfg,
-    const_values: &HashMap<SsaValue, ConstLattice>,
+    const_values: &ConstValues,
     reachable: &HashSet<BlockId>,
     on_path: &HashSet<BlockId>,
     loop_info: &LoopInfo,
@@ -898,7 +898,7 @@ fn apply_branch_constraint(
     state: &mut ExplorationState,
     cfg: &Cfg,
     ssa: &SsaBody,
-    const_values: &HashMap<SsaValue, ConstLattice>,
+    const_values: &ConstValues,
     block_id: BlockId,
     cond: petgraph::graph::NodeIndex,
     pre_lowered: &Option<Box<constraint::ConditionExpr>>,
@@ -964,7 +964,7 @@ fn fork_at_branch(
     state: &mut ExplorationState,
     cfg: &Cfg,
     ssa: &SsaBody,
-    const_values: &HashMap<SsaValue, ConstLattice>,
+    const_values: &ConstValues,
     block_id: BlockId,
     cond: petgraph::graph::NodeIndex,
     pre_lowered: &Option<Box<constraint::ConditionExpr>>,
@@ -1672,7 +1672,7 @@ mod tests {
         let ctx = super::SymexContext {
             ssa: &ssa,
             cfg: &Cfg::new(),
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
@@ -1820,7 +1820,7 @@ mod tests {
         let ctx = super::SymexContext {
             ssa: &ssa,
             cfg: &cfg_graph,
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
@@ -1968,7 +1968,7 @@ mod tests {
         let ctx = super::SymexContext {
             ssa: &ssa,
             cfg: &cfg_graph,
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
@@ -2258,7 +2258,7 @@ mod tests {
         let ctx = super::SymexContext {
             ssa: &ssa,
             cfg: &cfg_graph,
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,

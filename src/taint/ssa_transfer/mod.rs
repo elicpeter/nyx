@@ -111,7 +111,7 @@ pub struct SsaTaintTransfer<'a> {
     pub receiver_seed: Option<&'a VarTaint>,
     /// Per-SSA-value constant lattice from constant propagation.
     /// Used for SSA-level literal suppression at sinks.
-    pub const_values: Option<&'a HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>>,
+    pub const_values: Option<&'a crate::ssa::const_prop::ConstValues>,
     /// Type facts from type analysis.
     /// Used for type-aware sink filtering (e.g., suppress SQL injection for int-typed values).
     pub type_facts: Option<&'a crate::ssa::type_facts::TypeFactResult>,
@@ -583,11 +583,11 @@ fn run_ssa_taint_internal(
                     AbstractValue, BitFact, IntervalFact, PathFact, StringFact,
                 };
                 use crate::ssa::const_prop::ConstLattice;
-                for (v, cl) in cv {
+                for (v, cl) in cv.iter() {
                     match cl {
                         ConstLattice::Int(n) => {
                             abs.set(
-                                *v,
+                                v,
                                 AbstractValue {
                                     interval: IntervalFact::exact(*n),
                                     string: StringFact::top(),
@@ -598,7 +598,7 @@ fn run_ssa_taint_internal(
                         }
                         ConstLattice::Str(s) => {
                             abs.set(
-                                *v,
+                                v,
                                 AbstractValue {
                                     interval: IntervalFact::top(),
                                     string: StringFact::exact(s),
@@ -11176,7 +11176,7 @@ fn propagate_taint_to_aliases(
 /// Check if all argument SSA values of a call instruction are known constants.
 fn all_args_const(
     inst: &SsaInst,
-    const_values: &HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>,
+    const_values: &crate::ssa::const_prop::ConstValues,
 ) -> bool {
     let used = inst_use_values(inst);
     if used.is_empty() {

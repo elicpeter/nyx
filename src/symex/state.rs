@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::constraint::ConditionExpr;
-use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::const_prop::{ConstLattice, ConstValues};
 use crate::ssa::ir::{BlockId, SsaBody, SsaValue};
 use crate::taint::Finding;
 
@@ -154,8 +154,8 @@ impl SymbolicState {
     /// Maps `ConstLattice::Int(i)` to `Concrete(i)` and
     /// `ConstLattice::Str(s)` to `ConcreteStr(s)`. Other lattice values
     /// (Bool, Null, Top, Varying) are left as `Unknown` (not stored).
-    pub fn seed_from_const_values(&mut self, const_values: &HashMap<SsaValue, ConstLattice>) {
-        for (&v, cl) in const_values {
+    pub fn seed_from_const_values(&mut self, const_values: &ConstValues) {
+        for (v, cl) in const_values.iter() {
             match cl {
                 ConstLattice::Int(i) => {
                     self.values.insert(v, SymbolicValue::Concrete(*i));
@@ -277,8 +277,7 @@ mod tests {
     #[test]
     fn seed_from_const_values_int() {
         let mut state = SymbolicState::new();
-        let mut cv = HashMap::new();
-        cv.insert(SsaValue(1), ConstLattice::Int(42));
+        let cv: ConstValues = [(SsaValue(1), ConstLattice::Int(42))].into_iter().collect();
         state.seed_from_const_values(&cv);
         assert_eq!(state.get(SsaValue(1)), SymbolicValue::Concrete(42));
     }
@@ -286,8 +285,8 @@ mod tests {
     #[test]
     fn seed_from_const_values_str() {
         let mut state = SymbolicState::new();
-        let mut cv = HashMap::new();
-        cv.insert(SsaValue(2), ConstLattice::Str("hello".into()));
+        let cv: ConstValues =
+            [(SsaValue(2), ConstLattice::Str("hello".into()))].into_iter().collect();
         state.seed_from_const_values(&cv);
         assert_eq!(
             state.get(SsaValue(2)),
@@ -298,8 +297,7 @@ mod tests {
     #[test]
     fn seed_from_const_values_bool_ignored() {
         let mut state = SymbolicState::new();
-        let mut cv = HashMap::new();
-        cv.insert(SsaValue(3), ConstLattice::Bool(true));
+        let cv: ConstValues = [(SsaValue(3), ConstLattice::Bool(true))].into_iter().collect();
         state.seed_from_const_values(&cv);
         assert_eq!(state.get(SsaValue(3)), SymbolicValue::Unknown);
     }
@@ -307,8 +305,7 @@ mod tests {
     #[test]
     fn seed_from_const_values_null_ignored() {
         let mut state = SymbolicState::new();
-        let mut cv = HashMap::new();
-        cv.insert(SsaValue(4), ConstLattice::Null);
+        let cv: ConstValues = [(SsaValue(4), ConstLattice::Null)].into_iter().collect();
         state.seed_from_const_values(&cv);
         assert_eq!(state.get(SsaValue(4)), SymbolicValue::Unknown);
     }

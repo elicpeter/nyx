@@ -38,7 +38,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::const_prop::ConstLattice;
+use super::const_prop::ConstValues;
 use super::ir::*;
 use crate::cfg::Cfg;
 use crate::symbol::Lang;
@@ -177,7 +177,7 @@ pub fn analyze(
     body: &SsaBody,
     cfg: &Cfg,
     lang: Option<Lang>,
-    _const_values: &HashMap<SsaValue, ConstLattice>,
+    _const_values: &ConstValues,
 ) -> StaticMapResult {
     if lang != Some(Lang::Rust) {
         return StaticMapResult::empty();
@@ -445,7 +445,7 @@ mod tests {
             slot_scoped_assigns: Default::default(),
         };
         let cfg: Cfg = Graph::new();
-        let const_values = HashMap::new();
+        let const_values = ConstValues::default();
         let result = analyze(&body, &cfg, Some(Lang::Java), &const_values);
         assert!(result.is_empty());
     }

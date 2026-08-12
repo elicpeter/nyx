@@ -16,7 +16,7 @@
 //!    decomposed into separate SSA operations (condition nodes → `Nop`).
 
 use crate::cfg::NodeInfo;
-use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::const_prop::ConstValues;
 use crate::ssa::ir::{BlockId, SsaBody, SsaValue};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -140,7 +140,7 @@ pub fn lower_condition(
     cond_info: &NodeInfo,
     ssa: &SsaBody,
     branch_block: BlockId,
-    const_values: Option<&HashMap<SsaValue, ConstLattice>>,
+    const_values: Option<&ConstValues>,
 ) -> ConditionExpr {
     let text = match cond_info.condition_text.as_deref() {
         Some(t) if !t.is_empty() => t,

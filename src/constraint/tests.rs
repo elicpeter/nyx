@@ -789,8 +789,8 @@ fn pathenv_seed_from_optimization() {
     let mut env = PathEnv::empty();
     let v0 = SsaValue(0);
     let v1 = SsaValue(1);
-    let mut const_values = HashMap::new();
-    const_values.insert(v0, ConstLattice::Int(42));
+    let const_values: crate::ssa::const_prop::ConstValues =
+        [(v0, ConstLattice::Int(42))].into_iter().collect();
     let mut type_facts = TypeFactResult {
         facts: HashMap::new(),
     };

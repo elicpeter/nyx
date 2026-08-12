@@ -9,7 +9,7 @@
 #![allow(clippy::if_same_then_else, clippy::too_many_arguments)]
 
 use crate::cfg::Cfg;
-use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::const_prop::{ConstLattice, ConstValues};
 use crate::ssa::heap::PointsToResult;
 use crate::ssa::ir::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue};
 use crate::ssa::pointsto::{ContainerOp, classify_container_op};
@@ -50,7 +50,7 @@ pub struct SymexHeapCtx<'a> {
     pub points_to: &'a PointsToResult,
     pub ssa: &'a SsaBody,
     pub lang: Lang,
-    pub const_values: &'a std::collections::HashMap<SsaValue, ConstLattice>,
+    pub const_values: &'a ConstValues,
 }
 
 /// Result of resolving a callee symbolically via its summary.

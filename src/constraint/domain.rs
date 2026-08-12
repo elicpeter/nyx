@@ -8,12 +8,11 @@
 //! - [`UnionFind`]: equality class tracking for SSA values
 //! - [`PathEnv`]: constraint environment mapping SSA values to value facts
 
-use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::const_prop::{ConstLattice, ConstValues};
 use crate::ssa::ir::SsaValue;
 use crate::ssa::type_facts::{TypeFactResult, TypeKind};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::collections::HashMap;
 
 // ── Performance bounds ──────────────────────────────────────────────────
 
@@ -1299,10 +1298,10 @@ impl PathEnv {
     /// Seed facts from constant propagation and type analysis results.
     pub fn seed_from_optimization(
         &mut self,
-        const_values: &HashMap<SsaValue, ConstLattice>,
+        const_values: &ConstValues,
         type_facts: &TypeFactResult,
     ) {
-        for (v, cl) in const_values {
+        for (v, cl) in const_values.iter() {
             if let Some(cv) = ConstValue::from_const_lattice(cl) {
                 let mut fact = ValueFact::top();
                 fact.exact = Some(cv.clone());
@@ -1331,7 +1330,7 @@ impl PathEnv {
                         fact.null = Nullability::NonNull;
                     }
                 }
-                self.refine_single(*v, &fact);
+                self.refine_single(v, &fact);
             }
         }
         for (v, tf) in &type_facts.facts {

@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use super::const_prop::ConstLattice;
+use super::const_prop::{ConstLattice, ConstValues};
 use super::ir::*;
 use crate::cfg::Cfg;
 use crate::symbol::Lang;
@@ -152,7 +152,7 @@ fn classify_call(
     callee: &str,
     args: &[smallvec::SmallVec<[SsaValue; 2]>],
     receiver: Option<SsaValue>,
-    consts: &HashMap<SsaValue, ConstLattice>,
+    consts: &ConstValues,
     arg_idents: &[Vec<String>],
     arg_literals: &[Option<String>],
 ) -> ConfigEffect {
@@ -321,7 +321,7 @@ fn classify_call(
 pub fn analyze_xml_parser_config(
     body: &SsaBody,
     cfg: &Cfg,
-    consts: &HashMap<SsaValue, ConstLattice>,
+    consts: &ConstValues,
     lang: Option<Lang>,
 ) -> XmlParserConfigResult {
     let Some(lang) = lang else {

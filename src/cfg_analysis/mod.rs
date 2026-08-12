@@ -60,21 +60,21 @@ pub mod unreachable;
 use crate::cfg::{FuncSummaries, NodeInfo, StmtKind};
 use crate::labels::{DataLabel, LangAnalysisRules};
 use crate::patterns::Severity;
-use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::const_prop::ConstValues;
 use crate::ssa::type_facts::TypeFactResult;
-use crate::ssa::{SsaBody, SsaValue};
+use crate::ssa::SsaBody;
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
 use crate::taint;
 use petgraph::graph::NodeIndex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Per-body SSA facts used by structural analyses for finer-grained
 /// constancy checks.  Produced once per body in `run_cfg_analyses` and
 /// passed via `AnalysisContext::body_const_facts`.
 pub struct BodyConstFacts {
     pub ssa: SsaBody,
-    pub const_values: HashMap<SsaValue, ConstLattice>,
+    pub const_values: ConstValues,
     pub type_facts: TypeFactResult,
     /// Field-sensitive Steensgaard points-to facts.
     ///
