@@ -3008,7 +3008,11 @@ pub fn scan_with_index_parallel_observer(
                     ns,
                     container,
                     name,
-                    if arity >= 0 { Some(arity as usize) } else { None },
+                    if arity >= 0 {
+                        Some(arity as usize)
+                    } else {
+                        None
+                    },
                     disambig,
                     kind,
                 );
@@ -3066,7 +3070,11 @@ pub fn scan_with_index_parallel_observer(
                             ns,
                             container,
                             name,
-                            if arity >= 0 { Some(arity as usize) } else { None },
+                            if arity >= 0 {
+                                Some(arity as usize)
+                            } else {
+                                None
+                            },
                             disambig,
                             kind,
                         );
@@ -3120,7 +3128,11 @@ pub fn scan_with_index_parallel_observer(
                     ns,
                     container,
                     name,
-                    if arity >= 0 { Some(arity as usize) } else { None },
+                    if arity >= 0 {
+                        Some(arity as usize)
+                    } else {
+                        None
+                    },
                     disambig,
                     kind,
                 );

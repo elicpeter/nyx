@@ -1480,15 +1480,17 @@ mod tests {
 
         let analysis = analyse(&cg);
 
-        let key = |name: &str| FuncKey::from_parts(
-            Lang::Rust,
-            "lib.rs",
-            String::new(),
-            name,
-            Some(0),
-            None,
-            crate::symbol::FuncKind::Function,
-        );
+        let key = |name: &str| {
+            FuncKey::from_parts(
+                Lang::Rust,
+                "lib.rs",
+                String::new(),
+                name,
+                Some(0),
+                None,
+                crate::symbol::FuncKind::Function,
+            )
+        };
 
         let scc_of = |name: &str| analysis.node_to_scc[&cg.index[&key(name)]];
         let topo_pos = |name: &str| {

@@ -20,9 +20,9 @@ use crate::state::lattice::Lattice;
 use crate::state::symbol::SymbolId;
 use crate::taint::domain::{PredicateSummary, SmallBitSet, TaintOrigin, VarTaint};
 use smallvec::SmallVec;
-use std::sync::Arc;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 // NOTE: The per-SSA-value origin cap used to be a hardcoded
 // `MAX_ORIGINS: usize = 4`.  It is now governed by the stable

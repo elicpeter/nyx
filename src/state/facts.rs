@@ -726,7 +726,9 @@ mod tests {
         assert!(is_jdbc_resultset_acquire(Some("stmt.executeQuery")));
         assert!(is_jdbc_resultset_acquire(Some("EXECUTEQUERY")));
         assert!(is_jdbc_resultset_acquire(Some("rs.getResultSet")));
-        assert!(is_jdbc_resultset_acquire(Some("conn.prepareStatement().executeQuery")));
+        assert!(is_jdbc_resultset_acquire(Some(
+            "conn.prepareStatement().executeQuery"
+        )));
         // Not a ResultSet producer: the owning statement / update path / a
         // method that merely ends in a different verb.
         assert!(!is_jdbc_resultset_acquire(Some("con.prepareStatement")));

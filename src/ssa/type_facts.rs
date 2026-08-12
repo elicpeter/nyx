@@ -901,8 +901,7 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
                 Some(TypeKind::DatabaseConnection)
             } else if callee.contains("os.") && matches!(suffix, "Open" | "Create" | "OpenFile") {
                 Some(TypeKind::FileHandle)
-            } else if callee.contains("bytes.")
-                && matches!(suffix, "NewBuffer" | "NewBufferString")
+            } else if callee.contains("bytes.") && matches!(suffix, "NewBuffer" | "NewBufferString")
             {
                 // In-memory byte buffers (`bytes.NewBuffer(nil)` /
                 // `bytes.NewBufferString("")`).  Tagged `FileHandle` so a
@@ -1446,8 +1445,8 @@ fn parse_turbofish_arg(callee: &str) -> Option<&str> {
     let idx = loop {
         let rel = callee[search_from..].find(NEEDLE)?;
         let abs = search_from + rel;
-        let on_boundary = abs == 0
-            || matches!(callee.as_bytes()[abs - 1], b'.' | b':' | b' ' | b'(');
+        let on_boundary =
+            abs == 0 || matches!(callee.as_bytes()[abs - 1], b'.' | b':' | b' ' | b'(');
         if on_boundary {
             break abs;
         }

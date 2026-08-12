@@ -351,7 +351,11 @@ fn load_global_summaries_from_pool(
             },
             container,
             name,
-            if arity >= 0 { Some(arity as usize) } else { None },
+            if arity >= 0 {
+                Some(arity as usize)
+            } else {
+                None
+            },
             disambig,
             kind,
         );

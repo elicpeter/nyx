@@ -590,9 +590,7 @@ pub(super) fn classify_param_type<'a>(
 /// (`func GenerateMarkdown(model, writer io.Writer)` → `fmt.Fprintf(writer,
 /// ...)`) and the gitea `*bytes.Buffer` / `*os.File` write helpers.
 fn classify_param_type_go<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeKind> {
-    if param.kind() != "parameter_declaration"
-        && param.kind() != "variadic_parameter_declaration"
-    {
+    if param.kind() != "parameter_declaration" && param.kind() != "variadic_parameter_declaration" {
         return None;
     }
     let type_node = param.child_by_field_name("type")?;

@@ -2503,10 +2503,7 @@ fn propagate_path_return_confinement(
         let snapshot = summaries.clone();
         let mut changed = false;
         for (key, callee) in bodies {
-            if summaries
-                .get(key)
-                .is_some_and(|s| s.confines_path_return)
-            {
+            if summaries.get(key).is_some_and(|s| s.confines_path_return) {
                 continue;
             }
             let Some(cfg) = callee.body_graph.as_ref() else {

@@ -24,7 +24,7 @@ use petgraph::graph::NodeIndex;
 /// sibling of the `apply_assignment` field-LHS gate that handles the RHS-is-a-var
 /// downstream store):
 ///   - C:   `c->connect_timeout = hi_malloc(...)` (redis/hiredis net.c),
-///          `s->buf = malloc(size)` (redis lua strbuf.c), `pq->items = calloc(...)`.
+///     `s->buf = malloc(size)` (redis lua strbuf.c), `pq->items = calloc(...)`.
 ///   - Go:  `b.cpuprof = os.Create(...)` (prometheus tsdb.go::startProfiling).
 ///
 /// Language policy:
@@ -1119,8 +1119,14 @@ mod tests {
             "c->connect_timeout"
         ));
         assert!(acquire_into_field_transfers_ownership(Lang::C, "s->buf"));
-        assert!(acquire_into_field_transfers_ownership(Lang::C, "cfg.handle"));
-        assert!(acquire_into_field_transfers_ownership(Lang::Cpp, "this->fd"));
+        assert!(acquire_into_field_transfers_ownership(
+            Lang::C,
+            "cfg.handle"
+        ));
+        assert!(acquire_into_field_transfers_ownership(
+            Lang::Cpp,
+            "this->fd"
+        ));
         // Plain locals are still tracked (real leaks).
         assert!(!acquire_into_field_transfers_ownership(Lang::C, "p"));
         assert!(!acquire_into_field_transfers_ownership(Lang::C, "orphan"));
@@ -1129,7 +1135,10 @@ mod tests {
     #[test]
     fn acquire_into_field_transfers_ownership_go_dot_only() {
         // Go uses `.` field access; it has no `->` operator.
-        assert!(acquire_into_field_transfers_ownership(Lang::Go, "b.cpuprof"));
+        assert!(acquire_into_field_transfers_ownership(
+            Lang::Go,
+            "b.cpuprof"
+        ));
         assert!(!acquire_into_field_transfers_ownership(Lang::Go, "profile"));
     }
 
@@ -1211,7 +1220,10 @@ mod tests {
         });
 
         let set = nonescaping_local_field_containers(&cfg, Lang::C);
-        assert!(set.contains("c"), "non-escaping `c` must be present: {set:?}");
+        assert!(
+            set.contains("c"),
+            "non-escaping `c` must be present: {set:?}"
+        );
         assert!(
             set.contains("h"),
             "initializer-decl local `h` must be present: {set:?}"

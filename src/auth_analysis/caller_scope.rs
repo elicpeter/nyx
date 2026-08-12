@@ -466,7 +466,9 @@ mod tests {
             "helper must inherit the route-level check"
         );
         assert!(
-            u.auth_checks[0].callee.contains("cross-file caller-scope lift"),
+            u.auth_checks[0]
+                .callee
+                .contains("cross-file caller-scope lift"),
             "synthetic check must be tagged"
         );
     }

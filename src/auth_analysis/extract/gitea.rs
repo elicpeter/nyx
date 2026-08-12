@@ -302,9 +302,7 @@ fn route_handler_edge(
 fn handler_reference_leaf(node: Node<'_>, bytes: &[u8]) -> Option<String> {
     match node.kind() {
         "identifier" => Some(text(node, bytes)),
-        "selector_expression" => node
-            .child_by_field_name("field")
-            .map(|f| text(f, bytes)),
+        "selector_expression" => node.child_by_field_name("field").map(|f| text(f, bytes)),
         _ => None,
     }
 }
@@ -358,7 +356,15 @@ fn walk_routes(
             && http_method != crate::auth_analysis::model::HttpMethod::Use
         {
             register_route(
-                root, node, mw_stack, path_prefix, 0, bytes, path, rules, model,
+                root,
+                node,
+                mw_stack,
+                path_prefix,
+                0,
+                bytes,
+                path,
+                rules,
+                model,
             );
             return;
         }
@@ -368,7 +374,15 @@ fn walk_routes(
         // is arg 0; the path is arg 1.
         if matches!(method.as_str(), "Methods" | "MatchPath") {
             register_route(
-                root, node, mw_stack, path_prefix, 1, bytes, path, rules, model,
+                root,
+                node,
+                mw_stack,
+                path_prefix,
+                1,
+                bytes,
+                path,
+                rules,
+                model,
             );
             return;
         }
@@ -551,9 +565,7 @@ fn middleware_is_ownership_guard(root: Node<'_>, callee_name: &str, bytes: &[u8]
     let mut stack = vec![guard_body];
     while let Some(n) = stack.pop() {
         if n.kind() == "selector_expression"
-            && let Some(field) = n
-                .child_by_field_name("field")
-                .map(|f| text(f, bytes))
+            && let Some(field) = n.child_by_field_name("field").map(|f| text(f, bytes))
             && let Some(rootid) = selector_root_ident(n, bytes)
             && rootid == ctx_param
         {
@@ -873,7 +885,15 @@ func GetPackage(ctx *context.APIContext) {
             let tree = parse_go(src);
             let root = tree.root_node();
             let mut edges = Vec::new();
-            harvest_edges(root, root, false, false, src.as_bytes(), Lang::Go, &mut edges);
+            harvest_edges(
+                root,
+                root,
+                false,
+                false,
+                src.as_bytes(),
+                Lang::Go,
+                &mut edges,
+            );
             edges
         }
         fn gated(src: &str) -> Vec<CallerScopeEdge> {
@@ -895,7 +915,8 @@ func GetPackage(ctx *context.APIContext) {
 
         // (b) verb routes with no `Group` closure → prefilter skips, and the
         //     unconditional walk also yields nothing (skip is output-neutral).
-        let no_group = "package p\nfunc Routes() {\n\tr.Get(\"/x\", GetX)\n\tr.Post(\"/y\", PostY)\n}\n";
+        let no_group =
+            "package p\nfunc Routes() {\n\tr.Get(\"/x\", GetX)\n\tr.Post(\"/y\", PostY)\n}\n";
         assert!(
             !no_group
                 .as_bytes()

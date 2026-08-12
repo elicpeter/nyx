@@ -1138,7 +1138,10 @@ mod tests {
         let mp = rmp_serde::to_vec_named(&cv).unwrap();
         let back_mp: ConstValues = rmp_serde::from_slice(&mp).unwrap();
         assert_eq!(back_mp.get(&SsaValue(0)), Some(&ConstLattice::Int(42)));
-        assert_eq!(back_mp.get(&SsaValue(2)), Some(&ConstLattice::Str("s".into())));
+        assert_eq!(
+            back_mp.get(&SsaValue(2)),
+            Some(&ConstLattice::Str("s".into()))
+        );
 
         // A blob written by the LEGACY `HashMap<SsaValue, ConstLattice>` shape
         // must decode into an equivalent `ConstValues` (map wire form).
@@ -1152,7 +1155,10 @@ mod tests {
         let legacy_json = serde_json::to_string(&legacy).unwrap();
         let from_legacy: ConstValues = serde_json::from_str(&legacy_json).unwrap();
         assert_eq!(from_legacy.get(&SsaValue(0)), Some(&ConstLattice::Int(42)));
-        assert_eq!(from_legacy.get(&SsaValue(2)), Some(&ConstLattice::Str("s".into())));
+        assert_eq!(
+            from_legacy.get(&SsaValue(2)),
+            Some(&ConstLattice::Str("s".into()))
+        );
     }
 
     fn make_body(blocks: Vec<SsaBlock>, value_defs: Vec<ValueDef>) -> SsaBody {

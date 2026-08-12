@@ -478,7 +478,9 @@ impl CfgAnalysis for IncompleteErrorHandling {
             // consumes a recovered variable — a sink reading a
             // non-recovered failed value (`if err != nil { log(err) };
             // sink(failed)`) still fires.
-            let join = post_doms.as_ref().and_then(|pd| pd.immediate_dominator(idx));
+            let join = post_doms
+                .as_ref()
+                .and_then(|pd| pd.immediate_dominator(idx));
             let recovered = collect_true_branch_defines(ctx.cfg, idx, join);
             if !recovered.is_empty()
                 && dangerous

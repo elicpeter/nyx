@@ -285,8 +285,9 @@ mod tests {
     #[test]
     fn seed_from_const_values_str() {
         let mut state = SymbolicState::new();
-        let cv: ConstValues =
-            [(SsaValue(2), ConstLattice::Str("hello".into()))].into_iter().collect();
+        let cv: ConstValues = [(SsaValue(2), ConstLattice::Str("hello".into()))]
+            .into_iter()
+            .collect();
         state.seed_from_const_values(&cv);
         assert_eq!(
             state.get(SsaValue(2)),
@@ -297,7 +298,9 @@ mod tests {
     #[test]
     fn seed_from_const_values_bool_ignored() {
         let mut state = SymbolicState::new();
-        let cv: ConstValues = [(SsaValue(3), ConstLattice::Bool(true))].into_iter().collect();
+        let cv: ConstValues = [(SsaValue(3), ConstLattice::Bool(true))]
+            .into_iter()
+            .collect();
         state.seed_from_const_values(&cv);
         assert_eq!(state.get(SsaValue(3)), SymbolicValue::Unknown);
     }

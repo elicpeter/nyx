@@ -1730,7 +1730,7 @@ fn canon_has_prefix(name: &str, pattern: &str) -> bool {
     for pb in pattern.bytes().filter(u8::is_ascii_alphanumeric) {
         saw_pattern = true;
         match name_bytes.next() {
-            Some(nb) if nb.to_ascii_lowercase() == pb.to_ascii_lowercase() => {}
+            Some(nb) if nb.eq_ignore_ascii_case(&pb) => {}
             _ => return false,
         }
     }
@@ -2390,12 +2390,12 @@ mod tests {
             "has_role_",
             "PreAuthorize",
             "preauthorize",
-            "café_check",   // non-ASCII in the middle
+            "café_check", // non-ASCII in the middle
             "naïveGuard",
             "db.Tx(opts).Query",
             "12345",
             "a1b2c3",
-            "___",          // canonical form empty
+            "___", // canonical form empty
             "...",
             "checkOwnership",
             "check_ownership",

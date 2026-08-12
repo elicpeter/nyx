@@ -813,7 +813,10 @@ fn sink_args_numeric_confined(ctx: &AnalysisContext, sink: NodeIndex, sink_caps:
         let name = def.var_name.as_deref().unwrap_or("");
         if matches!(def.op, SsaOp::Param { .. })
             && (is_callee_fragment(name, callee_desc, &callee_parts, &outer_parts)
-                || sink_info.format_macro_method_idents.iter().any(|m| m == name))
+                || sink_info
+                    .format_macro_method_idents
+                    .iter()
+                    .any(|m| m == name))
         {
             // Callee receiver-chain fragments and Rust `format!`-macro phantom
             // method/macro-name tokens (`format`, `parse`, `unwrap`) are

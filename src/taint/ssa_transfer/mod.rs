@@ -44,8 +44,8 @@ use state::{
 pub(crate) use state::{
     push_origin_bounded, record_engine_note, reset_body_engine_notes, take_body_engine_notes,
 };
-pub use summary_extract::{extract_ssa_func_summary, extract_ssa_func_summary_full};
 pub(crate) use summary_extract::detect_path_confined_return;
+pub use summary_extract::{extract_ssa_func_summary, extract_ssa_func_summary_full};
 
 use crate::abstract_interp::AbstractState;
 use crate::callgraph::{callee_container_hint, callee_leaf_name};
@@ -2578,7 +2578,9 @@ fn sink_arg_wrapped_by_open_redirect_confiner(
         .iter()
         .flatten()
         .chain(info.call.outer_callee.as_ref())
-        .any(|ident| summary_confines_open_redirect(transfer, crate::labels::bare_method_name(ident)))
+        .any(|ident| {
+            summary_confines_open_redirect(transfer, crate::labels::bare_method_name(ident))
+        })
 }
 
 /// Source-level identifiers whose value flows through an open-redirect confiner
@@ -2639,8 +2641,16 @@ fn parse_inline_call_callee(text: &str) -> Option<String> {
     let trimmed = text.trim_start_matches(['(', '!', ' ', '\t']);
     let trimmed = trimmed.strip_prefix("not ").unwrap_or(trimmed).trim();
     let callee_part = trimmed.split('(').next().unwrap_or("");
-    let bare = callee_part.rsplit(['.', ':']).next().unwrap_or(callee_part).trim();
-    if bare.is_empty() || !bare.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+    let bare = callee_part
+        .rsplit(['.', ':'])
+        .next()
+        .unwrap_or(callee_part)
+        .trim();
+    if bare.is_empty()
+        || !bare
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+    {
         return None;
     }
     Some(bare.to_string())
@@ -8593,8 +8603,10 @@ fn collect_block_events(
                 // `template.HTML(x)` sink arg 0 is the payload, so a
                 // non-response arg type (e.g. a tainted `String`) must NOT
                 // strip the XSS label.
-                let is_fprintf =
-                    matches!(callee.as_str(), "fmt.Fprintf" | "fmt.Fprint" | "fmt.Fprintln");
+                let is_fprintf = matches!(
+                    callee.as_str(),
+                    "fmt.Fprintf" | "fmt.Fprint" | "fmt.Fprintln"
+                );
                 if is_fprintf {
                     if let Some(&first_val) = args.first().and_then(|g| g.first()) {
                         let writer_kind = transfer
@@ -8967,9 +8979,7 @@ fn collect_block_events(
                     // must-aliases (the same SSA value under different names).
                     // Motivated by CVE-2026-21859 (Mailpit `InArray(uri, links)`
                     // SSRF allowlist reached through a base64/split-derived uri).
-                    if let Some(aliases) =
-                        transfer.base_aliases.and_then(|a| a.aliases_of(name))
-                    {
+                    if let Some(aliases) = transfer.base_aliases.and_then(|a| a.aliases_of(name)) {
                         if aliases.iter().any(|alias| {
                             transfer
                                 .interner
@@ -11174,10 +11184,7 @@ fn propagate_taint_to_aliases(
 // ── SSA-Level Precision Helpers ──────────────────────────────────────────
 
 /// Check if all argument SSA values of a call instruction are known constants.
-fn all_args_const(
-    inst: &SsaInst,
-    const_values: &crate::ssa::const_prop::ConstValues,
-) -> bool {
+fn all_args_const(inst: &SsaInst, const_values: &crate::ssa::const_prop::ConstValues) -> bool {
     let used = inst_use_values(inst);
     if used.is_empty() {
         return false; // no args → not a call or nothing to suppress
@@ -12407,14 +12414,6 @@ impl Drop for LocalNameIndexGuard {
     }
 }
 
-/// Lang-matched local `FuncKey` candidates for `name` when a per-file
-/// index is published.
-///
-/// * `Some(keys)` — an index is active; `keys` is the (possibly empty)
-///   exact candidate set the linear scan would have produced.  An empty
-///   result is authoritative: there is no local definition of `name`.
-/// * `None` — no index is published; the caller must fall back to its
-///   own `local_summaries.keys().filter(...)` scan to preserve behaviour.
 /// Runs `f` over the file-local candidates for `name` (lang-filtered) held by
 /// the per-file `FuncNameIndex`, without deep-cloning them out of the
 /// thread-local index. `f` receives borrowed `&FuncKey`s that live only for
@@ -13916,7 +13915,12 @@ mod namespace_qualifier_authority_tests {
         let r = resolve_local_func_key_query(&s, &q("sanitize", Some("util"), Some("Reader")));
         assert_eq!(
             r,
-            Some(FuncKey::new_function(Lang::Rust, "mod.rs", "sanitize", Some(1)))
+            Some(FuncKey::new_function(
+                Lang::Rust,
+                "mod.rs",
+                "sanitize",
+                Some(1)
+            ))
         );
     }
 }

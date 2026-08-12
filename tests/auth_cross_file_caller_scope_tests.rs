@@ -69,8 +69,7 @@ fn cross_file_caller_scope_clears_authorized_helper_but_keeps_unauthorized() {
     let vuln_hits = diags
         .iter()
         .filter(|d| {
-            d.path.ends_with("services/dag_run_ops.py")
-                && d.id == "py.auth.missing_ownership_check"
+            d.path.ends_with("services/dag_run_ops.py") && d.id == "py.auth.missing_ownership_check"
         })
         .count();
     assert!(

@@ -1273,9 +1273,7 @@ where
 
 fn go_function_entry_kind(func: Node, bytes: &[u8]) -> Option<EntryKind> {
     let params = func.child_by_field_name("parameters")?;
-    let Some(text) = crate::cfg::node_str(params, bytes) else {
-        return None;
-    };
+    let text = crate::cfg::node_str(params, bytes)?;
     // net/http: signature ends with `*http.Request` (with or without the
     // leading `http.ResponseWriter` writer arg).
     if text.contains("http.Request") || text.contains("*http.Request") {

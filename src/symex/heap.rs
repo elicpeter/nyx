@@ -370,10 +370,7 @@ impl SymbolicHeap {
 /// When the index SSA value is a provably non-negative integer constant
 /// within [`MAX_TRACKED_INDICES`], returns `Index(n)`.  Otherwise returns
 /// `Elements` (conservative fallback).
-pub fn resolve_index_slot(
-    index_val: SsaValue,
-    const_values: &ConstValues,
-) -> FieldSlot {
+pub fn resolve_index_slot(index_val: SsaValue, const_values: &ConstValues) -> FieldSlot {
     if let Some(ConstLattice::Int(n)) = const_values.get(&index_val) {
         if *n >= 0 && (*n as u64) < MAX_TRACKED_INDICES as u64 {
             return FieldSlot::Index(*n as u64);

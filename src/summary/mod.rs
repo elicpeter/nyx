@@ -721,7 +721,9 @@ impl GlobalSummaries {
             match self.by_key.get(&key) {
                 Some(existing) if !summaries_compatible(existing, summary) => {
                     let synth = synthesize_disambig(summary).wrapping_add(probe);
-                    key.set_disambig(Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT)));
+                    key.set_disambig(Some(
+                        SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT),
+                    ));
                     probe = probe.wrapping_add(1);
                     if probe >= 1024 {
                         tracing::warn!(
@@ -759,7 +761,9 @@ impl GlobalSummaries {
                 return key;
             }
             let synth = synthesize_ssa_disambig(summary).wrapping_add(probe);
-            key.set_disambig(Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT)));
+            key.set_disambig(Some(
+                SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT),
+            ));
             probe = probe.wrapping_add(1);
             if probe >= 1024 {
                 tracing::warn!(
@@ -797,7 +801,9 @@ impl GlobalSummaries {
             let synth = (body.param_count as u32)
                 .wrapping_mul(0x9E37_79B9)
                 .wrapping_add(probe);
-            key.set_disambig(Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT)));
+            key.set_disambig(Some(
+                SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT),
+            ));
             key.set_arity(Some(body.param_count));
             probe = probe.wrapping_add(1);
             if probe >= 1024 {
@@ -1214,8 +1220,7 @@ impl GlobalSummaries {
         // but `(Lang, String)` keys can't be borrowed as `(Lang, &str)`,
         // so fall back to a cheap owned probe.  Caller-scope lookups run
         // once per helper unit at pass 2, not per instruction.
-        self.caller_scope_by_callee
-            .get(&(lang, leaf.to_string()))
+        self.caller_scope_by_callee.get(&(lang, leaf.to_string()))
     }
 
     /// Count of distinct `(Lang, callee_leaf)` caller-scope entries.
@@ -1293,7 +1298,10 @@ impl GlobalSummaries {
         > = HashMap::new();
         for (storage_key, facts) in &self.router_facts_by_module {
             if let Some(m) = module_id_for_path(Path::new(storage_key)) {
-                files_by_module.entry(m).or_default().push(storage_key.as_str());
+                files_by_module
+                    .entry(m)
+                    .or_default()
+                    .push(storage_key.as_str());
             }
             for (var, deps) in &facts.local_router_deps {
                 if !deps.is_empty() {

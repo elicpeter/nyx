@@ -152,8 +152,7 @@ pub fn run_state_analysis(
     // C/C++ struct-value containers whose field-acquire genuinely leaks
     // (a non-escaping stack struct) — lift the ownership-transfer
     // suppression for those.  Empty for other languages.
-    let nonescaping_field_containers =
-        transfer::nonescaping_local_field_containers(cfg, lang);
+    let nonescaping_field_containers = transfer::nonescaping_local_field_containers(cfg, lang);
     let transfer = DefaultTransfer {
         lang,
         resource_pairs,

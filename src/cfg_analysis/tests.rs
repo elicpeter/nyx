@@ -2476,8 +2476,7 @@ func h(r *http.Request) {
         .iter()
         .flat_map(|b| b.body.iter())
         .find(|i| {
-            i.var_name.as_deref() == Some("stdIn")
-                && matches!(i.op, crate::ssa::SsaOp::Call { .. })
+            i.var_name.as_deref() == Some("stdIn") && matches!(i.op, crate::ssa::SsaOp::Call { .. })
         })
         .map(|i| i.value)
         .expect("stdIn := new(bytes.Buffer) call value");
@@ -2514,8 +2513,7 @@ func h() {
         .iter()
         .flat_map(|b| b.body.iter())
         .find(|i| {
-            i.var_name.as_deref() == Some("p")
-                && matches!(i.op, crate::ssa::SsaOp::Call { .. })
+            i.var_name.as_deref() == Some("p") && matches!(i.op, crate::ssa::SsaOp::Call { .. })
         })
         .map(|i| i.value)
         .expect("p := new(Payload) call value");

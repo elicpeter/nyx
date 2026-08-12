@@ -176,7 +176,11 @@ mod combined_tests {
     /// `(rule_id, primary-capture start byte)` for every match of the legacy
     /// one-query-per-rule path — the exact `(meta, anchor)` pairs that drive
     /// `ast_query_diag` (and thus the diag set).
-    fn legacy_matches(lang: &'static str, ts: tree_sitter::Language, src: &[u8]) -> Vec<(String, usize)> {
+    fn legacy_matches(
+        lang: &'static str,
+        ts: tree_sitter::Language,
+        src: &[u8],
+    ) -> Vec<(String, usize)> {
         let per = for_lang(lang, ts.clone());
         let mut parser = Parser::new();
         parser.set_language(&ts).unwrap();
@@ -198,7 +202,11 @@ mod combined_tests {
 
     /// Same `(rule_id, anchor)` pairs, derived from the combined query via
     /// `slot.meta` + `slot.primary_capture_index`.
-    fn combined_matches(lang: &'static str, ts: tree_sitter::Language, src: &[u8]) -> Vec<(String, usize)> {
+    fn combined_matches(
+        lang: &'static str,
+        ts: tree_sitter::Language,
+        src: &[u8],
+    ) -> Vec<(String, usize)> {
         let combined = combined_for_lang(lang, ts.clone());
         let cq = combined.as_ref().as_ref().expect("combined query built");
         let mut parser = Parser::new();
@@ -229,7 +237,10 @@ mod combined_tests {
             combined, legacy,
             "combined query must yield the same (rule, anchor) set as the legacy per-rule path for {lang}"
         );
-        assert!(!legacy.is_empty(), "fixture should trigger ≥1 rule for {lang}");
+        assert!(
+            !legacy.is_empty(),
+            "fixture should trigger ≥1 rule for {lang}"
+        );
     }
 
     #[test]

@@ -850,7 +850,10 @@ mod tests {
         // Insert beyond the pre-sized bound grows on demand.
         assert_eq!(m.insert(NodeIndex::new(9), SsaValue(12)), None);
         // Overwrite returns the previous value.
-        assert_eq!(m.insert(NodeIndex::new(0), SsaValue(99)), Some(SsaValue(10)));
+        assert_eq!(
+            m.insert(NodeIndex::new(0), SsaValue(99)),
+            Some(SsaValue(10))
+        );
 
         assert_eq!(m.get(&NodeIndex::new(0)), Some(&SsaValue(99)));
         assert_eq!(m.get(&NodeIndex::new(5)), Some(&SsaValue(11)));

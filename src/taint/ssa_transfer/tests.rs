@@ -3979,7 +3979,7 @@ mod distinct_summary_sink_caps_tests {
     use super::super::distinct_summary_sink_caps;
     use crate::labels::Cap;
     use crate::summary::SinkSite;
-    use smallvec::{smallvec, SmallVec};
+    use smallvec::{SmallVec, smallvec};
 
     fn site(line: u32, cap: Cap) -> SinkSite {
         SinkSite {
@@ -4050,7 +4050,10 @@ mod distinct_summary_sink_caps_tests {
     fn cap_only_sites_skipped() {
         let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> = vec![(
             0usize,
-            smallvec![site(12, Cap::SSRF), SinkSite::cap_only(Cap::HEADER_INJECTION)],
+            smallvec![
+                site(12, Cap::SSRF),
+                SinkSite::cap_only(Cap::HEADER_INJECTION)
+            ],
         )];
         let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF | Cap::HEADER_INJECTION);
         assert_eq!(out, smallvec![Cap::SSRF] as SmallVec<[Cap; 4]>);
@@ -4071,7 +4074,7 @@ mod confinement_gate_tests {
     use super::super::*;
     use crate::summary::ssa_summary::SsaFuncSummary;
     use crate::symbol::{FuncKey, FuncKind};
-    use petgraph::prelude::*;
+
     use smallvec::smallvec;
 
     /// Build a minimal `SsaTaintTransfer` (Go, no seeds) pointing at `summaries`.
@@ -4149,24 +4152,30 @@ mod confinement_gate_tests {
         let ls: FuncSummaries = std::collections::HashMap::new();
 
         // confines_path_return -> return_confiner only.
-        let mut ret = SsaFuncSummary::default();
-        ret.confines_path_return = true;
+        let ret = SsaFuncSummary {
+            confines_path_return: true,
+            ..Default::default()
+        };
         let mut m1 = std::collections::HashMap::new();
         m1.insert(key("compose_path", Lang::Go), ret);
         let g = compute_confinement_gates(&transfer_with(&interner, &ls, Some(&m1)));
         assert!(g.return_confiner && !g.assert && !g.path_validator);
 
         // asserts_path_confined_params -> assert only.
-        let mut asrt = SsaFuncSummary::default();
-        asrt.asserts_path_confined_params = smallvec![0];
+        let asrt = SsaFuncSummary {
+            asserts_path_confined_params: smallvec![0],
+            ..Default::default()
+        };
         let mut m2 = std::collections::HashMap::new();
         m2.insert(key("check_under", Lang::Go), asrt);
         let g = compute_confinement_gates(&transfer_with(&interner, &ls, Some(&m2)));
         assert!(g.assert && !g.return_confiner && !g.path_validator);
 
         // result_reject_guard_params -> path_validator only.
-        let mut rej = SsaFuncSummary::default();
-        rej.result_reject_guard_params = smallvec![0];
+        let rej = SsaFuncSummary {
+            result_reject_guard_params: smallvec![0],
+            ..Default::default()
+        };
         let mut m3 = std::collections::HashMap::new();
         m3.insert(key("ensure_safe_path", Lang::Go), rej);
         let g = compute_confinement_gates(&transfer_with(&interner, &ls, Some(&m3)));
@@ -4179,8 +4188,10 @@ mod confinement_gate_tests {
         // body's gate (the passes filter on `key.lang == transfer.lang`).
         let interner = SymbolInterner::new();
         let ls: FuncSummaries = std::collections::HashMap::new();
-        let mut ret = SsaFuncSummary::default();
-        ret.confines_path_return = true;
+        let ret = SsaFuncSummary {
+            confines_path_return: true,
+            ..Default::default()
+        };
         let mut m = std::collections::HashMap::new();
         m.insert(key("compose_path", Lang::C), ret); // C, transfer is Go
         let g = compute_confinement_gates(&transfer_with(&interner, &ls, Some(&m)));

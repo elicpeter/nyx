@@ -1179,9 +1179,7 @@ pub(super) fn find_chained_gated_sink_call<'a>(
         // field text, whitespace-stripped (mirrors `find_chained_inner_call`
         // so the gate's suffix matchers hit on both single- and multi-line
         // chains).
-        if has_own_method
-            && let Some(raw) = text_of(function, code)
-        {
+        if has_own_method && let Some(raw) = text_of(function, code) {
             let callee: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
             if !crate::labels::classify_gated_sink(lang, &callee, |_| None, |_| None, |_| false)
                 .is_empty()

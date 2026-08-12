@@ -5921,8 +5921,10 @@ export default function CalComAdapter(client: any) {
         // options-factory scan is gated to `is_object_literal_lang()`, which a TS
         // file always satisfies in the real pipeline.  (`disabled()` rules would
         // suppress the scan.)
-        let rules =
-            crate::auth_analysis::config::build_auth_rules(&crate::utils::config::Config::default(), "typescript");
+        let rules = crate::auth_analysis::config::build_auth_rules(
+            &crate::utils::config::Config::default(),
+            "typescript",
+        );
         let mut model = crate::auth_analysis::model::AuthorizationModel::default();
         super::collect_top_level_units(tree.root_node(), src, &rules, &mut model);
         let unit = model
@@ -5966,8 +5968,10 @@ export function makeUserRepo() {
         // Production-faithful TS rules (see the positive test): the recogniser
         // must genuinely REJECT this generic CRUD repo, not merely be skipped by
         // the language gate.
-        let rules =
-            crate::auth_analysis::config::build_auth_rules(&crate::utils::config::Config::default(), "typescript");
+        let rules = crate::auth_analysis::config::build_auth_rules(
+            &crate::utils::config::Config::default(),
+            "typescript",
+        );
         let mut model = crate::auth_analysis::model::AuthorizationModel::default();
         super::collect_top_level_units(tree.root_node(), src, &rules, &mut model);
         let unit = model

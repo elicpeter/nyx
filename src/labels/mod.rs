@@ -540,9 +540,7 @@ impl LabelIndex {
                     let idx = suffix.len() as u32;
                     let (stripped, _) = unpack_matcher(m);
                     match stripped.last() {
-                        Some(&lb) => {
-                            suffix_by_last[lb.to_ascii_lowercase() as usize].push(idx)
-                        }
+                        Some(&lb) => suffix_by_last[lb.to_ascii_lowercase() as usize].push(idx),
                         None => suffix_always.push(idx),
                     }
                     suffix.push(entry);
@@ -2687,8 +2685,22 @@ mod tests {
     #[test]
     fn label_index_matches_linear_scan_over_full_registry() {
         let langs = [
-            "rust", "rs", "javascript", "js", "typescript", "ts", "python", "py",
-            "go", "java", "c", "cpp", "c++", "php", "ruby", "rb",
+            "rust",
+            "rs",
+            "javascript",
+            "js",
+            "typescript",
+            "ts",
+            "python",
+            "py",
+            "go",
+            "java",
+            "c",
+            "cpp",
+            "c++",
+            "php",
+            "ruby",
+            "rb",
         ];
         // Extra freeform probes that stress misses, empty, boundaries, chains.
         let extra_texts = [
@@ -3326,7 +3338,7 @@ mod tests {
         ] {
             let result = classify_all("java", ctor, None);
             assert!(
-                result.iter().any(|l| *l == DataLabel::Sink(Cap::SSRF)),
+                result.contains(&DataLabel::Sink(Cap::SSRF)),
                 "expected `{ctor}` to be an SSRF sink, got {result:?}"
             );
         }
@@ -3338,7 +3350,7 @@ mod tests {
         // method/var named `httpget` does not widen into an SSRF sink.
         let result = classify_all("java", "httpget", None);
         assert!(
-            !result.iter().any(|l| *l == DataLabel::Sink(Cap::SSRF)),
+            !result.contains(&DataLabel::Sink(Cap::SSRF)),
             "lowercase `httpget` must not match the SSRF constructor rule, got {result:?}"
         );
     }
@@ -3521,7 +3533,7 @@ mod tests {
         let result = classify_gated_sink_with_presence(
             "php",
             "dom.loadXML",
-            |_| None,  // options arg has no resolvable constant value...
+            |_| None, // options arg has no resolvable constant value...
             no_kw,
             no_kw_present,
             |_| false, // ...because it is absent entirely

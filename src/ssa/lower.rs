@@ -1126,7 +1126,8 @@ fn rename_variables(
     // [`SsaOp::Assign`]'s defined value to its `(receiver, field)` pair.
     // Populated below at the synthetic-Assign emission site.  Read by
     // the taint engine to lift the assign into a structural field WRITE.
-    let mut field_writes: FxHashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)> = FxHashMap::default();
+    let mut field_writes: FxHashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)> =
+        FxHashMap::default();
     // SSA values whose `Assign` comes from a bare-array destructure
     // slot-scoped kill arm; the taint engine consults this set to skip
     // outer-node Source label pickup while still unioning operand taint.

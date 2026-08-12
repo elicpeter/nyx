@@ -53,9 +53,7 @@ fn graphene_permissioned_mutation_lifts_route_auth_onto_cross_file_helper() {
     // Meta.permissions) must still fire.
     let vuln_hits = diags
         .iter()
-        .filter(|d| {
-            d.path.ends_with("export_ops.py") && d.id == "py.auth.missing_ownership_check"
-        })
+        .filter(|d| d.path.ends_with("export_ops.py") && d.id == "py.auth.missing_ownership_check")
         .count();
     assert!(
         vuln_hits >= 1,

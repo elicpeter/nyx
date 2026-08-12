@@ -258,7 +258,9 @@ fn is_metachar_regex_class(text: &str) -> bool {
 /// this branch for unrelated `strncmp` uses.
 fn path_prefix_confinement_subject(text: &str) -> Option<String> {
     for fname in ["strncmp(", "strncasecmp("] {
-        let Some(pos) = text.find(fname) else { continue };
+        let Some(pos) = text.find(fname) else {
+            continue;
+        };
         let args_part = &text[pos + fname.len()..];
         let args = split_top_level_args(args_part);
         if args.len() < 3 {
@@ -2913,20 +2915,28 @@ mod ghsa_h8cj_hpmg_636v_tests {
         // CVE-2024-39954: `isInvalidUrl(targetUrl)` classifies as ValidationCall
         // (it contains the substring `valid`) but its truthy branch is the
         // reject path, so polarity must be flipped.
-        assert!(is_negative_polarity_validation_callee("isInvalidUrl(targetUrl)"));
+        assert!(is_negative_polarity_validation_callee(
+            "isInvalidUrl(targetUrl)"
+        ));
         assert!(is_negative_polarity_validation_callee("is_invalid(url)"));
         assert!(is_negative_polarity_validation_callee("isNotValid(x)"));
-        assert!(is_negative_polarity_validation_callee("checker.isInvalidHost(h)"));
+        assert!(is_negative_polarity_validation_callee(
+            "checker.isInvalidHost(h)"
+        ));
         assert!(is_negative_polarity_validation_callee("!isInvalidUrl(u)"));
     }
 
     #[test]
     fn positive_validation_callees_are_not_negative_polarity() {
         // Precision guard: ordinary positive validators must NOT be flipped.
-        assert!(!is_negative_polarity_validation_callee("isValidUrl(targetUrl)"));
+        assert!(!is_negative_polarity_validation_callee(
+            "isValidUrl(targetUrl)"
+        ));
         assert!(!is_negative_polarity_validation_callee("validate(x)"));
         assert!(!is_negative_polarity_validation_callee("isSafe(x)"));
-        assert!(!is_negative_polarity_validation_callee("URL_VALIDATOR.isValid(url)"));
+        assert!(!is_negative_polarity_validation_callee(
+            "URL_VALIDATOR.isValid(url)"
+        ));
         // No call → not a validation callee at all.
         assert!(!is_negative_polarity_validation_callee("x == null"));
     }
@@ -2936,8 +2946,7 @@ mod ghsa_h8cj_hpmg_636v_tests {
     #[test]
     fn strncmp_prefix_check_is_path_prefix_confined() {
         // `strncmp(x, prefix, strlen(prefix))` → PathPrefixConfined, subject x.
-        let (kind, target) =
-            classify_condition_with_target("strncmp(rpath, home, strlen(home))");
+        let (kind, target) = classify_condition_with_target("strncmp(rpath, home, strlen(home))");
         assert_eq!(kind, PredicateKind::PathPrefixConfined);
         assert_eq!(target.as_deref(), Some("rpath"));
 
@@ -2949,8 +2958,7 @@ mod ghsa_h8cj_hpmg_636v_tests {
 
         // The subject scoping is what distinguishes the uftpd bug from the fix:
         // the bug checks `dir` (an unrelated local) while returning `rpath`.
-        let (_, bug_target) =
-            classify_condition_with_target("strncmp(dir, home, strlen(home))");
+        let (_, bug_target) = classify_condition_with_target("strncmp(dir, home, strlen(home))");
         assert_eq!(bug_target.as_deref(), Some("dir"));
     }
 

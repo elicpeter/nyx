@@ -585,7 +585,10 @@ fn go_multi_assign_predeclared_no_close_leaks_on_handle() {
     // def-attribution fix the resource was bound to `err` (the last ident), so
     // this fired on `err` (a false attribution) while the real handle went
     // untracked.
-    assert_has_prefix("go_multi_assign_predeclared_no_close.go", "state-resource-leak");
+    assert_has_prefix(
+        "go_multi_assign_predeclared_no_close.go",
+        "state-resource-leak",
+    );
     assert_message_contains(
         "go_multi_assign_predeclared_no_close.go",
         "state-resource-leak",

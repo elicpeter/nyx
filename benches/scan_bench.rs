@@ -252,9 +252,9 @@ fn bench_classify_all_sweep_go(c: &mut Criterion) {
         b.iter(|| {
             let mut n = 0usize;
             for &t in corpus {
-                n += nyx_scanner::labels::classify_all("go", criterion::black_box(t), None).len();
+                n += nyx_scanner::labels::classify_all("go", std::hint::black_box(t), None).len();
             }
-            criterion::black_box(n)
+            std::hint::black_box(n)
         });
     });
 }
@@ -809,8 +809,8 @@ fn bench_node_text_walk_large_go(c: &mut Criterion) {
 
     c.bench_function("node_text_walk_large_go", |b| {
         b.iter(|| {
-            criterion::black_box(nyx_scanner::ast::bench_node_text_walk(
-                criterion::black_box(&bytes),
+            std::hint::black_box(nyx_scanner::ast::bench_node_text_walk(
+                std::hint::black_box(&bytes),
                 &fixture,
             ))
         });
@@ -868,9 +868,7 @@ fn bench_ssa_lower_large_go(c: &mut Criterion) {
             for &(i, scope_all) in &inputs {
                 let body = &file_cfg.bodies[i];
                 let scope = body.meta.name.as_deref();
-                if let Ok(ssa_body) =
-                    ssa::lower_to_ssa(&body.graph, body.entry, scope, scope_all)
-                {
+                if let Ok(ssa_body) = ssa::lower_to_ssa(&body.graph, body.entry, scope, scope_all) {
                     total_blocks += ssa_body.blocks.len();
                 }
             }
@@ -917,8 +915,7 @@ fn bench_cfg_node_map_lookup(c: &mut Criterion) {
             ssa::lower_to_ssa(&body.graph, body.entry, scope, scope_all)
                 .ok()
                 .and_then(|ssa_body| {
-                    let nodes: Vec<_> =
-                        ssa_body.value_defs.iter().map(|vd| vd.cfg_node).collect();
+                    let nodes: Vec<_> = ssa_body.value_defs.iter().map(|vd| vd.cfg_node).collect();
                     if nodes.is_empty() {
                         None
                     } else {
@@ -971,14 +968,22 @@ fn bench_funckey_hash_lookup(c: &mut Criterion) {
         .map(|i| {
             FuncKey::new_function(
                 Lang::Go,
-                format!("server/channels/app/module_group_{}/handler_{:04}.go", i % 16, i),
+                format!(
+                    "server/channels/app/module_group_{}/handler_{:04}.go",
+                    i % 16,
+                    i
+                ),
                 format!("Process{:04}RequestHandler", i),
                 Some((i % 5) + 1),
             )
         })
         .collect();
-    let map: HashMap<FuncKey, usize> =
-        keys.iter().cloned().enumerate().map(|(i, k)| (k, i)).collect();
+    let map: HashMap<FuncKey, usize> = keys
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, k)| (k, i))
+        .collect();
 
     c.bench_function("funckey_hash_lookup", |b| {
         b.iter(|| {
@@ -1075,7 +1080,7 @@ fn bench_auth_matches_name(c: &mut Criterion) {
             let mut hits = 0usize;
             for n in &names {
                 for p in &patterns {
-                    if matches_name(criterion::black_box(n), criterion::black_box(p)) {
+                    if matches_name(std::hint::black_box(n), std::hint::black_box(p)) {
                         hits += 1;
                     }
                 }

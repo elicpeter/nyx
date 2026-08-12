@@ -389,12 +389,28 @@ fn funckey_setters_keep_key_equal_to_fresh_construction() {
 fn funckey_hashmap_lookup_after_namespace_mutation() {
     use std::collections::HashMap;
     let mut m: HashMap<FuncKey, u32> = HashMap::new();
-    let mut key = FuncKey::from_parts(Lang::Rust, "orig.rs", "", "g", Some(1), None, FuncKind::Function);
+    let mut key = FuncKey::from_parts(
+        Lang::Rust,
+        "orig.rs",
+        "",
+        "g",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
     key.set_namespace("src/lib.rs");
     m.insert(key, 42);
     // A key built directly with the post-mutation identity must find the entry:
     // proves the cached hash stayed consistent across the setter.
-    let probe = FuncKey::from_parts(Lang::Rust, "src/lib.rs", "", "g", Some(1), None, FuncKind::Function);
+    let probe = FuncKey::from_parts(
+        Lang::Rust,
+        "src/lib.rs",
+        "",
+        "g",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
     assert_eq!(m.get(&probe), Some(&42));
 }
 
@@ -416,7 +432,11 @@ fn funckey_serde_roundtrip_recomputes_hash_and_omits_hash_field() {
     );
     let back: FuncKey = serde_json::from_str(&json).unwrap();
     assert_eq!(k, back);
-    assert_eq!(fk_hash(&k), fk_hash(&back), "deserialize must recompute the cached hash");
+    assert_eq!(
+        fk_hash(&k),
+        fk_hash(&back),
+        "deserialize must recompute the cached hash"
+    );
 }
 
 #[test]
@@ -425,7 +445,8 @@ fn funckey_serde_wire_backcompat_defaults() {
     // proving existing SQLite summary blobs remain readable.
     let json = r#"{"lang":"go","namespace":"m.go","name":"h","arity":2}"#;
     let k: FuncKey = serde_json::from_str(json).unwrap();
-    let expected = FuncKey::from_parts(Lang::Go, "m.go", "", "h", Some(2), None, FuncKind::Function);
+    let expected =
+        FuncKey::from_parts(Lang::Go, "m.go", "", "h", Some(2), None, FuncKind::Function);
     assert_eq!(k, expected);
     assert_eq!(fk_hash(&k), fk_hash(&expected));
 }
@@ -434,11 +455,22 @@ fn funckey_serde_wire_backcompat_defaults() {
 fn funckey_serialized_wire_matches_field_names() {
     // The wire form is the seven identity fields, exactly as the old derived
     // Serialize emitted them (container/disambig/kind carry serde defaults).
-    let k = FuncKey::from_parts(Lang::Rust, "src/lib.rs", "", "main", Some(0), None, FuncKind::Function);
+    let k = FuncKey::from_parts(
+        Lang::Rust,
+        "src/lib.rs",
+        "",
+        "main",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
     let v: serde_json::Value = serde_json::to_value(&k).unwrap();
     let obj = v.as_object().unwrap();
     assert_eq!(obj.get("lang").and_then(|x| x.as_str()), Some("rust"));
-    assert_eq!(obj.get("namespace").and_then(|x| x.as_str()), Some("src/lib.rs"));
+    assert_eq!(
+        obj.get("namespace").and_then(|x| x.as_str()),
+        Some("src/lib.rs")
+    );
     assert_eq!(obj.get("name").and_then(|x| x.as_str()), Some("main"));
     assert!(obj.contains_key("arity"));
     assert!(!obj.contains_key("hash"));
@@ -463,6 +495,14 @@ fn funckey_distinct_identities_differ() {
     let b = FuncKey::from_parts(Lang::Go, "a.go", "", "g", Some(1), None, FuncKind::Function);
     assert_ne!(a, b);
     // container-only difference is also a distinct identity
-    let c = FuncKey::from_parts(Lang::Go, "a.go", "S", "f", Some(1), None, FuncKind::Function);
+    let c = FuncKey::from_parts(
+        Lang::Go,
+        "a.go",
+        "S",
+        "f",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
     assert_ne!(a, c);
 }

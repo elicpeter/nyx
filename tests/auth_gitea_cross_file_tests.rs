@@ -48,8 +48,7 @@ fn gitea_cross_file_clears_guarded_handler_keeps_unguarded() {
     let guarded_hits: Vec<_> = diags
         .iter()
         .filter(|d| {
-            d.path.ends_with("container/container.go")
-                && d.id == "go.auth.missing_ownership_check"
+            d.path.ends_with("container/container.go") && d.id == "go.auth.missing_ownership_check"
         })
         .collect();
     assert!(

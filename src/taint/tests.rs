@@ -8057,8 +8057,19 @@ fn compose_path_confines_return(src: &[u8]) -> bool {
             .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
             .count();
         let summary = ssa_transfer::extract_ssa_func_summary(
-            &ssa, the_cfg, summaries, None, Lang::C, "test.c", &interner, param_count, None,
-            None, None, None, None,
+            &ssa,
+            the_cfg,
+            summaries,
+            None,
+            Lang::C,
+            "test.c",
+            &interner,
+            param_count,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
         return summary.confines_path_return;
     }

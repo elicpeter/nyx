@@ -272,8 +272,10 @@ fn prefix_confinement_params(
             (subs, prefix)
         } else if mlow == "hasprefix" {
             let prefix = args.get(1).and_then(|g| g.first()).copied();
-            let subs: SmallVec<[SsaValue; 4]> =
-                args.first().map(|g| g.iter().copied().collect()).unwrap_or_default();
+            let subs: SmallVec<[SsaValue; 4]> = args
+                .first()
+                .map(|g| g.iter().copied().collect())
+                .unwrap_or_default();
             (subs, prefix)
         } else {
             (SmallVec::new(), None)
@@ -292,7 +294,14 @@ fn prefix_confinement_params(
     let mut prefix_params: SmallVec<[usize; 2]> = SmallVec::new();
     if !prefix_is_const {
         let mut pseen = HashSet::new();
-        collect_reaching_params(ssa, prefix, param_index_of, &mut pseen, &mut prefix_params, &mut budget);
+        collect_reaching_params(
+            ssa,
+            prefix,
+            param_index_of,
+            &mut pseen,
+            &mut prefix_params,
+            &mut budget,
+        );
         if !prefix_params.is_empty() {
             return result;
         }
@@ -304,7 +313,14 @@ fn prefix_confinement_params(
     let mut subj_params: SmallVec<[usize; 2]> = SmallVec::new();
     for sv in subject_vals {
         let mut sseen = HashSet::new();
-        collect_reaching_params(ssa, sv, param_index_of, &mut sseen, &mut subj_params, &mut budget);
+        collect_reaching_params(
+            ssa,
+            sv,
+            param_index_of,
+            &mut sseen,
+            &mut subj_params,
+            &mut budget,
+        );
     }
     for p in subj_params {
         if !prefix_params.contains(&p) && !result.contains(&p) {
@@ -376,10 +392,9 @@ fn detect_assert_path_confined_params(
             else {
                 continue;
             };
-            let assert_name = crate::labels::bare_method_name(
-                callee_text.as_deref().unwrap_or(callee.as_str()),
-            )
-            .to_ascii_lowercase();
+            let assert_name =
+                crate::labels::bare_method_name(callee_text.as_deref().unwrap_or(callee.as_str()))
+                    .to_ascii_lowercase();
             if !is_assert_true_callee(&assert_name) {
                 continue;
             }
@@ -396,12 +411,8 @@ fn detect_assert_path_confined_params(
             // appear as ordered leaves.  Split at the method phantom.  This is
             // the dominant Java/Spring shape; the `startsWith` never survives
             // as a distinct SSA Call op.
-            let confined = confined_params_from_collapsed_assert_group(
-                ssa,
-                consts,
-                param_index_of,
-                group,
-            );
+            let confined =
+                confined_params_from_collapsed_assert_group(ssa, consts, param_index_of, group);
             if !confined.is_empty() {
                 for p in confined {
                     if !result.contains(&p) {
@@ -632,7 +643,14 @@ fn confined_params_from_collapsed_assert_group(
             continue;
         }
         let mut seen = HashSet::new();
-        collect_reaching_params(ssa, pv, param_index_of, &mut seen, &mut prefix_params, &mut budget);
+        collect_reaching_params(
+            ssa,
+            pv,
+            param_index_of,
+            &mut seen,
+            &mut prefix_params,
+            &mut budget,
+        );
     }
     if !prefix_params.is_empty() {
         return result;
@@ -645,7 +663,14 @@ fn confined_params_from_collapsed_assert_group(
             continue;
         }
         let mut seen = HashSet::new();
-        collect_reaching_params(ssa, sv, param_index_of, &mut seen, &mut subj_params, &mut budget);
+        collect_reaching_params(
+            ssa,
+            sv,
+            param_index_of,
+            &mut seen,
+            &mut subj_params,
+            &mut budget,
+        );
     }
     for p in subj_params {
         if !prefix_params.contains(&p) && !result.contains(&p) {
@@ -916,7 +941,9 @@ fn detect_open_redirect_normalizer(
     for block in &ssa.blocks {
         for inst in &block.body {
             let SsaOp::Call {
-                callee, callee_text, ..
+                callee,
+                callee_text,
+                ..
             } = &inst.op
             else {
                 continue;
@@ -935,7 +962,10 @@ fn detect_open_redirect_normalizer(
         let Terminator::Branch { cond, .. } = &block.terminator else {
             continue;
         };
-        let Some(text) = cfg.node_weight(*cond).and_then(|n| n.condition_text.as_deref()) else {
+        let Some(text) = cfg
+            .node_weight(*cond)
+            .and_then(|n| n.condition_text.as_deref())
+        else {
             continue;
         };
         let lower = text.to_ascii_lowercase();
@@ -965,7 +995,14 @@ fn detect_open_redirect_normalizer(
         };
         let mut seen = HashSet::new();
         let mut params: SmallVec<[usize; 2]> = SmallVec::new();
-        collect_reaching_params(ssa, *rv, param_index_of, &mut seen, &mut params, &mut budget);
+        collect_reaching_params(
+            ssa,
+            *rv,
+            param_index_of,
+            &mut seen,
+            &mut params,
+            &mut budget,
+        );
         if !params.is_empty() {
             return true;
         }
@@ -1116,7 +1153,14 @@ fn detect_open_redirect_guarded_passthrough(
         };
         let mut seen = HashSet::new();
         let mut params: SmallVec<[usize; 2]> = SmallVec::new();
-        collect_reaching_params(ssa, *rv, param_index_of, &mut seen, &mut params, &mut budget);
+        collect_reaching_params(
+            ssa,
+            *rv,
+            param_index_of,
+            &mut seen,
+            &mut params,
+            &mut budget,
+        );
         if !params.is_empty() {
             param_returns.push((block.id.0, params));
         }
@@ -1137,7 +1181,10 @@ fn detect_open_redirect_guarded_passthrough(
         else {
             continue;
         };
-        let Some(text) = cfg.node_weight(*cond).and_then(|n| n.condition_text.as_deref()) else {
+        let Some(text) = cfg
+            .node_weight(*cond)
+            .and_then(|n| n.condition_text.as_deref())
+        else {
             continue;
         };
         if condition_calls_open_redirect_validator(text) {
@@ -2039,8 +2086,7 @@ pub fn extract_ssa_func_summary_full(
     // self-proving assert guards above because the confinement is applied only
     // at a *path-safety-validator-named* call site (`apply_path_validator_
     // confinement`), not unconditionally.
-    let result_reject_guard_params =
-        detect_result_reject_guard_params(ssa, &param_index_of);
+    let result_reject_guard_params = detect_result_reject_guard_params(ssa, &param_index_of);
 
     // Behaviour-based open-redirect confiner detection.  Two shapes mark the
     // return as OPEN_REDIRECT-clean:
@@ -2595,7 +2641,10 @@ mod tests {
             "assert_no_traversal",
             "reject_path_traversal",
         ] {
-            assert!(is_path_safety_validator_name(n), "expected path-safety: {n}");
+            assert!(
+                is_path_safety_validator_name(n),
+                "expected path-safety: {n}"
+            );
         }
         // Negative: non-path validators and unrelated calls must not match.
         for n in [
@@ -2603,7 +2652,7 @@ mod tests {
             "is_authenticated",
             "validate_component", // has a path noun but no safe/path/sanit signal
             "check_length",
-            "to_path_buf",        // a path *noun* but not a validator verb
+            "to_path_buf", // a path *noun* but not a validator verb
             "join",
             "format",
         ] {

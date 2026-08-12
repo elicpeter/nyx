@@ -396,7 +396,11 @@ mod tests {
         ] {
             let prop = arg_propagation("c", callee)
                 .unwrap_or_else(|| panic!("{callee} should have an arg propagation"));
-            assert_eq!(prop.to_args, &[0], "{callee} writes its destination at arg 0");
+            assert_eq!(
+                prop.to_args,
+                &[0],
+                "{callee} writes its destination at arg 0"
+            );
             assert!(
                 prop.from_args.contains(&1),
                 "{callee} reads its source from arg 1"

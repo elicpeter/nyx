@@ -864,7 +864,9 @@ mod jdbc_derivation_tests {
     fn connection_acquire_recognises_getconnection_forms() {
         assert!(is_jdbc_connection_acquire(Some("getConnection")));
         assert!(is_jdbc_connection_acquire(Some("dbSession.getConnection")));
-        assert!(is_jdbc_connection_acquire(Some("DriverManager.getConnection")));
+        assert!(is_jdbc_connection_acquire(Some(
+            "DriverManager.getConnection"
+        )));
         assert!(is_jdbc_connection_acquire(Some("GETCONNECTION")));
         // Not a connection acquire.
         assert!(!is_jdbc_connection_acquire(Some("con.prepareStatement")));

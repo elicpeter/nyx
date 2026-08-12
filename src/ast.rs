@@ -1250,7 +1250,11 @@ impl<'a> ParsedSource<'a> {
     /// the enclosing call) and as the finding span position. Returns `None`
     /// when a recogniser suppresses the match. Shared verbatim by the
     /// combined-query fast path and the legacy per-rule loop so they cannot drift.
-    fn ast_query_diag(&self, meta: &crate::patterns::Pattern, cap_node: tree_sitter::Node) -> Option<Diag> {
+    fn ast_query_diag(
+        &self,
+        meta: &crate::patterns::Pattern,
+        cap_node: tree_sitter::Node,
+    ) -> Option<Diag> {
         // Layer A: suppress Security findings on calls with all-literal args.
         //
         // Carve-outs for categories where the literal argument IS
@@ -1411,9 +1415,7 @@ impl<'a> ParsedSource<'a> {
         // dramatically on serialization, hashing, and
         // socket-API code where the cast is the canonical
         // (and standard-blessed) idiom.
-        if self.lang_slug == "cpp"
-            && is_cpp_cast_target_type_safe(meta.id, cap_node, self.bytes)
-        {
+        if self.lang_slug == "cpp" && is_cpp_cast_target_type_safe(meta.id, cap_node, self.bytes) {
             return None;
         }
         // Layer F: PHP `md5()` / `sha1()` flagged as weak hash
@@ -3017,6 +3019,7 @@ fn is_php_include_param_passthrough(include_node: tree_sitter::Node, bytes: &[u8
 ///     `env = jinja2.sandbox.ImmutableSandboxedEnvironment(...); env.from_string(x)`
 ///     (receiver is a local whose only environment-constructor assignment in
 ///     the enclosing function is a sandboxed env).
+///
 /// Conservative: an unresolved receiver (field access, subscript, parameter,
 /// or a name also assigned an unrestricted `Environment` / `Template`) keeps
 /// the finding firing.
@@ -3109,7 +3112,13 @@ fn python_local_is_sandboxed_env(use_node: tree_sitter::Node, name: &str, bytes:
     }
     let mut saw_sandboxed = false;
     let mut saw_unrestricted = false;
-    scan_python_env_assignments(scope, name, bytes, &mut saw_sandboxed, &mut saw_unrestricted);
+    scan_python_env_assignments(
+        scope,
+        name,
+        bytes,
+        &mut saw_sandboxed,
+        &mut saw_unrestricted,
+    );
     saw_sandboxed && !saw_unrestricted
 }
 
@@ -5519,8 +5528,7 @@ fn resolve_php_lvalue_name(lhs: tree_sitter::Node, bytes: &[u8]) -> Option<Strin
     match lhs.kind() {
         "variable_name" => {
             let name_node = lhs.named_child(0)?;
-            crate::cfg::node_str(name_node, bytes)
-                .map(String::from)
+            crate::cfg::node_str(name_node, bytes).map(String::from)
         }
         "member_access_expression" => {
             let n = lhs.child_by_field_name("name").or_else(|| {
@@ -5534,8 +5542,7 @@ fn resolve_php_lvalue_name(lhs: tree_sitter::Node, bytes: &[u8]) -> Option<Strin
             // Property access can name a `name` (bare ident) or a
             // `variable_name` (dynamic ${$x} — which we don't resolve).
             if n.kind() == "name" {
-                crate::cfg::node_str(n, bytes)
-                    .map(String::from)
+                crate::cfg::node_str(n, bytes).map(String::from)
             } else {
                 None
             }
@@ -5583,8 +5590,7 @@ fn string_literal_text(node: tree_sitter::Node, bytes: &[u8]) -> Option<String> 
         if let Some(c) = node.named_child(i)
             && (c.kind() == "string_content" || c.kind() == "string_value")
         {
-            return crate::cfg::node_str(c, bytes)
-                .map(String::from);
+            return crate::cfg::node_str(c, bytes).map(String::from);
         }
     }
     if let Some(s) = crate::cfg::node_str(node, bytes) {
@@ -7990,9 +7996,9 @@ fn ruby_eval_string_arg_distinguishes_block_from_string() {
     let mut parser = tree_sitter::Parser::new();
     let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
     parser.set_language(&lang).unwrap();
-    let q_ie =
-        r#"(call method: (identifier) @id (#eq? @id "instance_eval")) @vuln"#;
-    let q_ce = r#"(call method: (identifier) @id (#match? @id "^(class_eval|module_eval)$")) @vuln"#;
+    let q_ie = r#"(call method: (identifier) @id (#eq? @id "instance_eval")) @vuln"#;
+    let q_ce =
+        r#"(call method: (identifier) @id (#match? @id "^(class_eval|module_eval)$")) @vuln"#;
 
     // ── Block forms → NOT a string eval (suppress) ─────────────────────
     // `do … end` block.
