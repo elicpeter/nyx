@@ -2,9 +2,11 @@
 
 All notable changes to Nyx are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). For where Nyx is going, see the [Roadmap](ROADMAP.md).
 
-## [0.8.0] - 2026-06-12
+## [0.8.0] - Unreleased
 
 The dynamic-verification release. An attack-surface map, a sandboxed dynamic verifier, a framework adapter registry that grounds both, the per-language build infrastructure that makes per-finding verification affordable at corpus scale, and the first real-corpus acceptance gates.
+
+Alongside it, a static-engine accuracy and throughput campaign. Measured against the previous engine on an identical 669-case corpus, false positives drop from 43 to 7 and false negatives from 20 to 8 (rule-level F1 0.906 to 0.977), while a full scan of a 492-file Go service runs 1.35x faster and reports more findings than before.
 
 The attack-surface map and chain composer turn the flat finding list into a route-to-sink graph. The dynamic verifier re-runs every Medium-or-higher finding against a payload corpus and stamps a Confirmed / PartiallyConfirmed / NotConfirmed / Inconclusive / Unsupported verdict on each. The adapter registry (130+ entries across 8 languages) covers HTTP, message-broker, scheduled-job, GraphQL, WebSocket, middleware, and migration entry points. Per-language build pools and copy-on-write workdirs hold the with-verify wall-clock to within 1.5x of a static-only scan.
 
@@ -87,6 +89,34 @@ The attack-surface map and chain composer turn the flat finding list into a rout
 - **Symbolic execution.** Interprocedural parameter seeding fixed an off-by-one for method calls and now seeds the receiver / self parameter; the cross-file depth guard increments on descent; and a path cut short by the global step budget records `Inconclusive` instead of `Confirmed`.
 - **Abstract interpretation and pointer analysis.** Interval division handles the `i64::MIN / -1` overflow (degrading to unbounded instead of a falsely-narrow range) and multiplication computes overflow in `i128`. `AbstractState::leq` checks entries present only in the other state, restoring a sound partial order. The pointer fixpoint re-projects container-element field reads after the receiver's points-to set converges.
 - **CFG-level analyses.** Error-fallthrough termination stops at the `if` join point; a guard's constant-operand test refuses a `Source`-labelled call result; guard / sanitizer matchers require a leaf-name boundary (so `invalidate` no longer matches the `validate` guard and `unquote` no longer matches `quote`); resource ownership-transfer requires a real `->field =` assignment rather than any `->` in a span; post-dominators are computed once per resource pass; and the web-entrypoint heuristic confirms web parameters against the candidate handler only, so an unrelated `req` parameter elsewhere in the file no longer promotes batch / CLI functions to web entry points.
+
+### Cross-file authorization
+
+- **Caller-scope authorization lifting.** A private helper that is never itself a route handler now inherits route-level authorization from the units that call it. Pass 1 records one caller-scope edge per (caller, callee) pair; pass 2 appends synthetic route-level checks to a callee only when *every* observed caller is authorized, so one unauthorized path anywhere refuses the lift. Removes the dominant missing-ownership-check false positive on layered `services/` code without weakening the check itself. Currently applies on the `--index off` scan path.
+- **Framework fact suppliers.** Three extractors feed the mechanism without putting framework knowledge in its core: gitea-style `web.Router` closure groups (ownership middleware is recognised structurally, by a permission-field read paired with an error emit, rather than by a name allowlist), graphene `Meta.permissions` mutation classes, and FastAPI `include_router`, which is now a cycle-guarded transitive graph instead of a single-hop lookup.
+
+### Static engine precision and recall
+
+- **Interprocedural confinement post-conditions.** Function summaries carry five new proved properties about a callee: a boolean prefix-check the caller branches on, a throw-if-false assert guard, a `Result` rejection guard, a same-origin URL normaliser, and a `strncmp`-confined return. Each closes a false positive on the *patched* form of a real CVE whose fix introduced a custom confinement helper that name matching missed. Suppressions are capability-scoped, so a confined value reaching a SQL or command sink still fires.
+- **Validation-polarity fix.** A negative-polarity validator (`isInvalidUrl`, `is_not_valid`) marked the *reject* branch as validated, exactly inverting the intended narrowing. Both branches now resolve correctly.
+- **Resource ownership.** Leak, double-close, and use-after-close tracking moved from flat per-acquire tracking to an ownership model: a JDBC `Statement` whose `Connection` is body-local no longer reports, connections borrowed from a managed session (Hibernate `Session`, `EntityManager`, Liquibase `Database`) are distinguished from owned ones, and C/C++ struct-field handles are attributed to the containing object with an escape-analysis carve-out for locals that die in the same body.
+- **Go multi-assign definition attribution.** `f, err := os.Open(p)` bound the handle to `err` rather than `f`. The first identifier is now the primary definition. Removes a false leak on `err`, recovers a real missed leak on the handle, and recovers taint through `val, ok := os.LookupEnv()`.
+- **Explicit sink payload positions.** Sinks declare which argument positions carry the payload instead of implicitly treating all of them as payload (Rust `fs::*` / `File::*`, JS/TS raw-SQL builders, Go GORM query methods), and `promisify` aliases inherit the wrapped callee's restriction. The SSA sink scan is restricted to identifiers syntactically inside the inner sink sub-expression, so a tainted sibling field in an aggregate literal no longer implicates a constant-path `File::open`.
+- **Multi-capability sink de-masking.** A helper parameter consumed at two different sink classes now emits one finding per class instead of collapsing into a single conflated rule.
+- **Language coverage.** C gains twelve out-parameter propagations (`strcpy`, `strlcat`, `snprintf`, `memcpy`, `realpath` families) so path assembly through destination buffers keeps taint. Java gains Apache HttpClient request constructors as SSRF sinks; PHP gains Symfony HttpFoundation request accessors as sources; Go gains GORM query-builder SQL sinks; Ruby gains raw `pg` driver sinks with `exec_params` correctly excluded, and models `operator_assignment` as an assignment. Rust resolves `let x: T` annotations and `parse::<T>` turbofish, settling the `FromStr` ambiguity so `let p: PathBuf = s.parse()?` fires while `let port: u16 = s.parse()?` stays suppressed.
+- **Corpus.** Ground truth grows from 563 to 672 cases with no existing expectation modified or removed, including 18 new real-CVE vulnerable / patched pairs across all ten languages.
+- **Hoisted-sink provenance.** The search for a callback-nested sink no longer descends a call's callee / receiver side, so a chained call cannot inherit provenance from a sink nested in its receiver's callback. In `http.get(target, cb).on('error', cb2)` the `.on` node was recording `res.send('ok')` from inside the `http.get` receiver's callback, and that unrelated `'ok'` literal then read as a constant payload and suppressed a real SSRF finding.
+
+### Static scan throughput
+
+Full-scan wall clock on a 492-file Go service drops from 36.2s to 26.9s (1.35x) while reporting more findings, not fewer. Each optimization ships an equivalence argument and most an equivalence test; several carry a `NYX_DISABLE_*` toggle so the previous path can be measured from the same binary.
+
+- **Single-pass AST queries.** Per-rule tree-sitter queries are concatenated into one multi-pattern query, so classification walks the tree once instead of once per rule.
+- **O(1) node text.** A file's UTF-8 is validated once per parse and node text is taken as a boundary slice, replacing a per-node revalidation proportional to the node's byte range.
+- **Cheaper hashing and lookup.** `FuncKey` caches a hash of its identity, turning the engine's most-hashed type from O(len) to O(1) per lookup; label matchers gained a last-byte dispatch index replacing a linear suffix scan; SSA lowering and the symbol interner moved to a faster hash; the CFG node map became a dense positional vector.
+- **Taint worklist.** Path environments and abstract state are shared copy-on-write instead of deep-cloned per worklist step, branch-condition classification is memoized, per-call confinement checks are hoisted out of bodies with no confiner summary, and a per-file function-name index replaces four linear scans per callee resolution.
+- **Dense constant-propagation results.** Constant-propagation results moved from a hash map to a dense value-indexed table, removing a per-value hashed insert per body and making every consumer lookup an array index. The persisted format is unchanged.
+- **Fruitless-walk elision.** Auth extraction skips whole-subtree walks that cannot produce a result for the file's language or framework, cutting the isolated Go auth pass by roughly a quarter.
 
 ### CLI
 
