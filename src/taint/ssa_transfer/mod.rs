@@ -3338,7 +3338,8 @@ fn inline_analyse_callee_with_seeds(
 
     let (callee_key, callee_body) = if let (Some(k), Some(b)) = (intra_key, intra_body) {
         (k, b)
-    } else if let Some(gs) = transfer.global_summaries {
+    } else {
+        let gs = transfer.global_summaries?;
         // Cross-file fallback.  Build a structured query mirroring
         // resolve_callee_full (qualifier/receiver_var/caller_container) so that
         // qualified-first policy is preserved.
@@ -3395,8 +3396,6 @@ fn inline_analyse_callee_with_seeds(
             }
             _ => return None,
         }
-    } else {
-        return None;
     };
 
     // Skip very large function bodies

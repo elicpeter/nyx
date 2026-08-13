@@ -136,7 +136,7 @@ impl AuthExtractor for GiteaExtractor {
 /// same-file `attach_route_handler` injection cannot reach it.  BUT the
 /// *authorization decision* is same-file: the ownership-guard middleware
 /// factory (`reqPackageAccess`, `reqRepoReader`, …) is colocated with the
-/// route registration in `api.go`, so [`middleware_is_ownership_guard`]
+/// route registration in `api.go`, so `middleware_is_ownership_guard`
 /// resolves it here.
 ///
 /// This emits a [`CallerScopeEdge`] per route, keyed by the handler leaf

@@ -1592,10 +1592,9 @@ fn extract_allowlist_target(text: &str) -> Option<String> {
         // Handle `not in` by looking for ` not in ` first
         let target_part = if let Some(pos) = lower.find(" not in ") {
             &trimmed[..pos]
-        } else if let Some(pos) = lower.find(" in ") {
-            &trimmed[..pos]
         } else {
-            return None;
+            let pos = lower.find(" in ")?;
+            &trimmed[..pos]
         };
         let target = target_part.trim();
         let target = target.strip_prefix('!').unwrap_or(target).trim();

@@ -350,9 +350,9 @@ pub struct DefaultTransfer<'a> {
     /// field-acquire (`c.buf = malloc()`) provably does NOT transfer
     /// ownership — the container is a locally-declared value struct that
     /// never escapes the function, so the acquire genuinely leaks and the
-    /// [`acquire_into_field_transfers_ownership`] suppression must be lifted.
+    /// `acquire_into_field_transfers_ownership` suppression must be lifted.
     /// Computed once per body by
-    /// [`nonescaping_local_field_containers`] in `run_state_analysis`.
+    /// `nonescaping_local_field_containers` in `run_state_analysis`.
     /// Strict-additive: when `None`, the blanket suppression stands.
     pub nonescaping_field_containers: Option<&'a std::collections::HashSet<String>>,
 }

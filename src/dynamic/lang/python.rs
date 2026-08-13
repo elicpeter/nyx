@@ -3284,11 +3284,20 @@ pub fn emit_header_injection_harness(spec: &HarnessSpec) -> HarnessSource {
     raw = b""
     try:
         try:
-            sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+            # These two timeouts must sum to comfortably LESS than the
+            # sandbox's hard timeout (SandboxOpts::timeout, 5s).  Both peers
+            # are in this process on loopback, so a healthy run completes in
+            # milliseconds and the budget is only ever spent when something
+            # is wrong.  When the connect budget alone matched the sandbox
+            # cap, a slow runner spent the whole 5s here and got SIGKILLed
+            # mid-connect, so the _nyx_fallback_wire_frame degradation path
+            # below could never run and the attempt reported no probe at all
+            # rather than a synthetic frame.
+            sock = socket.create_connection(("127.0.0.1", port), timeout=1.5)
         except Exception:
             return _nyx_fallback_wire_frame(payload)
         try:
-            sock.settimeout(2.0)
+            sock.settimeout(1.0)
             sock.sendall(b"GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
             while len(raw) < 65536:
                 try:

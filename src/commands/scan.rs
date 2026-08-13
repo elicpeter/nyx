@@ -694,11 +694,7 @@ pub fn handle(
     let suppress_status = config.output.quiet || is_machine;
     if !suppress_status {
         // Status messages go to stderr so stdout stays clean
-        eprintln!(
-            "{} {}...\n",
-            style("Checking").green().bold(),
-            &project_name
-        );
+        eprintln!("{} {}...\n", style("Checking").green().bold(), project_name);
     }
 
     let show_progress = !is_machine && !config.output.quiet;

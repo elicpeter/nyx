@@ -41,7 +41,7 @@
 //! [`AnalysisUnitKind::RouteHandler`] carrying a route-level `Other`
 //! (+ `TokenExpiry` / `TokenRecipient`) [`AuthCheck`].  This makes:
 //!
-//!   * [`super::super::checks::check_ownership_gaps`] /
+//!   * `checks::check_ownership_gaps` /
 //!     `check_token_override_without_validation` short-circuit on the
 //!     method's own body operations (route-level `Other` covers every
 //!     subject; the two token checks satisfy the token-flow gate), and

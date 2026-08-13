@@ -1,6 +1,6 @@
 //! Cross-file caller-scope IPA (Phase 2 of the caller-scope fix).
 //!
-//! [`super::apply_caller_scope_propagation`] propagates route-handler
+//! `apply_caller_scope_propagation` propagates route-handler
 //! auth checks DOWN onto callee helper units, but only within a single
 //! file: it refuses to lift onto a helper that has no in-file caller
 //! (the helper could be an external entry point).  The dominant FP shape
@@ -221,7 +221,7 @@ pub fn extract_caller_scope_facts(model: &AuthorizationModel, lang: Lang) -> Vec
 /// route-level checks as synthetic `is_route_level=true` AuthChecks,
 /// re-anchored at the unit's start line so `has_prior_subject_auth`'s
 /// `check.line <= op.line` gate covers every operation inside the unit —
-/// matching [`super::apply_caller_scope_propagation`]'s final lift loop.
+/// matching `apply_caller_scope_propagation`'s final lift loop.
 ///
 /// Called BEFORE the in-file caller-scope pass so a cross-file-lifted
 /// helper (now carrying route-level seed checks) can itself seed the

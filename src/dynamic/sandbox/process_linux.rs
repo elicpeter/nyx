@@ -303,7 +303,12 @@ unsafe extern "C" {
         flags: u64,
         data: *const core::ffi::c_void,
     ) -> i32;
-    fn write(fd: i32, buf: *const u8, count: usize) -> isize;
+    // `buf` is `*const c_void`, matching POSIX `write(2)` exactly.  Declaring
+    // it as `*const u8` is ABI-compatible, but rustc's
+    // `suspicious_runtime_symbol_definitions` lint compares this declaration
+    // against the signature the standard library expects for the runtime
+    // `write` symbol and rejects the mismatch under `-D warnings`.
+    fn write(fd: i32, buf: *const core::ffi::c_void, count: usize) -> isize;
     fn __errno_location() -> *mut i32;
 }
 
@@ -602,7 +607,7 @@ pub fn install_pre_exec(
             let outcome = run_pre_exec_in_child(&plan_for_child);
             if write_fd >= 0 {
                 let bytes = encode_outcome(&outcome);
-                let _ = write(write_fd, bytes.as_ptr(), bytes.len());
+                let _ = write(write_fd, bytes.as_ptr().cast(), bytes.len());
                 // execve(2) closes write_fd via O_CLOEXEC; no manual
                 // close needed here.
             }

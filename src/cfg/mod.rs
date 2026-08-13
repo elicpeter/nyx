@@ -607,8 +607,8 @@ pub struct CallMeta {
     pub sink_payload_args: Option<Vec<usize>>,
     /// Identifiers syntactically contained in a nested inner sink call when the
     /// node's `Sink` label was contributed by
-    /// [`crate::cfg::find_classifiable_inner_call`] /
-    /// [`crate::cfg::find_inner_sink_call`] overriding the outer callee.
+    /// `find_classifiable_inner_call` /
+    /// `find_inner_sink_call` overriding the outer callee.
     ///
     /// A flattened aggregate node (`Ok(Reader { meta: <tainted>, h:
     /// File::open(const) })`) collapses the whole expression into one CFG
@@ -689,7 +689,7 @@ pub struct CallMeta {
     /// Provenance for a `Sink` label that was HOISTED onto this wrapper call
     /// from an inner call nested inside a callback-argument function literal.
     ///
-    /// [`first_member_label`] descends through function literals, so a wrapper
+    /// `first_member_label` descends through function literals, so a wrapper
     /// like `queryInterface.sequelize.transaction(async (t) => {
     /// queryInterface.sequelize.query(`…const DDL…`, { transaction: t }) })`
     /// inherits the inner `sequelize.query` `Sink` label — but the wrapper's
@@ -705,7 +705,7 @@ pub struct CallMeta {
 }
 
 /// Recorded provenance of a callback-nested inner sink call whose `Sink` label
-/// was hoisted onto an outer wrapper node by [`first_member_label`].  See
+/// was hoisted onto an outer wrapper node by `first_member_label`.  See
 /// [`CallMeta::hoisted_sink`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HoistedSink {
@@ -898,7 +898,7 @@ pub struct NodeInfo {
     /// `DataSource` / static `DriverManager` `getConnection(...)` return an
     /// OWNED connection the caller must close (this stays `false` — those
     /// leaks are real).  Set only at CFG build for Java (see
-    /// [`java_getconnection_receiver_is_borrowed`]); consumed by the
+    /// `java_getconnection_receiver_is_borrowed`); consumed by the
     /// `state-resource-leak` and `cfg-resource-leak` passes.
     #[serde(default)]
     pub borrowed_resource: bool,

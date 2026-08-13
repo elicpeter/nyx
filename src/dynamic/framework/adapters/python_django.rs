@@ -209,10 +209,9 @@ impl FrameworkAdapter for PythonDjangoAdapter {
                     method: summary.name.clone(),
                 },
             )
-        } else if let Some(template) = url_template {
-            (HttpMethod::GET, template, EntryKind::HttpRoute)
         } else {
-            return None;
+            let template = url_template?;
+            (HttpMethod::GET, template, EntryKind::HttpRoute)
         };
 
         let formals = function_formal_names(func_node, file_bytes);
