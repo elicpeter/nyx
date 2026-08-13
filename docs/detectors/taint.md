@@ -1,8 +1,8 @@
 # Taint analysis
 
-Nyx tracks untrusted data from **sources** (where it enters the program) through assignments and function calls to **sinks** (where it's used dangerously). If the flow reaches a sink without passing a matching **sanitizer**, a finding fires.
+Nyx tracks untrusted data from **sources** (where it enters the program) through assignments and calls to **sinks** (where it's used dangerously). Reaching a sink without passing a matching **sanitizer** fires a finding.
 
-The engine is a monotone forward dataflow over a finite lattice with guaranteed termination. It's flow-sensitive inside a function, and interprocedural across files via persisted per-function summaries.
+The engine is a monotone forward dataflow over a finite lattice with guaranteed termination: flow-sensitive inside a function, interprocedural across files via persisted per-function summaries.
 
 ## Rule ID
 
@@ -14,20 +14,20 @@ One rule ID, parameterized by the source location. Suppressions can target eithe
 
 ## What it detects
 
-- User input flowing to shell execution: `req.body.cmd` → `child_process.exec`
-- User input flowing to code evaluation: `req.query.code` → `eval`
-- User input flowing to SQL: `request.args.get('id')` → `cursor.execute(f"... {id}")`
-- Environment variables flowing to shell: `env::var("CMD")` → `Command::new("sh").arg("-c")`
-- Request parameters flowing to HTML: `req.query.name` → `innerHTML`
-- File contents flowing to privileged sinks: `fs::read_to_string` → `db.execute`
+- User input to shell execution: `req.body.cmd` into `child_process.exec`
+- User input to code evaluation: `req.query.code` into `eval`
+- User input to SQL: `request.args.get('id')` into `cursor.execute(f"... {id}")`
+- Environment variables to shell: `env::var("CMD")` into `Command::new("sh").arg("-c")`
+- Request parameters to HTML: `req.query.name` into `innerHTML`
+- File contents to privileged sinks: `fs::read_to_string` into `db.execute`
 - Any other source-to-sink flow where the sink's required capability is not stripped along the way
 
 ## What it can't detect
 
-- **Library calls without summaries.** If a callee has no summary (no source, binary-only dependency), Nyx treats it as neither propagating nor sanitizing. This is conservative for sanitization but lossy for propagation.
-- **Deep pointer aliasing.** `let y = &x; sink(*y)` works through one level, but arbitrary chains of pointer arithmetic and aliased writes (`*p`, `p->field` in C/C++) are not tracked end-to-end. Function pointers and indirect calls resolve to no callee.
-- **Implicit flows.** Taint follows explicit data, not branching signal. `if (secret) x = 1 else x = 0` does not taint `x`.
-- **Globals and statics across functions.** Not tracked across function boundaries.
+- Library calls without summaries. A callee with no summary (no source, binary-only dependency) counts as neither propagating nor sanitizing: conservative for sanitization, lossy for propagation.
+- Deep pointer aliasing. One level works (`let y = &x; sink(*y)`), but arbitrary chains of pointer arithmetic and aliased writes (`*p`, `p->field` in C/C++) are not tracked end-to-end. Function pointers and indirect calls resolve to no callee.
+- Implicit flows. Taint follows explicit data, not branching signal: `if (secret) x = 1 else x = 0` does not taint `x`.
+- Globals and statics across function boundaries.
 
 ## Common false positives
 
@@ -88,11 +88,11 @@ nyx scan . --min-confidence medium
 nyx scan . --mode ast
 ```
 
-AST-only mode gives you structural pattern matches without taint.
+AST-only mode gives structural pattern matches without taint.
 
-In the browser UI, taint findings render as a numbered flow walk so you can see each hop the engine took:
+In the browser UI, taint findings render as a numbered flow walk, one step per hop the engine took:
 
-<p align="center"><img src="../assets/screenshots/docs/serve-finding-detail.png" alt="Nyx finding detail: HIGH taint-unsanitised-flow with numbered source → call → sink steps and How to fix guidance" width="900"/></p>
+<p align="center"><img src="../assets/screenshots/docs/serve-finding-detail.png" alt="Nyx finding detail: HIGH taint-unsanitised-flow with numbered source, call and sink steps and How to fix guidance" width="900"/></p>
 
 ## Example
 
@@ -121,7 +121,7 @@ Safe rewrite: drop the shell and pass the value as argv directly (`Command::new(
 
 ## Capabilities
 
-Sources, sanitizers, and sinks are linked by named capabilities. A sanitizer only clears taint for the cap it declares. A sink only fires when the remaining taint still carries its required cap.
+Sources, sanitizers, and sinks are linked by named capabilities. Sources typically declare `cap = "all"` so they match every sink; a sink fires only when the remaining taint still carries the cap it requires; a sanitizer clears only the cap it names.
 
 | Capability | Typical source | Typical sanitizer | Typical sink |
 |---|---|---|---|
@@ -148,11 +148,9 @@ Sources, sanitizers, and sinks are linked by named capabilities. A sanitizer onl
 | `data_exfil` | cookies, headers, env, db rows, file reads (Sensitive-tier sources only) | | `fetch` body / headers / json, `XMLHttpRequest.send` body |
 | `all` | Sources typically use `all` so they match any sink | | |
 
-Sources typically use `cap = "all"` so they match every sink. Sinks declare the specific cap they need. Sanitizers only clear the cap they name.
-
 ## Source sensitivity
 
-Some detector classes need to know not just *that* a value is attacker-influenced but *what kind* of value it is. Each source carries a `SourceKind` (`UserInput`, `Cookie`, `Header`, `EnvironmentConfig`, `FileSystem`, `Database`, `CaughtException`, `Unknown`) and a derived sensitivity tier:
+Some detector classes need to know not just *that* a value is attacker-influenced but *what kind* it is. Each source carries a `SourceKind` (`UserInput`, `Cookie`, `Header`, `EnvironmentConfig`, `FileSystem`, `Database`, `CaughtException`, `Unknown`) and a derived sensitivity tier:
 
 | Tier | Source kinds | Meaning |
 |---|---|---|
@@ -160,9 +158,9 @@ Some detector classes need to know not just *that* a value is attacker-influence
 | `Sensitive` | `Cookie`, `Header`, `EnvironmentConfig`, `FileSystem`, `Database`, `CaughtException`, `Unknown` | Operator-bound state that should not leak across boundaries. |
 | `Secret` | (reserved for explicit credential sources) | Highest tier; treated identically to `Sensitive` today. |
 
-`Cap::DATA_EXFIL` only fires when the contributing source is at least `Sensitive`. Plain user input flowing into an outbound `fetch` body is suppressed at finding-emission time. That is the canonical false-positive class for API gateways and telemetry forwarders that proxy `req.body`. SSRF and other classes are unaffected; the gate is scoped to `DATA_EXFIL`.
+`Cap::DATA_EXFIL` only fires when the contributing source is at least `Sensitive`. Plain user input flowing into an outbound `fetch` body is suppressed at finding-emission time, which is the canonical false-positive class for API gateways and telemetry forwarders that proxy `req.body`. SSRF and other classes are unaffected: the gate is scoped to `DATA_EXFIL`.
 
-If a project legitimately classifies a request body as sensitive (e.g. an internal forwarder where `req.body` carries a pre-authenticated user token), override via custom rules in `nyx.conf`:
+If a project legitimately classifies a request body as sensitive (say an internal forwarder where `req.body` carries a pre-authenticated user token), override via custom rules in `nyx.conf`:
 
 ```toml
 # Treat the forwarder's outbound payload as already-sanitized so the
@@ -181,7 +179,7 @@ Three suppression knobs ship by default so projects can match the cap to their a
 
 ### 1. Forwarding-wrapper sanitizer convention
 
-A named function that exists to *forward* a payload across a known boundary is the developer's explicit decision to send the data. The default sanitizer rules treat the following identifiers as `Sanitizer(data_exfil)` in JavaScript and TypeScript:
+A named function whose job is to *forward* a payload across a known boundary is the developer's explicit decision to send the data. The default sanitizer rules treat these identifiers as `Sanitizer(data_exfil)` in JavaScript and TypeScript:
 
 ```
 serializeForUpstream
@@ -192,7 +190,7 @@ metrics.report
 logEvent
 ```
 
-If your codebase follows this convention, the cap stops firing on these calls automatically. Extend the convention with your own forwarding wrappers via the standard custom-rule path:
+Calls matching these names stop firing the cap. Add your own forwarding wrappers the same way:
 
 ```toml
 [[analysis.languages.javascript.rules]]
@@ -205,7 +203,7 @@ The rule of thumb: a function that *only* exists to ship a payload to a known bo
 
 ### 2. Destination allowlist
 
-Configure a set of trusted outbound prefixes once and the cap is dropped on every site whose destination argument has a static prefix that begins with one of them:
+Configure trusted outbound prefixes once, and the cap drops on every site whose destination argument has a static prefix beginning with one of them:
 
 ```toml
 [detectors.data_exfil]
@@ -221,7 +219,7 @@ The match consults the abstract string domain: a literal URL is a static prefix;
 
 ### 3. Detector-class disable
 
-Some projects forward user-bound payloads as a matter of architecture. Turn the entire detector class off when the noise is permanent:
+Some projects forward user-bound payloads as a matter of architecture. Turn the whole detector class off when the noise is permanent:
 
 ```toml
 [detectors.data_exfil]
@@ -258,7 +256,7 @@ Add project-specific sinks with `nyx config add-rule --kind sink --cap data_exfi
 | File system, database | Medium | Medium |
 | Caught exception | Medium | Low |
 
-Path-validated flows (`path_validated: true`) drop one severity tier. Confidence drops to Low when the abstract or symbolic domain cannot corroborate a concrete string reaching the outbound payload (for example, when the body comes from a callee with no summary).
+Path-validated flows (`path_validated: true`) drop one severity tier. Confidence drops to Low when the abstract or symbolic domain cannot corroborate a concrete string reaching the outbound payload, for example when the body comes from a callee with no summary.
 
 Attack-surface score ranges:
 
@@ -268,4 +266,4 @@ Attack-surface score ranges:
 | Medium DATA_EXFIL, header, fs, db, or caught-exception source | 40 to 45 |
 | Low DATA_EXFIL, no abstract corroboration, path-validated | 18 to 25 |
 
-For reference: High SSRF, SQLi, cmdi land at 76 to 81; Medium taint with env source lands at 45 to 50; AST-only patterns sit around 10. Data-exfil sits below the direct-compromise classes but above informational AST patterns.
+For reference: High SSRF, SQLi, cmdi land at 76 to 81; Medium taint with env source lands at 45 to 50; AST-only patterns sit around 10.

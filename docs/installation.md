@@ -41,7 +41,7 @@ nyx --version
 ## Build from source
 
 ```bash
-git clone https://github.com/elicpeter/nyx.git
+git clone https://github.com/nyx-sec/nyx.git
 cd nyx
 cargo build --release
 # Binary at target/release/nyx

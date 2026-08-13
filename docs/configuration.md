@@ -10,7 +10,7 @@ Nyx uses TOML configuration files. A default config is auto-generated on first r
 |----------|-----------|
 | Linux | `~/.config/nyx/` |
 | macOS | `~/Library/Application Support/nyx/` |
-| Windows | `%APPDATA%\elicpeter\nyx\config\` |
+| Windows | `%APPDATA%\nyx\config\` |
 
 Run `nyx config path` to see the exact directory on your system.
 

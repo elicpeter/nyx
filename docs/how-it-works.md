@@ -1,6 +1,6 @@
 # How Nyx works
 
-If you're going to act on a finding, it helps to know how the scanner got there. This page is the short version. Source paths are linked where the answer to "exactly what does it do" lives in the code.
+If you're going to act on a finding, it helps to know how the scanner got there. Source paths link to where the exact behaviour lives in the code.
 
 ## The pipeline
 
@@ -23,23 +23,23 @@ flowchart TD
     Verify --> Emit["Emit<br/>console, JSON, SARIF, UI"]
 ```
 
-**Pass 1, per file.** Tree-sitter parses the file. Nyx builds an intra-procedural control-flow graph, lowers it to SSA, and extracts a summary per function describing what that function does at the boundary: which arguments flow to sinks, which sources it reads from, which sinks it calls, what taint it strips, what it returns. Summaries are persisted to SQLite ([`src/summary/`](https://github.com/elicpeter/nyx/tree/master/src/summary/), [`src/database.rs`](https://github.com/elicpeter/nyx/blob/master/src/database.rs)).
+Pass 1 runs per file. Tree-sitter parses it, then Nyx builds an intra-procedural control-flow graph, lowers it to SSA, and extracts a per-function summary of what the function does at its boundary: which arguments flow to sinks, which sources it reads, which sinks it calls, what taint it strips, what it returns. Summaries persist to SQLite ([`src/summary/`](https://github.com/nyx-sec/nyx/tree/master/src/summary/), [`src/database.rs`](https://github.com/nyx-sec/nyx/blob/master/src/database.rs)).
 
-**Summary merge.** All per-file summaries get unioned into a global map keyed by qualified function name.
+The merge step unions all per-file summaries into a global map keyed by qualified function name.
 
-**Pass 2, per file.** Each file is reanalysed with the global summaries available. The taint engine runs a forward dataflow worklist over the SSA representation. When it hits a call, it consults summaries to decide whether the call propagates taint, sanitizes it, or terminates the flow. Findings are produced when tainted data reaches a sink whose required capability is still set on the value.
+Pass 2 reanalyses each file with the global summaries available. The taint engine runs a forward dataflow worklist over the SSA. At a call it consults summaries to decide whether the call propagates taint, sanitizes it, or terminates the flow. A finding is produced when tainted data reaches a sink whose required capability is still set on the value.
 
-Two extra layers tune precision around calls. **Context-sensitive inlining** (k=1) re-runs intra-file callees with the actual argument taint at the call site, so a helper called once with tainted input and once with sanitized input produces the right result for each call. **SCC fixed-point**: when a group of mutually-recursive functions forms a strongly-connected component in the call graph, the engine iterates summaries to a joint fixed-point (capped at 64 iterations). SCCs that span files are also handled.
+Two extra layers tune precision around calls. Context-sensitive inlining (k=1) re-runs intra-file callees with the actual argument taint at the call site, so a helper called once with tainted input and once with sanitized input gets the right result for each call. The SCC fixed-point handles mutual recursion: when a group of functions forms a strongly-connected component in the call graph, the engine iterates summaries to a joint fixed-point (capped at 64 iterations). SCCs that span files are also handled.
 
-When a method call has a receiver typed as a super-class, trait, or interface, **hierarchy fan-out** widens the resolved callee set to every concrete implementer the engine has seen. A class diagram extracted in pass 1 (Java extends/implements, Rust impl-for, TS/JS extends, Python bases, Ruby includes, PHP extends/implements, C++ inheritance) feeds an index that the call resolver consults during pass 2. The fan-out is capped at 8 implementers per call site; over-fanning is a precision tax, not a soundness issue.
+When a method call has a receiver typed as a super-class, trait, or interface, hierarchy fan-out widens the resolved callee set to every concrete implementer the engine has seen. A class diagram extracted in pass 1 (Java extends/implements, Rust impl-for, TS/JS extends, Python bases, Ruby includes, PHP extends/implements, C++ inheritance) feeds the index the call resolver consults during pass 2. Fan-out is capped at 8 implementers per call site; over-fanning is a precision tax, not a soundness issue.
 
-A separate **field-sensitive points-to** pass tracks abstract locations down to the field level, so `c.mu.Lock()` is a lock on `Field(c, mu)` rather than on `c` as a whole. That distinction is what lets the resource-lifecycle and taint passes tell `obj.field = tainted; sink(obj.other_field)` apart from the conservative whole-variable approximation. Subscript reads and writes (`arr[i]`, `map[k] = v`) lower to synthetic `__index_get__` / `__index_set__` calls so the same container model handles them. Set `NYX_POINTER_ANALYSIS=0` to fall back to the pre-pointer-pass behaviour for baseline comparison.
+A separate field-sensitive points-to pass tracks abstract locations down to the field level, so `c.mu.Lock()` is a lock on `Field(c, mu)` rather than on `c` as a whole. That distinction lets the resource-lifecycle and taint passes tell `obj.field = tainted; sink(obj.other_field)` apart from the conservative whole-variable approximation. Subscript reads and writes (`arr[i]`, `map[k] = v`) lower to synthetic `__index_get__` / `__index_set__` calls so the same container model handles them. Set `NYX_POINTER_ANALYSIS=0` to fall back to the pre-pointer-pass behaviour for baseline comparison.
 
-**Dynamic verification.** After ranking and dedupe, default builds verify Medium and High confidence findings unless `--no-verify` or `scanner.verify = false` is set. The verifier derives a small harness from the finding, runs it in a sandbox against curated payloads, and stores the result on `evidence.dynamic_verdict`. `Confirmed` means a vulnerable payload fired and its benign control stayed clean. `NotConfirmed` means the harness ran but did not fire, not that the finding is closed.
+Dynamic verification comes last. After ranking and dedupe, default builds verify Medium and High confidence findings unless `--no-verify` or `scanner.verify = false` is set. The verifier derives a small harness from the finding, runs it in a sandbox against curated payloads, and stores the result on `evidence.dynamic_verdict`. `Confirmed` means a vulnerable payload fired and its benign control stayed clean. `NotConfirmed` means the harness ran but did not fire, not that the finding is closed.
 
 ## Optional analyses on top
 
-These run on top of the forward taint pass. They're independently switchable via `[analysis.engine]` config or matching CLI flags. See [advanced-analysis.md](advanced-analysis.md) for the full description and tradeoffs.
+These run on top of the forward taint pass and are independently switchable via `[analysis.engine]` config or matching CLI flags. See [advanced-analysis.md](advanced-analysis.md) for the description and tradeoffs.
 
 | Pass | Purpose | Default |
 |---|---|---|
@@ -55,12 +55,15 @@ These run on top of the forward taint pass. They're independently switchable via
 
 ## Where bounds live
 
-Static analysis at scale means choosing where to stop. Nyx exposes its bounds rather than hiding them:
+Static analysis at scale means choosing where to stop. Nyx's bounds are explicit:
 
-- **Inline depth** is k=1. Callees larger than the inline body-size cap fall back to summary-based resolution.
-- **SCC fixed-point** is capped at 64 iterations. If a recursive cluster doesn't converge, the engine emits the best summary it has and records an `engine_note` on affected findings.
-- **Lattice width** is bounded. Taint origin sets cap at 32 entries per SSA value (`--max-origins`); points-to sets cap at 32 heap objects (`--max-pointsto`). Truncation is recorded as `OriginsTruncated` / `PointsToTruncated` so you can see when precision was lost.
-- **Symbolic expressions** cap at depth 32. Deeper expressions degrade to `Unknown` rather than growing without bound.
+| Bound | Limit | When it is hit |
+|---|---|---|
+| Inline depth | k=1 | Callees larger than the inline body-size cap fall back to summary-based resolution |
+| SCC fixed-point | 64 iterations | The engine emits the best summary it has and records an `engine_note` on affected findings |
+| Taint origin sets | 32 entries per SSA value (`--max-origins`) | Truncation is recorded as `OriginsTruncated` so you can see when precision was lost |
+| Points-to sets | 32 heap objects (`--max-pointsto`) | Truncation is recorded as `PointsToTruncated` |
+| Symbolic expression depth | 32 | Deeper expressions degrade to `Unknown` rather than growing without bound |
 
 Findings whose engine notes indicate a bound was hit can be filtered with `--require-converged` for strict CI gates. The flag drops over-reports and bails; under-reports (where the emitted finding is still real but the result set is a lower bound) are kept.
 

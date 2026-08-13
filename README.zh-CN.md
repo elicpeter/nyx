@@ -6,7 +6,7 @@
 [![crates.io](https://img.shields.io/crates/v/nyx-scanner.svg)](https://crates.io/crates/nyx-scanner)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange)](https://www.rust-lang.org)
-[![CI](https://img.shields.io/github/actions/workflow/status/elicpeter/nyx/ci.yml?branch=master)](https://github.com/elicpeter/nyx/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/nyx-sec/nyx/ci.yml?branch=master)](https://github.com/nyx-sec/nyx/actions)
 [![Docs](https://img.shields.io/badge/docs-nyxscan.dev%2Fdocs-blue)](https://nyxscan.dev/docs/)
 
 [English](./README.md) · 简体中文
@@ -76,7 +76,7 @@ nyx scan --engine-profile deep
 ### GitHub Action
 
 ```yaml
-- uses: elicpeter/nyx@v0.8.0
+- uses: nyx-sec/nyx@v0.8.0
   with:
     format: sarif
     fail-on: MEDIUM
@@ -96,7 +96,7 @@ nyx scan --engine-profile deep
 cargo install nyx-scanner
 ```
 
-**预编译二进制：** 从 [Releases](https://github.com/elicpeter/nyx/releases) 下载对应平台的归档包，对照 `SHA256SUMS`（以及随附的 `SHA256SUMS.asc` GPG 签名，如有提供）校验，解压并把 `nyx` 放到 `PATH` 中。
+**预编译二进制：** 从 [Releases](https://github.com/nyx-sec/nyx/releases) 下载对应平台的归档包，对照 `SHA256SUMS`（以及随附的 `SHA256SUMS.asc` GPG 签名，如有提供）校验，解压并把 `nyx` 放到 `PATH` 中。
 
 ```bash
 # 可选：校验校验文件的 GPG 签名（当 SHA256SUMS.asc 已发布时）
@@ -107,7 +107,7 @@ unzip nyx-x86_64-unknown-linux-gnu.zip && chmod +x nyx && sudo mv nyx /usr/local
 
 **从源码编译：**
 ```bash
-git clone https://github.com/elicpeter/nyx.git
+git clone https://github.com/nyx-sec/nyx.git
 cd nyx && cargo build --release
 ```
 
@@ -201,7 +201,7 @@ nyx scan --no-verify       # 只跑静态分析，适合本地快速循环
 
 ## 配置
 
-配置由 `nyx.conf`（默认值）与 `nyx.local`（你的覆写）合并而成，从平台配置目录读取（Linux 为 `~/.config/nyx/`，macOS 为 `~/Library/Application Support/nyx/`，Windows 为 `%APPDATA%\elicpeter\nyx\config\`）。
+配置由 `nyx.conf`（默认值）与 `nyx.local`（你的覆写）合并而成，从平台配置目录读取（Linux 为 `~/.config/nyx/`，macOS 为 `~/Library/Application Support/nyx/`，Windows 为 `%APPDATA%\nyx\config\`）。
 
 ```toml
 [scanner]

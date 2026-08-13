@@ -1,6 +1,6 @@
 # AST patterns
 
-AST patterns are tree-sitter queries that match dangerous structural shapes in source. No dataflow, no CFG. A match means the construct is present; it's not proof the construct is exploitable.
+AST patterns are tree-sitter queries that match dangerous structural shapes in source. No dataflow, no CFG. A match means the construct is present, not that it is exploitable.
 
 Patterns run in every analysis mode. In `--mode ast` they're the only active detector.
 
@@ -42,12 +42,12 @@ Full list: [rules.md](../rules.md).
 
 ## What patterns can't tell you
 
-- **Dataflow.** `eval("1+1")` (safe) and `eval(userInput)` (dangerous) both match `js.code_exec.eval`. The taint detector is the one that distinguishes them.
-- **Reachability.** A pattern in dead code matches identically.
-- **Semantics.** `strcpy(dst, src)` always matches, regardless of buffer sizes.
-- **Indirect calls.** `let e = eval; e(input)` doesn't match `eval`.
-- **Aliased imports.** `from os import system as s; s(cmd)` won't match `system`.
-- **Macro expansions.** Tree-sitter parses the macro call site, not the expansion.
+- Dataflow. `eval("1+1")` (safe) and `eval(userInput)` (dangerous) both match `js.code_exec.eval`; the taint detector is the one that distinguishes them.
+- Reachability. A pattern in dead code matches identically.
+- Semantics. `strcpy(dst, src)` always matches, regardless of buffer sizes.
+- Indirect calls. `let e = eval; e(input)` doesn't match `eval`.
+- Aliased imports. `from os import system as s; s(cmd)` won't match `system`.
+- Macro expansions. Tree-sitter parses the macro call site, not the expansion.
 
 ## Common false positives
 

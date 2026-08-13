@@ -2,7 +2,7 @@
 
 Every finding Nyx emits has a rule ID. This page enumerates the IDs that ship with the scanner, grouped by family.
 
-> This page is written by hand and drifts against the code. Authoritative sources: [`src/patterns/<lang>.rs`](https://github.com/elicpeter/nyx/tree/master/src/patterns) for AST patterns, [`src/labels/<lang>.rs`](https://github.com/elicpeter/nyx/tree/master/src/labels) for taint matchers, and [`src/auth_analysis/config.rs`](https://github.com/elicpeter/nyx/blob/master/src/auth_analysis/config.rs) for auth rules. If a rule fires that isn't listed here, the source file is right and this page is wrong.
+> This page is written by hand and drifts against the code. Authoritative sources: [`src/patterns/<lang>.rs`](https://github.com/nyx-sec/nyx/tree/master/src/patterns) for AST patterns, [`src/labels/<lang>.rs`](https://github.com/nyx-sec/nyx/tree/master/src/labels) for taint matchers, and [`src/auth_analysis/config.rs`](https://github.com/nyx-sec/nyx/blob/master/src/auth_analysis/config.rs) for auth rules. If a rule fires that isn't listed here, the source file is right and this page is wrong.
 
 If you'd rather browse rules interactively, [`nyx serve`](serve.md) ships a Rules page that lists every loaded matcher with its language, kind, and capability:
 
@@ -77,7 +77,7 @@ See [auth.md](auth.md) for scope, the five sink-classes, and tuning.
 
 Each language ships a tree-sitter pattern registry. Structural match on the pattern, no dataflow. Some patterns also have a Tier B heuristic guard (e.g. SQL execute must receive a concatenation, not a literal) noted in the registry.
 
-The tables below are generated from `src/patterns/<lang>.rs` by [`tools/docgen`](https://github.com/elicpeter/nyx/tree/master/tools/docgen). Run `cargo run --features docgen --bin nyx-docgen` after changing the registry to refresh them.
+The tables below are generated from `src/patterns/<lang>.rs` by [`tools/docgen`](https://github.com/nyx-sec/nyx/tree/master/tools/docgen). Run `cargo run --features docgen --bin nyx-docgen` after changing the registry to refresh them.
 
 <!-- BEGIN AUTOGEN rules-by-language -->
 
@@ -273,4 +273,4 @@ The tables below are generated from `src/patterns/<lang>.rs` by [`tools/docgen`]
 
 Aliases: `data_exfiltration` for `data_exfil`, `ldapi` for `ldap_injection`, `xpathi` for `xpath_injection`, `crlf` and `response_splitting` for `header_injection`, `redirect` for `open_redirect`, `template_injection` for `ssti`, `proto_pollution` for `prototype_pollution`.
 
-Source for both the enum and the `to_cap` mapping: [`src/labels/mod.rs`](https://github.com/elicpeter/nyx/blob/master/src/labels/mod.rs) (`Cap` and `CAP_RULE_REGISTRY`) and [`src/utils/config.rs`](https://github.com/elicpeter/nyx/blob/master/src/utils/config.rs) (`CapName`).
+Source for both the enum and the `to_cap` mapping: [`src/labels/mod.rs`](https://github.com/nyx-sec/nyx/blob/master/src/labels/mod.rs) (`Cap` and `CAP_RULE_REGISTRY`) and [`src/utils/config.rs`](https://github.com/nyx-sec/nyx/blob/master/src/utils/config.rs) (`CapName`).

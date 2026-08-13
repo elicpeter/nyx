@@ -1,6 +1,6 @@
 # State model analysis
 
-Tracks resource lifecycle and authentication state through a function. Detects use-after-close, double-close, leaks, and unauthenticated access to privileged operations.
+Tracks resource lifecycle and authentication state through a function: use-after-close, double-close, leaks, and unauthenticated access to privileged operations.
 
 State analysis is on by default. Disable with `scanner.enable_state_analysis = false`. It runs in `--mode full` and `--mode taint`; AST-only mode skips it.
 
@@ -16,7 +16,7 @@ State analysis is on by default. Disable with `scanner.enable_state_analysis = f
 
 ## What it detects
 
-**`state-use-after-close`**: Resource transitions to CLOSED (via `close`, `fclose`, `disconnect`, …), then a use operation happens on it.
+`state-use-after-close`: a resource reaches CLOSED (via `close`, `fclose`, `disconnect`, ...) and is then used.
 
 ```c
 FILE *f = fopen("data.txt", "r");
@@ -24,13 +24,13 @@ fclose(f);
 fread(buf, 1, 100, f);  // state-use-after-close
 ```
 
-**`state-double-close`**: Resource closed twice. Crashes or undefined behaviour on most runtimes.
+`state-double-close`: a resource closed twice. Crashes or undefined behaviour on most runtimes.
 
-**`state-resource-leak`**: Resource opened but never closed on any path through the function. Definite leak.
+`state-resource-leak`: opened but never closed on any path through the function. Definite leak.
 
-**`state-resource-leak-possible`**: Resource closed on some paths but not others. Lower confidence; often an early-return error path.
+`state-resource-leak-possible`: closed on some paths but not others. Lower confidence, often an early-return error path.
 
-**`state-unauthed-access`**: A function recognised as a web handler reaches a privileged sink without an auth call on the path.
+`state-unauthed-access`: a function recognised as a web handler reaches a privileged sink without an auth call on the path.
 
 A function counts as a web handler if its name starts with `handle_`, `route_`, or `api_` (sufficient on its own), or starts with `serve_`/`process_` and the file uses web-shaped parameter names (`request`, `req`, `ctx`, `res`, `response`, `w`, `writer`, language-dependent). `main` is excluded.
 
@@ -48,12 +48,12 @@ Several language-specific cleanup patterns suppress leak findings:
 
 ## What it can't detect
 
-- **Cross-function resource ownership.** Open in one function, close in another, leak gets reported in the opener. The most common FP source for leak detection.
-- **Factory / builder functions** that return a resource for the caller to manage.
-- **Variable shadowing across scopes.** Same name in inner and outer scope shares one symbol; an inner close masks an outer leak.
-- **Resources stored in collections.** Handles in arrays / maps / channels and cleaned up via iteration are not tracked.
-- **Dynamic dispatch.** Close called via trait object or interface may not be recognised.
-- **Type-state authentication.** `AuthenticatedRequest<T>` and similar Rust patterns are not recognised as auth.
+- Resource ownership that crosses functions. Open in one function, close in another, and the leak is reported in the opener. This is the most common FP source for leak detection.
+- Factory / builder functions that return a resource for the caller to manage.
+- Variable shadowing across scopes. Same name in inner and outer scope shares one symbol, so an inner close masks an outer leak.
+- Resources stored in collections. Handles in arrays / maps / channels and cleaned up via iteration are not tracked.
+- Dynamic dispatch. A close called via trait object or interface may not be recognised.
+- Type-state authentication. `AuthenticatedRequest<T>` and similar Rust patterns are not recognised as auth.
 
 ## Common false positives
 

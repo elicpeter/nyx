@@ -27,7 +27,6 @@ pub const MAX_RETURN_PATHS: usize = 8;
 /// caller-side path state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReturnPathTransform {
-    /// Behavioural kind on this path (Identity / StripBits / AddBits).
     pub transform: TaintTransform,
     /// Deterministic hash of the path-predicate gate. `0` = no gate.
     /// Equivalent predicates collide and are joined.
@@ -44,8 +43,8 @@ pub struct ReturnPathTransform {
 }
 
 impl ReturnPathTransform {
-    /// Dedup key. `abstract_contribution` is intentionally excluded
-    ///, colliding entries join their abstract facts.
+    /// Dedup key. `abstract_contribution` is intentionally excluded:
+    /// colliding entries join their abstract facts.
     pub fn dedup_key(&self) -> (u64, &TaintTransform, u8, u8) {
         (
             self.path_predicate_hash,
@@ -516,7 +515,6 @@ pub struct PathFactReturnEntry {
     pub known_true: u8,
     /// `PredicateSummary::known_false` bits at this return.
     pub known_false: u8,
-    /// The return value's [`PathFact`] on this path.
     pub path_fact: PathFact,
     /// Inner [`PathFact`] when the rv on this path is a one-arg variant
     /// constructor; [`None`] otherwise.  Match-arm-sensitive callers

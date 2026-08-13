@@ -1,25 +1,25 @@
 # Auth analysis
 
-**Rust is the stable target.** Python and Go have shipped precision work as of 0.7.0 (FastAPI cross-file dependencies, Go DAO-helper filtering, same-file caller-scope IPA) and are usable on real codebases. Ruby, Java, JavaScript, and TypeScript have rule scaffolding in [`src/auth_analysis/config.rs`](https://github.com/elicpeter/nyx/blob/master/src/auth_analysis/config.rs) but no benchmark corpus yet; treat findings there as preview.
+Rust is the stable target. Python and Go shipped precision work as of 0.7.0 (FastAPI cross-file dependencies, Go DAO-helper filtering, same-file caller-scope IPA) and are usable on real codebases. Ruby, Java, JavaScript, and TypeScript have rule scaffolding in [`src/auth_analysis/config.rs`](https://github.com/nyx-sec/nyx/blob/master/src/auth_analysis/config.rs) but no benchmark corpus yet; treat findings there as preview.
 
 ## What it catches
 
 The Rust rule is `rs.auth.missing_ownership_check`. It fires when a request handler reaches a privileged operation that takes a scoped identifier (`*_id`, row reference, scoped resource) without a preceding ownership or membership check.
 
-Concretely, it looks for these patterns of authorization in the function body and flags the call when none are present:
+It looks for these authorization patterns in the function body and flags the call when none are present:
 
 - A call to a recognised authorization helper. Defaults: `check_ownership`, `has_ownership`, `require_ownership`, `ensure_ownership`, `is_owner`, `authorize`, `verify_access`, `has_permission`, `can_access`, `can_manage`, plus `*_membership` and `require_{group,org,workspace,tenant,team}_member` variants. Extend in `[analysis.languages.rust]`.
 - An ownership-equality check on a row reference: `if owner_id != user.id { return 403 }` or any `field_id != self_actor` shape. The check writes `AuthCheck` evidence back to the row-fetch arguments via `AnalysisUnit.row_field_vars`.
 - A self-actor reference: `let user = require_auth(...).await?` followed by use of `user.id`, `user.user_id`, `user.uid`. The actor is recognised from typed extractor params (`Extension<Session>`, `CurrentUser`, etc.) and from typed helper bindings.
-- A typed extractor wrapper that proves route-level capability/policy enforcement: meilisearch-style `GuardedData<ActionPolicy<X>, _>`. Recognised by outer wrapper name (last segment, case-insensitive `starts_with`) so `GuardedData<ActionPolicy<X>, Data<AuthController>>` is classified by the outer `GuardedData`, not by whether an inner generic arg substring-matches `auth`. Configured via `policy_guard_names` (Rust default: `["Guarded"]`). Distinct from authentication-only wrappers so the pattern doesn't pollute regular call recognition.
-- A SQL query that joins through an ACL table or filters by `user_id` predicate. Detected without a SQL parser via [`sql_semantics.rs`](https://github.com/elicpeter/nyx/blob/master/src/auth_analysis/sql_semantics.rs); the authorized result variable propagates through `let row = ...prepare(LIT)...`, `for row in result`, `let id = row.get(...)`.
+- A typed extractor wrapper that proves route-level capability/policy enforcement, meilisearch-style `GuardedData<ActionPolicy<X>, _>`. Recognised by outer wrapper name (last segment, case-insensitive `starts_with`), so `GuardedData<ActionPolicy<X>, Data<AuthController>>` is classified by the outer `GuardedData` rather than by whether an inner generic arg substring-matches `auth`. Configured via `policy_guard_names` (Rust default: `["Guarded"]`), and kept distinct from authentication-only wrappers so the pattern doesn't pollute regular call recognition.
+- A SQL query that joins through an ACL table or filters by `user_id` predicate. Detected without a SQL parser via [`sql_semantics.rs`](https://github.com/nyx-sec/nyx/blob/master/src/auth_analysis/sql_semantics.rs); the authorized result variable propagates through `let row = ...prepare(LIT)...`, `for row in result`, `let id = row.get(...)`.
 - A helper-summary lift: handler calls `validate_target(db, widget_id, user.id)` whose body contains a `require_*_member` call. Cross-function summaries are merged at fixed-point (capped at 4 iterations).
 
-Handlers registered through attribute macros (`#[get("/path")]`, `#[routes::path(…)]`) or external service-config builders are also walked for typed-extractor guards, complementing the `.route(...)` registration path.
+Handlers registered through attribute macros (`#[get("/path")]`, `#[routes::path(...)]`) or external service-config builders are also walked for typed-extractor guards, complementing the `.route(...)` registration path.
 
 ## Caller-scope-entity exemption
 
-`<entity>.id` / `<entity>.pk` is not flagged when `<entity>` is a unit parameter named after a multi-tenant scope primitive: `organization` / `org`, `project`, `team`, `workspace`, `tenant`, `account`, `community`, `group`, `repository` / `repo`, `company`. The argument represents the caller's scope, not a user-controlled target, so internal helpers like `def get_environments(request, organization): Environment.objects.filter(organization_id=organization.id, …)` inherit the caller's authorization. Other field names (`.name`, `.slug`) still flag, and `user` / `member` / `actor` are deliberately excluded; those are handled by the actor-context recogniser.
+`<entity>.id` / `<entity>.pk` is not flagged when `<entity>` is a unit parameter named after a multi-tenant scope primitive: `organization` / `org`, `project`, `team`, `workspace`, `tenant`, `account`, `community`, `group`, `repository` / `repo`, `company`. The argument represents the caller's scope, not a user-controlled target, so internal helpers like `def get_environments(request, organization): Environment.objects.filter(organization_id=organization.id, ...)` inherit the caller's authorization. Other field names (`.name`, `.slug`) still flag, and `user` / `member` / `actor` are deliberately excluded; those are handled by the actor-context recogniser.
 
 ## Project-level web-framework gate (Rust)
 
@@ -29,7 +29,7 @@ In Rust, the `context_inputs` and param-name arms of the user-input heuristic ar
 - `Some(false)`: `Cargo.toml` was inspected and named no web framework, AND the file does not directly import one. Heuristics off; only `RouteHandler` classification (concrete route-registration evidence) survives.
 - `None`: no detection ran (single-file scan with no project root). Heuristics on; behavior unchanged.
 
-This avoids a class of FPs in non-web Rust crates where a debug-session handle named `session` would trip on `session.update(cx, …)`-style desktop-app code. Other languages keep prior behavior; the gate is currently Rust-only.
+This avoids a class of FPs in non-web Rust crates where a debug-session handle named `session` would trip on `session.update(cx, ...)`-style desktop-app code. Other languages keep prior behavior; the gate is currently Rust-only.
 
 ## Python: FastAPI cross-file dependencies
 
@@ -39,7 +39,7 @@ FastAPI's `include_router` chain is resolved across files. A child router declar
 - `<parent>.include_router(<child_module>.<child_var>)` edges are captured per file in pass 1, persisted into `GlobalSummaries::router_facts_by_module`, and lifted onto the active file's `AuthorizationModel::cross_file_router_deps` at pass 2 entry. Transitive lifts (grandparent to parent to child) iterate to fixpoint.
 - `Security(callable, scopes=[...])` is recognised distinctly from `Depends(callable)` and promotes the synthetic `AuthCheck` to `AuthCheckKind::Other` (route-level scope-checked authorization). Bare `Depends(callable)` is still a Login-only check.
 
-Module identity is the file basename without `.py`. This is sufficient for airflow-style `task_instances.router` naming; a project with two files of the same name in different subtrees will currently collide.
+Module identity is the file basename without `.py`. That is sufficient for airflow-style `task_instances.router` naming; a project with two files of the same name in different subtrees will currently collide.
 
 ## Go: DAO-helper id-scalar precision pass
 
@@ -59,7 +59,7 @@ This closes the FastAPI / Django / Flask shape where a route authenticates via d
 
 ## Sink classification
 
-The same call name can be safe on a local collection and dangerous on a database. The detector categorises each candidate sink before deciding whether to flag:
+The same call name can be safe on a local collection and dangerous on a database, so each candidate sink is categorised before the flag decision:
 
 | Class | Examples | Default treatment |
 |---|---|---|
@@ -70,20 +70,20 @@ The same call name can be safe on a local collection and dangerous on a database
 | `DbMutation` | `db.insert`, `repo.save` with scoped IDs | Sink unless ownership is established |
 | `DbCrossTenantRead` | `db.query` returning rows from a tenant scope | Sink unless ACL-join or tenant predicate is present |
 
-Receiver type drives the classification when SSA type facts are available, so `client.send(...)` correctly resolves through the receiver's inferred type.
+Receiver type drives the classification when SSA type facts are available, so `client.send(...)` resolves through the receiver's inferred type.
 
 ## What it can't catch
 
-- **Non-Rust frameworks**, in practice. Scaffolding exists; coverage doesn't.
-- **Type-system authorization.** A typestate pattern that makes unauthenticated handlers fail to compile (`fn endpoint(user: AuthenticatedUser<Admin>)`) is invisible. This is mostly fine because the type system already enforced the check, but the rule won't credit it.
-- **Authorization performed only via macros** that the AST doesn't expose as a recognisable call.
-- **Cross-async-boundary actor binding.** If the handler awaits `let user = require_auth(...).await?` and then spawns a task that uses `user.id` after a `tokio::spawn`, the spawn body is treated as a separate scope.
+- Non-Rust frameworks, in practice. Scaffolding exists; coverage doesn't.
+- Type-system authorization. A typestate pattern that makes unauthenticated handlers fail to compile (`fn endpoint(user: AuthenticatedUser<Admin>)`) is invisible. This is mostly fine because the type system already enforced the check, but the rule won't credit it.
+- Authorization performed only via macros that the AST doesn't expose as a recognisable call.
+- Cross-async-boundary actor binding. If the handler awaits `let user = require_auth(...).await?` and then spawns a task that uses `user.id` after a `tokio::spawn`, the spawn body is treated as a separate scope.
 
 ## The taint-based variant
 
 A second rule, `rs.auth.missing_ownership_check.taint`, folds the same logic into the SSA/taint engine using the `Cap::UNAUTHORIZED_ID` capability (bit 12). Request-bound handler parameters seed `UNAUTHORIZED_ID` into taint state; ownership checks act as sanitizers that strip the cap; sinks that take scoped IDs require it absent.
 
-This path is **off by default** while the standalone analyser carries the stable signal. Enable both:
+This path is off by default while the standalone analyser carries the stable signal. Enable both:
 
 ```toml
 [scanner]
@@ -112,11 +112,11 @@ The same rule recognised in the standalone analyser also strips `Cap::UNAUTHORIZ
 policy_guard_names = ["MyAppGuarded", "PolicyExtractor"]
 ```
 
-Matched as last-segment + case-insensitive `starts_with` (so a single entry `"Guarded"` covers `Guarded`, `GuardedData`, `GuardedRoute`). Distinct from `login_guard_names` and `admin_guard_names`.
+Matched as last-segment + case-insensitive `starts_with`, so a single entry `"Guarded"` covers `Guarded`, `GuardedData`, `GuardedRoute`. Distinct from `login_guard_names` and `admin_guard_names`.
 
 ### Recognised actor names
 
-Recognised by default: `user.id`, `user.user_id`, `user.uid`, `session.user_id`, `current_user.id`, plus typed extractor parameters with `CurrentUser`, `SessionUser`, `AuthUser`, `Extension<...>` shapes. To add a custom binding pattern, file an issue or add a fixture; the heuristic lives in [`src/auth_analysis/extract/common.rs`](https://github.com/elicpeter/nyx/blob/master/src/auth_analysis/extract/common.rs) under the `*self_actor*` helpers (`collect_self_actor_binding`, `collect_typed_extractor_self_actor`, `is_self_actor_type_text`).
+Recognised by default: `user.id`, `user.user_id`, `user.uid`, `session.user_id`, `current_user.id`, plus typed extractor parameters with `CurrentUser`, `SessionUser`, `AuthUser`, `Extension<...>` shapes. To add a custom binding pattern, file an issue or add a fixture; the heuristic lives in [`src/auth_analysis/extract/common.rs`](https://github.com/nyx-sec/nyx/blob/master/src/auth_analysis/extract/common.rs) under the `*self_actor*` helpers (`collect_self_actor_binding`, `collect_typed_extractor_self_actor`, `is_self_actor_type_text`).
 
 ### Suppress
 
@@ -134,10 +134,10 @@ nyx scan . --severity ">=MEDIUM" --min-confidence medium
 
 ## In the UI
 
-Auth findings render alongside taint findings in the [browser UI](serve.md). The flow visualiser shows the sink call, the actor reference (when one was found), and any helper-summary path the engine traversed; the How to fix panel mirrors the rule's recommendation.
+Auth findings render alongside taint findings in the [browser UI](serve.md). The flow visualiser shows the sink call, the actor reference when one was found, and any helper-summary path the engine traversed; the How to fix panel mirrors the rule's recommendation.
 
-<p align="center"><img src="assets/screenshots/docs/serve-finding-detail.png" alt="Nyx finding detail: numbered source → call → sink walk with a How to fix panel and an inline evidence object" width="900"/></p>
+<p align="center"><img src="assets/screenshots/docs/serve-finding-detail.png" alt="Nyx finding detail: numbered source, call and sink walk with a How to fix panel and an inline evidence object" width="900"/></p>
 
 ## Benchmark corpus
 
-The Rust auth corpus at [`tests/benchmark/corpus/rust/auth/`](https://github.com/elicpeter/nyx/tree/master/tests/benchmark/corpus/rust/auth/) covers the recognised authorization patterns, true-positive controls, typed-extractor guard injection, and the project-level web-framework gate (full-Cargo.toml fixtures under `safe_non_web_rust_project/` and `unsafe_actix_web_project_no_check/`). Per-row metrics live under the Rust auth row in `tests/benchmark/RESULTS.md`.
+The Rust auth corpus at [`tests/benchmark/corpus/rust/auth/`](https://github.com/nyx-sec/nyx/tree/master/tests/benchmark/corpus/rust/auth/) covers the recognised authorization patterns, true-positive controls, typed-extractor guard injection, and the project-level web-framework gate (full-Cargo.toml fixtures under `safe_non_web_rust_project/` and `unsafe_actix_web_project_no_check/`). Per-row metrics live under the Rust auth row in `tests/benchmark/RESULTS.md`.

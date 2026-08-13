@@ -25,21 +25,21 @@ Human-readable, color-coded output to stdout. Status messages go to stderr.
 
 ### Evidence fields
 
-Taint and state findings include structured evidence:
+Taint and state findings carry structured evidence:
 
 | Label | Meaning |
 |-------|---------|
-| **Source** | Where tainted data originated (function name + location) |
-| **Sink** | Where the dangerous operation happens |
-| **Path guard** | Type of validation predicate protecting the path |
+| Source | Where tainted data originated (function name + location) |
+| Sink | Where the dangerous operation happens |
+| Path guard | Type of validation predicate protecting the path |
 
 ### Score
 
-When attack-surface ranking is enabled (default), each finding shows a `Score` value. Higher scores indicate greater exploitability. See [Detector Overview](detectors.md) for the scoring formula.
+With attack-surface ranking enabled (the default), each finding shows a `Score`; higher scores mean greater exploitability. Scoring formula: [Detector Overview](detectors.md).
 
 ### Rollup findings
 
-High-frequency LOW Quality findings (e.g. `rs.quality.unwrap`) are grouped into rollup findings by `(file, rule)`:
+High-frequency LOW Quality findings (e.g. `rs.quality.unwrap`) are grouped by `(file, rule)`:
 
 ```
   21:10  ● [LOW]   rs.quality.unwrap
@@ -48,11 +48,11 @@ High-frequency LOW Quality findings (e.g. `rs.quality.unwrap`) are grouped into 
       Run: nyx scan --show-instances rs.quality.unwrap
 ```
 
-Rollups count as **one finding** for LOW budget enforcement. Use `--show-instances <RULE>` to expand a specific rule or `--all` to disable rollups entirely.
+A rollup counts as **one finding** for LOW budget enforcement. `--show-instances <RULE>` expands a specific rule; `--all` disables rollups entirely.
 
 ### Suppression footer
 
-When findings are suppressed by the prioritization pipeline, a footer is shown:
+When the prioritization pipeline suppresses findings, a footer is shown:
 
 ```
 Suppressed 195 LOW/Quality findings.
@@ -169,7 +169,7 @@ Fields marked "no" are omitted when empty/null/false to keep output compact.
 
 ### Evidence object
 
-The `evidence` field provides structured provenance data:
+`evidence` carries structured provenance data:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -215,7 +215,7 @@ The top-level `dynamic_verification` object counts verdict statuses across the e
 
 ### Rollup object
 
-When a finding is a rollup (grouped from multiple occurrences), the `rollup` field is present:
+Findings grouped from multiple occurrences carry a `rollup` field:
 
 ```json
 {
@@ -245,15 +245,14 @@ SARIF 2.1.0 JSON, suitable for GitHub Code Scanning and other SARIF-compatible t
 nyx scan . --format sarif > results.sarif
 ```
 
-The SARIF output includes:
-
-- **Tool metadata**: Nyx name and version
-- **Rules**: Rule ID, description, severity mapping
-- **Results**: One result per finding with location, message, and properties
-- **Properties**: Each result includes `category` and optionally `confidence`, `rollup.count`, and `nyx_dynamic_verdict`
-- **Fingerprints**: Dynamic verdict status is added as `partialFingerprints.dynamic_verdict_status` when present
-- **Related locations**: Rollup findings include example locations in `relatedLocations`
-- **Artifacts**: File paths referenced by findings
+The output carries tool metadata (Nyx name and version), a rule entry per rule
+ID with description and severity mapping, and one result per finding with
+location, message, and properties. Result properties include `category` and
+optionally `confidence`, `rollup.count`, and `nyx_dynamic_verdict`. A dynamic
+verdict status, when present, is added as
+`partialFingerprints.dynamic_verdict_status`. Rollup findings list example
+locations in `relatedLocations`, and file paths referenced by findings are
+emitted as artifacts.
 
 ### GitHub Code Scanning integration
 
@@ -284,8 +283,8 @@ Without `--fail-on` or `--gate`, Nyx always exits `0` on a successful scan regar
 
 ## Repository Triage
 
-`nyx scan` and `nyx serve` share `.nyx/triage.json` in the scan root. The file
-uses portable fingerprints so committed triage decisions survive different
+`nyx scan` and `nyx serve` share `.nyx/triage.json` in the scan root. Its
+fingerprints are portable, so committed triage decisions survive different
 checkout paths in local runs and CI.
 
 When the file exists, CLI scans apply it automatically:
@@ -296,8 +295,8 @@ When the file exists, CLI scans apply it automatically:
 - `--show-suppressed` includes terminal triage findings and emits
   `triage_state` plus `triage_note` when present.
 
-`nyx serve` continues to read and write the same file when triage sync is
-enabled, so browser triage and CI gating use the same decisions.
+`nyx serve` reads and writes the same file when triage sync is enabled, so
+browser triage and CI gating use the same decisions.
 
 ---
 
@@ -323,7 +322,7 @@ Use `--keep-nonprod-severity` to disable this behavior.
 
 ## Inline Suppressions
 
-Suppress specific findings directly in source code using `nyx:ignore` comments. Suppressed findings are excluded from output, severity counts, and `--fail-on` checks by default.
+Suppress specific findings in source with `nyx:ignore` comments. Suppressed findings are excluded from output, severity counts, and `--fail-on` checks by default.
 
 ### Comment syntax
 
@@ -341,26 +340,25 @@ x = dangerous()  # nyx:ignore taint-unsanitised-flow     (suppresses this line)
 x = dangerous()                                           (suppressed by the comment above)
 ```
 
-- `nyx:ignore <RULE_ID>`: suppresses findings on the **same line** as the comment.
-- `nyx:ignore-next-line <RULE_ID>`: suppresses findings on the **next line**.
+- `nyx:ignore <RULE_ID>` suppresses findings on the **same line** as the comment.
+- `nyx:ignore-next-line <RULE_ID>` suppresses findings on the **next line**.
 - For taint findings, the primary line is the **sink line** (the `line` field in output).
 
 ### Rule ID matching
 
-- **Case-sensitive**, exact match after canonicalization.
+Matching is case-sensitive and exact after canonicalization.
+
 - Comma-separated: `nyx:ignore rule-a, rule-b`
 - Wildcard suffix: `nyx:ignore rs.quality.*` matches any ID starting with `rs.quality.`
 - Taint IDs are canonicalized: `nyx:ignore taint-unsanitised-flow` matches `taint-unsanitised-flow (source 5:1)` (parenthetical suffix stripped).
 
 ### Console behavior
 
-- **Default**: suppressed findings are hidden entirely.
-- **`--show-suppressed`**: suppressed findings appear dimmed with `[SUPPRESSED]` tag. Summary shows `"N issues (M suppressed)"`.
+Suppressed findings are hidden entirely by default. With `--show-suppressed` they appear dimmed with a `[SUPPRESSED]` tag, and the summary shows `"N issues (M suppressed)"`.
 
 ### JSON / SARIF behavior
 
-- **Default**: suppressed findings are excluded from JSON/SARIF output.
-- **`--show-suppressed`**: suppressed findings are included with additional fields:
+Suppressed findings are excluded from JSON/SARIF output by default. `--show-suppressed` includes them with these additional fields:
 
 ```json
 {

@@ -4,7 +4,7 @@
 
 Report privately. Do not open a public GitHub issue for a security bug.
 
-Use [GitHub Security Advisories](https://github.com/elicpeter/nyx/security/advisories/new) to file a private report. Only the maintainers see it.
+Use [GitHub Security Advisories](https://github.com/nyx-sec/nyx/security/advisories/new) to file a private report. Only the maintainers see it.
 
 Include:
 

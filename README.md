@@ -6,7 +6,7 @@
 [![crates.io](https://img.shields.io/crates/v/nyx-scanner.svg)](https://crates.io/crates/nyx-scanner)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange)](https://www.rust-lang.org)
-[![CI](https://img.shields.io/github/actions/workflow/status/elicpeter/nyx/ci.yml?branch=master)](https://github.com/elicpeter/nyx/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/nyx-sec/nyx/ci.yml?branch=master)](https://github.com/nyx-sec/nyx/actions)
 [![Docs](https://img.shields.io/badge/docs-nyxscan.dev%2Fdocs-blue)](https://nyxscan.dev/docs/)
 
 English · [简体中文](./README.zh-CN.md)
@@ -76,7 +76,7 @@ Forward cross-file taint runs in every profile. Symex and the demand-driven back
 ### GitHub Action
 
 ```yaml
-- uses: elicpeter/nyx@v0.8.0
+- uses: nyx-sec/nyx@v0.8.0
   with:
     format: sarif
     fail-on: MEDIUM
@@ -96,7 +96,7 @@ Inputs: `path`, `version`, `format` (`sarif`|`json`|`console`), `fail-on`, `args
 cargo install nyx-scanner
 ```
 
-**Pre-built binaries:** Grab the archive for your platform from [Releases](https://github.com/elicpeter/nyx/releases), verify against `SHA256SUMS` (and the detached `SHA256SUMS.asc` GPG signature, when present), unzip, and drop `nyx` on your `PATH`.
+**Pre-built binaries:** Grab the archive for your platform from [Releases](https://github.com/nyx-sec/nyx/releases), verify against `SHA256SUMS` (and the detached `SHA256SUMS.asc` GPG signature, when present), unzip, and drop `nyx` on your `PATH`.
 
 ```bash
 # Optional: verify the checksum file's GPG signature (when SHA256SUMS.asc is published)
@@ -107,7 +107,7 @@ unzip nyx-x86_64-unknown-linux-gnu.zip && chmod +x nyx && sudo mv nyx /usr/local
 
 **From source:**
 ```bash
-git clone https://github.com/elicpeter/nyx.git
+git clone https://github.com/nyx-sec/nyx.git
 cd nyx && cargo build --release
 ```
 
@@ -227,7 +227,7 @@ Backends: Docker (preferred, network-blocked by default) or an in-process runner
 
 ## Configuration
 
-Config merges `nyx.conf` (defaults) and `nyx.local` (your overrides) from the platform config directory (`~/.config/nyx/` on Linux, `~/Library/Application Support/nyx/` on macOS, `%APPDATA%\elicpeter\nyx\config\` on Windows).
+Config merges `nyx.conf` (defaults) and `nyx.local` (your overrides) from the platform config directory (`~/.config/nyx/` on Linux, `~/Library/Application Support/nyx/` on macOS, `%APPDATA%\nyx\config\` on Windows).
 
 ```toml
 [scanner]

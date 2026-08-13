@@ -154,7 +154,6 @@ pub struct CuratedPayload {
     /// `Confirmed` requires the vuln payload to trigger AND the benign payload
     /// NOT to trigger (differential confirmation, §4.1).
     pub is_benign: bool,
-    /// Where this payload came from.
     pub provenance: PayloadProvenance,
     /// `CORPUS_VERSION` when this payload was added.
     pub since_corpus_version: u32,

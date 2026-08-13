@@ -19,23 +19,23 @@ These detectors use dominator analysis. A guard dominates a sink when the guard 
 
 ## What it detects
 
-**`cfg-unguarded-sink`**: A sink call (`system`, `eval`, `Command::new`, `db.execute`, etc.) is reachable from function entry without passing through any guard or sanitizer that matches the sink's capability.
+`cfg-unguarded-sink`: a sink call (`system`, `eval`, `Command::new`, `db.execute`, etc.) reachable from function entry without passing any guard or sanitizer that matches the sink's capability.
 
-**`cfg-auth-gap`**: A function identified as a web handler (by parameter naming conventions like `req`, `res`, `ctx`, `request`, language-dependent) reaches a privileged sink (shell execution, file I/O) without a preceding authentication call.
+`cfg-auth-gap`: a function identified as a web handler (by parameter naming conventions like `req`, `res`, `ctx`, `request`, language-dependent) reaches a privileged sink (shell execution, file I/O) with no preceding authentication call.
 
-**`cfg-unreachable-*`**: Sinks, sanitizers, or sources in dead code. Usually signals a refactoring error that silently disabled security-relevant logic.
+`cfg-unreachable-*`: sinks, sanitizers, or sources in dead code. Usually a refactoring error that silently disabled security-relevant logic.
 
-**`cfg-error-fallthrough`**: An error-handling branch (null check, error-return check) does not terminate. Execution falls through to a dangerous operation on the error path.
+`cfg-error-fallthrough`: an error-handling branch (null check, error-return check) does not terminate, so execution falls through to a dangerous operation on the error path.
 
-**`cfg-resource-leak`, `cfg-lock-not-released`**: A resource acquisition (`File::open`, `fopen`, `socket`, `Lock`) is not matched by a release on every exit path from the function.
+`cfg-resource-leak`, `cfg-lock-not-released`: a resource acquisition (`File::open`, `fopen`, `socket`, `Lock`) is not matched by a release on every exit path from the function.
 
 ## What it can't detect
 
-- **Inter-procedural guards.** Middleware-level auth, helper functions that internally call auth, and cleanup performed in a caller are invisible.
-- **Dynamic dispatch.** Virtual calls, function pointers, closures resolve to no specific callee.
-- **Correctness of guards.** The detector checks *a* guard dominates the sink. It cannot check the guard is correct. A no-op `if true {}` would suppress the finding.
-- **Custom validation logic.** Only recognised guard names are checked. `if password == expected` is not a recognised guard.
-- **Cross-function resource flows.** If a file handle opens in one function and closes in another, the opener gets flagged as a leak. This is the largest source of FPs on factory-pattern code.
+- Inter-procedural guards. Middleware-level auth, helper functions that internally call auth, and cleanup performed in a caller are invisible.
+- Dynamic dispatch. Virtual calls, function pointers, and closures resolve to no specific callee.
+- Correctness of guards. The detector checks that *a* guard dominates the sink, not that the guard is correct: a no-op `if true {}` would suppress the finding.
+- Custom validation logic. Only recognised guard names are checked, so `if password == expected` is not a recognised guard.
+- Cross-function resource flows. If a file handle opens in one function and closes in another, the opener gets flagged as a leak. This is the largest source of FPs on factory-pattern code.
 
 ## Common false positives
 

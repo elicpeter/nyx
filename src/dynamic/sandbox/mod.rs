@@ -359,10 +359,34 @@ impl SandboxOptions {
     }
 }
 
+/// Default sandbox wall-clock budget, in seconds.
+///
+/// This is a *wall-clock* deadline, not CPU time, so it is sensitive to how
+/// loaded the host is rather than to how much work the harness does.  5s is
+/// generous for a real scan, where a handful of verifications run at a time,
+/// and far too tight when a full test suite has several thousand cases
+/// competing for the same cores: a harness can burn the entire budget waiting
+/// to be scheduled and report `timed_out` with an empty stdout, which is
+/// indistinguishable from a genuine verification miss.
+///
+/// `NYX_SANDBOX_TIMEOUT_SECS` overrides it. The test suite sets it in
+/// `.config/nextest.toml` so contended runs get headroom; the product default
+/// is deliberately left at 5s so a real `nyx scan --verify` is unaffected.
+/// A missing, unparseable, or zero value falls back to 5s.
+fn default_sandbox_timeout() -> Duration {
+    const FALLBACK_SECS: u64 = 5;
+    let secs = std::env::var("NYX_SANDBOX_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(FALLBACK_SECS);
+    Duration::from_secs(secs)
+}
+
 impl Default for SandboxOptions {
     fn default() -> Self {
         Self {
-            timeout: Duration::from_secs(5),
+            timeout: default_sandbox_timeout(),
             memory_mib: 256,
             backend: SandboxBackend::Auto,
             env_passthrough: vec![],

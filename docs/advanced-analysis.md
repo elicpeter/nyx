@@ -61,7 +61,7 @@ suffix tracking is concat-only; it does not model reordering, reversal, or
 character-level regex constraints. Loop widening deliberately drops
 changing bounds rather than chasing fixpoints.
 
-**Source**: [`src/abstract_interp/`](https://github.com/elicpeter/nyx/tree/master/src/abstract_interp/).
+**Source**: [`src/abstract_interp/`](https://github.com/nyx-sec/nyx/tree/master/src/abstract_interp/).
 
 ---
 
@@ -111,7 +111,7 @@ object-pattern formals (`({ column, operator, value }) => …`) seed
 every destructured sibling in the per-parameter probe, so flow through
 any of them counts toward the slot being validated.
 
-**Source**: [`src/taint/ssa_transfer/`](https://github.com/elicpeter/nyx/tree/master/src/taint/ssa_transfer/)
+**Source**: [`src/taint/ssa_transfer/`](https://github.com/nyx-sec/nyx/tree/master/src/taint/ssa_transfer/)
 (`ArgTaintSig`, `InlineCache`, `inline_analyse_callee`,
 `propagate_validated_params_to_return`).
 
@@ -153,7 +153,7 @@ direct field case. The points-to set per value is capped at
 `--max-pointsto` (default 32); when truncation happens, an engine note
 records the precision loss.
 
-**Source**: [`src/pointer/`](https://github.com/elicpeter/nyx/tree/master/src/pointer/).
+**Source**: [`src/pointer/`](https://github.com/nyx-sec/nyx/tree/master/src/pointer/).
 
 ---
 
@@ -181,8 +181,8 @@ satisfaction (Go) are deliberately skipped because per-file extraction
 is intractable; those calls fall back to the single-result resolver. The
 extractor covers Java, Rust, TS/JS/TSX, Python, Ruby, PHP, and C++.
 
-**Source**: [`src/cfg/hierarchy.rs`](https://github.com/elicpeter/nyx/blob/master/src/cfg/hierarchy.rs)
-and [`src/summary/mod.rs`](https://github.com/elicpeter/nyx/blob/master/src/summary/mod.rs)
+**Source**: [`src/cfg/hierarchy.rs`](https://github.com/nyx-sec/nyx/blob/master/src/cfg/hierarchy.rs)
+and [`src/summary/mod.rs`](https://github.com/nyx-sec/nyx/blob/master/src/summary/mod.rs)
 (`TypeHierarchyIndex`, `resolve_callee_widened`).
 
 ---
@@ -221,7 +221,7 @@ deeper expressions degrade to `Unknown` rather than growing unboundedly.
 Sanitizer detection is informational: string-replace sanitizer patterns
 are reported as witness metadata, not used to clear taint.
 
-**Source**: [`src/symex/`](https://github.com/elicpeter/nyx/tree/master/src/symex/).
+**Source**: [`src/symex/`](https://github.com/nyx-sec/nyx/tree/master/src/symex/).
 
 ---
 
@@ -289,7 +289,7 @@ direction confirmed the flow.  See
 `taint::backwards::tests::driver_walks_data_exfil_source_to_sink` for
 the regression guards.
 
-**Source**: [`src/taint/backwards.rs`](https://github.com/elicpeter/nyx/blob/master/src/taint/backwards.rs).
+**Source**: [`src/taint/backwards.rs`](https://github.com/nyx-sec/nyx/blob/master/src/taint/backwards.rs).
 
 ---
 
@@ -326,7 +326,7 @@ algebraic unsatisfiability requires the `smt` feature (Z3). Without `smt`,
 Nyx ships a lightweight satisfiability check that catches literal
 contradictions but not deeper reasoning.
 
-**Source**: [`src/constraint/`](https://github.com/elicpeter/nyx/tree/master/src/constraint/).
+**Source**: [`src/constraint/`](https://github.com/nyx-sec/nyx/tree/master/src/constraint/).
 
 ---
 

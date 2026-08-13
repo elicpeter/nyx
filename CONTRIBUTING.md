@@ -1,8 +1,8 @@
 # Contributing to Nyx
 
-Thank you for your interest in improving Nyx. This guide covers everything you need to contribute effectively.
+Thank you for your interest in improving Nyx.
 
-User-facing documentation lives at **[elicpeter.github.io/nyx](https://elicpeter.github.io/nyx/)**; the source for those pages is in [`docs/`](docs/).
+User-facing documentation lives at **[nyx-sec.github.io/nyx](https://nyx-sec.github.io/nyx/)**; the source for those pages is in [`docs/`](docs/).
 
 Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
@@ -27,15 +27,15 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
 ### Prerequisites
 
-- **Rust 1.88+** (edition 2024)
+- Rust 1.88+ (edition 2024)
 - Git
-- **Node 20+** — only if you touch the browser UI under `frontend/` (the
-  `nyx serve` web app). Pure-Rust changes do not need it.
+- Node 20+, only if you touch the browser UI under `frontend/` (the `nyx serve`
+  web app). Pure-Rust changes do not need it.
 
 ### Building
 
 ```bash
-git clone https://github.com/elicpeter/nyx.git
+git clone https://github.com/nyx-sec/nyx.git
 cd nyx
 
 cargo build            # Debug build
@@ -45,8 +45,8 @@ cargo install --path . # Install as `nyx` binary
 
 ### Running Quality Checks
 
-The fastest way to reproduce CI locally is the bundled script — it runs the same
-commands CI runs (fmt, Clippy, tests, and the frontend checks):
+The bundled script runs the same commands CI runs (fmt, Clippy, tests, and the
+frontend checks), so it is the fastest local reproduction:
 
 ```bash
 ./scripts/check.sh              # Mirror CI: fmt + clippy + tests (+ frontend)
@@ -85,7 +85,7 @@ Benchmark fixtures live in `benches/fixtures/`. Criterion produces HTML reports 
 > **New here?** [`docs/how-it-works.md`](docs/how-it-works.md) walks the analysis
 > pipeline end to end (with a diagram), and [`docs/detectors/taint.md`](docs/detectors/taint.md)
 > covers the taint engine. The easiest first contribution is usually a new AST
-> pattern (see [below](#how-to-add-a-new-ast-pattern)) — small, self-contained,
+> pattern (see [below](#how-to-add-a-new-ast-pattern)): small, self-contained,
 > and well templated.
 
 ```
@@ -146,18 +146,18 @@ AST patterns are the simplest detector to add. Each pattern is a tree-sitter que
 
 ### Step-by-step
 
-1. **Pick the language file** under `src/patterns/<lang>.rs`.
+1. Pick the language file under `src/patterns/<lang>.rs`.
 
-2. **Choose the metadata**:
+2. Choose the metadata:
 
    | Field | Options | Guidelines |
    |-------|---------|------------|
-   | **ID** | `<lang>.<category>.<specific>` | e.g. `py.cmdi.os_popen` |
-   | **Tier** | `A` or `B` | `A` = presence alone is high-signal; `B` = query includes a heuristic guard |
-   | **Severity** | `High`, `Medium`, `Low` | High: command exec, deser, banned functions. Medium: SQL concat, reflection, XSS. Low: weak crypto, code quality. |
-   | **Category** | See `PatternCategory` enum | `CommandExec`, `CodeExec`, `Deserialization`, `SqlInjection`, `PathTraversal`, `Xss`, `Crypto`, `Secrets`, `InsecureTransport`, `Reflection`, `MemorySafety`, `Prototype`, `CodeQuality` |
+   | ID | `<lang>.<category>.<specific>` | e.g. `py.cmdi.os_popen` |
+   | Tier | `A` or `B` | `A` = presence alone is high-signal; `B` = query includes a heuristic guard |
+   | Severity | `High`, `Medium`, `Low` | High: command exec, deser, banned functions. Medium: SQL concat, reflection, XSS. Low: weak crypto, code quality. |
+   | Category | See `PatternCategory` enum | `CommandExec`, `CodeExec`, `Deserialization`, `SqlInjection`, `PathTraversal`, `Xss`, `Crypto`, `Secrets`, `InsecureTransport`, `Reflection`, `MemorySafety`, `Prototype`, `CodeQuality` |
 
-3. **Write the tree-sitter query**:
+3. Write the tree-sitter query:
 
    ```rust
    Pattern {
@@ -176,19 +176,19 @@ AST patterns are the simplest detector to add. Each pattern is a tree-sitter que
 
    The query **must** capture a `@vuln` node. That node's span determines the reported location.
 
-4. **Test it**:
+4. Test it:
 
    ```bash
    cargo test --bin nyx
    ```
 
-5. **Update docs**: Add the new rule to `docs/rules/<lang>.md`.
+5. Add the new rule to `docs/rules/<lang>.md`.
 
 ### Tips
 
 - Use the [tree-sitter playground](https://tree-sitter.github.io/tree-sitter/playground) to develop and test queries.
 - Avoid duplicating taint coverage. If the same function is already a labeled sink in `src/labels/<lang>.rs`, the AST pattern is still useful for `--mode ast`, but use a distinct ID namespace. The dedup pass prevents exact-duplicate findings at the same location.
-- Test with real-world code to check false positive rates before choosing a tier.
+- Test against real-world code to check false positive rates before choosing a tier.
 
 ---
 
@@ -198,9 +198,9 @@ Taint rules define sources (where untrusted data enters), sinks (where dangerous
 
 ### Step-by-step
 
-1. **Open the language file** in `src/labels/<lang>.rs`.
+1. Open the language file in `src/labels/<lang>.rs`.
 
-2. **Add an entry** to the `RULES` slice:
+2. Add an entry to the `RULES` slice:
 
    ```rust
    LabelRule {
@@ -209,7 +209,7 @@ Taint rules define sources (where untrusted data enters), sinks (where dangerous
    },
    ```
 
-3. **Choose the right label type**:
+3. Choose the right label type:
 
    | Type | Purpose | Example |
    |------|---------|---------|
@@ -217,7 +217,7 @@ Taint rules define sources (where untrusted data enters), sinks (where dangerous
    | `DataLabel::Sanitizer(cap)` | Strips matching capability bits | `html_escape`, `encodeURIComponent` |
    | `DataLabel::Sink(cap)` | Dangerous operation requiring sanitization | `eval`, `innerHTML`, `Command::new` |
 
-4. **Choose capabilities**:
+4. Choose capabilities:
 
    | Capability | When to use |
    |-----------|-------------|
@@ -230,7 +230,7 @@ Taint rules define sources (where untrusted data enters), sinks (where dangerous
    | `Cap::FMT_STRING` | Format string sinks |
    | `Cap::ENV_VAR` | Environment/config data sources |
 
-5. **Matcher semantics**:
+5. Mind the matcher semantics:
    - Case-insensitive suffix matching by default.
    - If a matcher ends with `_`, it acts as a prefix match.
    - Multiple matchers in one rule are alternatives (any match triggers the rule).
@@ -260,25 +260,25 @@ Adding a new language requires changes across several modules. Use an existing l
 
 ### Checklist
 
-1. **Tree-sitter parser**: Add `tree-sitter-<lang>` to `Cargo.toml`.
+1. Add `tree-sitter-<lang>` to `Cargo.toml`.
 
-2. **Language registration**: Register the parser in `ast.rs` (language detection from file extension, parser initialization).
+2. Register the parser in `ast.rs` (language detection from file extension, parser initialization).
 
-3. **CFG node kinds**: Create `src/labels/<lang>.rs` with a `KINDS` map that maps tree-sitter node types to the internal `Kind` enum (`Block`, `If`, `While`, `For`, `Return`, `CallFn`, `CallMethod`, `Assignment`, etc.).
+3. Create `src/labels/<lang>.rs` with a `KINDS` map that maps tree-sitter node types to the internal `Kind` enum (`Block`, `If`, `While`, `For`, `Return`, `CallFn`, `CallMethod`, `Assignment`, etc.).
 
-4. **Parameter extraction**: Add a `PARAM_CONFIG` constant specifying how to extract function parameters from the AST (field name for parameter list, node type for individual parameters, extraction field for parameter names).
+4. Add a `PARAM_CONFIG` constant specifying how to extract function parameters from the AST (field name for parameter list, node type for individual parameters, extraction field for parameter names).
 
-5. **Label rules**: Add `RULES` (sources, sinks, sanitizers) and `TERMINATORS` to the labels file.
+5. Add `RULES` (sources, sinks, sanitizers) and `TERMINATORS` to the labels file.
 
-6. **AST patterns**: Create `src/patterns/<lang>.rs` with a `PATTERNS` constant.
+6. Create `src/patterns/<lang>.rs` with a `PATTERNS` constant.
 
-7. **Registry updates**:
+7. Update the registries:
    - `src/patterns/mod.rs`: add to the `REGISTRY` HashMap
    - `src/labels/mod.rs`: add to the `classify()` dispatch
 
-8. **File extension mapping**: Add the extension in `ast.rs`.
+8. Add the file extension mapping in `ast.rs`.
 
-9. **Tests**: Write unit tests and add test fixtures.
+9. Write unit tests and add test fixtures.
 
 ---
 
@@ -295,10 +295,10 @@ cargo test --all-features
 
 ### What to Test
 
-- **New AST patterns**: Ensure the tree-sitter query matches the intended construct and does not match safe alternatives.
-- **New taint rules**: Verify that source-to-sink flows are detected and that sanitizers properly neutralize findings.
-- **New CFG rules**: Test that guard dominance logic correctly suppresses findings when guards are present.
-- **Edge cases**: Empty files, files with syntax errors (tree-sitter is error-tolerant), deeply nested structures.
+- New AST patterns: the query matches the intended construct and does not match safe alternatives.
+- New taint rules: source-to-sink flows are detected, and sanitizers neutralize findings.
+- New CFG rules: guard dominance logic suppresses findings when guards are present.
+- Edge cases: empty files, files with syntax errors (tree-sitter is error-tolerant), deeply nested structures.
 
 ### Linting
 
@@ -314,40 +314,40 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 First-time contributors are welcome. If you are unsure where to start, open an issue and we can help identify a focused starter task.
 
-1. **Branch from `master`**. Use descriptive branch names: `feat/add-kotlin-support`, `fix/false-positive-sql-concat`, `docs/update-rule-reference`.
+1. Branch from `master`, with a descriptive branch name: `feat/add-kotlin-support`, `fix/false-positive-sql-concat`, `docs/update-rule-reference`.
 
-2. **Keep PRs focused**. One logical change per PR.
+2. Keep PRs focused: one logical change per PR.
 
-3. **Ensure CI passes** — run `./scripts/check.sh` (mirrors CI), or the steps individually:
+3. Make sure CI passes. Run `./scripts/check.sh` (mirrors CI), or the steps individually:
    ```bash
    cargo test --all-features
    cargo clippy --all-targets --all-features -- -D warnings
    cargo fmt -- --check
    ```
 
-4. **Commit style**: Use [Conventional Commits](https://www.conventionalcommits.org/).
+4. Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages.
    ```
    feat(patterns): add Python subprocess.Popen pattern
    fix(taint): prevent false positive on sanitized innerHTML
    docs(rules): update JavaScript rule reference
    ```
 
-5. **Document new rules**. If you add patterns or taint rules, update the corresponding `docs/rules/<lang>.md` page.
+5. If you add patterns or taint rules, update the corresponding `docs/rules/<lang>.md` page.
 
-6. **Include test cases** for any new detection rules.
+6. Include test cases for any new detection rules.
 
-7. **Disclose material AI assistance** in the PR description if the change was drafted, generated, or substantially refactored by an AI tool. One line is enough. See [AI-POLICY.md](AI-POLICY.md) for the full policy and the bar we hold AI-assisted contributions to.
+7. Disclose material AI assistance in the PR description if the change was drafted, generated, or substantially refactored by an AI tool. One line is enough. See [AI-POLICY.md](AI-POLICY.md) for the full policy and the bar we hold AI-assisted contributions to.
 
 ---
 
 ## Bug Reports
 
-Please [open an issue](https://github.com/elicpeter/nyx/issues) for:
+Please [open an issue](https://github.com/nyx-sec/nyx/issues) for:
 
-- **Crashes or panics**: include the backtrace (`RUST_BACKTRACE=1 nyx scan .`)
-- **False positives**: include the minimal code snippet, rule ID, and Nyx version
-- **False negatives**: describe what you expected Nyx to find and why
-- **Documentation errors**: point to the specific page and what's wrong
+- Crashes or panics: include the backtrace (`RUST_BACKTRACE=1 nyx scan .`)
+- False positives: include the minimal code snippet, rule ID, and Nyx version
+- False negatives: describe what you expected Nyx to find and why
+- Documentation errors: point to the specific page and what's wrong
 
 ---
 
@@ -355,9 +355,9 @@ Please [open an issue](https://github.com/elicpeter/nyx/issues) for:
 
 We welcome well-motivated feature proposals. Please describe:
 
-1. **Problem statement**: what pain point does this solve?
-2. **Proposed solution**: high-level description, optionally with pseudo-code.
-3. **Alternatives considered**: why existing functionality is not enough.
+1. Problem statement: what pain point does this solve?
+2. Proposed solution: high-level description, optionally with pseudo-code.
+3. Alternatives considered: why existing functionality is not enough.
 
 ---
 
@@ -386,7 +386,7 @@ By submitting a pull request, patch, or other contribution to Nyx, you agree tha
 
 ### Developer Certificate of Origin
 
-We use the Developer Certificate of Origin (DCO) as a lightweight baseline for contributions. All commits must include a `Signed-off-by:` trailer, which certifies that you wrote the code yourself or otherwise have the right to submit it under the project license.
+We use the Developer Certificate of Origin (DCO). All commits must include a `Signed-off-by:` trailer, certifying that you wrote the code yourself or otherwise have the right to submit it under the project license.
 
 Use `git commit -s` to add this automatically.
 
@@ -394,6 +394,6 @@ Use `git commit -s` to add this automatically.
 
 Before your first contribution can be merged, you must sign the Nyx [Contributor License Agreement](./CLA.md).
 
-The CLA does not transfer ownership of your work. You retain copyright to your contributions. It grants Nyx the rights needed to maintain, distribute, and evolve the project over time, including the flexibility to support long-term sustainability through future licensing or commercial offerings.
+The CLA does not transfer ownership of your work: you retain copyright to your contributions. It grants Nyx the rights needed to maintain, distribute, and evolve the project over time, including the flexibility to support long-term sustainability through future licensing or commercial offerings.
 
 If you do not agree to these terms, please do not submit contributions to Nyx.
