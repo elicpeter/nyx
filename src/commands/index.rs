@@ -405,6 +405,22 @@ pub fn build_index_with_observer(
             })
             .collect();
         let cross_pkg_imports = fused.cross_package_imports;
+        // Same reasoning as the auth summaries above: `build_index` is the
+        // only place these are produced before the first indexed scan, and
+        // that scan skips every hash-matching file, so dropping them here
+        // leaves the cross-file authorization analysis permanently inert on
+        // the indexed path.
+        let caller_scope_rows: Vec<_> = fused
+            .caller_scope_facts
+            .iter()
+            .map(crate::auth_analysis::persist::CallerScopeEdgeRow::from)
+            .collect();
+        let router_facts_row = fused.router_facts.as_ref().map(|(module_id, facts)| {
+            (
+                module_id.clone(),
+                crate::auth_analysis::persist::PerFileRouterFactsRow::from(facts),
+            )
+        });
 
         let path_for_write = path.clone();
         write_tx.enqueue(move |idx| {
@@ -429,6 +445,9 @@ pub fn build_index_with_observer(
             let cpi_arg = cross_pkg_imports
                 .as_ref()
                 .map(|(ns, map)| (ns.as_str(), map.as_ref()));
+            let rf_arg = router_facts_row
+                .as_ref()
+                .map(|(module_id, facts)| (module_id.as_str(), facts));
             idx.replace_all_for_file(
                 &path_for_write,
                 &hash,
@@ -437,6 +456,8 @@ pub fn build_index_with_observer(
                 &body_rows,
                 &auth_rows,
                 cpi_arg,
+                &caller_scope_rows,
+                rf_arg,
             )?;
             Ok(())
         })?;

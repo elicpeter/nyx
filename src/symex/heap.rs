@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::const_prop::{ConstLattice, ConstValues};
 use crate::ssa::heap::{HeapObjectId, PointsToResult};
 use crate::ssa::ir::{SsaBody, SsaValue};
 
@@ -370,10 +370,7 @@ impl SymbolicHeap {
 /// When the index SSA value is a provably non-negative integer constant
 /// within [`MAX_TRACKED_INDICES`], returns `Index(n)`.  Otherwise returns
 /// `Elements` (conservative fallback).
-pub fn resolve_index_slot(
-    index_val: SsaValue,
-    const_values: &HashMap<SsaValue, ConstLattice>,
-) -> FieldSlot {
+pub fn resolve_index_slot(index_val: SsaValue, const_values: &ConstValues) -> FieldSlot {
     if let Some(ConstLattice::Int(n)) = const_values.get(&index_val) {
         if *n >= 0 && (*n as u64) < MAX_TRACKED_INDICES as u64 {
             return FieldSlot::Index(*n as u64);
@@ -728,11 +725,14 @@ mod tests {
 
     #[test]
     fn resolve_index_slot_cases() {
-        let mut cv = HashMap::new();
-        cv.insert(SsaValue(0), ConstLattice::Int(3));
-        cv.insert(SsaValue(1), ConstLattice::Int(-1));
-        cv.insert(SsaValue(2), ConstLattice::Int(MAX_TRACKED_INDICES as i64));
-        cv.insert(SsaValue(3), ConstLattice::Str("hello".into()));
+        let cv: ConstValues = [
+            (SsaValue(0), ConstLattice::Int(3)),
+            (SsaValue(1), ConstLattice::Int(-1)),
+            (SsaValue(2), ConstLattice::Int(MAX_TRACKED_INDICES as i64)),
+            (SsaValue(3), ConstLattice::Str("hello".into())),
+        ]
+        .into_iter()
+        .collect();
 
         // Known positive int within bounds → Index(3).
         assert_eq!(resolve_index_slot(SsaValue(0), &cv), FieldSlot::Index(3));

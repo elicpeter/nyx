@@ -20,7 +20,8 @@ use tracing::{debug, warn};
 use tree_sitter::{Node, Tree};
 
 use crate::labels::{
-    Cap, DataLabel, Kind, LangAnalysisRules, classify, classify_all, classify_gated_sink, lookup,
+    Cap, DataLabel, Kind, LangAnalysisRules, classify, classify_all, classify_gated_sink,
+    classify_gated_sink_with_presence, lookup,
 };
 use crate::summary::FuncSummary;
 use crate::symbol::{FuncKey, Lang};
@@ -42,8 +43,9 @@ pub mod safe_fields;
 use blocks::{build_begin_rescue, build_switch, build_try};
 use helpers::{
     collect_nested_function_nodes, derive_anon_fn_name_from_context, find_classifiable_inner_call,
-    first_call_ident_with_span, first_member_label, first_member_text, is_raii_factory,
-    is_subscript_kind, root_member_receiver, subscript_components, subscript_lhs_node,
+    find_inner_sink_call, first_call_ident_with_span, first_callback_sink_call, first_member_label,
+    first_member_text, is_raii_factory, is_subscript_kind, root_member_receiver,
+    subscript_components, subscript_lhs_node,
 };
 // Re-exports so sibling submodules can keep using `super::name` for
 // helpers that physically live in `helpers.rs`.
@@ -54,8 +56,9 @@ use conditions::{
 };
 use decorators::{extract_auth_decorators, extract_route_path_captures};
 pub(crate) use helpers::{
-    collect_idents, collect_idents_with_paths, find_constructor_type_child, first_call_ident,
-    has_call_descendant, member_expr_text, root_receiver_text, text_of,
+    ValidSourceGuard, collect_idents, collect_idents_with_paths, find_constructor_type_child,
+    first_call_ident, has_call_descendant, member_expr_text, node_str, root_receiver_text,
+    slice_str, text_of,
 };
 use imports::{
     extract_import_bindings, extract_local_import_view, extract_promisify_aliases,
@@ -64,20 +67,22 @@ use imports::{
 #[cfg(test)]
 use literals::has_sql_placeholders;
 use literals::{
-    arg0_kind_and_interpolation, call_ident_of, def_use, detect_go_replace_call_sanitizer,
-    detect_rust_replace_chain_sanitizer, extract_arg_callees, extract_arg_string_literals,
-    extract_arg_uses, extract_const_keyword_arg, extract_const_macro_arg, extract_const_string_arg,
-    extract_destination_field_pairs, extract_destination_kwarg_pairs, extract_kwargs,
-    extract_literal_rhs, extract_object_arg_property, extract_shell_array_payload_idents,
-    find_call_node, find_call_node_deep, find_chained_inner_call, has_keyword_arg,
-    has_object_arg_property, has_only_literal_args, has_string_interpolation,
-    is_object_create_null_call, is_parameterized_query_call, java_chain_arg0_kind_for_method,
-    js_chain_arg0_kind_for_method, js_chain_outer_method_for_inner, ruby_chain_arg0_for_method,
+    arg0_kind_and_interpolation, call_has_arg_at, call_ident_of, def_use,
+    detect_go_replace_call_sanitizer, detect_rust_replace_chain_sanitizer, extract_arg_callees,
+    extract_arg_string_literals, extract_arg_uses, extract_const_keyword_arg,
+    extract_const_macro_arg, extract_const_string_arg, extract_destination_field_pairs,
+    extract_destination_kwarg_pairs, extract_kwargs, extract_literal_rhs,
+    extract_object_arg_property, extract_shell_array_payload_idents, find_call_node,
+    find_call_node_deep, find_chained_gated_sink_call, find_chained_inner_call,
+    find_orm_query_chain_call, has_keyword_arg, has_object_arg_property, has_only_literal_args,
+    has_string_interpolation, is_object_create_null_call, is_parameterized_query_call,
+    is_rust_format_style_macro, java_chain_arg0_kind_for_method, js_chain_arg0_kind_for_method,
+    js_chain_outer_method_for_inner, js_orm_query_arg0_is_uid_ref, ruby_chain_arg0_for_method,
     walk_chain_inner_call_args,
 };
 use params::{
     compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
-    is_configured_terminator,
+    is_terminator_call,
 };
 
 /// Test-only re-export of `extract_param_meta` so the external
@@ -600,6 +605,23 @@ pub struct CallMeta {
     /// When `Some`, only variables from these `arg_uses` positions are checked
     /// for taint.  `None` = all arguments are payload (default).
     pub sink_payload_args: Option<Vec<usize>>,
+    /// Identifiers syntactically contained in a nested inner sink call when the
+    /// node's `Sink` label was contributed by
+    /// `find_classifiable_inner_call` /
+    /// `find_inner_sink_call` overriding the outer callee.
+    ///
+    /// A flattened aggregate node (`Ok(Reader { meta: <tainted>, h:
+    /// File::open(const) })`) collapses the whole expression into one CFG
+    /// node whose `Sink` label applies only to the inner `File::open`
+    /// sub-expression, yet whose def-use set (and hence the SSA Call's
+    /// implicit args) includes the tainted sibling field `meta`.  Without a
+    /// filter the sink scan's aggregate fallback would treat that sibling as
+    /// reaching the sink.  When `Some`, the SSA sink scan drops any tainted
+    /// value whose `var_name` is present but NOT in this set; unnamed
+    /// temporaries are kept (conservative for recall).  `None` for the common
+    /// case where the classified call IS the outer AST node.
+    #[serde(default)]
+    pub sink_reaching_uses: Option<Vec<String>>,
     /// Keyword/named arguments attached to this call, in source order.
     ///
     /// Each entry is `(keyword_name, uses)` where `uses` are the identifier
@@ -664,6 +686,38 @@ pub struct CallMeta {
     /// SSA does not need to re-walk the AST.
     #[serde(default)]
     pub produces_null_proto: bool,
+    /// Provenance for a `Sink` label that was HOISTED onto this wrapper call
+    /// from an inner call nested inside a callback-argument function literal.
+    ///
+    /// `first_member_label` descends through function literals, so a wrapper
+    /// like `queryInterface.sequelize.transaction(async (t) => {
+    /// queryInterface.sequelize.query(`…const DDL…`, { transaction: t }) })`
+    /// inherits the inner `sequelize.query` `Sink` label — but the wrapper's
+    /// own arguments are the callback, not the SQL payload.  This records the
+    /// INNER sink call's own payload-arg positions + per-argument string
+    /// literals so the `cfg-unguarded-sink` syntactic payload-const check
+    /// (`sink_payload_args_syntactic_const`) can prove the *inner* payload is
+    /// a constant (suppress the phantom wrapper finding) while a tainted inner
+    /// payload still fires.  `None` for the common case (no hoist, or the
+    /// hoisted label did not come from inside a callback body).
+    #[serde(default)]
+    pub hoisted_sink: Option<Box<HoistedSink>>,
+}
+
+/// Recorded provenance of a callback-nested inner sink call whose `Sink` label
+/// was hoisted onto an outer wrapper node by `first_member_label`.  See
+/// [`CallMeta::hoisted_sink`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HoistedSink {
+    /// The inner sink call's payload-arg positions (its gate's `payload_args`,
+    /// with the dynamic `ALL_ARGS_PAYLOAD` sentinel already expanded to the
+    /// inner call's arity).  `None` when the inner sink carries no gate (an
+    /// unrestricted sink — every argument is a payload position).
+    pub payload_args: Option<Vec<usize>>,
+    /// The inner sink call's per-positional-argument string literals, parallel
+    /// to the inner call's positional arguments (same shape as
+    /// [`CallMeta::arg_string_literals`]).
+    pub arg_string_literals: Vec<Option<String>>,
 }
 
 /// One gate's contribution at a call site whose callee matches multiple
@@ -835,6 +889,19 @@ pub struct NodeInfo {
     /// Only meaningful on Call nodes that define a resource variable.
     /// Leak detectors check this flag on the acquire site, not the variable.
     pub managed_resource: bool,
+    /// True when this is a Java `X.getConnection()` acquire whose receiver
+    /// `X` has a statically-declared *borrowed-owner* type — a managed
+    /// session / DB abstraction (Liquibase `Database`, Hibernate `Session`,
+    /// MyBatis `SqlSession`, JPA `EntityManager`) that closes the connection
+    /// as part of its own lifecycle.  The borrowing body must NOT close it,
+    /// so a leak-at-exit finding on such an acquire is a false positive.
+    /// `DataSource` / static `DriverManager` `getConnection(...)` return an
+    /// OWNED connection the caller must close (this stays `false` — those
+    /// leaks are real).  Set only at CFG build for Java (see
+    /// `java_getconnection_receiver_is_borrowed`); consumed by the
+    /// `state-resource-leak` and `cfg-resource-leak` passes.
+    #[serde(default)]
+    pub borrowed_resource: bool,
     /// True when this Call node is a deferred release (Go `defer f.Close()`).
     /// Deferred releases are not processed as immediate closes; instead they
     /// suppress leak findings (defer guarantees cleanup at function exit).
@@ -893,6 +960,55 @@ pub struct NodeInfo {
     /// Strictly additive: when `false`, legacy lowering applies.
     #[serde(default)]
     pub is_await_forward: bool,
+    /// Declared type annotation of a `let x: T = <rhs>` binding, lowered to
+    /// the lattice [`crate::ssa::type_facts::TypeKind`] it denotes.  Rust
+    /// only (the sole language whose binding RHS — `str::parse` — is
+    /// ambiguous between numeric and non-numeric `FromStr` targets).
+    /// Consumed by [`crate::ssa::type_facts`] as a high-priority override on
+    /// the bound value's type: `let p: PathBuf = s.parse()?` → `Object`
+    /// (recall — FILE_IO fires) while `let port: u16 = s.parse()?` → `Int`
+    /// (precision — numeric shell arg stays suppressed).  `None` for
+    /// un-annotated bindings, non-`let` nodes, and unrecognised annotation
+    /// types, so the conservative bare-`parse` → `Int` default is preserved.
+    #[serde(default)]
+    pub decl_type: Option<crate::ssa::type_facts::TypeKind>,
+    /// Value-use identifiers in this (sink) node whose **every** syntactic
+    /// occurrence is consumed by a numeric- or safe-string-producing call
+    /// (`x.parse::<u16>()`, `parseInt(x)`, `Atoi(x)`, `Integer.toString(x)`,
+    /// …).  Such an identifier reaches the node only as a number (or a
+    /// number stringified by an injection-free converter), so it cannot
+    /// carry CRLF / `..` / quote / shell metacharacters at a
+    /// type-suppressible sink.
+    ///
+    /// This is the inline-chain analogue of the value-level
+    /// [`crate::ssa::type_facts::TypeKind::Int`] suppression: an expression
+    /// like `sink(s.parse::<u16>().unwrap().to_string())` /
+    /// `read(format!("/d/{}", s.parse::<u32>()))` never lowers its inner
+    /// numeric chain to a dedicated SSA value (the outer call/macro flattens
+    /// the tainted source leaf `s` directly into its use set), so there is no
+    /// intermediate value to carry the `Int` fact.  Recovered here at CFG
+    /// construction by an AST walk (`collect_numeric_confined_value_idents`)
+    /// and consumed by the SSA taint sink-event collector to drop the
+    /// confined leaf.  Soundness: an identifier that *also* appears raw
+    /// anywhere in the node is **not** listed (a single un-wrapped occurrence
+    /// blocks confinement), so a real injection through the same variable
+    /// still fires.
+    #[serde(default)]
+    pub numeric_confined_uses: Vec<String>,
+
+    /// Syntactic phantom identifiers lifted from a Rust `format!`-family
+    /// macro's flattened `token_tree` — the macro name (`format`) and the
+    /// method-name tokens (`parse`, `unwrap`, …) of a *numeric-confined*
+    /// interpolation argument.  tree-sitter-rust models macro arguments as a
+    /// flat token run, so `g.parse::<u32>().unwrap()` contributes `g`, `parse`,
+    /// and `unwrap` as bare-identifier uses; only `g` is a real value.  Recorded
+    /// here so the structural `cfg-unguarded-sink` confinement check
+    /// ([`crate::cfg_analysis`]) can skip these non-value SSA `Param`
+    /// operands (the SSA-taint side ignores them automatically — they are never
+    /// tainted).  Empty unless [`Self::numeric_confined_uses`] is non-empty for
+    /// a Rust format-macro sink, so non-format nodes are unperturbed.
+    #[serde(default)]
+    pub format_macro_method_idents: Vec<String>,
 }
 
 impl NodeInfo {
@@ -1404,7 +1520,7 @@ fn parse_int_literal(node: Node, code: &[u8]) -> Option<i64> {
     if !is_int {
         return None;
     }
-    let raw = std::str::from_utf8(&code[node.byte_range()]).ok()?.trim();
+    let raw = slice_str(code, node.start_byte(), node.end_byte())?.trim();
     // Strip Java long suffix and digit separators.
     let cleaned: String = raw
         .trim_end_matches(['l', 'L'])
@@ -1966,7 +2082,7 @@ fn extract_bin_op_const(ast: Node, lang: &str, code: &[u8]) -> Option<i64> {
             || kind == "number_literal"
             || kind == "float"
         {
-            let text = std::str::from_utf8(&code[n.byte_range()]).ok()?.trim();
+            let text = slice_str(code, n.start_byte(), n.end_byte())?.trim();
             // Try standard decimal parse first
             if let Ok(v) = text.parse::<i64>() {
                 return Some(v);
@@ -2100,7 +2216,11 @@ fn binary_operator_token(node: Node) -> Option<String> {
 /// / `.size` / `.count`; Java `.size()` / `.length()`; Rust `.len()`.  This
 /// list is intentionally narrow, only properties whose semantics across every
 /// host we scan return an integer, so the `TypeKind::Int` fact is sound.
-fn is_numeric_length_property(name: &str) -> bool {
+///
+/// Shared with [`crate::ssa::type_facts::is_int_producing_callee`] so the
+/// value-level grain (`int n = s.length();`) and the callee-text grain
+/// (`String.valueOf(s.length())`) agree on the same narrow list.
+pub(crate) fn is_numeric_length_property(name: &str) -> bool {
     matches!(name, "length" | "size" | "byteLength" | "count" | "len")
 }
 
@@ -2402,6 +2522,77 @@ fn iterable_label_text(iter: Node, code: &[u8]) -> Option<String> {
         }
     }
     text_of(iter, code)
+}
+
+/// Build [`HoistedSink`] provenance for `inner_call`, the callback-nested sink
+/// whose `Sink` label [`first_callback_sink_call`] found being hoisted onto an
+/// outer wrapper node.  Mirrors the gate-classification path used for a node's
+/// own `sink_payload_args`: run the gated-sink registry against the inner
+/// callee to recover its payload-arg positions (expanding the dynamic
+/// `ALL_ARGS_PAYLOAD` sentinel to the inner call's arity) and capture the inner
+/// call's per-argument string literals.
+fn compute_hoisted_sink(inner_call: Node, lang: &str, code: &[u8]) -> HoistedSink {
+    let arg_string_literals = extract_arg_string_literals(inner_call, code);
+
+    let callee_text = inner_call
+        .child_by_field_name("function")
+        .or_else(|| inner_call.child_by_field_name("method"))
+        .or_else(|| inner_call.child_by_field_name("name"))
+        .and_then(|f| member_expr_text(f, code).or_else(|| text_of(f, code)))
+        .map(|t| t.chars().filter(|c| !c.is_whitespace()).collect::<String>())
+        .unwrap_or_default();
+
+    let matches = classify_gated_sink_with_presence(
+        lang,
+        &callee_text,
+        |idx| {
+            extract_const_string_arg(inner_call, idx, code).or_else(|| {
+                if matches!(lang, "c" | "cpp" | "c++" | "php" | "ruby" | "rb") {
+                    extract_const_macro_arg(inner_call, idx, code)
+                } else {
+                    None
+                }
+            })
+        },
+        |kw| {
+            extract_const_keyword_arg(inner_call, kw, code).or_else(|| {
+                if matches!(lang, "javascript" | "typescript") {
+                    extract_object_arg_property(inner_call, 1, kw, code)
+                } else {
+                    None
+                }
+            })
+        },
+        |kw| {
+            has_keyword_arg(inner_call, kw, code)
+                || (matches!(lang, "javascript" | "typescript")
+                    && has_object_arg_property(inner_call, 1, kw, code))
+        },
+        |idx| call_has_arg_at(inner_call, idx),
+    );
+
+    let mut payload: Vec<usize> = Vec::new();
+    for gm in &matches {
+        if gm.payload_args == crate::labels::ALL_ARGS_PAYLOAD {
+            let arity = extract_arg_uses(inner_call, code).len();
+            for p in 0..arity {
+                if !payload.contains(&p) {
+                    payload.push(p);
+                }
+            }
+        } else {
+            for &p in gm.payload_args {
+                if !payload.contains(&p) {
+                    payload.push(p);
+                }
+            }
+        }
+    }
+
+    HoistedSink {
+        payload_args: (!payload.is_empty()).then_some(payload),
+        arg_string_literals,
+    }
 }
 
 /// Create a node in one short borrow and optionally attach a taint label.
@@ -2733,6 +2924,11 @@ pub(super) fn push_node<'a>(
     // CVE-2023-38337, the Marshal/JSON/YAML-of-File.read pattern, etc.).
     let mut outer_callee: Option<String> = None;
     let mut inner_callee_span: Option<(usize, usize)> = None;
+    // Identifiers syntactically contained in a nested inner sink call when
+    // `find_classifiable_inner_call` / `find_inner_sink_call` overrides the
+    // outer callee.  Restricts the taint sink scan to the inner sink's own
+    // sub-expression, excluding sibling positions of the enclosing aggregate.
+    let mut sink_reaching_uses: Option<Vec<String>> = None;
     // JS/TS Promise callback methods (`.then`/`.catch`/`.finally`) on chained
     // receivers (`Promise.resolve(req.body).then(cb)`).  Without this guard,
     // `find_classifiable_inner_call` walks into the chain receiver and
@@ -2760,7 +2956,22 @@ pub(super) fn push_node<'a>(
                 }
             })
             .is_some_and(|leaf| crate::labels::is_promise_callback_method(lang, &leaf));
-    if labels.is_empty()
+    // Surface a classifiable nested call when the outer call carries no
+    // SINK label of its own.  Two cases:
+    //   (a) the outer call is unclassified (`labels.is_empty()`) — surface
+    //       any classifiable inner call (`str(eval(expr))` → `eval`).
+    //   (b) the outer call is a non-Sink (Sanitizer / Source) label — surface
+    //       the inner call ONLY when it is itself a SINK, so an outer
+    //       Sanitizer / Source cannot shadow a dangerous nested sink.
+    //       e.g. `JSON.parse(await fsp.readFile(tainted))` (FILE_IO sink
+    //       hidden under the JSON_PARSE sanitizer, vite CVE-2026-39365),
+    //       `escapeHtml(db.query(tainted))`, `String(execSync(tainted))`.
+    //       Additive: the existing Sanitizer / Source label is retained
+    //       (a JSON_PARSE / HTML_ESCAPE cap on the parsed *result* is
+    //       unrelated to the inner sink's path/query/command argument),
+    //       and only fires when no Sink label is present yet.
+    let outer_has_sink_label = labels.iter().any(|l| matches!(l, DataLabel::Sink(_)));
+    if !outer_has_sink_label
         && matches!(
             lookup(lang, ast.kind()),
             Kind::CallWrapper
@@ -2770,14 +2981,52 @@ pub(super) fn push_node<'a>(
                 | Kind::CallMethod
                 | Kind::CallMacro
         )
-        && let Some((inner_text, inner_label, inner_span)) =
-            find_classifiable_inner_call(ast, lang, code, extra)
     {
-        labels.push(inner_label);
-        if !outer_is_promise_callback {
-            outer_callee = Some(text.clone());
-            text = inner_text;
-            inner_callee_span = Some(inner_span);
+        // `labels.is_empty()`: outer call is unclassified — surface ANY
+        // classifiable nested call (`str(eval(x))` → `eval`).
+        //
+        // outer is a non-Sink label (Sanitizer / Source): surface only a
+        // nested SINK, recursing PAST the non-sink outer call.  An outer
+        // Sanitizer / Source sanitizes the parsed *result* (an unrelated cap
+        // on a downstream value), it cannot neutralise the inner sink's
+        // path / query / command argument, so the inner sink must still fire.
+        // e.g. `JSON.parse(await fsp.readFile(tainted))` (vite CVE-2026-39365
+        // FILE_IO path traversal hidden under the JSON_PARSE sanitizer),
+        // `escapeHtml(db.query(tainted))`.  `require_sink` makes the search
+        // skip the non-sink outer match and keep walking into its arguments.
+        let inner = if labels.is_empty() {
+            find_classifiable_inner_call(ast, lang, code, extra)
+        } else {
+            find_inner_sink_call(ast, lang, code, extra)
+        };
+        if let Some((inner_text, inner_label, inner_node)) = inner {
+            let inner_is_sink = matches!(inner_label, DataLabel::Sink(_));
+            labels.push(inner_label);
+            if !outer_is_promise_callback {
+                outer_callee = Some(text.clone());
+                text = inner_text;
+                inner_callee_span = Some((inner_node.start_byte(), inner_node.end_byte()));
+                // Inner-nested-sink argument attribution.  The Sink label was
+                // contributed by a call nested inside a larger, non-sink outer
+                // expression (`Ok(Reader { meta: <tainted>, h:
+                // File::open(const) })`, `str(eval(x))`).  Record the
+                // identifiers that syntactically appear *inside* that inner
+                // sink call so the taint sink scan can exclude values that
+                // occupy a DIFFERENT sub-position of the enclosing aggregate
+                // (a sibling struct field / tuple element), which are NOT the
+                // sink's payload.  Only meaningful for sink overrides — a
+                // Source/Sanitizer override taints the wrapper's *result*, a
+                // separate channel handled elsewhere.
+                if inner_is_sink {
+                    let mut idents = Vec::new();
+                    let mut paths = Vec::new();
+                    collect_idents_with_paths(inner_node, code, &mut idents, &mut paths);
+                    paths.extend(idents);
+                    if !paths.is_empty() {
+                        sink_reaching_uses = Some(paths);
+                    }
+                }
+            }
         }
     }
 
@@ -2848,6 +3097,11 @@ pub(super) fn push_node<'a>(
         }
     }
 
+    // Provenance for a Sink label hoisted onto a wrapper from a callback body
+    // (populated in the hoist block below).  Consumed by the CFG node's
+    // `CallMeta.hoisted_sink`.
+    let mut hoisted_sink: Option<Box<HoistedSink>> = None;
+
     // For declarations/assignments whose RHS is a member expression (not a call),
     // try to classify the member expression text as a source.
     // This handles `var x = process.env.CMD` (JS), `os.environ["KEY"]` (Python),
@@ -2866,7 +3120,28 @@ pub(super) fn push_node<'a>(
         && !rhs_is_function_literal(ast, lang)
         && let Some(found) = first_member_label(ast, lang, code, extra)
     {
+        let hoisted_is_sink = matches!(found, DataLabel::Sink(_));
         labels.push(found);
+        // When the hoisted label is a Sink contributed from inside a
+        // callback-argument function literal (the `sequelize.transaction(async
+        // (t) => { sequelize.query(`…`, opts) })` idiom), record the INNER sink
+        // call's own payload-arg positions + argument string literals.  The
+        // wrapper's own arguments are the callback, not the payload, so
+        // `sink_payload_args_syntactic_const` must check the inner call to
+        // decide whether the phantom `cfg-unguarded-sink` on the wrapper is a
+        // false positive (constant inner payload) or a real flow (tainted).
+        //
+        // `first_callback_sink_call` descends argument positions only, never a
+        // call's callee/receiver side, so provenance can only come from a
+        // callback this node actually passes.  Without that restriction a
+        // chained call picked up a sink nested in the RECEIVER's callback:
+        // `http.get(target, cb).on('error', cb2)` recorded `res.send('ok')`
+        // from inside `http.get`'s callback as provenance for the `.on` node,
+        // and that unrelated `'ok'` literal then masqueraded as a constant
+        // payload and suppressed a real SSRF finding.
+        if hoisted_is_sink && let Some(inner) = first_callback_sink_call(ast, lang, code, extra) {
+            hoisted_sink = Some(Box::new(compute_hoisted_sink(inner, lang, code)));
+        }
         // Update text so the callee name reflects the source.
         // Preserve the original callee in outer_callee so inter-procedural
         // summary resolution can still find the wrapping function
@@ -2952,7 +3227,8 @@ pub(super) fn push_node<'a>(
     // Motivated by CVE-2025-64430 (Parse Server SSRF).
     if labels.is_empty()
         && let Some(outer) = call_ast
-        && let Some((inner, inner_callee_text)) = find_chained_inner_call(outer, lang, code)
+        && let Some((inner, inner_callee_text)) = find_chained_gated_sink_call(outer, lang, code)
+            .or_else(|| find_chained_inner_call(outer, lang, code))
         && !classify_gated_sink(lang, &inner_callee_text, |_| None, |_| None, |_| false).is_empty()
     {
         call_ast = Some(inner);
@@ -3037,7 +3313,7 @@ pub(super) fn push_node<'a>(
             } else {
                 function_field_text.unwrap_or_else(|| text.clone())
             };
-            let matches = classify_gated_sink(
+            let matches = classify_gated_sink_with_presence(
                 lang,
                 &gate_callee_text,
                 |idx| {
@@ -3080,6 +3356,7 @@ pub(super) fn push_node<'a>(
                         || (matches!(lang, "javascript" | "typescript")
                             && has_object_arg_property(cn, 1, kw, code))
                 },
+                |idx| call_has_arg_at(cn, idx),
             );
 
             if !matches.is_empty() {
@@ -3444,13 +3721,19 @@ pub(super) fn push_node<'a>(
     //
     // Recognition rule: when the CFG node's classified text reaches a sink
     // with `SQL_QUERY` cap, walk the receiver chain looking for an inner
-    // `*.query(...)` / `*.execute(...)` whose arg 0 is a string literal
-    // and whose result has at least one chained method call appended whose
-    // name is in the ORM-accessor whitelist.  If both hold, synthesise a
-    // same-node `Sanitizer(SQL_QUERY)` mirroring the Java JPA fix.  Bare
-    // `connection.query("SELECT ...")` (no chained method) and
-    // `db.query("UPDATE x SET y=" + name)` (non-literal arg 0) leave the
-    // sink in place, both are genuine SQLi shapes.
+    // `*.query(...)` / `*.execute(...)` whose result has at least one chained
+    // method call appended whose name is in the ORM-accessor whitelist AND
+    // whose arg 0 is a model-UID *reference* (string literal, const / variable
+    // identifier, or member access — see `js_orm_query_arg0_is_uid_ref`).  The
+    // trailing ORM method (`findMany` / `findOne` / …) is the discriminator: a
+    // raw driver's `query(sql)` returns a Promise that cannot chain those
+    // methods, so the chain shape only arises on ORM query builders.  If both
+    // hold, synthesise a same-node `Sanitizer(SQL_QUERY)` mirroring the Java
+    // JPA fix.  Because `dominates()` is reflexive, the same-node sanitizer
+    // also suppresses the parallel structural `cfg-unguarded-sink` finding.
+    // Bare `connection.query("SELECT ...")` (no chained ORM method) and
+    // `db.query(`UPDATE ... ${name}`)` (interpolated arg 0) leave the sink in
+    // place, both are genuine SQLi shapes.
     if (lang == "javascript"
         || lang == "js"
         || lang == "typescript"
@@ -3485,16 +3768,37 @@ pub(super) fn push_node<'a>(
             "aggregate",
             "distinct",
             "save",
+            // Strapi Query Engine relation loader: `db.query(uid).load(entity,
+            // populate)` returns the populated relation, parameterised like the
+            // other accessors.
+            "load",
         ];
         // Fall back to a deeper walk (up to 4 levels) for await/return-
         // wrapped calls (e.g. `const x = await db.query(...).findOne(...)` ,
         // call sits at depth 3 inside lexical_declaration > variable_declarator
         // > await_expression > call_expression).
-        let chain_call = call_ast.or_else(|| find_call_node_deep(ast, lang, 4));
+        // Locate the ORM-accessor call `<recv>.query(UID).<orm_method>(...)`
+        // robustly.  Real strapi code wraps the chain in forms that defeat the
+        // shallow `call_ast` / fixed-depth `find_call_node_deep` lookup:
+        //   * `const x = (await db.query(uid).findMany(...))` — the
+        //     `(await ...)` wrapper pushes the call past the depth budget, so
+        //     both lookups return `None`.
+        //   * `return (await db.query(uid).count(...)) > 0` — a binary wrapper.
+        //   * `Promise.all([ db.query(model).findOne(...) ])` — `find_call_node`
+        //     returns the *outer* `Promise.all` call, whose spine has no
+        //     `.query`, so the ORM chain is invisible.
+        // A bounded subtree DFS for the specific call whose receiver spine holds
+        // an inner `query`/`execute` (via `js_chain_outer_method_for_inner`)
+        // finds the right node regardless of wrapping; fall back to the prior
+        // lookups only if the DFS finds nothing.
+        let mut orm_dfs_budget: u32 = 96;
+        let chain_call = find_orm_query_chain_call(ast, QUERY_TARGETS, code, &mut orm_dfs_budget)
+            .or(call_ast)
+            .or_else(|| find_call_node_deep(ast, lang, 4));
         if let Some(call_node) = chain_call {
             // Outer method must be in the ORM whitelist *and* the chain must
             // have a deeper inner call to a `query`/`execute` whose arg 0 is
-            // a string literal.  Both checks gate the synthesis.
+            // a model-UID reference.  Both checks gate the synthesis.
             let outer_method = js_chain_outer_method_for_inner(call_node, QUERY_TARGETS, code);
             let outer_is_orm = outer_method
                 .as_deref()
@@ -3503,10 +3807,7 @@ pub(super) fn push_node<'a>(
                 && let Some((arg0_kind, has_interp)) =
                     js_chain_arg0_kind_for_method(call_node, QUERY_TARGETS, code)
                 && !has_interp
-                && matches!(
-                    arg0_kind.as_str(),
-                    "string" | "string_fragment" | "template_string"
-                )
+                && js_orm_query_arg0_is_uid_ref(arg0_kind.as_str())
             {
                 labels.push(DataLabel::Sanitizer(Cap::SQL_QUERY));
             }
@@ -3797,6 +4098,15 @@ pub(super) fn push_node<'a>(
     let produces_null_proto = matches!(lang, "javascript" | "typescript")
         && call_ast.is_some_and(|cn| is_object_create_null_call(cn, code));
 
+    let numeric_confined_uses = collect_numeric_confined_value_idents(ast, lang, code, &labels);
+    // Only Rust format-macro confined sinks need the phantom-ident skip list
+    // (see [`NodeInfo::format_macro_method_idents`]); skip the walk otherwise.
+    let format_macro_method_idents = if lang == "rust" && !numeric_confined_uses.is_empty() {
+        collect_format_macro_method_idents(ast, code)
+    } else {
+        Vec::new()
+    };
+
     let idx = g.add_node(NodeInfo {
         kind,
         call: CallMeta {
@@ -3808,12 +4118,14 @@ pub(super) fn push_node<'a>(
             arg_uses,
             receiver,
             sink_payload_args,
+            sink_reaching_uses,
             kwargs,
             arg_string_literals,
             destination_uses,
             gate_filters,
             is_constructor,
             produces_null_proto,
+            hoisted_sink,
         },
         taint: TaintMeta {
             labels,
@@ -3839,6 +4151,11 @@ pub(super) fn push_node<'a>(
         bin_op: extract_bin_op(ast, lang),
         bin_op_const: extract_bin_op_const(ast, lang, code),
         managed_resource: is_raii_managed || is_ruby_block_managed,
+        borrowed_resource: lang == "java"
+            && code
+                .get(span.0..span.1)
+                .is_some_and(|s| s.windows(13).any(|w| w == b"getConnection"))
+            && java_getconnection_receiver_is_borrowed(ast, code),
         in_defer: false,
         parameterized_query,
         string_prefix,
@@ -3847,6 +4164,9 @@ pub(super) fn push_node<'a>(
         member_field: detect_member_field_assignment(ast, code),
         rhs_is_function_literal: rhs_is_function_literal(ast, lang),
         is_await_forward: lookup(lang, ast.kind()) == Kind::AwaitForward,
+        decl_type: extract_decl_type(ast, lang, code),
+        numeric_confined_uses,
+        format_macro_method_idents,
     });
 
     debug!(
@@ -3859,6 +4179,218 @@ pub(super) fn push_node<'a>(
         g[idx].taint.labels
     );
     idx
+}
+
+/// Simple leaf name of a Java type text: strip generic arguments
+/// (`Session<T>` → `Session`), array brackets (`Foo[]` → `Foo`), and any
+/// package qualifier (`liquibase.database.Database` → `Database`).
+fn java_type_leaf(type_text: &str) -> &str {
+    let no_generics = type_text.split('<').next().unwrap_or(type_text);
+    let no_array = no_generics.split('[').next().unwrap_or(no_generics);
+    no_array.rsplit('.').next().unwrap_or(no_array).trim()
+}
+
+/// Whether a Java type is a *borrowed-owner* of the JDBC `Connection` it
+/// yields via `getConnection()`: a managed session / DB abstraction that
+/// closes the connection as part of its own lifecycle, so a body that
+/// borrows the connection must NOT close it.  Recognised owners:
+///   * Liquibase `liquibase.database.Database`
+///   * Hibernate `org.hibernate.Session` / `StatelessSession` /
+///     `SharedSessionContract(Implementor)` / `SessionImplementor`
+///   * MyBatis `org.apache.ibatis.session.SqlSession` / `SqlSessionManager`
+///   * JPA `jakarta/javax.persistence.EntityManager`
+///
+/// In contrast a `javax.sql.DataSource` / `java.sql.DriverManager`
+/// `getConnection(...)` returns an OWNED connection the caller must close —
+/// those are NOT in this set (they do not end in `Session` and are not
+/// listed), so their leaks stay true positives.
+///
+/// A leaf name ending in `Session` (Hibernate `Session` / `StatelessSession`,
+/// MyBatis `SqlSession`, sonarqube `DbSession`, …) is treated as a managed
+/// DB session that owns its connection.  This is sound in context: the flag
+/// is consulted only at a `getConnection()` receiver, and the only types that
+/// ever appear there are DB-connection-owning types (a servlet `HttpSession`
+/// has no `getConnection`, so it never matters).  `Database` is matched
+/// exactly (Liquibase's interface) rather than by suffix, to avoid
+/// suppressing a homegrown `*Database` wrapper whose `getConnection()`
+/// freshly opens an OWNED connection.
+fn is_java_borrowed_connection_owner(type_text: &str) -> bool {
+    let leaf = java_type_leaf(type_text);
+    leaf.ends_with("Session")
+        || matches!(
+            leaf,
+            "Database"                          // Liquibase liquibase.database.Database
+                | "SharedSessionContract"       // Hibernate contracts (non-`Session` suffix)
+                | "SharedSessionContractImplementor"
+                | "SessionImplementor"
+                | "SqlSessionManager"           // MyBatis session manager
+                | "EntityManager" // JPA jakarta/javax.persistence.EntityManager
+        )
+}
+
+/// Whether the acquire statement `ast` is a Java `X.getConnection()` whose
+/// receiver `X` has a statically-declared *borrowed-owner* type (see
+/// [`is_java_borrowed_connection_owner`]).  The receiver's declared type is
+/// resolved from the enclosing method's formal parameters, then a preceding
+/// typed local declaration in the same scope, then the enclosing class's
+/// fields — Java is statically typed so exactly one of these carries the
+/// declaration.
+///
+/// Recall-preserving: returns `true` only when the receiver type is a
+/// positively-recognised borrowed owner.  A static factory call
+/// (`DriverManager.getConnection(...)`, whose receiver `DriverManager`
+/// resolves to no local / parameter / field), a `DataSource` receiver, and a
+/// bare `getConnection()` all return `false`, so those leaks stay reported.
+///
+/// Motivated by the openmrs Liquibase changeset shape
+/// `execute(Database database) { … database.getConnection() }`, where
+/// Liquibase owns and closes the connection.
+fn java_getconnection_receiver_is_borrowed(ast: Node, code: &[u8]) -> bool {
+    let Some(mi) = find_java_getconnection_invocation(ast, code) else {
+        return false;
+    };
+    // No receiver (`getConnection()` bare) → nothing to type.
+    let Some(obj) = mi.child_by_field_name("object") else {
+        return false;
+    };
+    let Some(recv) = java_receiver_var_name(obj, code) else {
+        return false;
+    };
+    match resolve_java_var_declared_type(mi, &recv, code) {
+        Some(ty) => is_java_borrowed_connection_owner(&ty),
+        None => false,
+    }
+}
+
+/// The receiver variable name of a Java method-invocation `object` node.
+/// Plain `identifier` → its text.  `this.field` / `obj.field`
+/// (`field_access`) → the accessed field name.  Any more complex receiver
+/// (chained call, array access, …) → `None`.
+fn java_receiver_var_name(obj: Node, code: &[u8]) -> Option<String> {
+    match obj.kind() {
+        "identifier" => text_of(obj, code),
+        "field_access" => obj
+            .child_by_field_name("field")
+            .and_then(|f| text_of(f, code)),
+        _ => None,
+    }
+}
+
+/// Pre-order search for a `method_invocation` named `getConnection` within
+/// (or equal to) `ast`.  Does not descend into nested method / lambda bodies
+/// (those own their own scope and acquire nodes).  Returns the first match.
+fn find_java_getconnection_invocation<'a>(ast: Node<'a>, code: &[u8]) -> Option<Node<'a>> {
+    if ast.kind() == "method_invocation"
+        && ast
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(code).ok())
+            == Some("getConnection")
+    {
+        return Some(ast);
+    }
+    let mut cursor = ast.walk();
+    for child in ast.children(&mut cursor) {
+        if matches!(child.kind(), "method_declaration" | "lambda_expression") {
+            continue;
+        }
+        if let Some(found) = find_java_getconnection_invocation(child, code) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Resolve the statically-declared type text of Java variable `var` as seen
+/// from `from`, by walking up enclosing scopes: method / constructor / lambda
+/// parameters, block-local declarations, then class / interface / enum
+/// fields.  Returns the raw type text (leaf-simplified by the caller).
+fn resolve_java_var_declared_type(from: Node, var: &str, code: &[u8]) -> Option<String> {
+    let mut cur = from;
+    while let Some(parent) = cur.parent() {
+        match parent.kind() {
+            "method_declaration" | "constructor_declaration" | "lambda_expression" => {
+                if let Some(t) = java_param_declared_type(parent, var, code) {
+                    return Some(t);
+                }
+            }
+            "block" | "constructor_body" => {
+                if let Some(t) = java_block_local_declared_type(parent, var, code) {
+                    return Some(t);
+                }
+            }
+            "class_body" | "interface_body" | "enum_body" => {
+                if let Some(t) = java_field_declared_type(parent, var, code) {
+                    return Some(t);
+                }
+            }
+            _ => {}
+        }
+        cur = parent;
+    }
+    None
+}
+
+/// Declared type of formal parameter `var` on a Java method / constructor /
+/// lambda node, if present.
+fn java_param_declared_type(method: Node, var: &str, code: &[u8]) -> Option<String> {
+    let params = method.child_by_field_name("parameters")?;
+    let mut cursor = params.walk();
+    for fp in params.named_children(&mut cursor) {
+        if !matches!(fp.kind(), "formal_parameter" | "spread_parameter") {
+            continue;
+        }
+        if fp
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(code).ok())
+            == Some(var)
+        {
+            return fp
+                .child_by_field_name("type")
+                .and_then(|t| text_of(t, code));
+        }
+    }
+    None
+}
+
+/// Declared type of `var` among the direct `local_variable_declaration`
+/// children of a Java block, if declared there.
+fn java_block_local_declared_type(block: Node, var: &str, code: &[u8]) -> Option<String> {
+    let mut cursor = block.walk();
+    for child in block.named_children(&mut cursor) {
+        if child.kind() == "local_variable_declaration" && java_decl_defines_var(child, var, code) {
+            return child
+                .child_by_field_name("type")
+                .and_then(|t| text_of(t, code));
+        }
+    }
+    None
+}
+
+/// Declared type of field `var` among the `field_declaration` members of a
+/// Java class / interface / enum body, if declared there.
+fn java_field_declared_type(body: Node, var: &str, code: &[u8]) -> Option<String> {
+    let mut cursor = body.walk();
+    for child in body.named_children(&mut cursor) {
+        if child.kind() == "field_declaration" && java_decl_defines_var(child, var, code) {
+            return child
+                .child_by_field_name("type")
+                .and_then(|t| text_of(t, code));
+        }
+    }
+    None
+}
+
+/// Whether a Java declaration node (`local_variable_declaration` /
+/// `field_declaration`) declares a `variable_declarator` named `var`.
+fn java_decl_defines_var(decl: Node, var: &str, code: &[u8]) -> bool {
+    let mut cursor = decl.walk();
+    decl.children(&mut cursor).any(|ch| {
+        ch.kind() == "variable_declarator"
+            && ch
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(code).ok())
+                == Some(var)
+    })
 }
 
 /// Add the same edge (of the same kind) from every node in `froms` to `to`.
@@ -3899,6 +4431,447 @@ pub(super) fn connect_all(g: &mut Cfg, froms: &[NodeIndex], to: NodeIndex, kind:
 /// label propagation from inside the literal's body up onto the outer
 /// wrapper assignment.  The literal is processed as its own scope by
 /// `collect_nested_function_nodes`.
+/// Extract the declared type annotation of a Rust `let x: T = <rhs>` binding
+/// and lower it to the lattice [`crate::ssa::type_facts::TypeKind`] for the
+/// bound value.  Returns `None` for any non-Rust language, any node that is
+/// not (or does not directly wrap) a `let_declaration` carrying a `type`
+/// field, and any annotation the lattice does not recognise (see
+/// [`crate::ssa::type_facts::rust_annotation_type_kind`]).
+///
+/// `ast` may be the `let_declaration` itself or a statement wrapper whose
+/// direct child is the declaration (mirrors the RHS-locating walk in
+/// [`rhs_is_function_literal`]).  Rust is the only language wired here: its
+/// idiomatic binding RHS `str::parse` is the one verb whose return type is
+/// ambiguous between numeric and non-numeric `FromStr` targets, so the
+/// annotation is the only ground truth.
+fn extract_decl_type(
+    ast: Node,
+    lang: &str,
+    code: &[u8],
+) -> Option<crate::ssa::type_facts::TypeKind> {
+    if lang == "go" {
+        return extract_decl_type_go(ast, code);
+    }
+    if lang != "rust" {
+        return None;
+    }
+    let decl = if ast.kind() == "let_declaration" {
+        ast
+    } else {
+        let mut cursor = ast.walk();
+        ast.children(&mut cursor)
+            .find(|c| c.kind() == "let_declaration")?
+    };
+    let type_node = decl.child_by_field_name("type")?;
+    let type_text = text_of(type_node, code)?;
+    crate::ssa::type_facts::rust_annotation_type_kind(&type_text)
+}
+
+/// Go local-binding writer-type inference.
+///
+/// A local writer bound to a byte-buffer constructor —
+/// `stdIn := new(bytes.Buffer)`, `buf := &bytes.Buffer{}`,
+/// `sb := new(strings.Builder)` — is a non-response byte sink, exactly like
+/// a `w bytes.Buffer` parameter.  The `new(T)` type argument (and the
+/// `&T{}` composite-literal type) is dropped from the CFG's `arg_uses` (the
+/// type node is not a value use), so the value's `TypeFact` stays `Unknown`
+/// and the Go `fmt.Fprintf` XSS gate cannot recognise the writer as
+/// non-response.  This recovers the type by reading the RHS constructor text
+/// and mapping it through the shared [`params::go_writer_type_to_kind`]
+/// table, so `fmt.Fprintf(stdIn, "0 %s\t%s\x00", ...)` (gitea
+/// `temp_repo.go`) is not flagged as reflected XSS.  Only writer buffer
+/// types resolve; every other constructor returns `None`, so the inference
+/// stays conservative (never suppresses a real `http.ResponseWriter`).
+fn extract_decl_type_go(ast: Node, code: &[u8]) -> Option<crate::ssa::type_facts::TypeKind> {
+    // Resolve the initialiser expression for the binding statement.
+    let rhs = match ast.kind() {
+        // `x := <rhs>` / `x = <rhs>`
+        "short_var_declaration" | "assignment_statement" => {
+            let right = ast.child_by_field_name("right")?;
+            first_go_expr(right)
+        }
+        // `var x = <rhs>` (a var_spec carries the value directly)
+        "var_spec" => ast.child_by_field_name("value").and_then(first_go_expr),
+        _ => None,
+    }?;
+    let ty_text = go_constructor_type_text(rhs, code)?;
+    params::go_writer_type_to_kind(&ty_text)
+}
+
+/// First concrete expression inside an `expression_list` (or the node itself
+/// when it is already a single expression).  Returns `None` for
+/// multi-value RHS lists (`a, b := f()`), where the binding target's type is
+/// ambiguous.
+fn first_go_expr(n: Node) -> Option<Node> {
+    if n.kind() == "expression_list" {
+        let mut cursor = n.walk();
+        let exprs: Vec<Node> = n.children(&mut cursor).filter(|c| c.is_named()).collect();
+        if exprs.len() == 1 {
+            Some(exprs[0])
+        } else {
+            None
+        }
+    } else {
+        Some(n)
+    }
+}
+
+/// Read the constructed type's text from a Go constructor expression:
+/// `new(T)` → `T`, `&T{}` / `T{}` (composite literals, possibly under a
+/// `&` unary) → `T`.  Returns `None` for any other expression shape.
+fn go_constructor_type_text(expr: Node, code: &[u8]) -> Option<String> {
+    match expr.kind() {
+        "call_expression" => {
+            let func = expr.child_by_field_name("function")?;
+            if text_of(func, code)?.trim() != "new" {
+                return None;
+            }
+            let args = expr.child_by_field_name("arguments")?;
+            let mut cursor = args.walk();
+            let first = args.children(&mut cursor).find(|c| c.is_named())?;
+            text_of(first, code)
+        }
+        // `&T{}` — the address-of a composite literal.
+        "unary_expression" => {
+            let operand = expr.child_by_field_name("operand")?;
+            go_constructor_type_text(operand, code)
+        }
+        // `T{}` composite literal.
+        "composite_literal" => {
+            let ty = expr.child_by_field_name("type")?;
+            text_of(ty, code)
+        }
+        _ => None,
+    }
+}
+
+/// Nearest ancestor of `n` that is a call/method-call expression, or `None`
+/// when `n` is not nested inside any call.  Used to find the call that
+/// *consumes* a value-use identifier (its receiver or argument).
+fn nearest_enclosing_call<'a>(n: Node<'a>, lang: &str) -> Option<Node<'a>> {
+    let mut cur = n.parent()?;
+    loop {
+        if matches!(lookup(lang, cur.kind()), Kind::CallFn | Kind::CallMethod) {
+            return Some(cur);
+        }
+        cur = cur.parent()?;
+    }
+}
+
+/// Collect value-use identifiers in the sink `ast` whose **every** occurrence
+/// is consumed by a numeric- or safe-string-producing call
+/// (`x.parse::<u16>()`, `parseInt(x)`, `Atoi(x)`, `Integer.toString(x)`, …).
+///
+/// Populates [`NodeInfo::numeric_confined_uses`].  Motivated by inline
+/// numeric chains flowing into type-suppressible sinks —
+/// `Command::arg(s.parse::<u16>().unwrap().to_string())`,
+/// `fs::read(format!("/d/{}", s.parse::<u32>()))` — where the inner chain
+/// never lowers to its own SSA value, so the value-level
+/// [`crate::ssa::type_facts::TypeKind::Int`] suppression cannot reach it; the
+/// tainted source leaf is flattened directly into the sink's use set.
+///
+/// Soundness: an identifier whose count of numeric-confined occurrences is
+/// less than its total value-use count (i.e. it also appears raw somewhere in
+/// the node) is **not** returned, so a real injection through the same
+/// variable still fires.  Bare-callee-name identifiers (`parseInt` in
+/// `parseInt(x)`) are excluded from the value-use count.  Gated to Sink nodes;
+/// returns empty otherwise.
+fn collect_numeric_confined_value_idents(
+    ast: Node,
+    lang: &str,
+    code: &[u8],
+    labels: &[DataLabel],
+) -> Vec<String> {
+    if !labels.iter().any(|l| matches!(l, DataLabel::Sink(_))) {
+        return Vec::new();
+    }
+    // text -> (total value-use occurrences, numeric-confined occurrences)
+    let mut counts: std::collections::HashMap<String, (u32, u32)> =
+        std::collections::HashMap::new();
+    count_confined_idents_into(ast, lang, code, &mut counts);
+    counts
+        .into_iter()
+        .filter(|(_, (total, conf))| *total > 0 && total == conf)
+        .map(|(k, _)| k)
+        .collect()
+}
+
+/// Per-identifier numeric-confinement tally for the confinement walk:
+/// `text -> (total value-use occurrences, numeric-confined occurrences)`.
+type ConfinedCounts = std::collections::HashMap<String, (u32, u32)>;
+
+/// Walk `root` accumulating, per value-use identifier, how many of its
+/// occurrences are numeric-confined (consumed by a numeric / safe-string
+/// producer) versus its total occurrences.  Factored out of
+/// [`collect_numeric_confined_value_idents`] so the Rust `format!`-family
+/// handler can re-run the same structured tally on a re-parsed argument
+/// subtree and merge into the shared `counts` (preserving the
+/// single-raw-occurrence-blocks soundness across the whole sink node).
+fn count_confined_idents_into(root: Node, lang: &str, code: &[u8], counts: &mut ConfinedCounts) {
+    use crate::ssa::type_facts::{is_int_producing_callee, is_safe_string_producing_callee};
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        // Rust `format!`/`write!`/… macros model their arguments as a flat
+        // `token_tree` of raw tokens, so the inner `g.parse::<u32>()` chain is
+        // NOT a `call_expression` subtree and `nearest_enclosing_call` below
+        // can't see it (the leaf `g` would be counted raw).  Re-parse each
+        // interpolated argument expression and tally it structurally, then
+        // skip descending into the flat tokens so the phantom method-name
+        // tokens (`parse`, `unwrap`) are not miscounted as raw value-uses.
+        if lang == "rust"
+            && n.kind() == "macro_invocation"
+            && count_rust_format_macro_confined(n, lang, code, counts)
+        {
+            continue;
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+        // Variable references across the supported grammars: `identifier`
+        // (Rust/Go/Python/JS/TS/Java/Ruby/C/C++) plus PHP `variable_name`.
+        if !matches!(n.kind(), "identifier" | "variable_name") {
+            continue;
+        }
+        // Skip bare callee-name identifiers (`parseInt` in `parseInt(x)`):
+        // they are the `function`/`name` field of a call, not a consumed
+        // value.  Method-name identifiers (`.parse`, `.unwrap`) already carry
+        // distinct node kinds (`field_identifier` / `property_identifier`) and
+        // are excluded by the kind filter above.
+        if let Some(p) = n.parent()
+            && matches!(lookup(lang, p.kind()), Kind::CallFn | Kind::CallMethod)
+        {
+            let callee_field = p
+                .child_by_field_name("function")
+                .or_else(|| p.child_by_field_name("name"));
+            if callee_field == Some(n) {
+                continue;
+            }
+        }
+        let Some(text) = text_of(n, code) else {
+            continue;
+        };
+        let confined = nearest_enclosing_call(n, lang).is_some_and(|c| {
+            call_ident_of(c, lang, code).is_some_and(|ci| {
+                is_int_producing_callee(&ci) || is_safe_string_producing_callee(&ci)
+            })
+        });
+        let entry = counts.entry(text).or_insert((0, 0));
+        entry.0 += 1;
+        if confined {
+            entry.1 += 1;
+        }
+    }
+}
+
+/// When `macro_node` is a Rust format-style `macro_invocation`
+/// (`format!` / `write!` / `println!` / `panic!` / a `log` severity macro,
+/// …), tally numeric-confinement for the value-use identifiers in each of its
+/// interpolated argument expressions and merge into `counts`; returns `true`
+/// so the caller skips descending into the flat `token_tree`.
+///
+/// tree-sitter-rust parses a macro's body as an unstructured `token_tree`, so
+/// `g.parse::<u32>().unwrap()` inside `fs::read(format!("/d/{}", g.parse::<u32>()
+/// .unwrap()))` is a flat token run rather than a `call_expression`.  We split
+/// the token_tree into top-level (`,`-separated) argument segments, drop the
+/// format-template string literal, and re-parse the remaining segments as Rust
+/// expressions so the shared structured tally
+/// ([`count_confined_idents_into`]) recovers the receiver→`parse::<u32>()`
+/// relationship.  Multi-identifier arguments stay sound: `format!("{}", a +
+/// b.parse::<u32>())` confines only `b` (its nearest enclosing call is the
+/// numeric `parse`), leaving `a` un-confined.
+///
+/// Returns `false` for any non-format macro so the caller descends normally
+/// (an unrecognised macro's tokens are then counted raw → never confined,
+/// the conservative default).  The format-string literal's own constant
+/// content is intentionally not vetted: a digits-only interpolation cannot
+/// inject `..` / quotes / shell metacharacters, and any constant traversal in
+/// the template is developer-authored, not an attacker-controlled taint
+/// vector.
+fn count_rust_format_macro_confined(
+    macro_node: Node,
+    lang: &str,
+    code: &[u8],
+    counts: &mut ConfinedCounts,
+) -> bool {
+    let Some(name_node) = macro_node.child_by_field_name("macro") else {
+        return false;
+    };
+    let Some(macro_text) = text_of(name_node, code) else {
+        return false;
+    };
+    let leaf = macro_text
+        .rsplit("::")
+        .next()
+        .unwrap_or(macro_text.as_str());
+    if !is_rust_format_style_macro(leaf) {
+        return false;
+    }
+    let tt = match macro_node.child_by_field_name("token_tree") {
+        Some(t) => t,
+        None => {
+            let mut cursor = macro_node.walk();
+            match macro_node
+                .children(&mut cursor)
+                .find(|c| c.kind() == "token_tree")
+            {
+                Some(t) => t,
+                None => return false,
+            }
+        }
+    };
+    let segments = split_format_macro_segments(tt);
+    if segments.is_empty() {
+        // Recognised format macro with no parseable arguments — still claim
+        // it so the caller does not re-descend (nothing to confine).
+        return true;
+    }
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .is_err()
+    {
+        return true;
+    }
+    for seg in segments {
+        // Drop the format-template literal segment (`"/data/{}"`): it carries
+        // no interpolated value-use and named captures (`{n}`) live in its
+        // bytes, not as tokens, so they are deliberately left un-confined.
+        if seg.len() == 1 && matches!(seg[0].kind(), "string_literal" | "raw_string_literal") {
+            continue;
+        }
+        let (Some(first), Some(last)) = (seg.first(), seg.last()) else {
+            continue;
+        };
+        let (start, end) = (first.start_byte(), last.end_byte());
+        if start >= end || end > code.len() {
+            continue;
+        }
+        // Re-parse the argument expression in a minimal function/`let` context
+        // so tree-sitter-rust yields a structured expression tree, then tally
+        // only that expression's value (the synthetic `_nyx_fmt_arg` /
+        // wrapper names are never numeric-confined, so they cannot leak into
+        // the result).
+        let mut wrapped = Vec::with_capacity(end - start + 24);
+        wrapped.extend_from_slice(b"fn _nyx_fmt_arg(){let _=");
+        wrapped.extend_from_slice(&code[start..end]);
+        wrapped.extend_from_slice(b";}");
+        let Some(tree) = parser.parse(&wrapped, None) else {
+            continue;
+        };
+        if let Some(value) = format_arg_value_node(tree.root_node()) {
+            count_confined_idents_into(value, lang, &wrapped, counts);
+        }
+    }
+    true
+}
+
+/// Split a Rust macro `token_tree` into top-level argument segments.  Children
+/// alternate between expression tokens and `,` separators; nested
+/// parenthesised groups are their own `token_tree` children (so their inner
+/// commas are invisible here), while turbofish `::<…>` angle brackets are flat
+/// tokens — track angle-bracket depth so a generic `parse::<HashMap<K, V>>`
+/// comma does not split an argument.  The surrounding `(`/`)` are dropped.
+fn split_format_macro_segments(tt: Node) -> Vec<Vec<Node>> {
+    let mut segments: Vec<Vec<Node>> = vec![Vec::new()];
+    let mut angle_depth: i32 = 0;
+    let mut cursor = tt.walk();
+    for child in tt.children(&mut cursor) {
+        if !child.is_named() {
+            match child.kind() {
+                "(" | ")" => continue,
+                "<" => angle_depth += 1,
+                ">" => angle_depth = (angle_depth - 1).max(0),
+                "," if angle_depth == 0 => {
+                    segments.push(Vec::new());
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        segments.last_mut().unwrap().push(child);
+    }
+    segments.retain(|s| !s.is_empty());
+    segments
+}
+
+/// Locate the wrapped argument expression inside a re-parsed
+/// `fn _nyx_fmt_arg(){let _=<expr>;}` tree: the `value` field of the first
+/// `let_declaration`.  Falls back to the whole root (harmless — the synthetic
+/// wrapper identifiers are never numeric-confined).
+fn format_arg_value_node(root: Node) -> Option<Node> {
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "let_declaration"
+            && let Some(v) = n.child_by_field_name("value")
+        {
+            return Some(v);
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    None
+}
+
+/// Collect the syntactic phantom identifiers a Rust `format!`-family macro
+/// flattens into a sink's use set — the macro name plus every method-name
+/// token (an `identifier` whose immediately-preceding sibling is `.`) inside
+/// its `token_tree`.  These lower to bare-identifier SSA `Param` operands that
+/// are not real arguments, so the structural confinement check skips them.
+/// See [`NodeInfo::format_macro_method_idents`].
+fn collect_format_macro_method_idents(ast: Node, code: &[u8]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut stack = vec![ast];
+    while let Some(n) = stack.pop() {
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+        if n.kind() != "macro_invocation" {
+            continue;
+        }
+        let Some(name_node) = n.child_by_field_name("macro") else {
+            continue;
+        };
+        let Some(macro_text) = text_of(name_node, code) else {
+            continue;
+        };
+        let leaf = macro_text
+            .rsplit("::")
+            .next()
+            .unwrap_or(macro_text.as_str());
+        if !is_rust_format_style_macro(leaf) {
+            continue;
+        }
+        // Macro name token (`format` / `write` / …).
+        if let Some(t) = text_of(name_node, code) {
+            out.push(t);
+        }
+        // Method-name tokens: `identifier` preceded by a `.` separator, at any
+        // nesting depth within the macro's token_tree.
+        let mut inner = vec![n];
+        while let Some(m) = inner.pop() {
+            let mut c = m.walk();
+            let children: Vec<Node> = m.children(&mut c).collect();
+            for (i, ch) in children.iter().enumerate() {
+                inner.push(*ch);
+                if ch.kind() == "identifier"
+                    && i > 0
+                    && children[i - 1].kind() == "."
+                    && let Some(t) = text_of(*ch, code)
+                {
+                    out.push(t);
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 fn rhs_is_function_literal(ast: Node, lang: &str) -> bool {
     use conditions::unwrap_parens;
 
@@ -4533,7 +5506,7 @@ fn pp_string_literal_value(n: Node, code: &[u8]) -> Option<String> {
     if !matches!(kind, "string" | "string_literal" | "template_string") {
         return None;
     }
-    let raw = std::str::from_utf8(&code[n.start_byte()..n.end_byte()]).ok()?;
+    let raw = slice_str(code, n.start_byte(), n.end_byte())?;
     if raw.len() < 2 {
         return None;
     }
@@ -6539,15 +7512,15 @@ pub(super) fn build_sub<'a>(
             tainted_sink_params.dedup();
 
             // ── 5) Store summary (entry/exit are body-local) ──────────────────
-            let key = FuncKey {
-                lang: Lang::from_slug(lang).unwrap_or(Lang::Rust),
-                namespace: file_path.to_owned(),
-                container: fn_container.clone(),
-                name: fn_name.clone(),
-                arity: Some(param_count),
-                disambig: fn_disambig,
-                kind: fn_kind,
-            };
+            let key = FuncKey::from_parts(
+                Lang::from_slug(lang).unwrap_or(Lang::Rust),
+                file_path.to_owned(),
+                fn_container.clone(),
+                fn_name.clone(),
+                Some(param_count),
+                fn_disambig,
+                fn_kind,
+            );
             let body_func_key = key.clone();
             summaries.insert(
                 key,
@@ -6771,10 +7744,12 @@ pub(super) fn build_sub<'a>(
                 analysis_rules,
             );
 
-            // If the callee is a configured terminator, treat as a dead end
+            // If the callee never returns, treat as a dead end: no
+            // fall-through edge, so a guard whose failing arm aborts stays
+            // dominating.  See `is_terminator_call`.
             if kind == StmtKind::Call
                 && let Some(callee) = &g[node].call.callee
-                && is_configured_terminator(callee, analysis_rules)
+                && is_terminator_call(lang, callee, analysis_rules)
             {
                 return Vec::new();
             }
@@ -6823,7 +7798,8 @@ pub(super) fn build_sub<'a>(
             // pipeline. Append a synthetic If node (condition_vars includes <name>) so validation
             // predicates like `.chars().all(|c| c.is_ascii_*())` narrow taint on the guarded branch.
             if lang == "rust"
-                && let Some((guard, let_name)) = detect_rust_let_match_guard(ast, code)
+                && let Some((guard, let_name, alternatives_diverge)) =
+                    detect_rust_let_match_guard(ast, code)
             {
                 let if_node = emit_rust_match_guard_if(g, guard, &let_name, code, enclosing_func);
                 connect_all(g, &[node], if_node, EdgeKind::Seq);
@@ -6845,6 +7821,18 @@ pub(super) fn build_sub<'a>(
                 });
                 connect_all(g, &[if_node], true_gate, EdgeKind::True);
                 connect_all(g, &[if_node], false_gate, EdgeKind::False);
+                // When every other arm diverges (`_ => return`,
+                // `_ => panic!(…)`), the guard-false path never reaches the
+                // code after the `let`: the binding only exists on the
+                // guarded arm.  Leaving the false gate on the frontier would
+                // hand the join an unvalidated predecessor, and
+                // `validated_must` (AND-on-join) would drop the guard's
+                // narrowing, reporting a value the guard already proved safe.
+                // The false gate stays in the graph as a dead end, the same
+                // CFG shape an explicit `return` arm produces.
+                if alternatives_diverge {
+                    return vec![true_gate];
+                }
                 return vec![true_gate, false_gate];
             }
 
@@ -6878,9 +7866,11 @@ pub(super) fn build_sub<'a>(
             apply_arg_source_bindings(g, n, &src_bindings, &src_uses_only);
             connect_all(g, &effective_preds, n, EdgeKind::Seq);
 
-            // If the callee is a configured terminator, treat as a dead end
+            // If the callee never returns, treat as a dead end: no
+            // fall-through edge, so a guard whose failing arm aborts stays
+            // dominating.  See `is_terminator_call`.
             if let Some(callee) = &g[n].call.callee
-                && is_configured_terminator(callee, analysis_rules)
+                && is_terminator_call(lang, callee, analysis_rules)
             {
                 return Vec::new();
             }
@@ -7231,7 +8221,7 @@ pub(crate) fn build_cfg<'a>(
     let local_imports = if matches!(lang, "javascript" | "typescript" | "tsx") {
         let local_imports = extract_local_import_view(tree, code);
         if !local_imports.is_empty() {
-            apply_gated_label_rules(&mut bodies, lang, extra, &local_imports);
+            apply_gated_label_rules(&mut bodies, lang, extra, &local_imports, tree, code);
         }
         local_imports
     } else {
@@ -7321,11 +8311,56 @@ fn apply_promisify_labels(
                 classify_all(lang, &alias.wrapped, extra)
                     .into_iter()
                     .collect();
-            for gm in
-                classify_gated_sink(lang, &alias.wrapped, |_| None, |_| None, |_| false).iter()
-            {
-                if !wrapped_labels.contains(&gm.label) {
-                    wrapped_labels.push(gm.label);
+            // A promisify alias must inherit not just the wrapped callee's
+            // sink *label* but also its arg-position restriction.
+            // `promisify(execFile)` is a `SHELL_ESCAPE` sink whose only
+            // injectable payload is arg 0 (the binary), exactly like the bare
+            // `=execFile` gate (`payload_args: &[0]`).  Without carrying the
+            // gate's `payload_args`, the alias call was treated as an
+            // unrestricted flat sink, so taint reaching the args array /
+            // options object at arg 1+ spuriously fired — e.g. OneUptime
+            // CVE-2026-27728's patched form `execFileAsync(cmd, [.., dest])`,
+            // where `execFile` no longer spawns a shell and the destination is
+            // a non-injectable argv element.  Union the wrapped gate's
+            // concrete payload positions; bail (leave unrestricted) if any
+            // matching gate declares `ALL_ARGS_PAYLOAD`.
+            let mut wrapped_payload: Vec<usize> = Vec::new();
+            let mut wrapped_has_restricted_sink = false;
+            let mut wrapped_all_args_sink = false;
+            // Gate-match the wrapped callee AND its bare leaf name.  The
+            // exec-family gates use the `=` exact-only sigil (to avoid
+            // `container.exec` collisions at classification time), so
+            // `promisify(child_process.execFile)` — whose wrapped callee is the
+            // qualified `child_process.execFile` — would otherwise miss the
+            // `=execFile` gate.  A payload restriction only ever narrows which
+            // args are taint-checked (it never adds findings), so applying the
+            // leaf's gate is strictly safe-directional.
+            let leaf = alias
+                .wrapped
+                .rsplit(['.', ':'])
+                .next()
+                .unwrap_or(alias.wrapped.as_str());
+            let mut gate_targets: Vec<&str> = vec![alias.wrapped.as_str()];
+            if leaf != alias.wrapped.as_str() {
+                gate_targets.push(leaf);
+            }
+            for target in gate_targets {
+                for gm in classify_gated_sink(lang, target, |_| None, |_| None, |_| false).iter() {
+                    if !wrapped_labels.contains(&gm.label) {
+                        wrapped_labels.push(gm.label);
+                    }
+                    if matches!(gm.label, crate::labels::DataLabel::Sink(_)) {
+                        if gm.payload_args == crate::labels::ALL_ARGS_PAYLOAD {
+                            wrapped_all_args_sink = true;
+                        } else {
+                            wrapped_has_restricted_sink = true;
+                            for &p in gm.payload_args {
+                                if !wrapped_payload.contains(&p) {
+                                    wrapped_payload.push(p);
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if wrapped_labels.is_empty() {
@@ -7335,6 +8370,19 @@ fn apply_promisify_labels(
             for lbl in wrapped_labels {
                 if !info.taint.labels.contains(&lbl) {
                     info.taint.labels.push(lbl);
+                }
+            }
+            if wrapped_has_restricted_sink && !wrapped_all_args_sink && !wrapped_payload.is_empty()
+            {
+                match &mut info.call.sink_payload_args {
+                    Some(existing) => {
+                        for p in wrapped_payload {
+                            if !existing.contains(&p) {
+                                existing.push(p);
+                            }
+                        }
+                    }
+                    None => info.call.sink_payload_args = Some(wrapped_payload),
                 }
             }
         }
@@ -7353,10 +8401,13 @@ fn apply_gated_label_rules(
     lang: &str,
     _extra: Option<&[crate::labels::RuntimeLabelRule]>,
     local_imports: &std::collections::HashMap<String, String>,
+    tree: &Tree,
+    code: &[u8],
 ) {
     let ctx = crate::labels::ClassificationContext {
         local_imports: Some(local_imports),
     };
+    let root = tree.root_node();
     for body in bodies.iter_mut() {
         let indices: Vec<NodeIndex> = body.graph.node_indices().collect();
         for idx in indices {
@@ -7364,13 +8415,45 @@ fn apply_gated_label_rules(
                 continue;
             };
             let labels = crate::labels::classify_gated_only(lang, &callee, Some(&ctx));
-            if labels.is_empty() {
+            if !labels.is_empty() {
+                let info = &mut body.graph[idx];
+                for lbl in labels {
+                    if !info.taint.labels.contains(&lbl) {
+                        info.taint.labels.push(lbl);
+                    }
+                }
                 continue;
             }
-            let info = &mut body.graph[idx];
-            for lbl in labels {
-                if !info.taint.labels.contains(&lbl) {
-                    info.taint.labels.push(lbl);
+
+            // The node's own callee is not an import-gated sink.  When the node
+            // carries no `Sink` label of its own (a non-sink wrapper such as the
+            // `JSON.parse` sanitizer or an unknown helper), re-walk its AST for a
+            // nested import-gated sink that `push_node`'s CFG-time `classify`
+            // could not resolve (the import view did not exist yet).  Surface it
+            // the same way `find_inner_sink_call` does: rewrite the node's callee
+            // to the inner sink and remember the outer callee.  vite CVE-2026-39365
+            // (`JSON.parse(await fsp.readFile(tainted))`).
+            if body.graph[idx]
+                .taint
+                .labels
+                .iter()
+                .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
+            {
+                continue;
+            }
+            let (start, end) = body.graph[idx].ast.span;
+            let Some(node) = root.descendant_for_byte_range(start, end) else {
+                continue;
+            };
+            if let Some((inner_text, inner_label, inner_span)) =
+                helpers::find_inner_gated_sink_call(node, lang, code, &ctx)
+            {
+                let info = &mut body.graph[idx];
+                info.taint.labels.push(inner_label);
+                if info.call.outer_callee.is_none() {
+                    info.call.outer_callee = Some(callee);
+                    info.call.callee = Some(inner_text);
+                    info.call.callee_span = Some(inner_span);
                 }
             }
         }

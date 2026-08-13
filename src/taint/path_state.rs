@@ -54,6 +54,19 @@ pub enum PredicateKind {
     /// [`crate::labels::Cap::OPEN_REDIRECT`] only on the validated branch so
     /// non-redirect sinks downstream still fire on residual taint.
     HostAllowlistValidated,
+    /// C path-prefix confinement: `strncmp(x, prefix, strlen(prefix))` /
+    /// `strncmp(x, prefix, N)` (also `strncasecmp`).  `strncmp` returns 0 when
+    /// `x` begins with `prefix`, so the idiomatic guard
+    /// `if (strncmp(x, prefix, strlen(prefix))) reject;` rejects paths that do
+    /// **not** start with the fixed prefix — a directory-confinement check.
+    /// Inverted polarity like [`ShellMetaValidated`](Self::ShellMetaValidated):
+    /// the TRUE (non-zero) branch is the reject path, the FALSE (starts-with)
+    /// branch is confined.  Cap-aware: clears
+    /// [`crate::labels::Cap::FILE_IO`] only on the confined branch so
+    /// non-file sinks downstream still fire on residual taint.  Surfaced by
+    /// CVE-2020-5221 (uftpd), whose fix moved the check from the unresolved
+    /// `dir` onto the `realpath()`-resolved `rpath`.
+    PathPrefixConfined,
     /// Bounded-length rejection: `x.len() > N` / `x.length < N` with N >= 2.
     ///
     /// Commonly paired with `ShellMetaValidated` in OR-chain rejection
@@ -230,6 +243,94 @@ fn is_metachar_regex_class(text: &str) -> bool {
 /// Negation prefixes (`!`, `not`) are NOT stripped, the caller's
 /// classification path handles those uniformly via the predicate
 /// polarity inversion machinery.
+/// Recognise a C prefix-containment guard and return the confined subject.
+///
+/// Matches `strncmp(subject, prefix, strlen(prefix))` / `strncmp(subject,
+/// prefix, <numeric>)` (and the `strncasecmp` variant), the canonical C
+/// idiom for "does `subject` begin with `prefix`".  The length argument must
+/// tie the comparison to the prefix (`strlen(prefix)` or a numeric literal),
+/// which is what distinguishes a genuine prefix check from an arbitrary
+/// `strncmp(a, b, n)` byte comparison.  `subject` must be a bare identifier so
+/// the caller can name-clear its taint.  Best-effort text analysis; scans for
+/// the call anywhere in the (possibly compound) condition text.
+///
+/// Returns `None` when the shape does not match, keeping the classifier out of
+/// this branch for unrelated `strncmp` uses.
+fn path_prefix_confinement_subject(text: &str) -> Option<String> {
+    for fname in ["strncmp(", "strncasecmp("] {
+        let Some(pos) = text.find(fname) else {
+            continue;
+        };
+        let args_part = &text[pos + fname.len()..];
+        let args = split_top_level_args(args_part);
+        if args.len() < 3 {
+            continue;
+        }
+        let subject = args[0].trim();
+        let prefix = args[1].trim();
+        let length = args[2].trim();
+
+        // The length must anchor the comparison to the prefix: `strlen(prefix)`
+        // (the uftpd form), or a bare numeric constant.  Reject `sizeof(x)` and
+        // arbitrary expressions so a plain `strncmp(a, b, n)` does not confine.
+        let expected_strlen = format!("strlen({prefix})");
+        let len_anchored = length == expected_strlen
+            || (!length.is_empty() && length.bytes().all(|b| b.is_ascii_digit()));
+        if !len_anchored {
+            continue;
+        }
+
+        if is_identifier(subject) {
+            return Some(subject.to_string());
+        }
+    }
+    None
+}
+
+/// Split the top-level comma-separated arguments of a call, starting from the
+/// substring immediately after its open paren.  Stops at the matching close
+/// paren, respects nested paren/bracket/brace depth, and skips quoted strings.
+fn split_top_level_args(args_part: &str) -> Vec<&str> {
+    let bytes = args_part.as_bytes();
+    let mut out = Vec::new();
+    let mut depth: usize = 1;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    out.push(args_part[start..i].trim());
+                    return out;
+                }
+            }
+            b',' if depth == 1 => {
+                out.push(args_part[start..i].trim());
+                start = i + 1;
+            }
+            b'"' | b'\'' => {
+                let quote = bytes[i];
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    if bytes[i] == quote {
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
 fn is_leading_slash_check(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     // Method-call form: `.startswith("/")` covers JS/TS/Java (`startsWith`
@@ -604,6 +705,41 @@ pub(crate) fn to_snake_lower(s: &str) -> String {
     out
 }
 
+/// Negative-polarity validation predicate: a call whose callee name asserts
+/// the input is *bad* (`isInvalidUrl`, `is_invalid`, `isNotValid`,
+/// `not_valid`), so the **truthy** branch is the reject/early-return path and
+/// the **false** branch is the validated path.
+///
+/// [`classify_condition`] routes these to [`PredicateKind::ValidationCall`]
+/// via the broad `bare.contains("valid")` match (every `…invalid…` name
+/// contains the substring `valid`).  ValidationCall applies non-inverted
+/// polarity (truthy ⇒ validated), which lands the validation on the *reject*
+/// branch — exactly backwards.  Callers flip `effective_negated` when this
+/// returns true, reusing the same polarity-inversion path as `not in` /
+/// `!==`.  Motivated by CVE-2024-39954 (Apache EventMesh): the patched
+/// `if (isInvalidUrl(targetUrl)) { return false; }` guard validates
+/// `targetUrl` on the surviving (false) branch.
+///
+/// Language-agnostic: matches on the bare callee name after stripping
+/// receiver / namespace qualifiers and any leading `!` / `not`.
+pub fn is_negative_polarity_validation_callee(text: &str) -> bool {
+    if !text.contains('(') {
+        return false;
+    }
+    let trimmed = text.trim_start_matches(['(', '!', ' ', '\t']);
+    let trimmed = trimmed.strip_prefix("not ").unwrap_or(trimmed).trim();
+    let callee_part = trimmed.split('(').next().unwrap_or("");
+    let bare = callee_part
+        .rsplit(['.', ':'])
+        .next()
+        .unwrap_or(callee_part)
+        .trim();
+    let snake = to_snake_lower(bare);
+    // The callee classified as ValidationCall because it contains `valid`.
+    // The negative sense is precisely the `…invalid…` / `…not_valid…` form.
+    snake.contains("invalid") || snake.contains("not_valid") || snake.contains("notvalid")
+}
+
 /// Parse a leading non-negative integer literal (decimal only).
 fn parse_leading_uint(s: &str) -> Option<u64> {
     let mut n: u64 = 0;
@@ -708,6 +844,52 @@ fn is_negated_indexof_membership(text: &str) -> bool {
         || compact.contains("<=-1")
 }
 
+/// Value-first membership predicate free functions: `f(value, collection)`
+/// whose TRUE branch proves `value ∈ collection`.  Names are matched case- and
+/// underscore-insensitively (see [`membership_fn_leaf_normalised`]) so the PHP
+/// `in_array`, Go `InArray` / `stringInSlice`, and JS lodash `inArray`
+/// spellings all resolve to the same membership concept.  The existing
+/// `in_array(` / ` in ` / `.contains(` recognisers cover the underscore, `in`
+/// operator, and method spellings; this closes the camelCase free-function
+/// spelling.  Motivated by CVE-2026-21859 (Mailpit `tools.InArray(uri, links)`
+/// SSRF allowlist).
+const VALUE_FIRST_MEMBERSHIP_FNS: &[&str] = &["inarray", "stringinslice", "stringinlist"];
+
+/// If `text` is a bare call to a free function (`InArray(x, list)`,
+/// `!in_array($x, $y)`, `tools.InArray(x, list)`, `not stringInSlice(x, l)`),
+/// return the function's leaf name lowercased with underscores stripped.
+/// Returns `None` for method calls with a value receiver, operators, indexing,
+/// or non-call text, so only simple membership free functions are considered.
+fn membership_fn_leaf_normalised(text: &str) -> Option<String> {
+    let t = text.trim().trim_start_matches(['(', '!', ' ', '\t']);
+    let t = t.strip_prefix("not ").unwrap_or(t).trim();
+    let open = t.find('(')?;
+    let callee = t[..open].trim();
+    // Callee must be a plain identifier or a dotted / scoped path
+    // (`tools.InArray`, `pkg::in_array`) — reject anything with spaces,
+    // operators, or brackets so this never fires on comparisons or receiver
+    // method chains that happen to contain a paren.
+    if callee.is_empty()
+        || !callee
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == ':')
+    {
+        return None;
+    }
+    let leaf = callee.rsplit(['.', ':']).next().unwrap_or(callee);
+    if leaf.is_empty() || !leaf.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(leaf.to_ascii_lowercase().replace('_', ""))
+}
+
+/// True when `text` is a call to a recognised value-first membership free
+/// function (see [`VALUE_FIRST_MEMBERSHIP_FNS`]).
+fn is_value_first_membership_fn(text: &str) -> bool {
+    membership_fn_leaf_normalised(text)
+        .is_some_and(|leaf| VALUE_FIRST_MEMBERSHIP_FNS.contains(&leaf.as_str()))
+}
+
 /// Classify a raw condition text into a [`PredicateKind`].
 ///
 /// # Rules
@@ -799,6 +981,16 @@ pub fn classify_condition(text: &str) -> PredicateKind {
         return PredicateKind::HostAllowlistValidated;
     }
 
+    // ── C path-prefix confinement ───────────────────────────────────────
+    //
+    // `strncmp(x, prefix, strlen(prefix))` guarding a reject branch confines
+    // `x` to a fixed directory prefix (uftpd CVE-2020-5221).  Matched here so
+    // the bare `strncmp(...)` call isn't captured by any later comparison /
+    // membership branch.
+    if path_prefix_confinement_subject(text).is_some() {
+        return PredicateKind::PathPrefixConfined;
+    }
+
     // ── Substring-REJECTION with a literal needle (not an allowlist) ─────
     //
     // `x.includes("..")` / `x.contains("<script>")` / `x.indexOf("..")` test
@@ -837,6 +1029,7 @@ pub fn classify_condition(text: &str) -> PredicateKind {
         || lower.contains("in_array(")
         || lower.contains(" in ")
         || is_index_membership_check(text)
+        || is_value_first_membership_fn(text)
     {
         return PredicateKind::AllowlistCheck;
     }
@@ -1069,6 +1262,14 @@ pub fn classify_condition_with_target(text: &str) -> (PredicateKind, Option<Stri
             // Argument of the parse call: `new URL(x).host` → `x`,
             // `urlparse(x).netloc` → `x`.
             let target = extract_host_allowlist_target(text);
+            (kind, target)
+        }
+        PredicateKind::PathPrefixConfined => {
+            // Subject (arg 0) of `strncmp(x, prefix, strlen(prefix))`.  Scoping
+            // the FILE_IO clear to just the subject is what distinguishes the
+            // uftpd fix (`strncmp(rpath, …)`, confines the returned value) from
+            // the bug (`strncmp(dir, …)`, confines an unrelated local).
+            let target = path_prefix_confinement_subject(text);
             (kind, target)
         }
         PredicateKind::Comparison => {
@@ -1367,16 +1568,33 @@ fn extract_allowlist_target(text: &str) -> Option<String> {
         }
     }
 
+    // Value-first membership free function: `InArray(value, coll)` /
+    // `stringInSlice(value, list)` — the value under test is the first arg.
+    // Matches the camelCase / package-qualified spellings the `in_array(`
+    // branch above misses (CVE-2026-21859 Mailpit `tools.InArray(uri, links)`).
+    if is_value_first_membership_fn(trimmed) {
+        let t = trimmed.trim_start_matches(['(', '!', ' ', '\t']);
+        let t = t.strip_prefix("not ").unwrap_or(t).trim();
+        if let Some(open) = t.find('(') {
+            let args_part = &t[open + 1..];
+            if let Some(first_arg) = first_call_arg(args_part) {
+                let first_arg = first_arg.strip_prefix('$').unwrap_or(first_arg);
+                if !first_arg.is_empty() && is_identifier(first_arg) {
+                    return Some(first_arg.to_string());
+                }
+            }
+        }
+    }
+
     // Python `in` operator: `cmd in ALLOWED` / `cmd not in ALLOWED`
     if lower.contains(" in ") {
         // Find the leftmost ` in `, everything before it is the target expression
         // Handle `not in` by looking for ` not in ` first
         let target_part = if let Some(pos) = lower.find(" not in ") {
             &trimmed[..pos]
-        } else if let Some(pos) = lower.find(" in ") {
-            &trimmed[..pos]
         } else {
-            return None;
+            let pos = lower.find(" in ")?;
+            &trimmed[..pos]
         };
         let target = target_part.trim();
         let target = target.strip_prefix('!').unwrap_or(target).trim();
@@ -2075,6 +2293,43 @@ mod tests {
         assert_eq!(target.as_deref(), Some("cmd"));
     }
 
+    #[test]
+    fn classify_value_first_membership_camelcase_in_array() {
+        // CVE-2026-21859: Mailpit's SSRF fix guards with `tools.InArray(uri,
+        // links)`.  The camelCase spelling lowercases to `inarray(` which the
+        // PHP-style `in_array(` (underscore) recogniser misses; the value-first
+        // membership-fn recogniser must classify it as an AllowlistCheck and
+        // extract the value under test (`uri`, arg 0).
+        let (kind, target) = classify_condition_with_target("!InArray(uri, links)");
+        assert_eq!(kind, PredicateKind::AllowlistCheck);
+        assert_eq!(target.as_deref(), Some("uri"));
+    }
+
+    #[test]
+    fn classify_value_first_membership_package_qualified_and_go_idioms() {
+        // Package-qualified callee (`tools.InArray`) resolves on the leaf name.
+        let (k1, t1) = classify_condition_with_target("!tools.InArray(uri, links)");
+        assert_eq!(k1, PredicateKind::AllowlistCheck);
+        assert_eq!(t1.as_deref(), Some("uri"));
+        // Common Go membership idiom `stringInSlice(value, list)`.
+        let (k2, t2) = classify_condition_with_target("!stringInSlice(host, allowed)");
+        assert_eq!(k2, PredicateKind::AllowlistCheck);
+        assert_eq!(t2.as_deref(), Some("host"));
+    }
+
+    #[test]
+    fn value_first_membership_does_not_capture_unrelated_calls() {
+        // `.contains(` is handled by the dedicated method branch, not the
+        // value-first free-function recogniser (its leaf isn't in the set).
+        assert!(!is_value_first_membership_fn("arr.contains(x)"));
+        // An unrelated free function must not classify as membership.
+        assert!(!is_value_first_membership_fn("compute(a, b)"));
+        // A plain comparison is not a membership call.
+        assert!(!is_value_first_membership_fn("x == y"));
+        // Indexing is not a free-function call.
+        assert!(!is_value_first_membership_fn("allowed[cmd]"));
+    }
+
     // ── TypeCheck classification ──────────────────────────────────────
 
     #[test]
@@ -2651,6 +2906,78 @@ mod ghsa_h8cj_hpmg_636v_tests {
         assert!(
             kind != PredicateKind::ValidationCall,
             "no regex marker should not trigger validation"
+        );
+    }
+
+    #[test]
+    fn negative_polarity_validation_callee_recognised() {
+        // CVE-2024-39954: `isInvalidUrl(targetUrl)` classifies as ValidationCall
+        // (it contains the substring `valid`) but its truthy branch is the
+        // reject path, so polarity must be flipped.
+        assert!(is_negative_polarity_validation_callee(
+            "isInvalidUrl(targetUrl)"
+        ));
+        assert!(is_negative_polarity_validation_callee("is_invalid(url)"));
+        assert!(is_negative_polarity_validation_callee("isNotValid(x)"));
+        assert!(is_negative_polarity_validation_callee(
+            "checker.isInvalidHost(h)"
+        ));
+        assert!(is_negative_polarity_validation_callee("!isInvalidUrl(u)"));
+    }
+
+    #[test]
+    fn positive_validation_callees_are_not_negative_polarity() {
+        // Precision guard: ordinary positive validators must NOT be flipped.
+        assert!(!is_negative_polarity_validation_callee(
+            "isValidUrl(targetUrl)"
+        ));
+        assert!(!is_negative_polarity_validation_callee("validate(x)"));
+        assert!(!is_negative_polarity_validation_callee("isSafe(x)"));
+        assert!(!is_negative_polarity_validation_callee(
+            "URL_VALIDATOR.isValid(url)"
+        ));
+        // No call → not a validation callee at all.
+        assert!(!is_negative_polarity_validation_callee("x == null"));
+    }
+
+    // ── C path-prefix confinement (uftpd CVE-2020-5221) ──────────────────
+
+    #[test]
+    fn strncmp_prefix_check_is_path_prefix_confined() {
+        // `strncmp(x, prefix, strlen(prefix))` → PathPrefixConfined, subject x.
+        let (kind, target) = classify_condition_with_target("strncmp(rpath, home, strlen(home))");
+        assert_eq!(kind, PredicateKind::PathPrefixConfined);
+        assert_eq!(target.as_deref(), Some("rpath"));
+
+        // strncasecmp variant + numeric length constant.
+        assert_eq!(
+            classify_condition("strncasecmp(p, \"/srv\", 4)"),
+            PredicateKind::PathPrefixConfined
+        );
+
+        // The subject scoping is what distinguishes the uftpd bug from the fix:
+        // the bug checks `dir` (an unrelated local) while returning `rpath`.
+        let (_, bug_target) = classify_condition_with_target("strncmp(dir, home, strlen(home))");
+        assert_eq!(bug_target.as_deref(), Some("dir"));
+    }
+
+    #[test]
+    fn strncmp_without_prefix_length_is_not_confinement() {
+        // A plain byte comparison whose length is not tied to the prefix must
+        // NOT be treated as a prefix confinement (would over-suppress).
+        assert_ne!(
+            classify_condition("strncmp(a, b, n)"),
+            PredicateKind::PathPrefixConfined
+        );
+        // `strlen` of a *different* operand does not anchor the prefix.
+        assert_ne!(
+            classify_condition("strncmp(a, b, strlen(c))"),
+            PredicateKind::PathPrefixConfined
+        );
+        // A non-identifier subject (member/index expression) is not extracted.
+        assert_eq!(
+            classify_condition_with_target("strncmp(buf[0], home, strlen(home))").1,
+            None
         );
     }
 }

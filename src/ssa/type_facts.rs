@@ -9,7 +9,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
-use super::const_prop::ConstLattice;
+use super::const_prop::{ConstLattice, ConstValues};
 use super::ir::*;
 use crate::cfg::{BinOp, Cfg};
 use crate::symbol::Lang;
@@ -558,7 +558,7 @@ fn arg_aware_call_type(
     lang: Lang,
     callee: &str,
     _args: &[SmallVec<[SsaValue; 2]>],
-    _consts: &HashMap<SsaValue, ConstLattice>,
+    _consts: &ConstValues,
 ) -> Option<TypeKind> {
     if !matches!(lang, Lang::Java) {
         return None;
@@ -901,6 +901,21 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
                 Some(TypeKind::DatabaseConnection)
             } else if callee.contains("os.") && matches!(suffix, "Open" | "Create" | "OpenFile") {
                 Some(TypeKind::FileHandle)
+            } else if callee.contains("bytes.") && matches!(suffix, "NewBuffer" | "NewBufferString")
+            {
+                // In-memory byte buffers (`bytes.NewBuffer(nil)` /
+                // `bytes.NewBufferString("")`).  Tagged `FileHandle` so a
+                // `fmt.Fprintf(buf, ...)` into the buffer is recognised as a
+                // non-response (non-XSS) write by the Go ResponseWriter gate —
+                // same rationale as `classify_param_type_go`.  gitea's
+                // git-index write helpers build a `*bytes.Buffer` and stream
+                // it to `git update-index` stdin.
+                Some(TypeKind::FileHandle)
+            } else if callee.contains("bufio.")
+                && matches!(suffix, "NewWriter" | "NewWriterSize" | "NewReadWriter")
+            {
+                // Buffered writers wrapping an underlying stream/file.
+                Some(TypeKind::FileHandle)
             } else if callee.contains("url.") && suffix == "Parse" {
                 Some(TypeKind::Url)
             } else if callee.contains("ldap.") && matches!(suffix, "Dial" | "DialURL" | "DialTLS") {
@@ -1018,9 +1033,23 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
             } else if after_colons.starts_with("URI") && matches!(suffix, "parse" | "URI") {
                 Some(TypeKind::Url)
             } else if after_colons == "PG.connect"
+                || callee == "PG::Connection.new"
+                || callee == "PG::Connection.connect"
+                || callee == "PG::Connection.open"
+                || callee == "PGconn.new"
+                || callee == "PGconn.connect"
                 || (after_colons.starts_with("Sequel") && suffix == "connect")
                 || callee.contains("Mysql2")
             {
+                // `pg` gem low-level driver: `@@conn = PG::Connection.new(...)`
+                // (and the `PG.connect` / `PGconn.new` aliases) return a raw
+                // libpq connection whose `conn.exec(sql)` runs an unparameterised
+                // string and `conn.exec_params(sql, params)` is the safe
+                // placeholder form.  Tagging the receiver `DatabaseConnection`
+                // lets the type-qualified resolver rewrite `conn.exec(query)` to
+                // `DatabaseConnection.exec` (a SQL_QUERY sink) without widening
+                // the bare `exec` matcher (which is Kernel#exec — a shell sink).
+                // Motivated by CVE-2026-42087 (OpenC3 COSMOS QuestDB SQLi).
                 Some(TypeKind::DatabaseConnection)
             } else if after_colons.starts_with("File.") && matches!(suffix, "open" | "new") {
                 Some(TypeKind::FileHandle)
@@ -1335,7 +1364,124 @@ pub fn is_orm_queryset_chain_method(verb: &str) -> bool {
     )
 }
 
+/// Map a Rust type-annotation fragment — from a `let x: T = …` binding or a
+/// `s.parse::<T>()` turbofish — to the lattice [`TypeKind`] it denotes.
+///
+/// Resolves the long-standing ambiguity of the Rust `str::parse` verb, which
+/// `is_int_producing_callee` otherwise tags `Int` by default (the callee text
+/// alone cannot name the `FromStr` target).  Two real shapes drive this:
+///   * `let port: u16 = s.parse()?` / `s.parse::<u16>()` → `Int` (precision:
+///     a numeric port flowing into a shell arg stays suppressed).
+///   * `let p: PathBuf = s.parse()?` / `s.parse::<PathBuf>()` → `Object`
+///     (recall: a parsed filesystem path is not numeric, so `fs::read(p)`
+///     must still fire `FILE_IO`).
+///
+/// Returns `None` for any unrecognised named type (custom structs, numeric
+/// newtypes like `UserId`, bare generics) so the conservative bare-`parse`
+/// → `Int` default is preserved and no new false positive is introduced on
+/// e.g. `let id: UserId = s.parse()?` shapes that flow into SQL.
+pub fn rust_annotation_type_kind(text: &str) -> Option<TypeKind> {
+    // Strip leading reference / lifetime / `mut` markers so `&'a mut PathBuf`
+    // exposes `PathBuf`.
+    let mut s = text.trim();
+    loop {
+        if let Some(rest) = s.strip_prefix('&') {
+            let rest = rest.trim_start();
+            // Optional lifetime label `'a` / `'static` / `'_`.
+            let rest = if let Some(after) = rest.strip_prefix('\'') {
+                let end = after
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .unwrap_or(after.len());
+                after[end..].trim_start()
+            } else {
+                rest
+            };
+            s = rest.strip_prefix("mut ").unwrap_or(rest).trim_start();
+            continue;
+        }
+        if let Some(rest) = s.strip_prefix("mut ") {
+            s = rest.trim_start();
+            continue;
+        }
+        break;
+    }
+    // Numeric / bool / string scalars.  Floats join `Int` (the suppression
+    // policy treats both as non-payload-bearing numerics).
+    match s {
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
+        | "usize" | "f32" | "f64" => return Some(TypeKind::Int),
+        "bool" => return Some(TypeKind::Bool),
+        "String" | "str" | "char" => return Some(TypeKind::String),
+        _ => {}
+    }
+    // Drop module-path prefix + generic args to the head identifier
+    // (`std::path::PathBuf` → `PathBuf`, `url::Url` → `Url`).
+    let head = s.rsplit("::").next().unwrap_or(s);
+    let head = head.split('<').next().unwrap_or(head).trim();
+    match head {
+        // Known non-numeric std payload-bearing types.  A value parsed into
+        // one of these can carry path / host metacharacters, so it must NOT
+        // be tagged `Int` (which would suppress FILE_IO / SSRF).  `Object`
+        // is a known, non-suppressing kind: it overrides the bare-`parse`
+        // → `Int` heuristic without claiming a security-relevant type.
+        "PathBuf" | "Path" | "OsString" | "OsStr" | "IpAddr" | "Ipv4Addr" | "Ipv6Addr"
+        | "SocketAddr" | "SocketAddrV4" | "SocketAddrV6" => Some(TypeKind::Object),
+        // A `url::Url` / `http::Uri` parse target — dedicated security type
+        // so type-qualified SSRF resolution still applies downstream.
+        "Url" | "Uri" => Some(TypeKind::Url),
+        // Unrecognised: leave the default heuristic in charge.
+        _ => None,
+    }
+}
+
+/// Extract the inner type text `T` of a Rust `parse::<T>()` turbofish from a
+/// (possibly chained) callee string, balancing nested `<...>` so
+/// `parse::<Vec<u8>>()` yields `Vec<u8>`.  Returns `None` when no turbofish
+/// `parse::<` segment is present (the `parse` token must sit on a `.`/`:`
+/// boundary so `reparse::<…>` does not match).
+fn parse_turbofish_arg(callee: &str) -> Option<&str> {
+    const NEEDLE: &str = "parse::<";
+    let mut search_from = 0usize;
+    let idx = loop {
+        let rel = callee[search_from..].find(NEEDLE)?;
+        let abs = search_from + rel;
+        let on_boundary =
+            abs == 0 || matches!(callee.as_bytes()[abs - 1], b'.' | b':' | b' ' | b'(');
+        if on_boundary {
+            break abs;
+        }
+        search_from = abs + NEEDLE.len();
+    };
+    let after = &callee[idx + NEEDLE.len()..];
+    let mut depth = 1usize;
+    for (i, c) in after.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(after[..i].trim());
+                }
+            }
+            _ => {}
+        }
+    }
+    // Unterminated turbofish (truncated callee text): take the remainder.
+    Some(after.trim())
+}
+
 pub fn is_int_producing_callee(callee: &str) -> bool {
+    // Rust `s.parse::<T>()` turbofish: an explicit `FromStr` target is ground
+    // truth, so trust it over the conservative bare-`parse` → `Int` default.
+    // A recognised numeric `T` → `Int`; a recognised non-numeric `T`
+    // (`PathBuf` / `IpAddr` / `Url` / …) or an unrecognised explicit `T` →
+    // NOT `Int`, so FILE_IO / SSRF / SHELL on the parsed value is not
+    // silently suppressed.  (`peel_identity_suffix` truncates at `<`, so the
+    // turbofish is invisible to the suffix match below — read it here from
+    // the raw callee.)
+    if let Some(inner) = parse_turbofish_arg(callee) {
+        return matches!(rust_annotation_type_kind(inner), Some(TypeKind::Int));
+    }
     // Peel trailing identity methods (e.g. `.unwrap()`/`.expect("...")` after
     // `.parse()`) so the underlying numeric-producing verb is exposed.
     let base = peel_identity_suffix(callee);
@@ -1349,6 +1495,20 @@ pub fn is_int_producing_callee(callee: &str) -> bool {
     // an empty segment.
     let trimmed = base.trim_end_matches([':', '.']);
     let suffix = trimmed.rsplit(['.', ':']).next().unwrap_or(trimmed);
+    // Zero-argument numeric-length accessors (`s.length()`, `list.size()`,
+    // `vec.len()`, `xs.count()`) produce an integer in every grammar we scan.
+    // The CFG detector already pins `TypeKind::Int` on the *binding* shape
+    // (`int n = s.length();` sets `NodeInfo::is_numeric_length_access`), but an
+    // accessor written inline inside a sink argument — `res.setHeader("X-Len",
+    // String.valueOf(rendered.length()))` — never lowers to its own SSA value,
+    // so the Int fact has nothing to attach to and only the callee-text
+    // predicates (`cfg::count_confined_idents_into`,
+    // `apply_arg_type_safe_suppression`) can still see it.  Reuse the single
+    // narrow property list instead of restating it so both grains stay in
+    // lock-step.
+    if crate::cfg::is_numeric_length_property(suffix) {
+        return true;
+    }
     matches!(
         suffix,
         "parseInt" | "parseFloat" | "Number"        // JS/TS
@@ -1527,7 +1687,7 @@ pub fn classify_input_validator_callee(callee: &str) -> Option<InputValidatorPol
 pub fn analyze_types(
     body: &SsaBody,
     cfg: &Cfg,
-    consts: &HashMap<SsaValue, ConstLattice>,
+    consts: &ConstValues,
     lang: Option<Lang>,
 ) -> TypeFactResult {
     analyze_types_with_param_types(body, cfg, consts, lang, &[])
@@ -1540,7 +1700,7 @@ pub fn analyze_types(
 pub fn analyze_types_with_param_types(
     body: &SsaBody,
     cfg: &Cfg,
-    consts: &HashMap<SsaValue, ConstLattice>,
+    consts: &ConstValues,
     lang: Option<Lang>,
     param_types: &[Option<TypeKind>],
 ) -> TypeFactResult {
@@ -1635,6 +1795,21 @@ pub fn analyze_types_with_param_types(
                         lang.and_then(|l| arg_aware_call_type(l, callee, args, consts))
                     {
                         TypeFact::from_kind(ty)
+                    } else if let Some(dt) = cfg
+                        .node_weight(inst.cfg_node)
+                        .and_then(|ni| ni.decl_type.clone())
+                    {
+                        // A declared `let x: T = …` binding annotation is
+                        // ground truth for the bound value's type — strictly
+                        // more authoritative than the bare-`parse` → `Int`
+                        // heuristic below.  Fixes `let p: PathBuf =
+                        // s.parse()?; fs::read(p)` (recall: `Object`, not
+                        // suppressed) while keeping `let port: u16 =
+                        // s.parse()?` numeric (precision).  Placed after the
+                        // constructor / arg-aware paths so security-typed
+                        // constructors (`Client::new()` → `HttpClient`) still
+                        // win the type-qualified resolution.
+                        TypeFact::from_kind(dt)
                     } else if is_int_producing_callee(callee_for_int) {
                         TypeFact::from_kind(TypeKind::Int)
                     } else if is_safe_string_producing_callee(callee) {
@@ -2058,6 +2233,15 @@ impl TypeHierarchy {
     }
 }
 
+/// True when a Go `fmt.Fprint*` writer value (positional arg 0) is provably
+/// **not** an `http.ResponseWriter`, so the reflected-XSS (`HTML_ESCAPE`)
+/// sink label does not apply.  Shared by the SSA taint sink gate and the
+/// structural `cfg-unguarded-sink` rule so suppressing the finding on one
+/// path does not surface the twin false positive on the other.
+pub fn go_writer_is_non_response(kind: &TypeKind) -> bool {
+    GoInterfaceTable::definitely_not(kind, "http.ResponseWriter")
+}
+
 // ── Go Interface Satisfaction (bounded, conservative) ────────────────────
 
 /// Go interface satisfaction table for **sink-relevant interfaces only**.
@@ -2214,16 +2398,18 @@ mod tests {
                 .collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
-        let consts = HashMap::from([
+        let consts: ConstValues = [
             (SsaValue(0), ConstLattice::Int(42)),
             (SsaValue(1), ConstLattice::Str("hello".into())),
-        ]);
+        ]
+        .into_iter()
+        .collect();
 
         let cfg: crate::cfg::Cfg = Graph::new();
         let result = analyze_types(&body, &cfg, &consts, None);
@@ -2330,13 +2516,13 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
-        let consts = HashMap::new();
+        let consts = ConstValues::default();
         let cfg: crate::cfg::Cfg = Graph::new();
         let result = analyze_types(&body, &cfg, &consts, Some(Lang::Java));
 
@@ -2650,13 +2836,13 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
-        let consts = HashMap::new();
+        let consts = ConstValues::default();
         let cfg: Cfg = petgraph::Graph::new();
         let param_types = vec![Some(TypeKind::Int)];
 
@@ -2730,6 +2916,15 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn go_writer_is_non_response_discriminates_buffer_from_response() {
+        // The shared `fmt.Fprint*` writer-type gate: byte-sink writers are
+        // non-response; an `http.ResponseWriter` (or an unknown writer type)
+        // is not, so the reflected-XSS label is preserved for real handlers.
+        assert!(go_writer_is_non_response(&TypeKind::FileHandle));
+        assert!(!go_writer_is_non_response(&TypeKind::HttpResponse));
+    }
+
     // ── GoInterfaceTable::satisfies ──────────────────────────────────────
 
     #[test]
@@ -2781,6 +2976,27 @@ mod tests {
             Some(TypeKind::FileHandle)
         );
         assert_eq!(constructor_type(Lang::Php, "array_map"), None);
+    }
+
+    #[test]
+    fn constructor_type_ruby_pg() {
+        // Raw `pg` gem connection constructors → DatabaseConnection so the
+        // type-qualified `DatabaseConnection.exec` SQL sink resolves
+        // (CVE-2026-42087 regression guard).
+        assert_eq!(
+            constructor_type(Lang::Ruby, "PG::Connection.new"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            constructor_type(Lang::Ruby, "PG.connect"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            constructor_type(Lang::Ruby, "PGconn.new"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        // A plain method named `new` on an unrelated receiver is not a DB conn.
+        assert_eq!(constructor_type(Lang::Ruby, "Widget.new"), None);
     }
 
     #[test]
@@ -3399,7 +3615,7 @@ mod tests {
     #[test]
     fn arg_aware_call_type_jpa_criteria_builder_recogniser() {
         let no_args: Vec<SmallVec<[SsaValue; 2]>> = vec![];
-        let consts: HashMap<SsaValue, ConstLattice> = HashMap::new();
+        let consts = ConstValues::default();
         // Receiver hint: bare `cb` ident.
         assert_eq!(
             arg_aware_call_type(Lang::Java, "cb.createQuery", &no_args, &consts),
@@ -3512,28 +3728,38 @@ mod tests {
         assert!(is_safe_string_producing_callee("loaded.getClass().getName"));
     }
 
-    /// Audit #4: bare Rust `.parse()` is generic over `FromStr`, but the
-    /// callee text cannot distinguish `parse::<u32>()` from
-    /// `parse::<PathBuf>()`.  The engine deliberately tags every `parse` as
-    /// `Int` (precision: a u16 port into a shell arg is suppressed — pinned by
-    /// `cfg_analysis::tests::type_facts_suppress_int_typed_shell_arg`), at the
-    /// cost of a rare FN on `let p: PathBuf = s.parse()?`.  Distinguishing the
-    /// two soundly needs let-annotation typing (deep-fix queue), not the
-    /// callee text.  This test pins the chosen behaviour + cross-language
-    /// converters + turbofish-form robustness.
+    /// Bare Rust `.parse()` is generic over `FromStr` and the callee text
+    /// alone cannot name the target, so it is tagged `Int` by default
+    /// (precision: a u16 port into a shell arg is suppressed — pinned by
+    /// `cfg_analysis::tests::type_facts_suppress_int_typed_shell_arg`).  An
+    /// EXPLICIT `parse::<T>()` turbofish, however, names the target: numeric
+    /// `T` → `Int`, a recognised non-numeric `T` (`PathBuf` / `IpAddr` /
+    /// `Url`) or an unrecognised explicit `T` → NOT `Int` (recall — a parsed
+    /// path / host must not be suppressed for FILE_IO / SSRF).  This test
+    /// pins the bare default, turbofish discrimination, cross-language
+    /// converters, and form robustness.
     #[test]
     fn rust_parse_is_int_producing_and_turbofish_forms_are_robust() {
         // Bare parse and its identity-peeled / receiver-qualified forms — Int.
         assert!(is_int_producing_callee("parse"));
         assert!(is_int_producing_callee("s.parse"));
         assert!(is_int_producing_callee("parse().unwrap()"));
-        // Turbofish forms survive `peel_identity_suffix` truncation at `<`
-        // (the trailing `::` is trimmed back to the `parse` suffix).
+        // Numeric turbofish forms — Int.
         assert!(is_int_producing_callee("s.parse::<u32>()"));
         assert!(is_int_producing_callee("s.parse::<i64>()"));
         assert!(is_int_producing_callee(
             "contents.trim().parse::<u32>().expect(\"invalid pid\")"
         ));
+        // Non-numeric turbofish forms — NOT Int (recall: the parsed value can
+        // carry path / host metacharacters).
+        assert!(!is_int_producing_callee("s.parse::<PathBuf>()"));
+        assert!(!is_int_producing_callee("addr.parse::<IpAddr>().unwrap()"));
+        assert!(!is_int_producing_callee("u.parse::<Url>()"));
+        // Unrecognised explicit turbofish target — conservatively NOT Int.
+        assert!(!is_int_producing_callee("x.parse::<MyNewtype>()"));
+        // Boundary: a method that merely ends in `parse` must not match the
+        // turbofish needle (`reparse::<u32>` is not `parse::<u32>`).
+        assert!(!is_int_producing_callee("v.reparse::<Foo>()"));
         // Other languages' numeric converters remain unconditional.
         assert!(is_int_producing_callee("parseInt"));
         assert!(is_int_producing_callee("Number"));
@@ -3543,5 +3769,62 @@ mod tests {
         // Negative: a non-numeric-producing method must not be Int.
         assert!(!is_int_producing_callee("toUpperCase"));
         assert!(!is_int_producing_callee("trim"));
+    }
+
+    /// `rust_annotation_type_kind` maps `let x: T` / `parse::<T>` annotation
+    /// text to the lattice kind: numeric → `Int`, `bool` → `Bool`, string
+    /// scalars → `String`, known non-numeric std payload types → `Object`,
+    /// `Url`/`Uri` → `Url`, everything else → `None` (preserve the default).
+    #[test]
+    fn rust_annotation_type_kind_maps_known_targets() {
+        use TypeKind::*;
+        // Numeric scalars (incl. floats and ref/mut-prefixed forms).
+        for t in ["u16", "i64", "usize", "f64", "&mut u32", "&'a u8"] {
+            assert_eq!(rust_annotation_type_kind(t), Some(Int), "{t}");
+        }
+        assert_eq!(rust_annotation_type_kind("bool"), Some(Bool));
+        for t in ["String", "&str", "str", "char"] {
+            assert_eq!(rust_annotation_type_kind(t), Some(String), "{t}");
+        }
+        // Known non-numeric std payload types → Object (non-suppressing).
+        for t in [
+            "PathBuf",
+            "std::path::PathBuf",
+            "Path",
+            "OsString",
+            "IpAddr",
+            "Ipv4Addr",
+            "SocketAddr",
+            "&PathBuf",
+        ] {
+            assert_eq!(rust_annotation_type_kind(t), Some(Object), "{t}");
+        }
+        // Url / Uri keep a dedicated security kind.
+        assert_eq!(rust_annotation_type_kind("Url"), Some(Url));
+        assert_eq!(rust_annotation_type_kind("url::Url"), Some(Url));
+        assert_eq!(rust_annotation_type_kind("http::Uri"), Some(Url));
+        // Unrecognised named types / generics / containers → None so the
+        // bare-`parse` default and downstream inference stay in charge.
+        for t in ["UserId", "MyStruct", "T", "Vec<u8>", "Foo<Bar>"] {
+            assert_eq!(rust_annotation_type_kind(t), None, "{t}");
+        }
+    }
+
+    /// `parse_turbofish_arg` extracts the inner `T` of `parse::<T>()`,
+    /// balancing nested generics and respecting token boundaries.
+    #[test]
+    fn parse_turbofish_arg_extracts_inner_type() {
+        assert_eq!(parse_turbofish_arg("s.parse::<u32>()"), Some("u32"));
+        assert_eq!(
+            parse_turbofish_arg("a.b().parse::<PathBuf>().unwrap()"),
+            Some("PathBuf")
+        );
+        // Nested generics balance to the matching `>`.
+        assert_eq!(parse_turbofish_arg("x.parse::<Vec<u8>>()"), Some("Vec<u8>"));
+        // Truncated (peeled) callee text — take the remainder after `<`.
+        assert_eq!(parse_turbofish_arg("s.parse::<u32"), Some("u32"));
+        // No turbofish, or a non-boundary `parse` token.
+        assert_eq!(parse_turbofish_arg("s.parse()"), None);
+        assert_eq!(parse_turbofish_arg("reparse::<Foo>()"), None);
     }
 }

@@ -3274,8 +3274,22 @@ pub fn emit_header_injection_harness(spec: &HarnessSpec) -> HarnessSource {
             Handler.cookie_value = bytes(payload)
     except Exception:
         return None
+    # `http.server.HTTPServer.server_bind` calls `socket.getfqdn(host)` to
+    # populate `server_name`.  That is a reverse-DNS lookup, and it runs
+    # inside the constructor, before this harness has emitted anything.  On a
+    # network-isolated sandbox there is no resolver to answer it, so it blocks
+    # until the system resolver gives up (5s+ on macOS) and the sandbox's hard
+    # timeout kills the process first: no probe, no stdout, no fallback.  The
+    # value is never read here, so bind without it.
+    class _NyxHTTPServer(http.server.HTTPServer):
+        def server_bind(self):
+            import socketserver
+            socketserver.TCPServer.server_bind(self)
+            self.server_name = self.server_address[0]
+            self.server_port = self.server_address[1]
+
     try:
-        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        server = _NyxHTTPServer(("127.0.0.1", 0), Handler)
     except Exception:
         return _nyx_fallback_wire_frame(payload)
     port = server.server_address[1]
@@ -3284,11 +3298,20 @@ pub fn emit_header_injection_harness(spec: &HarnessSpec) -> HarnessSource {
     raw = b""
     try:
         try:
-            sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+            # These two timeouts must sum to comfortably LESS than the
+            # sandbox's hard timeout (SandboxOpts::timeout, 5s).  Both peers
+            # are in this process on loopback, so a healthy run completes in
+            # milliseconds and the budget is only ever spent when something
+            # is wrong.  When the connect budget alone matched the sandbox
+            # cap, a slow runner spent the whole 5s here and got SIGKILLed
+            # mid-connect, so the _nyx_fallback_wire_frame degradation path
+            # below could never run and the attempt reported no probe at all
+            # rather than a synthetic frame.
+            sock = socket.create_connection(("127.0.0.1", port), timeout=1.5)
         except Exception:
             return _nyx_fallback_wire_frame(payload)
         try:
-            sock.settimeout(2.0)
+            sock.settimeout(1.0)
             sock.sendall(b"GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
             while len(raw) < 65536:
                 try:
@@ -5474,9 +5497,28 @@ import pika
             h.source
         );
         assert!(
+            h.source.contains("_NyxHTTPServer((\"127.0.0.1\", 0)"),
+            "tier-(b) harness must boot the HTTP server on a loopback ephemeral port: {}",
             h.source
-                .contains("http.server.HTTPServer((\"127.0.0.1\", 0)"),
-            "tier-(b) harness must boot HTTPServer on loopback ephemeral port: {}",
+        );
+        // The server subclass exists solely to skip `HTTPServer.server_bind`'s
+        // `socket.getfqdn()` reverse-DNS lookup, which blocks for longer than
+        // the sandbox's hard timeout when the sandbox has no resolver, killing
+        // the harness before it can emit a single probe.  Pin the override so
+        // a future refactor cannot quietly reintroduce the stall.
+        assert!(
+            h.source
+                .contains("class _NyxHTTPServer(http.server.HTTPServer):"),
+            "tier-(b) harness must subclass HTTPServer to skip the getfqdn lookup: {}",
+            h.source
+        );
+        // Match the stock `server_bind` body rather than the bare symbol: the
+        // override's own comment names `socket.getfqdn` to explain why it is
+        // being skipped, so a substring test on the symbol alone would fire on
+        // the documentation instead of on a real lookup.
+        assert!(
+            !h.source.contains("server_name = socket.getfqdn"),
+            "tier-(b) harness must not perform a reverse-DNS lookup: {}",
             h.source
         );
         assert!(

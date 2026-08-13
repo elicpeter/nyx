@@ -33,15 +33,15 @@ fn func_key_display() {
 
 #[test]
 fn func_key_display_method_with_container() {
-    let k = FuncKey {
-        lang: Lang::Java,
-        namespace: "src/OrderService.java".into(),
-        container: "OrderService".into(),
-        name: "process".into(),
-        arity: Some(1),
-        disambig: None,
-        kind: FuncKind::Method,
-    };
+    let k = FuncKey::from_parts(
+        Lang::Java,
+        "src/OrderService.java",
+        "OrderService",
+        "process",
+        Some(1),
+        None,
+        FuncKind::Method,
+    );
     assert_eq!(
         k.to_string(),
         "java::src/OrderService.java::OrderService::process/1[method]"
@@ -50,15 +50,15 @@ fn func_key_display_method_with_container() {
 
 #[test]
 fn func_key_display_closure_with_disambig() {
-    let k = FuncKey {
-        lang: Lang::JavaScript,
-        namespace: "src/app.js".into(),
-        container: "outer".into(),
-        name: "<anon>".into(),
-        arity: Some(0),
-        disambig: Some(421),
-        kind: FuncKind::Closure,
-    };
+    let k = FuncKey::from_parts(
+        Lang::JavaScript,
+        "src/app.js",
+        "outer",
+        "<anon>",
+        Some(0),
+        Some(421),
+        FuncKind::Closure,
+    );
     assert_eq!(
         k.to_string(),
         "javascript::src/app.js::outer::<anon>/0#421[closure]"
@@ -73,77 +73,77 @@ fn func_key_qualified_name_free_function() {
 
 #[test]
 fn func_key_qualified_name_method() {
-    let k = FuncKey {
-        lang: Lang::Python,
-        namespace: "app.py".into(),
-        container: "Service".into(),
-        name: "run".into(),
-        arity: Some(1),
-        disambig: None,
-        kind: FuncKind::Method,
-    };
+    let k = FuncKey::from_parts(
+        Lang::Python,
+        "app.py",
+        "Service",
+        "run",
+        Some(1),
+        None,
+        FuncKind::Method,
+    );
     assert_eq!(k.qualified_name(), "Service::run");
 }
 
 #[test]
 fn method_vs_function_same_name_are_distinct_keys() {
     let free = FuncKey::new_function(Lang::Python, "app.py", "process", Some(1));
-    let method = FuncKey {
-        lang: Lang::Python,
-        namespace: "app.py".into(),
-        container: "Worker".into(),
-        name: "process".into(),
-        arity: Some(1),
-        disambig: None,
-        kind: FuncKind::Method,
-    };
+    let method = FuncKey::from_parts(
+        Lang::Python,
+        "app.py",
+        "Worker",
+        "process",
+        Some(1),
+        None,
+        FuncKind::Method,
+    );
     assert_ne!(free, method);
     assert_ne!(free.qualified_name(), method.qualified_name());
 }
 
 #[test]
 fn two_methods_same_name_different_containers_are_distinct() {
-    let order = FuncKey {
-        lang: Lang::Java,
-        namespace: "src/Services.java".into(),
-        container: "OrderService".into(),
-        name: "process".into(),
-        arity: Some(1),
-        disambig: None,
-        kind: FuncKind::Method,
-    };
-    let user = FuncKey {
-        lang: Lang::Java,
-        namespace: "src/Services.java".into(),
-        container: "UserService".into(),
-        name: "process".into(),
-        arity: Some(1),
-        disambig: None,
-        kind: FuncKind::Method,
-    };
+    let order = FuncKey::from_parts(
+        Lang::Java,
+        "src/Services.java",
+        "OrderService",
+        "process",
+        Some(1),
+        None,
+        FuncKind::Method,
+    );
+    let user = FuncKey::from_parts(
+        Lang::Java,
+        "src/Services.java",
+        "UserService",
+        "process",
+        Some(1),
+        None,
+        FuncKind::Method,
+    );
     assert_ne!(order, user);
 }
 
 #[test]
 fn closure_disambig_separates_same_name_siblings() {
-    let a = FuncKey {
-        lang: Lang::JavaScript,
-        namespace: "f.js".into(),
-        container: "outer".into(),
-        name: "<anon>".into(),
-        arity: Some(0),
-        disambig: Some(100),
-        kind: FuncKind::Closure,
-    };
-    let b = FuncKey {
-        lang: Lang::JavaScript,
-        namespace: "f.js".into(),
-        container: "outer".into(),
-        name: "<anon>".into(),
-        arity: Some(0),
-        disambig: Some(205),
-        kind: FuncKind::Closure,
-    };
+    let a = FuncKey::from_parts(
+        Lang::JavaScript,
+        "f.js",
+        "outer",
+        "<anon>",
+        Some(0),
+        Some(100),
+        FuncKind::Closure,
+    );
+    let b = FuncKey::from_parts(
+        Lang::JavaScript,
+        "f.js",
+        "outer",
+        "<anon>",
+        Some(0),
+        Some(205),
+        FuncKind::Closure,
+    );
     assert_ne!(a, b);
 }
 
@@ -165,15 +165,15 @@ fn legacy_json_without_new_fields_deserialises() {
 
 #[test]
 fn round_trip_full_fields_serde() {
-    let k = FuncKey {
-        lang: Lang::Ruby,
-        namespace: "lib/worker.rb".into(),
-        container: "Admin::Worker".into(),
-        name: "run".into(),
-        arity: Some(2),
-        disambig: Some(9001),
-        kind: FuncKind::Method,
-    };
+    let k = FuncKey::from_parts(
+        Lang::Ruby,
+        "lib/worker.rb",
+        "Admin::Worker",
+        "run",
+        Some(2),
+        Some(9001),
+        FuncKind::Method,
+    );
     let json = serde_json::to_string(&k).unwrap();
     let back: FuncKey = serde_json::from_str(&json).unwrap();
     assert_eq!(k, back);
@@ -337,4 +337,172 @@ fn from_path_or_content_returns_none_when_nothing_matches() {
 fn from_path_or_content_empty_head_with_unknown_extension_returns_none() {
     let path = Path::new("/tmp/runme");
     assert_eq!(Lang::from_path_or_content(path, b""), None);
+}
+
+// --- Precomputed identity hash invariants (perfhunt session-0012) ---
+
+/// Hash a `FuncKey` through the standard `Hasher` path (also triggers the
+/// `cfg(test)` integrity assertion inside `FuncKey::hash`).
+fn fk_hash(k: &FuncKey) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut s = std::collections::hash_map::DefaultHasher::new();
+    k.hash(&mut s);
+    s.finish()
+}
+
+#[test]
+fn funckey_from_parts_hash_stable_under_recompute() {
+    let mut k = FuncKey::from_parts(
+        Lang::Go,
+        "server/app.go",
+        "S",
+        "m",
+        Some(2),
+        Some(7),
+        FuncKind::Method,
+    );
+    let before = fk_hash(&k);
+    k.recompute_hash();
+    assert_eq!(before, fk_hash(&k), "recompute must be idempotent");
+}
+
+#[test]
+fn funckey_setters_keep_key_equal_to_fresh_construction() {
+    let mut k = FuncKey::from_parts(Lang::Go, "x.go", "", "f", None, None, FuncKind::Function);
+    k.set_namespace("pkg/x.go");
+    k.set_arity(Some(3));
+    k.set_disambig(Some(9));
+    let fresh = FuncKey::from_parts(
+        Lang::Go,
+        "pkg/x.go",
+        "",
+        "f",
+        Some(3),
+        Some(9),
+        FuncKind::Function,
+    );
+    assert_eq!(k, fresh, "setter-mutated key must equal freshly-built key");
+    assert_eq!(fk_hash(&k), fk_hash(&fresh), "Hash must agree with Eq");
+}
+
+#[test]
+fn funckey_hashmap_lookup_after_namespace_mutation() {
+    use std::collections::HashMap;
+    let mut m: HashMap<FuncKey, u32> = HashMap::new();
+    let mut key = FuncKey::from_parts(
+        Lang::Rust,
+        "orig.rs",
+        "",
+        "g",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
+    key.set_namespace("src/lib.rs");
+    m.insert(key, 42);
+    // A key built directly with the post-mutation identity must find the entry:
+    // proves the cached hash stayed consistent across the setter.
+    let probe = FuncKey::from_parts(
+        Lang::Rust,
+        "src/lib.rs",
+        "",
+        "g",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
+    assert_eq!(m.get(&probe), Some(&42));
+}
+
+#[test]
+fn funckey_serde_roundtrip_recomputes_hash_and_omits_hash_field() {
+    let k = FuncKey::from_parts(
+        Lang::TypeScript,
+        "src/a.ts",
+        "C",
+        "run",
+        Some(0),
+        Some(3),
+        FuncKind::Constructor,
+    );
+    let json = serde_json::to_string(&k).unwrap();
+    assert!(
+        !json.contains("\"hash\""),
+        "serialized FuncKey must not persist the private hash field: {json}"
+    );
+    let back: FuncKey = serde_json::from_str(&json).unwrap();
+    assert_eq!(k, back);
+    assert_eq!(
+        fk_hash(&k),
+        fk_hash(&back),
+        "deserialize must recompute the cached hash"
+    );
+}
+
+#[test]
+fn funckey_serde_wire_backcompat_defaults() {
+    // Old-format JSON (no container/disambig/kind) must still load and hash,
+    // proving existing SQLite summary blobs remain readable.
+    let json = r#"{"lang":"go","namespace":"m.go","name":"h","arity":2}"#;
+    let k: FuncKey = serde_json::from_str(json).unwrap();
+    let expected =
+        FuncKey::from_parts(Lang::Go, "m.go", "", "h", Some(2), None, FuncKind::Function);
+    assert_eq!(k, expected);
+    assert_eq!(fk_hash(&k), fk_hash(&expected));
+}
+
+#[test]
+fn funckey_serialized_wire_matches_field_names() {
+    // The wire form is the seven identity fields, exactly as the old derived
+    // Serialize emitted them (container/disambig/kind carry serde defaults).
+    let k = FuncKey::from_parts(
+        Lang::Rust,
+        "src/lib.rs",
+        "",
+        "main",
+        Some(0),
+        None,
+        FuncKind::Function,
+    );
+    let v: serde_json::Value = serde_json::to_value(&k).unwrap();
+    let obj = v.as_object().unwrap();
+    assert_eq!(obj.get("lang").and_then(|x| x.as_str()), Some("rust"));
+    assert_eq!(
+        obj.get("namespace").and_then(|x| x.as_str()),
+        Some("src/lib.rs")
+    );
+    assert_eq!(obj.get("name").and_then(|x| x.as_str()), Some("main"));
+    assert!(obj.contains_key("arity"));
+    assert!(!obj.contains_key("hash"));
+}
+
+#[test]
+fn funckey_default_hash_consistent() {
+    let d = FuncKey::default();
+    let mut d2 = d.clone();
+    d2.recompute_hash();
+    assert_eq!(fk_hash(&d), fk_hash(&d2));
+    assert_eq!(d, d2);
+    // Default must equal a from_parts-built empty key (hash included).
+    let empty = FuncKey::from_parts(Lang::default(), "", "", "", None, None, FuncKind::default());
+    assert_eq!(d, empty);
+    assert_eq!(fk_hash(&d), fk_hash(&empty));
+}
+
+#[test]
+fn funckey_distinct_identities_differ() {
+    let a = FuncKey::from_parts(Lang::Go, "a.go", "", "f", Some(1), None, FuncKind::Function);
+    let b = FuncKey::from_parts(Lang::Go, "a.go", "", "g", Some(1), None, FuncKind::Function);
+    assert_ne!(a, b);
+    // container-only difference is also a distinct identity
+    let c = FuncKey::from_parts(
+        Lang::Go,
+        "a.go",
+        "S",
+        "f",
+        Some(1),
+        None,
+        FuncKind::Function,
+    );
+    assert_ne!(a, c);
 }

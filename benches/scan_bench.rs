@@ -173,6 +173,92 @@ fn bench_classify(c: &mut Criterion) {
     });
 }
 
+/// Sweep `classify_all` over a realistic per-node Go corpus (a mix of a few
+/// sink/source hits and mostly ordinary non-matching callee/identifier texts —
+/// the true distribution the CFG-build + taint passes classify, where the
+/// overwhelming majority of nodes match nothing).
+///
+/// Isolates the per-node label-matcher loop that the last-byte `LabelIndex`
+/// dispatch replaced: the old path ran `match_suffix_cs` over **every** Go
+/// matcher (~150) for every one of these texts; the index visits only the
+/// handful sharing the text's last byte. A/B a single binary with
+/// `NYX_DISABLE_LABEL_INDEX=1` (forces the pre-index linear scan). A regression
+/// here means the dispatch index stopped pruning.
+fn bench_classify_all_sweep_go(c: &mut Criterion) {
+    // ~60 texts: a handful of real Go sinks/sources + realistic misses
+    // (ordinary method names, chained calls, locals) in registry-diverse
+    // last bytes.
+    let corpus: &[&str] = &[
+        // hits (various last bytes)
+        "os.Getenv",
+        "exec.Command",
+        "exec.CommandContext",
+        "db.Query",
+        "db.QueryRow",
+        "db.Exec",
+        "fmt.Fprintf",
+        "template.HTML",
+        "os.ReadFile",
+        "ioutil.ReadFile",
+        "r.URL.Query().Get",
+        "http.Get",
+        // misses — ordinary code the classifier still scans every node of
+        "handleRequest",
+        "s.doWork",
+        "ctx.Done",
+        "w.WriteHeader",
+        "json.Marshal",
+        "strings.TrimSpace",
+        "append",
+        "make",
+        "len",
+        "buf.String",
+        "logger.Info",
+        "logger.Debugf",
+        "user.Name",
+        "cfg.Load",
+        "srv.Shutdown",
+        "wg.Wait",
+        "mu.Lock",
+        "mu.Unlock",
+        "time.Now",
+        "rand.Intn",
+        "errors.New",
+        "fmt.Errorf",
+        "b.Bytes",
+        "req.Context",
+        "resp.Body.Close",
+        "router.Group",
+        "c.JSON",
+        "c.Param",
+        "svc.repo.FindByID",
+        "helper.normalize",
+        "x",
+        "yy",
+        "totalCount",
+        "isValid",
+        "parsePayload",
+        "computeHash",
+        "sched.next",
+        "conn.readLoop",
+        "p.marshalTo",
+        "node.left",
+        "tree.insert",
+        "cache.evict",
+        "metrics.observe",
+        "span.End",
+    ];
+    c.bench_function("classify_all_sweep_go", |b| {
+        b.iter(|| {
+            let mut n = 0usize;
+            for &t in corpus {
+                n += nyx_scanner::labels::classify_all("go", std::hint::black_box(t), None).len();
+            }
+            std::hint::black_box(n)
+        });
+    });
+}
+
 /// Per-file fused analysis throughput on a realistic ~1.5k-line Go module
 /// (gin context.go, ~147 fns).  Guards the
 /// `ParsedFile::body_const_facts_cache` optimization that collapses the
@@ -217,6 +303,14 @@ fn bench_analyse_file_fused_large_go(c: &mut Criterion) {
 /// `GinExtractor` match by default — pre-hoist this bench measured the
 /// AST being walked twice; regressions here mean the hoist has been
 /// broken or a new Go extractor was added that re-walks the tree.
+///
+/// Also guards the 2026-07-15 (perfhunt session-0051) NextAuth per-unit
+/// walk gate: `body_returns_nextauth_options` scanned every unit body for
+/// JS/TS `object` literal nodes even on Go, where it always returns
+/// `false`.  The gate (`AuthAnalysisRules::is_object_literal_lang`) skips
+/// that fruitless whole-body walk on the ~147 Go functions in this
+/// fixture; a regression that drops the gate re-introduces the per-unit
+/// walk here.  `NYX_DISABLE_AUTH_WALK_GATE=1` reverts to the old path.
 fn bench_extract_authorization_model_go(c: &mut Criterion) {
     use tree_sitter::Parser;
 
@@ -297,6 +391,42 @@ fn bench_extract_authorization_model_shared_go(c: &mut Criterion) {
     });
 }
 
+/// Per-file gitea `extract_route_handler_auth_edges` cost on the realistic
+/// ~1.5k-line Go fixture (gin context.go — no `web.Router` closure groups).
+///
+/// The gitea extractor harvests cross-file route→handler authorization edges
+/// by walking the whole tree of every Go file (`harvest_edges`).  On a file
+/// with no `<r>.Group(...)` / `<r>.PathGroup(...)` closure group the walk emits
+/// nothing, yet pre-2026-07-15 (perfhunt session-0051) it still descended the
+/// entire tree per Go file.  The fix short-circuits on a cheap `Group`
+/// byte-substring pre-filter (a gitea edge is emitted only from inside a
+/// matched `Group` / `PathGroup` call, both of which contain that token), so a
+/// non-gitea Go file skips the walk.  This bench measures that skip; a
+/// regression that drops the pre-filter surfaces here as a ≥10× slowdown.
+fn bench_gitea_route_auth_edges_go(c: &mut Criterion) {
+    use tree_sitter::Parser;
+
+    let fixture = Path::new("benches/perf_fixtures/large_go_module.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let bytes = std::fs::read(&fixture).expect("read fixture");
+
+    let mut parser = Parser::new();
+    let go_lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+    parser.set_language(&go_lang).expect("set go grammar");
+    let tree = parser.parse(&bytes, None).expect("parse fixture");
+
+    c.bench_function("gitea_route_auth_edges_go", |b| {
+        b.iter(|| {
+            nyx_scanner::auth_analysis::extract::gitea::extract_route_handler_auth_edges(
+                &tree,
+                &bytes,
+                nyx_scanner::symbol::Lang::Go,
+            )
+        });
+    });
+}
+
 /// Per-file `collect_top_level_units` cost on a realistic Go fixture
 /// (gin context.go, ~147 functions).  Targets the inner per-function
 /// AST-walk path: `collect_top_level_units` →
@@ -311,6 +441,21 @@ fn bench_extract_authorization_model_shared_go(c: &mut Criterion) {
 /// replaced that call with an O(1)-per-node `append_shallow_value_ref`
 /// helper.  A regression that re-introduces the deep walk surfaces
 /// here as a ≥2× slowdown.
+///
+/// Also guards the 2026-07-14 (perfhunt session-0030) `collect_call`
+/// redundancy elimination: `collect_call` was profiled as the single
+/// dominant caller of alloc / memmove / from_utf8 on mm/channels/app.
+/// The fix removed the duplicate per-argument `extract_value_refs` walk
+/// (the old code ran it twice: once for `subjects`, once for
+/// `args_value_refs`), made `subjects` lazy (built only for auth checks /
+/// sensitive operations), borrowed the whole-call text as `&str` instead
+/// of allocating a `String` on every call, and moved `string_args` into
+/// the `CallSite` instead of cloning it when no auth check needs it.
+/// Non-overlapping criterion CIs recorded the elimination (before
+/// [4.3815, 4.4010] ms → after [4.3227, 4.3462] ms, -1.3%); the
+/// isolated win is Amdahl-diluted at whole-scan.  A regression that
+/// re-introduces the duplicate `extract_value_refs` or the eager
+/// `subjects` / `node_text` allocations surfaces here.
 fn bench_collect_top_level_units_go(c: &mut Criterion) {
     use tree_sitter::Parser;
 
@@ -356,6 +501,26 @@ fn bench_collect_top_level_units_go(c: &mut Criterion) {
 /// predicate cut `const_propagate` self-time roughly in half on the
 /// large-Go fixture.  A regression that re-introduces the hash-keyed
 /// inner loop will surface here as a ≥1.4× slowdown.
+///
+/// 2026-07-15 perfhunt session-0048 additionally removed the residual
+/// per-iteration clones from the SCCP worklist: the spurious
+/// `use_sites[val_idx].clone()` (a `SmallVec` heap clone per popped value),
+/// the `let old = lookup(..)` lattice clone before every change-check (now
+/// a borrowing `changed_from`), and the per-phi-operand `lookup` clone (now
+/// a borrowing `lookup_ref` fed straight into `meet`).  Bit-identical;
+/// criterion here 186.5 → 172.8 µs (−6%).  Re-introducing any of those
+/// clones surfaces as a regression on this fixture.
+///
+/// 2026-07-15 perfhunt session-0054 landed the last structural residual: the
+/// public `ConstPropResult.values` (and `OptimizeResult.const_values`) is now
+/// a dense `ConstValues(Vec<ConstLattice>)` newtype into which `const_propagate`
+/// **moves** its internal `Vec` — eliminating the old `O(num_values)` per-body
+/// `HashMap<SsaValue, ConstLattice>` build (one SipHash insert per value,
+/// discarded next scan) and turning every downstream `.get(&v)` into a
+/// bounds-checked array index.  Single-binary A/B: run once normally and once
+/// with `NYX_CONST_VALUES_LEGACY_BUILD=1` (which reproduces the old per-value
+/// hashed build).  A regression that re-materialises the result HashMap
+/// surfaces here proportional to value count.
 fn bench_const_propagate_large_go(c: &mut Criterion) {
     use nyx_scanner::ssa;
 
@@ -433,6 +598,498 @@ fn bench_global_summaries_lookup_same_lang_go(c: &mut Criterion) {
     });
 }
 
+/// Callee-resolution throughput on a high-function-count, high-call-density
+/// Go file (`callee_resolve_stress.go`: ~400 functions, ~1680 intra-file
+/// call sites).  Guards the per-file [`FuncNameIndex`] that replaced the
+/// linear `local_summaries.keys()` scans inside `resolve_callee_full`
+/// (`caller_container_for`, `resolve_local_func_key_query`,
+/// `resolve_local_func_key`, and the ambiguity probe).  Before the index
+/// each of the ~1680 call-site resolutions scanned all ~400 functions
+/// (`O(C·F)` ≈ `O(F²)` per file, run once per taint pass — summary
+/// extraction, the main analysis, child-sink augmentation).  A regression
+/// that reintroduces the linear scan surfaces here as a large slowdown
+/// that grows quadratically with the fixture's function count.
+///
+/// Also guards the borrow-vs-clone candidate API (session-0036): the four
+/// resolvers above consult the index via `with_indexed_local_candidates`,
+/// which hands them borrowed `&FuncKey`s instead of the former
+/// `indexed_local_candidates`, which deep-cloned every same-name candidate
+/// (three `String` allocations per `FuncKey`) on each resolution only to be
+/// filtered and discarded. The sole surviving clone is the single winning
+/// key each resolver returns. Reintroducing the per-resolution candidate-list
+/// clone regresses here (measured -2.2% cooled on this fixture).
+///
+/// Also guards the per-call path-confinement gate hoist (session-0039): this
+/// call-dense fixture has no confiner summary (Go produces none), so before the
+/// hoist the three per-call confinement passes — `apply_call_post_confinement`,
+/// `apply_path_validator_confinement` (a `to_snake_lower` alloc + ~20 substring
+/// `contains` scans of the callee name), `apply_call_return_confinement` — ran
+/// unconditionally on every call in both the dataflow and event replays, ~5
+/// passes per body. `compute_confinement_gates` now computes the "any confiner?"
+/// existence check once per body and skips all three when the gate is closed.
+/// A/B from one binary via `NYX_DISABLE_CONFINEMENT_GATE=1` (forces the gates
+/// open = pre-hoist behaviour); reintroducing the unconditional passes regresses
+/// here proportional to the call density.
+fn bench_taint_callee_resolve_stress_go(c: &mut Criterion) {
+    let fixture = Path::new("benches/perf_fixtures/callee_resolve_stress.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let bytes = std::fs::read(&fixture).expect("read fixture");
+    let mut cfg = Config::default();
+    cfg.scanner.mode = AnalysisMode::Full;
+    cfg.scanner.enable_state_analysis = true;
+    cfg.performance.worker_threads = Some(1);
+
+    let _ = nyx_scanner::ast::analyse_file_fused(&bytes, &fixture, &cfg, None, None)
+        .expect("warmup analyse");
+
+    c.bench_function("taint_callee_resolve_stress_go", |b| {
+        b.iter(|| {
+            nyx_scanner::ast::analyse_file_fused(&bytes, &fixture, &cfg, None, None)
+                .expect("analyse_file_fused")
+        });
+    });
+}
+
+/// Stresses the SSA taint worklist's state-clone path
+/// (`run_ssa_taint_internal` in `src/taint/ssa_transfer/mod.rs`).  The
+/// fixture is branch- and constraint-dense: every function threads a
+/// tainted source through a long chain of `if`/`else` guards plus a loop,
+/// so `SsaTaintState::path_env` is non-empty across many basic blocks.  The
+/// worklist clones the full state on every block pop, exit store, and
+/// per-successor push; before the `Arc`-COW change each clone deep-copied
+/// the `PathEnv` (`UnionFind` + five `SmallVec`s — ≈3.9% of static CPU on
+/// Go corpora).  After the change those clones are refcount bumps and the
+/// `PathEnv` is copied at most once per block (only when it actually
+/// mutates).  Measured −12% on this bench when the COW landed
+/// (2026-06-12); a regression that drops the `Arc` (or makes `make_mut`
+/// fire per instruction) surfaces here as a slowdown proportional to
+/// block × constraint density.  `Arc` (not `Rc`) keeps `SsaTaintState`
+/// `Send` for the rayon-parallel file scan.
+///
+/// Also guards the `block_exit_states` clone elision (2026-07-14): the
+/// worklist used to `SsaTaintState::clone()` the exit state into
+/// `block_exit_states[bid]` on *every* block pop, but the dominant callers
+/// (`run_ssa_taint_full`: summary extraction + main analysis + sink
+/// augmentation) discard that vector.  It is now built only when the caller
+/// asks (`track_exit_states`), and even then the state is *moved* in after
+/// its last borrow instead of cloned.  This block-dense fixture maximises
+/// pops, so re-introducing the per-pop exit clone surfaces here (measured
+/// −1.8% end-to-end when the elision landed; the worklist itself is ~1/3 of
+/// `analyse_file_fused`, so the isolated worklist gain is proportionally
+/// larger).
+fn bench_taint_branch_stress_go(c: &mut Criterion) {
+    let fixture = Path::new("benches/perf_fixtures/taint_branch_stress.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let bytes = std::fs::read(&fixture).expect("read fixture");
+    let mut cfg = Config::default();
+    cfg.scanner.mode = AnalysisMode::Full;
+    cfg.scanner.enable_state_analysis = true;
+    cfg.performance.worker_threads = Some(1);
+
+    let _ = nyx_scanner::ast::analyse_file_fused(&bytes, &fixture, &cfg, None, None)
+        .expect("warmup analyse");
+
+    c.bench_function("taint_branch_stress_go", |b| {
+        b.iter(|| {
+            nyx_scanner::ast::analyse_file_fused(&bytes, &fixture, &cfg, None, None)
+                .expect("analyse_file_fused")
+        });
+    });
+}
+
+/// Branch conditions INSIDE nested loops, so the taint worklist re-visits
+/// loop-body blocks until fixpoint and (before the memo) re-classified the
+/// same condition text on every re-visit.  Isolates the per-condition
+/// classification cache: each branch's `classify_condition_with_target` /
+/// `has_semantic_negation` / PathFact-classifier `str::find`/`str::contains`
+/// scans run once per distinct condition text via the persistent per-thread
+/// `COND_CLASS_CACHE`, rather than once per re-visit / pass.  `analyse_file_fused`
+/// runs the body's worklist ~5× (summary extraction + main + sink
+/// augmentation), and criterion keeps the thread-local warm across `b.iter()`
+/// iterations, so this bench captures the cross-pass / cross-iteration reuse
+/// the persistent cache adds over the worklist-local memo
+/// (session-0018: −2.5% vs worklist-local, −12.5% vs `NYX_DISABLE_COND_MEMO=1`).
+/// Reverting the cache to per-`run_ssa_taint_internal` (or recompute-per-visit)
+/// surfaces here proportional to the loop re-visit count × pass count.
+fn bench_taint_cond_revisit_go(c: &mut Criterion) {
+    let fixture = Path::new("benches/perf_fixtures/taint_cond_revisit.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let bytes = std::fs::read(&fixture).expect("read fixture");
+    let mut cfg = Config::default();
+    cfg.scanner.mode = AnalysisMode::Full;
+    cfg.scanner.enable_state_analysis = true;
+    cfg.performance.worker_threads = Some(1);
+
+    let _ = nyx_scanner::ast::analyse_file_fused(&bytes, &fixture, &cfg, None, None)
+        .expect("warmup analyse");
+
+    c.bench_function("taint_cond_revisit_go", |b| {
+        b.iter(|| {
+            nyx_scanner::ast::analyse_file_fused(&bytes, &fixture, &cfg, None, None)
+                .expect("analyse_file_fused")
+        });
+    });
+}
+
+/// CFG-construction throughput on the large gin Go module (~1.5k lines,
+/// selector-expression-dense).  Targets `build_cfg_for_file`, whose hot
+/// inner path runs `push_node` → `first_member_label` → `member_expr_text`
+/// on every `CallWrapper`/`Assignment` node.  Pre-fix `member_expr_text`
+/// built its dot-joined member path bottom-up via a `format!("{o}.{p}")`
+/// chain, allocating one intermediate `String` per nesting level (and the
+/// `first_member_label` classify path threw every one of those Strings away
+/// after a single `classify(&str)` call).  The fix rewrote the builder to
+/// append directly into a single reused buffer (`member_expr_text_into`),
+/// collapsing the O(depth) intermediate allocations to one final allocation
+/// (zero on the `first_member_label` classify path, which uses a thread-local
+/// scratch buffer).  This bench isolates that allocation churn — the biggest
+/// self-time bucket on the mm/channels/app static profile — from the taint /
+/// SSA passes.  A regression that reintroduces the per-level `format!` chain
+/// surfaces here proportional to member-expression nesting depth.
+fn bench_cfg_build_large_go(c: &mut Criterion) {
+    let fixture = Path::new("benches/perf_fixtures/large_go_module.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let cfg = Config::default();
+
+    c.bench_function("cfg_build_large_go", |b| {
+        b.iter(|| {
+            nyx_scanner::ast::build_cfg_for_file(&fixture, &cfg)
+                .expect("build cfg")
+                .expect("supported language")
+        });
+    });
+}
+
+/// AST pattern-query pass throughput on the large gin Go module.
+///
+/// Targets `ParsedSource::run_ast_queries` (via the `bench_run_ast_queries`
+/// hook), isolating it from the rest of the per-file pipeline. Pre-fix the
+/// pass issued one `QueryCursor::matches` — i.e. one full tree walk — per rule
+/// (Go: 8 rules, JS/TS: 23), so traversal cost was `O(rules × nodes)`. The
+/// combined multi-pattern query walks the AST once and tests every rule in a
+/// single matcher pass (`O(nodes)`); on the mm/channels/app profile
+/// `run_ast_queries` was the single biggest active nyx self-time bucket
+/// (tree-sitter-cursor work). A/B the two paths on one binary via
+/// `NYX_DISABLE_QUERY_COMBINE=1 … --save-baseline legacy` then `… --baseline
+/// legacy`. A regression that reverts to per-rule walks surfaces here
+/// proportional to the rule count.
+fn bench_ast_queries_large_go(c: &mut Criterion) {
+    let fixture = Path::new("benches/perf_fixtures/large_go_module.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let bytes = std::fs::read(&fixture).expect("read fixture");
+    let cfg = Config::default();
+
+    // Warm the per-language combined-query cache before timing.
+    let _ = nyx_scanner::ast::bench_run_ast_queries(&bytes, &fixture, &cfg);
+
+    c.bench_function("ast_queries_large_go", |b| {
+        b.iter(|| nyx_scanner::ast::bench_run_ast_queries(&bytes, &fixture, &cfg).len());
+    });
+}
+
+/// Node-text extraction throughput on the large-Go fixture: decode every node's
+/// text via `slice_str` (the `text_of` primitive).  Pre-2026-07-14 every call
+/// re-ran `core::str::from_utf8` (`run_utf8_validation`, `O(range_len)`) over
+/// the node's byte range, ~1.6% of active CPU on mattermost.  The pre-validated
+/// source cache ([`ValidSourceGuard`]) validates the whole file once at parse
+/// time and turns each `slice_str` into an `O(1)` `str::get` boundary slice of
+/// the already-validated bytes.  Single-binary A/B: run once normally (fast
+/// path) and once with `NYX_DISABLE_SRC_STR_CACHE=1` (checked baseline).  A
+/// regression that drops the cache surfaces here proportional to node count.
+fn bench_node_text_walk_large_go(c: &mut Criterion) {
+    let fixture = Path::new("benches/perf_fixtures/large_go_module.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let bytes = std::fs::read(&fixture).expect("read fixture");
+
+    c.bench_function("node_text_walk_large_go", |b| {
+        b.iter(|| {
+            std::hint::black_box(nyx_scanner::ast::bench_node_text_walk(
+                std::hint::black_box(&bytes),
+                &fixture,
+            ))
+        });
+    });
+}
+
+/// `lower_to_ssa` cost on the large-Go fixture.  This is the CFG→SSA
+/// lowering path: `form_blocks` (basic-block formation over the reachable
+/// node set) plus `rename_variables`/`process_block` (Cytron dominator-tree
+/// rename, which pushes/pops per-variable SSA stacks).  Pre-2026-07-13 the
+/// node-keyed maps in `form_blocks` (`successors`, `in_degree`,
+/// `has_branching_in`, `is_leader`, `block_of_node`, and the BFS visited
+/// sets) and the string-keyed `var_stacks` used `std::collections::HashMap`
+/// (SipHash), which profiling showed as ~26% of all SipHash self-time on
+/// mattermost (`process_block` + `lower_to_ssa_inner`).  Post-fix they use
+/// `rustc_hash::FxHashMap`/`FxHashSet`: keys are dense `NodeIndex` integers
+/// or short variable-name strings, none are iterated in an output-observable
+/// order, so the cheaper deterministic hasher is bit-identical.  A
+/// regression that re-introduces SipHash on this path surfaces here.
+///
+/// 2026-07-14 (perfhunt session-0015) extended the conversion to the four
+/// maps `lower_to_ssa` *returns* inside `SsaBody` — `cfg_node_map`
+/// (`NodeIndex`→`SsaValue`), `field_writes`, `synthetic_externals`,
+/// `slot_scoped_assigns` — which had stayed `std::collections::HashMap`/
+/// `HashSet` because they cross the return boundary into the taint / guards /
+/// symex consumers and the `CalleeSsaBody` DB blob.  All consumer accesses are
+/// point lookups (audited: the only iteration is the order-insensitive
+/// `ssa::invariants` validation), and `FxHashMap` serialises to the identical
+/// msgpack map form, so the swap is bit-identical and blob-compatible.  This
+/// bench builds `cfg_node_map` on every lowered body, so a regression that
+/// reverts those fields to SipHash surfaces here proportional to node count.
+fn bench_ssa_lower_large_go(c: &mut Criterion) {
+    use nyx_scanner::ssa;
+
+    let fixture = Path::new("benches/perf_fixtures/large_go_module.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let cfg_obj = Config::default();
+    let (file_cfg, _lang) = nyx_scanner::ast::build_cfg_for_file(&fixture, &cfg_obj)
+        .expect("build cfg")
+        .expect("supported language");
+
+    // Snapshot the (graph, entry, scope) inputs once; the bench loop re-runs
+    // `lower_to_ssa` on each so we measure only lowering cost, not CFG build.
+    let inputs: Vec<(usize, bool)> = file_cfg
+        .bodies
+        .iter()
+        .enumerate()
+        .map(|(i, body)| (i, body.meta.name.is_none()))
+        .collect();
+
+    c.bench_function("ssa_lower_large_go", |b| {
+        b.iter(|| {
+            let mut total_blocks = 0usize;
+            for &(i, scope_all) in &inputs {
+                let body = &file_cfg.bodies[i];
+                let scope = body.meta.name.as_deref();
+                if let Ok(ssa_body) = ssa::lower_to_ssa(&body.graph, body.entry, scope, scope_all) {
+                    total_blocks += ssa_body.blocks.len();
+                }
+            }
+            total_blocks
+        });
+    });
+}
+
+/// Isolates the `cfg_node_map` **point-lookup** path — the map's hottest access
+/// pattern (18 `.get()` sites across taint / guards / symex / const-prop resolve
+/// a sink or source CFG node to its primary `SsaValue`).
+///
+/// Pre-2026-07-14 this was a `std::collections::HashMap<NodeIndex, SsaValue>`
+/// (SipHash), then an `FxHashMap` (session-0015).  2026-07-14 (session-0018)
+/// replaced it with a positional `CfgNodeMap` (`Vec<Option<SsaValue>>` indexed by
+/// `NodeIndex::index()`) — the option-(b) deep fix in `PERF_DEFERRED.md`.  A
+/// lookup is now a bounds-checked `Vec` index with **zero hashing** instead of an
+/// `FxHash` of the `NodeIndex` plus a bucket probe.  A regression that re-hashes
+/// the key surfaces here proportional to the number of value-defining nodes.
+///
+/// Sourced from `value_defs` (not `cfg_node_map.iter()`) so the bench compiles
+/// identically against the old `FxHashMap` and the new `CfgNodeMap`, enabling a
+/// clean `--save-baseline` before/after on the same bench.
+fn bench_cfg_node_map_lookup(c: &mut Criterion) {
+    use nyx_scanner::ssa;
+
+    let fixture = Path::new("benches/perf_fixtures/large_go_module.go")
+        .canonicalize()
+        .expect("perf fixture");
+    let cfg_obj = Config::default();
+    let (file_cfg, _lang) = nyx_scanner::ast::build_cfg_for_file(&fixture, &cfg_obj)
+        .expect("build cfg")
+        .expect("supported language");
+
+    // Lower every body once (outside the measured loop); keep each lowered body
+    // paired with the value-defining CFG node indices — the realistic lookup
+    // keys.
+    let probes: Vec<_> = file_cfg
+        .bodies
+        .iter()
+        .filter_map(|body| {
+            let scope = body.meta.name.as_deref();
+            let scope_all = body.meta.name.is_none();
+            ssa::lower_to_ssa(&body.graph, body.entry, scope, scope_all)
+                .ok()
+                .and_then(|ssa_body| {
+                    let nodes: Vec<_> = ssa_body.value_defs.iter().map(|vd| vd.cfg_node).collect();
+                    if nodes.is_empty() {
+                        None
+                    } else {
+                        Some((ssa_body, nodes))
+                    }
+                })
+        })
+        .collect();
+
+    c.bench_function("cfg_node_map_lookup", |b| {
+        b.iter(|| {
+            let mut acc = 0u64;
+            for (ssa_body, nodes) in &probes {
+                for n in nodes {
+                    if let Some(v) = ssa_body.cfg_node_map.get(n) {
+                        acc = acc.wrapping_add(v.0 as u64);
+                    }
+                }
+            }
+            acc
+        });
+    });
+}
+
+/// Isolates `FuncKey` hashing on the pessimal map: a `std::collections::HashMap`
+/// (SipHash `RandomState`), the exact type used by the interprocedural indices
+/// `ssa_by_key` / `bodies_by_key` / `auth_by_key` in `GlobalSummaries`.
+///
+/// Pre-fix, `FuncKey` derived `Hash`, so every lookup walked all bytes of the
+/// three `String` identity fields (project-relative namespace path ~40-50 B,
+/// container, name) through SipHash's per-byte mixing.  Profiling attributed
+/// 44.7% of all SipHash self-time (~3.8% active CPU) on mattermost's
+/// `server/channels/app` to `FuncKey::hash` — the single largest hashed entity
+/// in the engine (PERF_DEFERRED.md, 2026-07-13).
+///
+/// Post-fix (2026-07-14 perfhunt session-0012), `FuncKey` caches a `u64`
+/// FxHash of its identity computed once at construction; the manual `Hash`
+/// impl writes that single precomputed `u64`, so a lookup mixes 8 bytes
+/// instead of the ~76 B of identity string this fixture uses.  The change is
+/// asymptotic in the identity string length: `O(len)` → `O(1)` per hash.  A
+/// regression that reverts to hashing the string fields surfaces here
+/// proportional to the namespace + name lengths.
+fn bench_funckey_hash_lookup(c: &mut Criterion) {
+    use nyx_scanner::symbol::{FuncKey, Lang};
+    use std::collections::HashMap;
+
+    // Realistic identity shapes: deep namespace paths + service-method names,
+    // mirroring how cross-file callee keys look on a large Go/Java repo.
+    let keys: Vec<FuncKey> = (0..500)
+        .map(|i| {
+            FuncKey::new_function(
+                Lang::Go,
+                format!(
+                    "server/channels/app/module_group_{}/handler_{:04}.go",
+                    i % 16,
+                    i
+                ),
+                format!("Process{:04}RequestHandler", i),
+                Some((i % 5) + 1),
+            )
+        })
+        .collect();
+    let map: HashMap<FuncKey, usize> = keys
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, k)| (k, i))
+        .collect();
+
+    c.bench_function("funckey_hash_lookup", |b| {
+        b.iter(|| {
+            let mut hits = 0usize;
+            for k in &keys {
+                if let Some(v) = map.get(k) {
+                    hits += *v & 1;
+                }
+            }
+            hits
+        });
+    });
+}
+
+/// Isolates the auth-name matcher `matches_name` on a realistic
+/// O(call-names × patterns) matrix — mirroring the auth-extraction pass,
+/// which checks every call node's callee against dozens of guard/auth
+/// patterns per node.  Guards the zero-alloc `canon_has_prefix` stream that
+/// replaced two throwaway `canonical_name` `String` allocations per
+/// comparison (the `matches_name`/`canonical_name` subtree was ~8.8% of
+/// active CPU on mm/channels/app before the fix).  Single-binary A-B via
+/// `NYX_DISABLE_CANON_STREAM=1` (forces the legacy allocating path).
+fn bench_auth_matches_name(c: &mut Criterion) {
+    use nyx_scanner::auth_analysis::config::matches_name;
+
+    // Callee names as they appear on a real Go/JS scan: dotted receiver
+    // chains, mixed case, and a majority that miss every auth pattern
+    // (the common case that still pays the allocation in the old path).
+    let names: Vec<&str> = vec![
+        "s.store.User().Get",
+        "a.srv.Platform().GetUser",
+        "c.App.SessionHasPermissionTo",
+        "web.Handler.ServeHTTP",
+        "model.User.IsValid",
+        "sql.DB.QueryContext",
+        "require_trip_member",
+        "checkOwnership",
+        "isAdmin",
+        "hasWorkspaceMembership",
+        "before_action",
+        "PreAuthorize",
+        "user.repo.save",
+        "Model.objects.filter",
+        "fmt.Sprintf",
+        "strings.HasPrefix",
+        "json.Marshal",
+        "ctx.Done",
+        "r.URL.Query().Get",
+        "db.Tx(opts).Query",
+        "utils.GenerateId",
+        "logger.Debug",
+        "make",
+        "append",
+        "getRandomBytes",
+    ];
+    // The union of literal auth/guard patterns matched per call node.
+    let patterns: Vec<&str> = vec![
+        "PreAuthorize",
+        "Secured",
+        "RolesAllowed",
+        "hasRole",
+        "hasAuthority",
+        "requireRole",
+        "permission_required",
+        "PermissionRequiredMixin",
+        "user_passes_test",
+        "isAuthenticated",
+        "authenticated",
+        "isAdmin",
+        "checkMembership",
+        "hasWorkspaceMembership",
+        "isMember",
+        "requireMembership",
+        "check_membership",
+        "checkOwnership",
+        "isOwner",
+        "requireOwnership",
+        "check_ownership",
+        "is_owner",
+        "owner?",
+        "before_action",
+        "prepend_before_action",
+        "skip_before_action",
+        "method_decorator",
+        "require_http_methods",
+        "get",
+        "filter",
+        "first",
+        "one",
+    ];
+
+    c.bench_function("auth_matches_name", |b| {
+        b.iter(|| {
+            let mut hits = 0usize;
+            for n in &names {
+                for p in &patterns {
+                    if matches_name(std::hint::black_box(n), std::hint::black_box(p)) {
+                        hits += 1;
+                    }
+                }
+            }
+            hits
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_ast_only_scan,
@@ -441,11 +1098,23 @@ criterion_group!(
     bench_single_file_parse_and_cfg,
     bench_state_analysis_only,
     bench_classify,
+    bench_classify_all_sweep_go,
     bench_analyse_file_fused_large_go,
     bench_extract_authorization_model_go,
     bench_extract_authorization_model_shared_go,
+    bench_gitea_route_auth_edges_go,
     bench_collect_top_level_units_go,
     bench_const_propagate_large_go,
+    bench_ssa_lower_large_go,
+    bench_cfg_node_map_lookup,
     bench_global_summaries_lookup_same_lang_go,
+    bench_funckey_hash_lookup,
+    bench_auth_matches_name,
+    bench_taint_callee_resolve_stress_go,
+    bench_taint_branch_stress_go,
+    bench_taint_cond_revisit_go,
+    bench_cfg_build_large_go,
+    bench_ast_queries_large_go,
+    bench_node_text_walk_large_go,
 );
 criterion_main!(benches);

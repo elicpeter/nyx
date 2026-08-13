@@ -88,10 +88,140 @@ impl ConstLattice {
     }
 }
 
+/// Dense, `SsaValue`-indexed table of constant-propagation lattice values.
+///
+/// SCCP already computes into a dense `Vec<ConstLattice>` indexed by
+/// `SsaValue.0` (every value is defined by exactly one inst, so the range
+/// `0..num_values` is fully populated).  Historically the result was then
+/// re-materialised into a `HashMap<SsaValue, ConstLattice>` — one SipHash
+/// insert per value, per body, discarded on the next scan — and every
+/// downstream `.get(&v)` paid a SipHash lookup where a `Vec` index would do.
+/// This newtype lets `const_propagate` **move** its internal `Vec` out with
+/// zero conversion and turns every consumer lookup into a bounds-checked
+/// index.  It exposes exactly the surface the old `HashMap` did that consumers
+/// use (`get`, `iter`, `is_empty`, `len`), so the swap is a pure
+/// type-signature change.
+///
+/// Complexity: result construction `O(1)` (move) vs the old `O(num_values)`
+/// hashed inserts; each lookup `O(1)` array index vs SipHash.  The lattice is
+/// never serialised (it is recomputed per body and lives only inside a
+/// transient `OptimizeResult`), so no wire-compat shim is required.
+///
+/// `get` returns `Top` semantics identically to the old map: an in-range slot
+/// yields `Some(&lattice)`, and any out-of-range value yields `None` — matching
+/// `HashMap::get` over the dense `0..num_values` key set the old path built.
+#[derive(Debug, Clone, Default)]
+pub struct ConstValues(Vec<ConstLattice>);
+
+impl ConstValues {
+    /// Constant lattice for `v`, or `None` when `v` is outside the dense range.
+    /// Mirrors `HashMap::get` over the `0..num_values` key set (every in-range
+    /// value was inserted by the old conversion, out-of-range never).
+    #[inline]
+    pub fn get(&self, v: &SsaValue) -> Option<&ConstLattice> {
+        self.0.get(v.0 as usize)
+    }
+
+    /// Number of dense slots (== `num_values` for a real result).
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Iterate `(SsaValue, &ConstLattice)` over every dense slot in ascending
+    /// index order.  The old `HashMap` path inserted **every** value
+    /// `0..num_values` (including `Top`/`Varying`), so this visits the same
+    /// entry set; the two consumers that iterate (`SymbolicState::
+    /// seed_from_const_values`, `PathEnv::seed_from_optimization`) apply an
+    /// order-independent per-value keyed update, so ascending order is
+    /// output-equivalent to the old nondeterministic map order.
+    pub fn iter(&self) -> impl Iterator<Item = (SsaValue, &ConstLattice)> {
+        self.0
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (SsaValue(i as u32), v))
+    }
+}
+
+/// Build a `ConstValues` from sparse `(SsaValue, ConstLattice)` pairs.
+///
+/// Used only by unit tests that hand-seed a few values; production always
+/// constructs the dense `Vec` directly inside `const_propagate`.  Sizes the
+/// dense range to `max(index) + 1` and fills unspecified slots with `Top`.
+/// Because every consumer treats `Some(&Top)` and `None` identically ("not a
+/// known constant"), a gap-filled dense table is behaviourally equivalent to a
+/// sparse map for test seeds.
+impl FromIterator<(SsaValue, ConstLattice)> for ConstValues {
+    fn from_iter<I: IntoIterator<Item = (SsaValue, ConstLattice)>>(iter: I) -> Self {
+        let pairs: Vec<(SsaValue, ConstLattice)> = iter.into_iter().collect();
+        let max = pairs.iter().map(|(v, _)| v.0 as usize).max();
+        let mut dense = match max {
+            Some(m) => vec![ConstLattice::Top; m + 1],
+            None => Vec::new(),
+        };
+        for (v, cl) in pairs {
+            let idx = v.0 as usize;
+            if idx < dense.len() {
+                dense[idx] = cl;
+            }
+        }
+        ConstValues(dense)
+    }
+}
+
+impl Serialize for ConstValues {
+    /// Emits the same map form (`{ ssa_value: lattice }`) the former
+    /// `HashMap<SsaValue, ConstLattice>` produced, keeping persisted
+    /// `CalleeSsaBody.opt` DB blobs byte-compatible.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (v, cl) in self.iter() {
+            map.serialize_entry(&v, cl)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ConstValues {
+    /// Accepts the map form written by any prior binary (`HashMap` or this
+    /// newtype), rebuilding the dense `Vec` from the `(SsaValue, ConstLattice)`
+    /// entries.  Gaps (absent indices) fill with `Top`, which every consumer
+    /// treats identically to an absent key.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct MapVisitor;
+        impl<'de> serde::de::Visitor<'de> for MapVisitor {
+            type Value = ConstValues;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a map of SSA value to constant lattice")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut access: M,
+            ) -> Result<ConstValues, M::Error> {
+                let mut pairs: Vec<(SsaValue, ConstLattice)> = Vec::new();
+                if let Some(hint) = access.size_hint() {
+                    pairs.reserve(hint);
+                }
+                while let Some((k, v)) = access.next_entry::<SsaValue, ConstLattice>()? {
+                    pairs.push((k, v));
+                }
+                Ok(pairs.into_iter().collect())
+            }
+        }
+        deserializer.deserialize_map(MapVisitor)
+    }
+}
+
 /// Result of constant propagation analysis.
 pub struct ConstPropResult {
     /// Per-SSA-value constant lattice.
-    pub values: HashMap<SsaValue, ConstLattice>,
+    pub values: ConstValues,
     /// Blocks that are statically unreachable.
     pub unreachable_blocks: HashSet<BlockId>,
 }
@@ -161,9 +291,8 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
             // Evaluate phis
             for phi in &block.phis {
                 if let SsaOp::Phi(operands) = &phi.op {
-                    let old = lookup(&values, phi.value);
                     let new_val = eval_phi(operands, &values, &executable_preds, block_id);
-                    if new_val != old {
+                    if changed_from(&values, phi.value, &new_val) {
                         store(&mut values, phi.value, new_val);
                         ssa_worklist.push_back(phi.value);
                         changed = true;
@@ -173,9 +302,8 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
 
             // Evaluate body instructions
             for inst in &block.body {
-                let old = lookup(&values, inst.value);
                 let new_val = eval_inst(inst, &values);
-                if new_val != old {
+                if changed_from(&values, inst.value, &new_val) {
                     store(&mut values, inst.value, new_val);
                     ssa_worklist.push_back(inst.value);
                     changed = true;
@@ -199,11 +327,14 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
             if val_idx >= use_sites.len() {
                 continue;
             }
-            // Snapshot the use-list so we can borrow `values` mutably
-            // while iterating block ids.  The list is short (typically
-            // 1–3 blocks) so the clone is cheap.
-            let use_blocks = use_sites[val_idx].clone();
-            for block_id in use_blocks {
+            // Iterate the use-list by reference. `use_sites` is built once
+            // before the worklist and never mutated inside it, and it is a
+            // distinct allocation from `values` / `executable_*` / the
+            // worklists, so the borrow checker allows borrowing the block-id
+            // list immutably while `values` is mutated — the previous per-pop
+            // `SmallVec` clone (a heap allocation whenever a value is used in
+            // >2 blocks) was spurious.
+            for &block_id in &use_sites[val_idx] {
                 if !executable_blocks[block_id.0 as usize] {
                     continue;
                 }
@@ -214,9 +345,8 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
                     if let SsaOp::Phi(operands) = &phi.op
                         && operands.iter().any(|(_, v)| *v == val)
                     {
-                        let old = lookup(&values, phi.value);
                         let new_val = eval_phi(operands, &values, &executable_preds, block_id);
-                        if new_val != old {
+                        if changed_from(&values, phi.value, &new_val) {
                             store(&mut values, phi.value, new_val);
                             ssa_worklist.push_back(phi.value);
                             changed = true;
@@ -227,9 +357,8 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
                 // Re-evaluate body instructions using this value
                 for inst in &block.body {
                     if inst_has_use(inst, val) {
-                        let old = lookup(&values, inst.value);
                         let new_val = eval_inst(inst, &values);
-                        if new_val != old {
+                        if changed_from(&values, inst.value, &new_val) {
                             store(&mut values, inst.value, new_val);
                             ssa_worklist.push_back(inst.value);
                             changed = true;
@@ -254,13 +383,25 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
         }
     }
 
-    // Convert dense storage to the public `HashMap`-shaped result. Walks
-    // the value vector exactly once. The unreachable-blocks set is small
-    // (often empty), so building it from a linear scan is fine.
-    let mut out_values: HashMap<SsaValue, ConstLattice> = HashMap::with_capacity(num_values);
-    for (i, v) in values.into_iter().enumerate() {
-        out_values.insert(SsaValue(i as u32), v);
+    // A/B escape hatch (benchmark-only, off in production): reproduce the
+    // pre-2026-07-15 per-value `HashMap<SsaValue, ConstLattice>` build so a
+    // single binary can measure the result-materialisation delta via
+    // `NYX_CONST_VALUES_LEGACY_BUILD=1`.  The map is thrown away (`black_box`
+    // keeps the compiler from eliding the inserts); the real dense result is
+    // still returned, so only the extra build cost is measured.
+    if legacy_result_build_enabled() {
+        let mut m: HashMap<SsaValue, ConstLattice> = HashMap::with_capacity(values.len());
+        for (i, v) in values.iter().enumerate() {
+            m.insert(SsaValue(i as u32), v.clone());
+        }
+        std::hint::black_box(&m);
     }
+
+    // Move the dense lattice into the public result with zero conversion —
+    // no per-value hashed insert (the old `HashMap<SsaValue, ConstLattice>`
+    // build was `O(num_values)` SipHash inserts per body, discarded next
+    // scan).  The unreachable-blocks set is small (often empty), so building
+    // it from a linear scan is fine.
     let mut unreachable_blocks: HashSet<BlockId> = HashSet::new();
     for (i, exec) in executable_blocks.iter().enumerate() {
         if !exec {
@@ -269,9 +410,19 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
     }
 
     ConstPropResult {
-        values: out_values,
+        values: ConstValues(values),
         unreachable_blocks,
     }
+}
+
+/// Benchmark A/B toggle: when `NYX_CONST_VALUES_LEGACY_BUILD=1`, `const_propagate`
+/// reproduces the old per-body `HashMap` result build to isolate the
+/// dense-`Vec`-result win on a single binary.  Read once (env is process-stable).
+#[inline]
+fn legacy_result_build_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NYX_CONST_VALUES_LEGACY_BUILD").is_some())
 }
 
 /// Dense lattice lookup. Returns Top for out-of-range values to match the
@@ -282,6 +433,31 @@ fn lookup(values: &[ConstLattice], v: SsaValue) -> ConstLattice {
         .get(v.0 as usize)
         .cloned()
         .unwrap_or(ConstLattice::Top)
+}
+
+/// Borrowing variant of [`lookup`]: returns a reference to the stored
+/// lattice (or a shared `Top` sentinel for out-of-range values) so phi
+/// meet, branch-condition resolution, and change-detection avoid cloning
+/// `ConstLattice::Str` heap data on the hot fixed-point path.
+#[inline]
+fn lookup_ref(values: &[ConstLattice], v: SsaValue) -> &ConstLattice {
+    const TOP: ConstLattice = ConstLattice::Top;
+    values.get(v.0 as usize).unwrap_or(&TOP)
+}
+
+/// True iff `new_val` differs from the value currently stored for `v`,
+/// mirroring `lookup(values, v) != *new_val` WITHOUT cloning the stored
+/// lattice. Out-of-range slots read as `Top` (matching `lookup`'s
+/// `unwrap_or(Top)`), and a store to an out-of-range slot is a no-op either
+/// way, so this is bit-identical to the prior `let old = lookup(..); new !=
+/// old` shape while eliminating a per-instruction clone (a heap allocation
+/// for `Str` values) on every worklist re-evaluation.
+#[inline]
+fn changed_from(values: &[ConstLattice], v: SsaValue, new_val: &ConstLattice) -> bool {
+    match values.get(v.0 as usize) {
+        Some(cur) => cur != new_val,
+        None => *new_val != ConstLattice::Top,
+    }
 }
 
 /// Dense lattice store. Out-of-range writes are silently dropped to
@@ -313,8 +489,10 @@ fn eval_phi(
         if !preds.contains(pred_block) {
             continue; // skip non-executable predecessors
         }
-        let operand_val = lookup(values, *val);
-        result = result.meet(&operand_val);
+        // Borrow the operand's stored lattice instead of cloning it; `meet`
+        // only reads `&other`, so a phi over `Str` operands no longer heap-
+        // allocates one clone per incoming edge.
+        result = result.meet(lookup_ref(values, *val));
     }
     result
 }
@@ -451,8 +629,7 @@ fn process_terminator(
             let cond_val = body
                 .cfg_node_map
                 .get(cond)
-                .map(|v| lookup(values, *v))
-                .and_then(|c| c.as_bool());
+                .and_then(|v| lookup_ref(values, *v).as_bool());
 
             match cond_val {
                 Some(true) => {
@@ -682,7 +859,7 @@ fn resolve_const_var(body: &SsaBody, var_name: &str, block: BlockId) -> Option<S
 pub fn fold_constant_branches(
     body: &mut SsaBody,
     cfg: &crate::cfg::Cfg,
-    const_values: &HashMap<SsaValue, ConstLattice>,
+    const_values: &ConstValues,
 ) -> usize {
     use crate::ssa::ir::Terminator;
 
@@ -819,7 +996,7 @@ pub fn fold_constant_branches(
 /// Only tracks known HTTP-related modules to avoid false positives.
 pub fn collect_module_aliases(
     body: &SsaBody,
-    const_values: &HashMap<SsaValue, ConstLattice>,
+    const_values: &ConstValues,
 ) -> HashMap<SsaValue, smallvec::SmallVec<[String; 2]>> {
     use smallvec::SmallVec;
 
@@ -911,6 +1088,79 @@ mod tests {
     use petgraph::graph::NodeIndex;
     use smallvec::SmallVec;
 
+    /// The dense `ConstValues` result must be behaviourally identical to the
+    /// old `HashMap<SsaValue, ConstLattice>` it replaced: `get` matches
+    /// `HashMap::get` over the `0..len` key set, `iter` visits every slot in
+    /// index order, the `FromIterator` test builder gap-fills with `Top`, and
+    /// the custom serde emits/consumes the same `{ ssa_value: lattice }` map
+    /// form so persisted `CalleeSsaBody.opt` DB blobs stay wire-compatible
+    /// (checked through both `serde_json` and the `rmp_serde` codec used by
+    /// the summary store, and by decoding a blob written from the legacy
+    /// `HashMap` shape).
+    #[test]
+    fn const_values_positional_semantics_and_wire_compat() {
+        let cv: ConstValues = [
+            (SsaValue(0), ConstLattice::Int(42)),
+            (SsaValue(2), ConstLattice::Str("s".into())),
+        ]
+        .into_iter()
+        .collect();
+
+        // Dense range = max index + 1; gap (index 1) filled with Top.
+        assert_eq!(cv.len(), 3);
+        assert!(!cv.is_empty());
+        assert_eq!(cv.get(&SsaValue(0)), Some(&ConstLattice::Int(42)));
+        assert_eq!(cv.get(&SsaValue(1)), Some(&ConstLattice::Top));
+        assert_eq!(cv.get(&SsaValue(2)), Some(&ConstLattice::Str("s".into())));
+        // Out-of-range yields None, matching HashMap::get over the key set.
+        assert_eq!(cv.get(&SsaValue(3)), None);
+
+        // iter visits every slot in ascending index order.
+        let collected: Vec<(SsaValue, ConstLattice)> =
+            cv.iter().map(|(v, cl)| (v, cl.clone())).collect();
+        assert_eq!(
+            collected,
+            vec![
+                (SsaValue(0), ConstLattice::Int(42)),
+                (SsaValue(1), ConstLattice::Top),
+                (SsaValue(2), ConstLattice::Str("s".into())),
+            ]
+        );
+
+        // serde_json round-trip preserves every entry.
+        let json = serde_json::to_string(&cv).unwrap();
+        let back: ConstValues = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.len(), 3);
+        assert_eq!(back.get(&SsaValue(0)), Some(&ConstLattice::Int(42)));
+        assert_eq!(back.get(&SsaValue(2)), Some(&ConstLattice::Str("s".into())));
+
+        // rmp_serde (the CalleeSsaBody blob codec) round-trip.
+        let mp = rmp_serde::to_vec_named(&cv).unwrap();
+        let back_mp: ConstValues = rmp_serde::from_slice(&mp).unwrap();
+        assert_eq!(back_mp.get(&SsaValue(0)), Some(&ConstLattice::Int(42)));
+        assert_eq!(
+            back_mp.get(&SsaValue(2)),
+            Some(&ConstLattice::Str("s".into()))
+        );
+
+        // A blob written by the LEGACY `HashMap<SsaValue, ConstLattice>` shape
+        // must decode into an equivalent `ConstValues` (map wire form).
+        let legacy: HashMap<SsaValue, ConstLattice> = [
+            (SsaValue(0), ConstLattice::Int(42)),
+            (SsaValue(1), ConstLattice::Top),
+            (SsaValue(2), ConstLattice::Str("s".into())),
+        ]
+        .into_iter()
+        .collect();
+        let legacy_json = serde_json::to_string(&legacy).unwrap();
+        let from_legacy: ConstValues = serde_json::from_str(&legacy_json).unwrap();
+        assert_eq!(from_legacy.get(&SsaValue(0)), Some(&ConstLattice::Int(42)));
+        assert_eq!(
+            from_legacy.get(&SsaValue(2)),
+            Some(&ConstLattice::Str("s".into()))
+        );
+    }
+
     fn make_body(blocks: Vec<SsaBlock>, value_defs: Vec<ValueDef>) -> SsaBody {
         let cfg_node_map = value_defs
             .iter()
@@ -924,10 +1174,10 @@ mod tests {
             cfg_node_map,
             exception_edges: Vec::new(),
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         }
     }
 

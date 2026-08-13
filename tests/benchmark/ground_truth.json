@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 567
+    "corpus_size": 674
   },
   "cases": [
     {
@@ -1562,6 +1562,45 @@
       "notes": "Path traversal via FileInputStream with user-controlled path"
     },
     {
+      "case_id": "java-path_traversal-002",
+      "file": "java/path_traversal/AssertDoesNotContainInsufficient.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "state-resource-leak"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          18,
+          18
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          16,
+          16
+        ]
+      ],
+      "tags": [
+        "assert-guard",
+        "path-traversal",
+        "cve-2021-21234"
+      ],
+      "disabled": false,
+      "notes": "Insufficient blocklist guard Assert.doesNotContain(name, '..') is not a prefix-containment confinement; the interprocedural read must still fire. Recall counterpart to java-safe-assertguard-confinement-001 (CVE-2021-21234)."
+    },
+    {
       "case_id": "java-deser-001",
       "file": "java/deser/DeserOis.java",
       "language": "java",
@@ -1699,6 +1738,33 @@
       ],
       "disabled": false,
       "notes": "Constant string in executeQuery(); no user-controlled data"
+    },
+    {
+      "case_id": "java-safe-assertguard-confinement-001",
+      "file": "java/safe/SafeAssertStartsWithConfinement.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "assert-guard",
+        "path-confinement",
+        "cve-2021-21234"
+      ],
+      "disabled": false,
+      "notes": "Assert.isTrue(canonical.startsWith(base)) getCanonicalPath containment guard confines the path arg for FILE_IO; the guarded interprocedural read is safe. Precision pin for CVE-2021-21234 (asserts_path_confined_params)."
     },
     {
       "case_id": "java-safe-002",
@@ -3159,6 +3225,38 @@
       "notes": "Code injection via assert() with string argument (PHP < 8.0 evaluates as code)"
     },
     {
+      "case_id": "php-code_injection-003",
+      "file": "php/code_injection/code_injection_assert_string_literal.php",
+      "language": "php",
+      "is_vulnerable": true,
+      "vuln_class": "code_injection",
+      "cwe": "CWE-94",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "php.code_exec.assert_string"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "assert",
+        "code-injection",
+        "real-repo-precision-2026-06-12"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for the assert() first-argument anchor: a string FIRST argument is still evaluated as code and must keep firing php.code_exec.assert_string."
+    },
+    {
       "case_id": "php-safe-001",
       "file": "php/safe/safe_constant.php",
       "language": "php",
@@ -3997,6 +4095,35 @@
       "notes": "Negative regression for Ruby =open exact-matcher: File.open with a hardcoded path must not fire the bare-open CMDI rule (or any taint rule); pairs with ruby-cmdi-003"
     },
     {
+      "case_id": "ruby-safe-010",
+      "file": "ruby/safe/safe_eval_block_dsl.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rb.code_exec.instance_eval",
+        "rb.code_exec.class_eval"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "instance_eval",
+        "class_eval",
+        "block-dsl",
+        "real-repo-precision-2026-07-13"
+      ],
+      "disabled": false,
+      "notes": "Block-form instance_eval/class_eval metaprogramming DSL (diaspora self.included mixins); statically-authored code with no injection surface, must not fire the code_exec pattern rules; pairs with ruby-code_injection-002"
+    },
+    {
       "case_id": "ruby-ssrf-safe-001",
       "file": "ruby/ssrf/safe_ssrf_hardcoded.rb",
       "language": "ruby",
@@ -4173,6 +4300,41 @@
       ],
       "disabled": false,
       "notes": "Code injection via eval() with user-controlled expression"
+    },
+    {
+      "case_id": "ruby-code_injection-002",
+      "file": "ruby/code_injection/eval_string_dynamic.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "code_injection",
+      "cwe": "CWE-94",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rb.code_exec.instance_eval"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "instance_eval",
+        "string-eval",
+        "code-injection",
+        "real-repo-precision-2026-07-13"
+      ],
+      "disabled": false,
+      "notes": "instance_eval with a user-controlled STRING argument is arbitrary code execution (recall guard for the Layer I block-vs-string recogniser); the block form is the safe counterpart in ruby-safe-010"
     },
     {
       "case_id": "ruby-deser-001",
@@ -4393,6 +4555,77 @@
       ],
       "disabled": false,
       "notes": "SQL injection via ActiveRecord execute() with string concatenation"
+    },
+    {
+      "case_id": "ruby-sqli-pg-raw-exec-001",
+      "file": "ruby/sqli/sqli_pg_raw_exec.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rb.cmdi.system_interp"
+      ],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "sqli",
+        "pg",
+        "raw-connection",
+        "type-aware",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "Raw pg gem: PG::Connection.new is typed DatabaseConnection so conn.exec(interpolated SQL) resolves to the DatabaseConnection.exec SQL_QUERY sink, not Kernel#exec shell. Guards against cmdi misclassification. Motivated by CVE-2026-42087 (engine fix; AGPL upstream not fixtured)."
+    },
+    {
+      "case_id": "ruby-safe-pg-exec-params-001",
+      "file": "ruby/safe/safe_pg_exec_params.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "sqli",
+        "pg",
+        "exec_params",
+        "parameterized",
+        "regression",
+        "no-source"
+      ],
+      "disabled": false,
+      "notes": "Precision guard: parameterized exec_params($1) is the safe pg API and must not fire a SQL injection finding. Pairs with ruby-sqli-pg-raw-exec-001 (CVE-2026-42087 patched form)."
     },
     {
       "case_id": "ruby-ssrf-002",
@@ -5497,6 +5730,110 @@
       ],
       "disabled": false,
       "notes": "Direct flow from getenv to open()"
+    },
+    {
+      "case_id": "c-path-003",
+      "file": "c/path_traversal/recv_strlcat_fopen.c",
+      "language": "c",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          16,
+          16
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          14,
+          14
+        ]
+      ],
+      "tags": [
+        "strlcat",
+        "arg-propagation",
+        "uftpd-shape"
+      ],
+      "disabled": false,
+      "notes": "recv() -> strlcat() path assembly -> fopen(); pins C string-builder taint passthrough (ARG_PROPAGATIONS)"
+    },
+    {
+      "case_id": "c-path-004",
+      "file": "c/path_traversal/strncmp_unrelated_var.c",
+      "language": "c",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          19,
+          19
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          15,
+          15
+        ]
+      ],
+      "tags": [
+        "strncmp",
+        "confinement-recall-guard"
+      ],
+      "disabled": false,
+      "notes": "strncmp prefix check on an unrelated copy must not confine the tainted path; recall guard for PathPrefixConfined value-scoping"
+    },
+    {
+      "case_id": "c-safe-019",
+      "file": "c/safe/safe_strncmp_prefix_confined.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "strncmp",
+        "path-prefix-confined"
+      ],
+      "disabled": false,
+      "notes": "intra-function strncmp(path, prefix, strlen(prefix)) confines the path before fopen(); pins PathPrefixConfined FILE_IO clear"
     },
     {
       "case_id": "c-fmt-001",
@@ -7960,7 +8297,7 @@
       "notes": "Axum Path<String> \u2192 Html(format!(...)) \u2014 requires framework rules (Cargo.toml present)"
     },
     {
-      "case_id": "rs-safe-009",
+      "case_id": "rs-safe-013",
       "file": "rust/safe/safe_match_guard.rs",
       "language": "rust",
       "is_vulnerable": false,
@@ -10140,6 +10477,200 @@
       "notes": "CVE-2026-42353 patched counterpart: utils.isSafeIdentifier denylist applied via languages.filter(isSafeIdentifier) before forwarding to backend. Enabled 2026-05-04: array-method validator-callback narrowing recognises `<arr>.filter(<is*/has*Valid|isSafe>)` shapes and strips the receiver-derived caps from the call result."
     },
     {
+      "case_id": "cve-js-2026-42259-vulnerable",
+      "file": "cve_corpus/javascript/CVE-2026-42259/vulnerable.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "open_redirect",
+      "cwe": "CWE-601",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          39,
+          39
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "saltcorn",
+        "open_redirect",
+        "express",
+        "redirect"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-42259 / GHSA-f3g8-9xv5-77gv: Saltcorn login handler redirects to a user-supplied `dest` gated only by the weak `is_relative_url` (blocks `://`/`//` substrings but not backslash-normalised `/\\evil.com`), reaching res.redirect(decodeURIComponent(req.body.dest)) -> open redirect. MIT."
+    },
+    {
+      "case_id": "cve-js-2026-42259-patched",
+      "file": "cve_corpus/javascript/CVE-2026-42259/patched.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-open-redirect",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "saltcorn",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-42259 patched counterpart: `normalize_relative_url` normalises backslashes then rejects protocol-relative (`//`) and any `scheme:` URL, returning null on reject; `res.redirect(dest)` runs only when the confined result is non-null. Silenced by behaviour-based open-redirect normalizer recognition (SsaFuncSummary.sanitizes_open_redirect_return)."
+    },
+    {
+      "case_id": "cve-js-2026-41478-vulnerable",
+      "file": "cve_corpus/javascript/CVE-2026-41478/vulnerable.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "saltcorn",
+        "sqli",
+        "express",
+        "interprocedural"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-41478: Saltcorn POST /sync/load_changes reads req.body.syncInfos and, per Object.entries entry, forwards syncInfo to getSyncRows() which interpolates syncInfo.maxLoadedId raw into a db.query() SQL string (CVSS 9.9). Interprocedural + Object.entries + object-field recall path. MIT"
+    },
+    {
+      "case_id": "cve-js-2026-41478-patched",
+      "file": "cve_corpus/javascript/CVE-2026-41478/patched.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "saltcorn",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-41478 patched counterpart: getSyncRows casts syncInfo.maxLoadedId via Number() + Number.isInteger guard and parameterizes it with a $1 placeholder + params array; the bound value flows into db.query arg1 (non-payload position, payload_args=[0]) and arg0 is a constant SQL template, so both taint-unsanitised-flow and cfg-unguarded-sink stay silent."
+    },
+    {
+      "case_id": "js-open_redirect-001",
+      "file": "javascript/open_redirect/redirect_weak_relative_check.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "open_redirect",
+      "cwe": "CWE-601",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          18,
+          18
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          16,
+          16
+        ]
+      ],
+      "tags": [
+        "open_redirect",
+        "weak-validator",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "Regression guard for CVE-2026-42259: a redirect gated only by the weak is_relative_url (.includes substring form) must still fire; the weak form is NOT a recognised relative-URL confiner (no backslash normalisation, no `//`-prefix / scheme rejection)."
+    },
+    {
+      "case_id": "js-safe-023",
+      "file": "javascript/safe/safe_redirect_normalize_confiner.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-open-redirect",
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "open_redirect",
+        "confiner",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "Precision guard for CVE-2026-42259: a redirect through the behaviour-recognised normalize_relative_url confiner (rejects `//` and `scheme:`) must be silent on both the taint and cfg-unguarded-sink layers."
+    },
+    {
       "case_id": "cve-ts-2023-26159-vulnerable",
       "file": "cve_corpus/typescript/CVE-2023-26159/vulnerable.ts",
       "language": "typescript",
@@ -10515,7 +11046,7 @@
         "positive"
       ],
       "disabled": false,
-      "notes": "CVE-2024-23334: aiohttp StaticResource symlink-bypass — relative_to(self._directory) check gated to the non-follow_symlinks arm; FileResponse(filepath) reachable from request.match_info on follow_symlinks=True. Apache-2.0"
+      "notes": "CVE-2024-23334: aiohttp StaticResource symlink-bypass \u2014 relative_to(self._directory) check gated to the non-follow_symlinks arm; FileResponse(filepath) reachable from request.match_info on follow_symlinks=True. Apache-2.0"
     },
     {
       "case_id": "cve-py-2024-23334-patched",
@@ -10583,7 +11114,7 @@
         "positive"
       ],
       "disabled": false,
-      "notes": "CVE-2023-6568: mlflow auth create_user reflected attacker-controlled Content-Type request header into make_response f-string — reflected XSS. Apache-2.0"
+      "notes": "CVE-2023-6568: mlflow auth create_user reflected attacker-controlled Content-Type request header into make_response f-string \u2014 reflected XSS. Apache-2.0"
     },
     {
       "case_id": "cve-py-2023-6568-patched",
@@ -10879,6 +11410,72 @@
       ],
       "disabled": false,
       "notes": "CVE-2026-33486 patched counterpart: isSafeRemoteUrl early-return validates scheme/host before fopen; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-php-2026-46364-vulnerable",
+      "file": "cve_corpus/php/CVE-2026-46364/vulnerable.php",
+      "language": "php",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          68,
+          68
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          52,
+          54
+        ]
+      ],
+      "tags": [
+        "cve",
+        "phpmyfaq",
+        "sqli"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-46364: phpMyFAQ BuiltinCaptcha::garbageCollector interpolates the attacker-controlled user-agent header and client IP into a DELETE via sprintf with no escaping before $db->query(). MPL-2.0"
+    },
+    {
+      "case_id": "cve-php-2026-46364-patched",
+      "file": "cve_corpus/php/CVE-2026-46364/patched.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "phpmyfaq",
+        "patched",
+        "negative"
+      ],
+      "disabled": true,
+      "disabled_reason": "Patched-precision false positive on the default (field-INsensitive) taint model. The fix routes $this->userAgent / $this->ip through $db->escape() before the DELETE, but a tainted write to ANY object field (`$this->ip = <source>`) taints the WHOLE `$this` scalar, and every subsequent `$this->...` reference (the escape/query receiver chain AND the sprintf `$this->configuration->getLanguage()` arg) reads that polluted base, so the escaped value is bypassed and `taint-unsanitised-flow` fires on the base object. Root cause: per-field cells are gated behind NYX_POINTER_ANALYSIS (off by default), so field writes fold into the base object scalar. A clean fix (base-write field-sensitivity: member_access_expression dotted defines + field-write base rebuild + FieldProj field-precise reads) was prototyped this session and DID silence the patched fixture, but zeroing the field-write base scalar is UNSOUND for whole-object reads (`res.send(obj)` where a field is tainted must still fire \u2014 regression on ssa_field_base_sink_no_suppression) and the sound alternative needs default-mode per-field cells that whole-object reads aggregate while field reads project \u2014 a multi-day core-model change with broad cross-language regression surface. Tracked in nyx-dev-tools/CVE_DEFERRED.md. MPL-2.0",
+      "notes": "CVE-2026-46364 patched counterpart: escapeQueryValue routes the user-agent header and client IP through $db->escape() before interpolation. MPL-2.0"
     },
     {
       "case_id": "cve-rb-2013-0156-vulnerable",
@@ -11880,6 +12477,75 @@
       ],
       "disabled": false,
       "notes": "CVE-2017-1000117 patched counterpart: dash-prefix gate added before argv assembly; regression guard that Nyx does not refire on the fix once the deferral lands"
+    },
+    {
+      "case_id": "cve-c-2020-5221-vulnerable",
+      "file": "cve_corpus/c/CVE-2020-5221/vulnerable.c",
+      "language": "c",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          84,
+          106
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          99,
+          104
+        ]
+      ],
+      "tags": [
+        "cve",
+        "uftpd",
+        "path_traversal",
+        "directory-traversal"
+      ],
+      "disabled": false,
+      "notes": "CVE-2020-5221 (uftpd < 2.11 directory traversal): an FTP RETR/STOR argument read via recv() reaches compose_path(), which assembles the path with strlcpy/strlcat, canonicalises it with realpath(), and returns it to fopen(). Recall depends on taint propagating through the C string-builder out-params (strlcpy/strlcat/realpath), landed this session via labels/c.rs ARG_PROPAGATIONS. ISC"
+    },
+    {
+      "case_id": "cve-c-2020-5221-patched",
+      "file": "cve_corpus/c/CVE-2020-5221/patched.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "uftpd",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2020-5221 patched counterpart (uftpd, ISC): confinement check moved from the unresolved `dir` onto the realpath()-resolved `rpath`. Now silent via interprocedural path-return confinement (SsaFuncSummary.confines_path_return + detect_path_confined_return + propagate_path_return_confinement fixpoint + call-result FILE_IO strip + confined-sink prune)."
     },
     {
       "case_id": "cve-cpp-2019-13132-vulnerable",
@@ -13101,6 +13767,118 @@
       "notes": "CVE-2024-32884 patched counterpart: sanitize_shell rejects host/user components beginning with `-` before they reach ssh's argv (mirrors gix-url::host_argument_safe). Regression guard."
     },
     {
+      "case_id": "cve-rs-2022-0072-vulnerable",
+      "file": "cve_corpus/rust/RUSTSEC-2022-0072/vulnerable.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "open_redirect",
+      "cwe": "CWE-601",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "cve",
+        "rustsec",
+        "hyper-staticfile",
+        "open-redirect",
+        "location-header"
+      ],
+      "disabled": false,
+      "notes": "RUSTSEC-2022-0072 (GHSA-5wvv-q5fv-2388): hyper-staticfile built the directory-redirect Location header from the raw request path (self.path) with only a trailing slash appended, so a `//evil.com/` request path became a scheme-relative open redirect. Detected via the chained-builder gated Location sink new().status().header(LOCATION, target).body(). MIT."
+    },
+    {
+      "case_id": "cve-rs-2022-0072-patched",
+      "file": "cve_corpus/rust/RUSTSEC-2022-0072/patched.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "rustsec",
+        "hyper-staticfile",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "RUSTSEC-2022-0072 patched: redirect target rebuilt from the sanitized filesystem path (RequestedPath::resolve) rather than the raw request path, so it can't be scheme-relative. Regression guard. Recognised via RequestedPath::resolve OPEN_REDIRECT sanitizer."
+    },
+    {
+      "case_id": "rs-open_redirect-001",
+      "file": "rust/open_redirect/chained_builder_location.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "open_redirect",
+      "cwe": "CWE-601",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "chained-builder",
+        "location-header",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "Chained-builder middle-gate: gated header(\"Location\", ..) sink in the middle of new().status().header().finish(). Pins find_chained_gated_sink_call (RUSTSEC-2022-0072)."
+    },
+    {
+      "case_id": "rs-safe-020",
+      "file": "rust/open_redirect/safe_sanitized_location.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-601",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "sanitized",
+        "relative-url",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "Same chained Location sink but URL routed through ensure_relative_url sanitizer. Precision guard: chained-builder rebinding must not over-fire on sanitized payload."
+    },
+    {
       "case_id": "cve-rs-2025-53549-vulnerable",
       "file": "cve_corpus/rust/CVE-2025-53549/vulnerable.rs",
       "language": "rust",
@@ -13842,7 +14620,34 @@
         "magic-method"
       ],
       "disabled": false,
-      "notes": "Serializable::unserialize($input) magic-method body — the legacy PHP Serializable interface contract (deprecated since PHP 8.1). PHP itself drives invocation; the body's \\unserialize($x) call is part of the deserialization machinery and cannot be removed without breaking the interface. Distilled from joomla/administrator/components/com_finder/src/Indexer/Result.php:488 + libraries/src/Input/{Cli,Input}.php."
+      "notes": "Serializable::unserialize($input) magic-method body \u2014 the legacy PHP Serializable interface contract (deprecated since PHP 8.1). PHP itself drives invocation; the body's \\unserialize($x) call is part of the deserialization machinery and cannot be removed without breaking the interface. Distilled from joomla/administrator/components/com_finder/src/Indexer/Result.php:488 + libraries/src/Input/{Cli,Input}.php."
+    },
+    {
+      "case_id": "php-safe-021",
+      "file": "php/safe/safe_assert_description_message.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-94",
+      "provenance": "real-repo-precision-2026-06-12",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "php.code_exec.assert_string"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "real-repo-precision-2026-06-12",
+        "assert",
+        "code-injection"
+      ],
+      "disabled": false,
+      "notes": "PHP 7.2+ assert(bool_expr, \"description\") \u2014 the second argument is a diagnostic message thrown with AssertionError, never evaluated as code. The first-argument anchor must suppress php.code_exec.assert_string on the description string. Distilled from glpi tests/ (atoum/PHPUnit) e.g. tests/src/GLPITestCase.php:131, tests/functional/SLMTest.php:2217, tests/src/Glpi/Auth/HelpersTrait.php:122."
     },
     {
       "case_id": "php-deser-003",
@@ -14037,6 +14842,64 @@
       ],
       "disabled": false,
       "notes": "curl/lib/dynhds.c::entry_new shape \u2014 sub-buffer alias `e->name = (char*)e + sizeof(*e)` and local-into-field ownership transfer `m->buf = ptr`.  Field-LHS in apply_assignment moves the RHS to MOVED but does not seed the field as a separately-tracked resource.  Engine fix: src/state/transfer.rs::apply_assignment SAFE-FOR-FIELD-LHS gate.  Closes the dominant `state-resource-leak` FP cluster on curl/openssl/postgres/git (~165 findings across 6 repos)."
+    },
+    {
+      "case_id": "c-safe-realrepo-025",
+      "file": "c/safe/safe_struct_field_call_alloc.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo-precision-2026-07-15",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-resource-leak",
+        "state-resource-leak-possible",
+        "cfg-resource-leak"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "resource-lifecycle",
+        "negative",
+        "real-repo-precision-2026-07-15"
+      ],
+      "disabled": false,
+      "notes": "redis/hiredis net.c::redisContextUpdateConnectTimeout (c->connect_timeout = malloc(...)) + lua strbuf.c (s->buf = malloc(size)) shape.  Acquire call assigned DIRECTLY into a struct-field LHS transfers ownership to the containing struct (freed by the paired free_*() / in the caller for a param receiver).  Engine fix: src/state/transfer.rs::apply_call SAFE-FOR-FIELD-LHS gate (acquire_into_field_transfers_ownership), the RHS-is-a-call sibling of the apply_assignment gate (c-safe-realrepo-019).  Closes the dominant state-resource-leak FP cluster on redis/git (~165 findings)."
+    },
+    {
+      "case_id": "c-safe-realrepo-026",
+      "file": "c/safe/safe_struct_field_escaping_containers.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo-precision-2026-07-15",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-resource-leak",
+        "state-resource-leak-possible",
+        "cfg-resource-leak"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "resource-lifecycle",
+        "negative",
+        "real-repo-precision-2026-07-15"
+      ],
+      "disabled": false,
+      "notes": "Container escape analysis precision guard.  The struct-field-acquire ownership-transfer suppression is lifted ONLY for a provably non-escaping local value struct; an escaping container (parameter arrow b->buf, address-taken &b passed to box_register, returned constructor box_new) stays suppressed.  Engine: src/state/transfer.rs::nonescaping_local_field_containers + twin src/cfg_analysis::resources.rs.  Resolves the session-0049 deferred deep fix; sibling of c-safe-realrepo-025."
     },
     {
       "case_id": "c-vuln-realrepo-019",
@@ -14475,7 +15338,7 @@
         "real-repo-precision-2026-05-03"
       ],
       "disabled": false,
-      "notes": "Jest-style nested arrow callbacks (`describe('…', () => { it('…', async () => { const body = await res.json(); … }) })`) bubble inner-scope free vars (`body`, `userId`, `server.post`) up to the outer arrow as synthetic Params.  Before the fix, JS/TS auto-seed treated every Param whose var_name matched a handler-name (`userId`) as a real formal of the outer arrow and seeded it as `Source(UserInput)`, producing 934 phantom `taint-unsanitised-flow` findings on outline alone.  Engine fix: `lower_to_ssa_with_params` now signals `with_params=true` to `lower_to_ssa_inner`, which makes the synthetic-externals classifier always exclude formals (even when the formal list is empty, e.g. arrow `() => {…}`) — bubbled-up free vars become synthetic and the auto-seed pass skips them.  Distilled from /Users/elipeter/oss/outline/server/routes/api/comments/comments.test.ts."
+      "notes": "Jest-style nested arrow callbacks (`describe('\u2026', () => { it('\u2026', async () => { const body = await res.json(); \u2026 }) })`) bubble inner-scope free vars (`body`, `userId`, `server.post`) up to the outer arrow as synthetic Params.  Before the fix, JS/TS auto-seed treated every Param whose var_name matched a handler-name (`userId`) as a real formal of the outer arrow and seeded it as `Source(UserInput)`, producing 934 phantom `taint-unsanitised-flow` findings on outline alone.  Engine fix: `lower_to_ssa_with_params` now signals `with_params=true` to `lower_to_ssa_inner`, which makes the synthetic-externals classifier always exclude formals (even when the formal list is empty, e.g. arrow `() => {\u2026}`) \u2014 bubbled-up free vars become synthetic and the auto-seed pass skips them.  Distilled from /Users/elipeter/oss/outline/server/routes/api/comments/comments.test.ts."
     },
     {
       "case_id": "ts-sqli-realrepo-arrow-002",
@@ -14496,8 +15359,18 @@
       "forbidden_rule_ids": [],
       "expected_severity": null,
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
-      "expected_source_lines": [[7, 7]],
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
       "tags": [
         "sqli",
         "arrow-handler",
@@ -14505,7 +15378,7 @@
         "real-repo-precision-2026-05-03"
       ],
       "disabled": false,
-      "notes": "Arrow with REAL handler-named formal (`userId`) MUST still auto-seed and trigger taint flow into `db.exec(\"… ${userId}\")`.  Pins the auto-seed positive path so the FP fix in ts-safe-022 does not over-suppress real handlers."
+      "notes": "Arrow with REAL handler-named formal (`userId`) MUST still auto-seed and trigger taint flow into `db.exec(\"\u2026 ${userId}\")`.  Pins the auto-seed positive path so the FP fix in ts-safe-022 does not over-suppress real handlers."
     },
     {
       "case_id": "js-safe-jest-callback-001",
@@ -15568,6 +16441,35 @@
       ],
       "disabled": false,
       "notes": "Recall guard for the inner-call-arg / member-LHS fixes.  Bare-identifier `f := os.OpenFile(...)` with no `f.Close()` anywhere must still fire the resource-leak rule."
+    },
+    {
+      "case_id": "go-safe-realrepo-020",
+      "file": "go/safe/safe_multi_assign_predeclared_defer_close.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "resource",
+      "cwe": "CWE-404",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-resource-leak",
+        "cfg-resource-leak",
+        "state-resource-leak-possible"
+      ],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "resource-lifecycle",
+        "negative",
+        "real-repo-precision-2026-07-14"
+      ],
+      "disabled": false,
+      "notes": "Precision guard for the multi-target `=` assignment resource-attribution fix. Pre-declared `var (f;err)` + `f, err = os.Open(p)` (Go expression_list LHS) with `defer f.Close()`. Resource handle is `f` (first LHS target), not the trailing `err`. Distilled from hugo internal/js/esbuild/build.go:139. Pre-fix bound the resource to `err` (an error is never closeable) so the defer close on `f` never cleared it and a false leak fired on `err`."
     },
     {
       "case_id": "go-auth-realrepo-001",
@@ -16654,7 +17556,7 @@
       "notes": "Distilled from airflow tests/unit/models/test_backfill.py: pytest test methods with SQLAlchemy `session` fixture and `session.commit()` calls.  Bare `session.<sqlalchemy_verb>` no longer counts as auth Session evidence; only `session.<identity_field>` (user/user_id/...) does."
     },
     {
-      "case_id": "py-auth-realrepo-007",
+      "case_id": "py-auth-realrepo-027",
       "file": "python/auth/vuln_fastapi_route_no_dependencies.py",
       "language": "python",
       "is_vulnerable": true,
@@ -16683,7 +17585,7 @@
         "real-repo-precision-2026-04-29"
       ],
       "disabled": false,
-      "notes": "Vulnerable counterpart to py-auth-realrepo-005: same FastAPI route shape but no `dependencies=[Depends(...)]` keyword arg.  Regression guard: the dependency-injection recogniser must not blanket-suppress every FastAPI route.  Updated 2026-05-03: pre-fix recall came from a member_chain quirk where `select(Connection).filter_by(...)` reduced to bare callee `filter_by` and prefix-matched the `filter` read indicator.  Post `receiver_is_simple_chain` gating, the fixture uses a qualified `Connection.objects.filter(id=connection_id).delete()` shape — SQLAlchemy `select().filter_by(...)` chained-call detection is a deferred deep fix."
+      "notes": "Vulnerable counterpart to py-auth-realrepo-005: same FastAPI route shape but no `dependencies=[Depends(...)]` keyword arg.  Regression guard: the dependency-injection recogniser must not blanket-suppress every FastAPI route.  Updated 2026-05-03: pre-fix recall came from a member_chain quirk where `select(Connection).filter_by(...)` reduced to bare callee `filter_by` and prefix-matched the `filter` read indicator.  Post `receiver_is_simple_chain` gating, the fixture uses a qualified `Connection.objects.filter(id=connection_id).delete()` shape \u2014 SQLAlchemy `select().filter_by(...)` chained-call detection is a deferred deep fix."
     },
     {
       "case_id": "js-data_exfil-001",
@@ -17512,7 +18414,7 @@
         "real-repo-precision-2026-05-04"
       ],
       "disabled": false,
-      "notes": "Vulnerable counterpart to py-auth-realrepo-012: same bare-`set()` / `dict()` local container shape, but the helper *also* runs an id-targeted ORM `Project.objects.filter(id=team_id)` query whose filter param is a user-supplied id (no caller-scope-entity exemption applies).  Recall guard: bare-callee constructor recogniser must only suppress the InMemoryLocal `.add` / `.update` calls — the id-targeted ORM filter must still fire `py.auth.missing_ownership_check`."
+      "notes": "Vulnerable counterpart to py-auth-realrepo-012: same bare-`set()` / `dict()` local container shape, but the helper *also* runs an id-targeted ORM `Project.objects.filter(id=team_id)` query whose filter param is a user-supplied id (no caller-scope-entity exemption applies).  Recall guard: bare-callee constructor recogniser must only suppress the InMemoryLocal `.add` / `.update` calls \u2014 the id-targeted ORM filter must still fire `py.auth.missing_ownership_check`."
     },
     {
       "case_id": "py-auth-realrepo-014",
@@ -17607,7 +18509,7 @@
         "real-repo-precision-2026-05-04"
       ],
       "disabled": false,
-      "notes": "Recall counterpart to py-auth-realrepo-015.  `Security(require_auth, scopes=[])` with an empty scope list is NOT promoted to `Other` — the OAuth2 scope semantic only fires when scopes is non-empty, so the wrapper falls back to bare login classification.  Recall guard: `missing_ownership_check` must still fire on this id-targeted ORM filter; without conservative scope-emptiness gating, every empty-scopes route would over-suppress."
+      "notes": "Recall counterpart to py-auth-realrepo-015.  `Security(require_auth, scopes=[])` with an empty scope list is NOT promoted to `Other` \u2014 the OAuth2 scope semantic only fires when scopes is non-empty, so the wrapper falls back to bare login classification.  Recall guard: `missing_ownership_check` must still fire on this id-targeted ORM filter; without conservative scope-emptiness gating, every empty-scopes route would over-suppress."
     },
     {
       "case_id": "py-auth-realrepo-017",
@@ -17636,7 +18538,7 @@
         "real-repo-precision-2026-05-04"
       ],
       "disabled": false,
-      "notes": "Distilled from airflow `airflow-core/src/airflow/api_fastapi/execution_api/routes/task_instances.py:89-318`: `ti_id_router = VersionedAPIRouter(dependencies=[Security(require_auth, scopes=[\"ti:self\"])])` declares the auth dep once at the router constructor; every `@ti_id_router.<verb>(...)` route inherits it at runtime.  Pre-fix the FastAPI dep extractor only walked the per-route decorator's `dependencies=[...]` kwarg; router-constructor `dependencies=` was dropped, so every attached route without inline deps fired `missing_ownership_check` + `token_override_without_validation` despite being authorized.  Fix: `collect_router_level_dependencies` walks module-level `<router> = APIRouter(...)` / `VersionedAPIRouter(...)` / `FastAPI(...)` assignments and captures `dependencies=[...]` keyed by the router var name; `router_prefix_from_decorator` extracts the receiver from `@<router>.<verb>(...)` and merges router-level deps into the per-route middleware list.  A scoped Security wrapper additionally synthesises matching `TokenExpiry` + `TokenRecipient` checks (the JWT-validation semantics — JWT signature includes expiry, scopes encode recipient binding) so the token-override rule recognises the route too.  Precision guard: route must NOT fire ownership / token-override findings."
+      "notes": "Distilled from airflow `airflow-core/src/airflow/api_fastapi/execution_api/routes/task_instances.py:89-318`: `ti_id_router = VersionedAPIRouter(dependencies=[Security(require_auth, scopes=[\"ti:self\"])])` declares the auth dep once at the router constructor; every `@ti_id_router.<verb>(...)` route inherits it at runtime.  Pre-fix the FastAPI dep extractor only walked the per-route decorator's `dependencies=[...]` kwarg; router-constructor `dependencies=` was dropped, so every attached route without inline deps fired `missing_ownership_check` + `token_override_without_validation` despite being authorized.  Fix: `collect_router_level_dependencies` walks module-level `<router> = APIRouter(...)` / `VersionedAPIRouter(...)` / `FastAPI(...)` assignments and captures `dependencies=[...]` keyed by the router var name; `router_prefix_from_decorator` extracts the receiver from `@<router>.<verb>(...)` and merges router-level deps into the per-route middleware list.  A scoped Security wrapper additionally synthesises matching `TokenExpiry` + `TokenRecipient` checks (the JWT-validation semantics \u2014 JWT signature includes expiry, scopes encode recipient binding) so the token-override rule recognises the route too.  Precision guard: route must NOT fire ownership / token-override findings."
     },
     {
       "case_id": "py-auth-realrepo-018",
@@ -17669,7 +18571,7 @@
         "real-repo-precision-2026-05-04"
       ],
       "disabled": false,
-      "notes": "Recall counterpart to py-auth-realrepo-017.  Bare `router = VersionedAPIRouter()` with no `dependencies=` kwarg — attached routes that do not supply inline deps are genuinely unauthorized.  The router-level extractor must NOT enter a fake key for routers without router-level deps; the gate (`if deps.is_empty() { continue; }` in `collect_router_level_dependencies`) ensures absence is preserved.  Recall guard: `missing_ownership_check` must still fire on the id-targeted write."
+      "notes": "Recall counterpart to py-auth-realrepo-017.  Bare `router = VersionedAPIRouter()` with no `dependencies=` kwarg \u2014 attached routes that do not supply inline deps are genuinely unauthorized.  The router-level extractor must NOT enter a fake key for routers without router-level deps; the gate (`if deps.is_empty() { continue; }` in `collect_router_level_dependencies`) ensures absence is preserved.  Recall guard: `missing_ownership_check` must still fire on the id-targeted write."
     },
     {
       "case_id": "py-auth-realrepo-019",
@@ -17698,7 +18600,7 @@
         "real-repo-precision-2026-05-04"
       ],
       "disabled": false,
-      "notes": "Distilled from airflow `airflow-core/src/airflow/api_fastapi/execution_api/routes/task_instances.py:516-628`: the route handler `ti_update_state` is route-level authorized via the `ti_id_router = APIRouter(dependencies=[Security(require_auth, scopes=[\"ti:self\"])])` declaration (closed by session-0010), then delegates the `session.add(...)` sink to a private helper `_create_state_update`.  Pre-fix the helper fired both `missing_ownership_check` and `token_override_without_validation` because `check_ownership_gaps` is scoped per AnalysisUnit — the caller's route-level auth check did not propagate to the callee.  Phase 1 caller-scope IPA fix (`apply_caller_scope_propagation` in `src/auth_analysis/mod.rs`) walks the call graph DOWN: when every in-file caller of a helper carries route-level non-Login auth, the helper inherits those checks via synthetic `is_route_level=true` AuthChecks anchored at the callee's start line.  Soundness: requires every caller authorized; refuses on dead helpers, mixed-caller helpers, login-only routes."
+      "notes": "Distilled from airflow `airflow-core/src/airflow/api_fastapi/execution_api/routes/task_instances.py:516-628`: the route handler `ti_update_state` is route-level authorized via the `ti_id_router = APIRouter(dependencies=[Security(require_auth, scopes=[\"ti:self\"])])` declaration (closed by session-0010), then delegates the `session.add(...)` sink to a private helper `_create_state_update`.  Pre-fix the helper fired both `missing_ownership_check` and `token_override_without_validation` because `check_ownership_gaps` is scoped per AnalysisUnit \u2014 the caller's route-level auth check did not propagate to the callee.  Phase 1 caller-scope IPA fix (`apply_caller_scope_propagation` in `src/auth_analysis/mod.rs`) walks the call graph DOWN: when every in-file caller of a helper carries route-level non-Login auth, the helper inherits those checks via synthetic `is_route_level=true` AuthChecks anchored at the callee's start line.  Soundness: requires every caller authorized; refuses on dead helpers, mixed-caller helpers, login-only routes."
     },
     {
       "case_id": "py-auth-realrepo-020",
@@ -17732,6 +18634,204 @@
       ],
       "disabled": false,
       "notes": "Recall counterpart to py-auth-realrepo-019.  Same shape but bare `router = APIRouter()` (no Security dep at the boundary).  The helper `_create_state_update` is reached from a route handler with no authorization; `apply_caller_scope_propagation`'s soundness rule refuses to authorize the helper because no caller carries route-level non-Login auth.  Recall guard: `missing_ownership_check` must still fire on the helper's `session.add` sink."
+    },
+    {
+      "case_id": "py-auth-realrepo-021",
+      "file": "python/safe/safe_graphene_permissioned_mutation_helper.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.auth.missing_ownership_check",
+        "py.auth.token_override_without_validation"
+      ],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "graphene",
+        "caller-scope-ipa",
+        "real-repo-precision-2026-06-11"
+      ],
+      "disabled": false,
+      "notes": "Distilled from saleor `graphql/order/mutations/order_cancel.py:34` + `graphql/order/mutations/utils.py`: a graphene-django mutation `OrderCancel(graphene.Mutation)` declares class-level RBAC via `class Meta: permissions = (OrderPermissions.MANAGE_ORDERS,)` and implements the action in a `perform_mutation` classmethod that delegates the id-targeted ORM write to a private helper `_cancel_order_rows`.  graphene's metaclass enforces `Meta.permissions` before dispatching to `perform_mutation`, so the action method and every helper it calls run under an RBAC-authorized actor.  The `GrapheneExtractor` (`src/auth_analysis/extract/graphene.rs`) marks `perform_mutation` a RouteHandler with a route-level `Other` (+ `TokenExpiry`/`TokenRecipient`) check; the in-file caller-scope pass (`apply_caller_scope_propagation`) lifts those onto `_cancel_order_rows`.  Both `missing_ownership_check` and `token_override_without_validation` must be suppressed.  Soundness: fires only on a NON-EMPTY `Meta.permissions`/`permission_classes` collection literal AND a graphene action method in the class body, so ORM models with `Meta.permissions` and public (no-permission) mutations are never authorized."
+    },
+    {
+      "case_id": "py-auth-realrepo-022",
+      "file": "python/auth/vuln_graphene_public_mutation_helper.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "real-repo",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          21,
+          21
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "graphene",
+        "caller-scope-ipa",
+        "real-repo-precision-2026-06-11"
+      ],
+      "disabled": false,
+      "notes": "Recall counterpart to py-auth-realrepo-021.  Same shape, but the mutation declares NO `Meta.permissions` \u2014 a public graphene mutation.  The `GrapheneExtractor` must NOT mark `perform_mutation` authorized (the soundness gate fires only on a non-empty `Meta.permissions`), so the in-file caller-scope pass refuses to lift onto `_cancel_order_rows` and `missing_ownership_check` still fires on its id-targeted ORM write at line 21."
+    },
+    {
+      "case_id": "py-auth-realrepo-023",
+      "file": "python/safe/fastapi_local_include_router_auth.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.auth.missing_ownership_check",
+        "py.auth.token_override_without_validation"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "real-repo-precision-2026-07-13"
+      ],
+      "disabled": false,
+      "notes": "Bare-identifier same-file include_router lift: outer=APIRouter(dependencies=[Security(require_auth)]); outer.include_router(inner); route under inner is authorized. Engine fix: router_facts.rs parse_include_router_call now captures bare-identifier local edges; summary/mod.rs resolve_cross_file_router_deps is a transitive fixed-point."
+    },
+    {
+      "case_id": "py-auth-realrepo-024",
+      "file": "python/auth/fastapi_local_include_router_no_deps.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [
+        "py.auth.token_override_without_validation"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          25,
+          25
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          23,
+          23
+        ]
+      ],
+      "tags": [
+        "auth",
+        "positive",
+        "real-repo-precision-2026-07-13"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for the bare-identifier local include_router lift: parent router declares no deps, so nothing is lifted; the id-keyed session.add must still fire."
+    },
+    {
+      "case_id": "py-auth-realrepo-025",
+      "file": "python/safe/fastapi_transitive_include_router/",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.auth.missing_ownership_check",
+        "py.auth.token_override_without_validation"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "cross-file",
+        "negative",
+        "real-repo-precision-2026-07-13"
+      ],
+      "disabled": false,
+      "notes": "Transitive cross-file include_router chain: Security root app_router -> bare `secured` (local edge) -> v1.router -> leaf.router. The leaf route is authorized transitively (2 deps-less intermediate hops) and must not fire. Engine fix: transitive fixed-point in summary/mod.rs resolve_cross_file_router_deps."
+    },
+    {
+      "case_id": "py-auth-realrepo-026",
+      "file": "python/auth/fastapi_transitive_no_deps/",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [
+        "py.auth.token_override_without_validation"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "tags": [
+        "auth",
+        "cross-file",
+        "positive",
+        "real-repo-precision-2026-07-13"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for the transitive resolver: outer -> mid (local edge) -> leaf.router with NO deps anywhere; leaf route must fire. Proves the transitive fixed-point does not hallucinate deps down a deps-less chain."
     },
     {
       "case_id": "cve-ts-2026-25544-vulnerable",
@@ -17798,6 +18898,2492 @@
       ],
       "disabled": false,
       "notes": "Patched form of `sanitizeValue` from `@payloadcms/drizzle@v3.73.0` (MIT).  Enabled after validated-flow propagation landed."
+    },
+    {
+      "case_id": "cve-java-2024-39954-vulnerable",
+      "file": "cve_corpus/java/CVE-2024-39954/vulnerable.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          40,
+          40
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          39,
+          39
+        ]
+      ],
+      "tags": [
+        "cve",
+        "eventmesh",
+        "ssrf",
+        "apache-httpclient"
+      ],
+      "disabled": false,
+      "notes": "CVE-2024-39954: Apache EventMesh webhook SSRF. Subscriber-supplied targetUrl reaches `new HttpOptions(targetUrl)` -> `httpClient.execute(builder)` across the `obtainDeliveryAgreement` helper with no scheme validation. Apache-2.0. Required modelling Apache HttpClient request constructors as SSRF sinks."
+    },
+    {
+      "case_id": "cve-java-2024-39954-patched",
+      "file": "cve_corpus/java/CVE-2024-39954/patched.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "eventmesh",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2024-39954 patched counterpart: `if (isInvalidUrl(targetUrl)) return false;` guard backed by Apache commons-validator `UrlValidator(http/https)`. Regression guard that Nyx recognises the negative-polarity validator and does not refire."
+    },
+    {
+      "case_id": "cve-java-2021-21234-vulnerable",
+      "file": "cve_corpus/java/CVE-2021-21234/vulnerable.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          62,
+          62
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          52,
+          54
+        ]
+      ],
+      "tags": [
+        "cve",
+        "spring-boot-actuator-logview",
+        "path_traversal",
+        "directory-traversal"
+      ],
+      "disabled": false,
+      "notes": "CVE-2021-21234: spring-boot-actuator-logview directory traversal. @RequestParam `base` -> loggingPath(base)=Paths.get(loggingPath, base) -> fileProvider.streamContent(path, filename, ...) whose FileSystemFileProvider opens new FileInputStream(Paths.get(folder.toString(), filename)) (FILE_IO). securityCheck(filename) validates only filename (Assert.doesNotContain), never base. MIT. Two-hop interproc recall (base->path->streamContent->getFile->FileInputStream)."
+    },
+    {
+      "case_id": "cve-java-2021-21234-patched",
+      "file": "cve_corpus/java/CVE-2021-21234/patched.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "spring-boot-actuator-logview",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2021-21234 patched: securityCheck(Path base, String filename) canonicalises the resolved path and Assert.isTrue(canonicalLoggingPath.startsWith(baseCanonicalPath), errorMessage) \u2014 the canonical Java getCanonicalPath().startsWith(base) assert-guard containment idiom. Regression guard that Nyx recognises this confinement and does not refire. Deep fix: SsaFuncSummary.asserts_path_confined_params + detect_assert_path_confined_params (collapsed-group split at the startsWith method phantom) + apply_call_post_confinement in transfer_block AND collect_block_events."
+    },
+    {
+      "case_id": "java-ssrf-003",
+      "file": "java/ssrf/SsrfApacheHttpClient.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "tags": [
+        "ssrf",
+        "apache-httpclient",
+        "cross-function"
+      ],
+      "disabled": false,
+      "notes": "Synthetic CVE-2024-39954 invariant: tainted URL into Apache HttpClient request constructor (`new HttpGet(url)`) dispatched via `client.execute(req)` across a helper boundary fires SSRF."
+    },
+    {
+      "case_id": "java-ssrf-004",
+      "file": "java/ssrf/SsrfMultiSinkParam.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-header-injection"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          18,
+          18
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          17,
+          17
+        ]
+      ],
+      "tags": [
+        "ssrf",
+        "header-injection",
+        "multi-sink-param",
+        "de-masking",
+        "cross-function",
+        "real-repo-precision-2026-06-11"
+      ],
+      "disabled": false,
+      "notes": "Multi-sink-per-param de-masking invariant: a helper param flowing to BOTH an SSRF sink (`new HttpGet(url)`) and a HEADER_INJECTION sink (`req.addHeader(name, url)`) must surface the SSRF flow (taint-unsanitised-flow). Pre-fix the summary unioned both caps and the cap->rule routing collapsed to taint-header-injection, masking the SSRF. Header-injection is a legitimate co-finding (allowed alternative)."
+    },
+    {
+      "case_id": "java-safe-017",
+      "file": "java/safe/SafeNegativeUrlValidator.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "ssrf",
+        "negative-validator",
+        "precision"
+      ],
+      "disabled": false,
+      "notes": "Synthetic CVE-2024-39954 precision invariant: negative-polarity validator `if (isInvalidUrl(url)) return;` validates the URL on the surviving branch so the Apache HttpClient SSRF sink does not fire."
+    },
+    {
+      "case_id": "java-safe-018",
+      "file": "java/safe/SafeMultiSinkParamConst.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "taint-header-injection"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "ssrf",
+        "header-injection",
+        "multi-sink-param",
+        "precision",
+        "real-repo-precision-2026-06-11"
+      ],
+      "disabled": false,
+      "notes": "Precision counterpart to java-ssrf-004: the SAME multi-sink helper is called with a CONSTANT url, never attacker input. The per-cap de-masking split must not manufacture findings from an untainted argument \u2014 neither taint-unsanitised-flow nor taint-header-injection may fire."
+    },
+    {
+      "case_id": "ts-path_traversal-002",
+      "file": "typescript/path_traversal/nested_readfile_under_json_parse.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "path-traversal",
+        "nested-sink",
+        "json-parse-shadow"
+      ],
+      "disabled": false,
+      "notes": "FILE_IO sink fs.readFileSync nested under JSON.parse sanitizer still fires"
+    },
+    {
+      "case_id": "ts-path_traversal-003",
+      "file": "typescript/path_traversal/nested_fsp_readfile_under_json_parse.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "path-traversal",
+        "nested-sink",
+        "fs-promises-namespace"
+      ],
+      "disabled": false,
+      "notes": "fsp.readFile (node:fs/promises alias) nested under JSON.parse still fires"
+    },
+    {
+      "case_id": "ts-safe-023",
+      "file": "typescript/safe/nested_readfile_validated.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "safe",
+        "validator",
+        "nested-sink"
+      ],
+      "disabled": false,
+      "notes": "recognised isValidPath validator narrows the nested-sink flow"
+    },
+    {
+      "case_id": "ts-safe-024",
+      "file": "typescript/safe/confine_helper_behaviour.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "safe",
+        "validator",
+        "path-confinement"
+      ],
+      "disabled": false,
+      "notes": "behaviour-based path-confinement helper (isWithinBaseDir startsWith const) narrows FILE_IO on the confined branch"
+    },
+    {
+      "case_id": "ts-path_traversal-004",
+      "file": "typescript/path_traversal/confine_helper_unguarded.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          15,
+          15
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          14,
+          14
+        ]
+      ],
+      "tags": [
+        "path-traversal",
+        "path-confinement",
+        "precision-guard"
+      ],
+      "disabled": false,
+      "notes": "confinement helper defined but not used to gate the read; FILE_IO flow must still fire"
+    },
+    {
+      "case_id": "cve-ts-2026-39365-vulnerable",
+      "file": "cve_corpus/typescript/CVE-2026-39365/vulnerable.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          41,
+          41
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          36,
+          36
+        ]
+      ],
+      "tags": [
+        "cve",
+        "vite",
+        "path-traversal"
+      ],
+      "notes": "vite dev-server transform middleware sourcemap handler path traversal"
+    },
+    {
+      "case_id": "cve-ts-2026-39365-patched",
+      "file": "cve_corpus/typescript/CVE-2026-39365/patched.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "vite",
+        "path-traversal"
+      ],
+      "notes": "vite dev-server transform middleware sourcemap handler path traversal; patched guard isOptimizedDepFile recognised by behaviour-based path-confinement (SsaFuncSummary.confines_path_params)"
+    },
+    {
+      "case_id": "rs-path-007",
+      "file": "rust/path_traversal/parse_pathbuf_read.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.file_io.read_to_string"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-06-12",
+        "parse",
+        "pathbuf",
+        "let-annotation"
+      ],
+      "disabled": false,
+      "notes": "let p: PathBuf = env::var().parse() flows into fs::read. The PathBuf let-annotation lowers to TypeKind::Object, overriding the bare-parse->Int heuristic that previously suppressed the FILE_IO flow (deep_engine_fixes #4-deep)."
+    },
+    {
+      "case_id": "rs-path-008",
+      "file": "rust/path_traversal/format_raw_interp.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.file_io.read_to_string"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          13,
+          13
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "tags": [
+        "format-macro",
+        "raw-interp",
+        "real-repo-precision-2026-06-12"
+      ],
+      "disabled": false,
+      "notes": "fs::read(format!(\"/var/data/{}\", name)) with a raw String env value \u2014 NOT numeric-confined, the path-traversal flow must still fire. Over-suppression guard for the format!-macro numeric-confinement fix."
+    },
+    {
+      "case_id": "rs-safe-017",
+      "file": "rust/safe/safe_parse_numeric_port.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "real-repo-precision-2026-06-12",
+        "parse",
+        "numeric",
+        "let-annotation"
+      ],
+      "disabled": false,
+      "notes": "let port: u16 = env::var().parse() into a shell arg. The u16 let-annotation lowers to TypeKind::Int, keeping the numeric suppression (precision counterpart to rs-path-007)."
+    },
+    {
+      "case_id": "rs-safe-018",
+      "file": "rust/safe/safe_numeric_parse_shell_arg.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink",
+        "rust.cmdi.command"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "numeric-confinement",
+        "inline-parse-chain",
+        "real-repo-precision-2026-06-12"
+      ],
+      "disabled": false,
+      "notes": "Inline raw_port.parse::<u16>().unwrap().to_string() into Command::arg \u2014 numeric-confined leaf, must not fire cmdi or cfg-unguarded-sink"
+    },
+    {
+      "case_id": "rs-safe-019",
+      "file": "rust/safe/safe_format_numeric_interp.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink",
+        "rust.file_io.read"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "numeric-confinement",
+        "format-macro",
+        "real-repo-precision-2026-06-12"
+      ],
+      "disabled": false,
+      "notes": "fs::read(format!(\"/var/data/{}\", id.parse::<u32>().unwrap())) \u2014 numeric interpolation inside a format! macro. tree-sitter flattens the chain into the token_tree, so the confinement recogniser re-parses the interpolation argument to clear taint + cfg-unguarded-sink (deep_engine_fixes format!-macro form)."
+    },
+    {
+      "case_id": "rs-cmdi-010",
+      "file": "rust/cmdi/cmdi_string_tostring_shell_arg.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.cmdi.command"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "tags": [
+        "direct",
+        "env-var",
+        "tostring-identity",
+        "real-repo-precision-2026-06-12"
+      ],
+      "disabled": false,
+      "notes": "user_cmd.to_string() on a String env value is an identity passthrough, not numeric confinement \u2014 cmdi must still fire"
+    },
+    {
+      "case_id": "cve-go-2024-37896-vulnerable",
+      "file": "cve_corpus/go/CVE-2024-37896/vulnerable.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          43,
+          43
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          42,
+          42
+        ]
+      ],
+      "tags": [
+        "cve",
+        "gin-vue-admin",
+        "sqli",
+        "gorm",
+        "order-by"
+      ],
+      "disabled": false,
+      "notes": "CVE-2024-37896 / GHSA-gf3r-h744-mqgp: gin-vue-admin export `db.Order(values.Get(\"order\"))` ORDER BY injection. `values` is c.Request.URL.Query() passed cross-fn to the service ExportExcel helper. Fixed in 53d0338 by a column allowlist + asc/desc check. Drives the GORM query-builder SQL sink set in src/labels/go.rs."
+    },
+    {
+      "case_id": "cve-go-2024-37896-patched",
+      "file": "cve_corpus/go/CVE-2024-37896/patched.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "gin-vue-admin",
+        "sqli",
+        "gorm",
+        "patched",
+        "negative"
+      ],
+      "disabled": true,
+      "disabled_reason": "Precision (patched) deferred: the fix validates the order column via a Go comma-ok map-membership allowlist `if _, ok := fields[checkOrderArr[0]]; !ok { return }` then assigns the validated key to `orderStr` (`orderStr = checkOrderArr[0]`) which flows to `db.Order(orderStr)`. Recognising this needs VALUE-LEVEL narrowing: (1) the comma-ok membership predicate is in the if-INITIALIZER (condition text is bare `!ok`), not the inline `allowed[k]` form the AllowlistCheck classifier already handles; (2) the validated key is a nested index `checkOrderArr[0]` (not a bare ident, so extract_allowlist_target returns None); (3) the validated value must propagate through the `orderStr = checkOrderArr[0]` copy to the sink. The existing branch narrowing is name-based and cannot carry validation through a derived element copy. A shallow fix (name-recognising the helper, or trimming the Split/rebuild) would diverge from the verbatim upstream patch. Tracked in CVE_DEFERRED.md. The vulnerable counterpart (recall) is active and detects.",
+      "notes": "CVE-2024-37896 patched counterpart. DISABLED (precision deferred): the fix validates the order column via a Go comma-ok map-membership allowlist `if _, ok := fields[checkOrderArr[0]]; !ok { return }` then copies the validated nested key to `orderStr` which flows to `db.Order(orderStr)`. Recognising this needs value-level narrowing (membership in the if-initializer + nested-index key + carry through a derived copy). See disabled_reason and CVE_DEFERRED.md. Vulnerable counterpart is active and detects."
+    },
+    {
+      "case_id": "go-sqli-005",
+      "file": "go/sqli/sqli_gorm_order.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          18,
+          18
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          16,
+          16
+        ]
+      ],
+      "tags": [
+        "sqli",
+        "gorm",
+        "order-by"
+      ],
+      "disabled": false,
+      "notes": "CVE-2024-37896 regression guard: terminal/assigned `db.Order(c.Query(\"order\"))` fires SQL_QUERY. Pins the GORM query-builder sink set in src/labels/go.rs."
+    },
+    {
+      "case_id": "go-sqli-safe-002",
+      "file": "go/safe/safe_gorm_where_param.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "sqli",
+        "gorm",
+        "parameterised",
+        "safe",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2024-37896 precision pair: parameterised `db.Where(\"name = ?\", name)` must NOT fire \u2014 the payload-arg-0 gate keeps the tainted bind value (arg 1) out of the SQL sink scan."
+    },
+    {
+      "case_id": "cve-py-2024-32651-vulnerable",
+      "file": "cve_corpus/python/CVE-2024-32651/vulnerable.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "xss",
+      "cwe": "CWE-1336",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.xss.jinja_from_string"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "taint-template-injection"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          36,
+          36
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "changedetection",
+        "ssti",
+        "jinja2",
+        "positive"
+      ],
+      "disabled": false,
+      "notes": "CVE-2024-32651: changedetection.io notification SSTI-to-RCE \u2014 user-controlled notification body rendered through Environment(loader=BaseLoader).from_string(...).render(...). Apache-2.0"
+    },
+    {
+      "case_id": "cve-py-2024-32651-patched",
+      "file": "cve_corpus/python/CVE-2024-32651/patched.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.xss.jinja_from_string"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "changedetection",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2024-32651 patched counterpart: notification bodies rendered through jinja2.sandbox.ImmutableSandboxedEnvironment.from_string \u2014 Layer G recognises the sandboxed receiver and does not refire py.xss.jinja_from_string."
+    },
+    {
+      "case_id": "py-safe-jinja-sandboxed-from-string",
+      "file": "python/safe/safe_jinja_sandboxed_from_string.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-1336",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.xss.jinja_from_string"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "ssti",
+        "jinja2",
+        "sandbox",
+        "receiver-type"
+      ],
+      "disabled": false,
+      "notes": "Jinja2 ImmutableSandboxedEnvironment.from_string neutralises SSTI; Layer G suppresses py.xss.jinja_from_string for sandboxed receivers (CVE-2024-32651 fix shape)."
+    },
+    {
+      "case_id": "py-ssti-unrestricted-from-string",
+      "file": "python/xss/ssti_unrestricted_from_string.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "xss",
+      "cwe": "CWE-1336",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.xss.jinja_from_string"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "taint-template-injection"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          14,
+          14
+        ]
+      ],
+      "expected_source_lines": null,
+      "tags": [
+        "ssti",
+        "jinja2",
+        "positive"
+      ],
+      "disabled": false,
+      "notes": "Unrestricted Environment(loader=BaseLoader).from_string positive: Layer G must NOT suppress \u2014 only sandboxed receivers are safe."
+    },
+    {
+      "case_id": "rs-safe-021",
+      "file": "rust/safe/safe_reader_sibling_file_open.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "real-repo-precision-2026-07-13",
+        "aggregate-sibling",
+        "file-io"
+      ],
+      "disabled": false,
+      "notes": "meilisearch dump-reader: tainted file contents in one struct field, File::open(const) in a sibling field of the same Ok(...) aggregate; the sibling must not reach the nested FILE_IO sink"
+    },
+    {
+      "case_id": "rs-path-009",
+      "file": "rust/path_traversal/reader_wrapped_file_open.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.file_io.File"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          13,
+          13
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-07-13",
+        "aggregate-wrapper",
+        "recall-guard"
+      ],
+      "disabled": false,
+      "notes": "Ok(File::open(&tainted_contents)) \u2014 tainted file contents ARE the inner sink path arg; must fire despite the Ok(...) wrapper (recall guard for the sibling-attribution fix)"
+    },
+    {
+      "case_id": "rs-safe-022",
+      "file": "rust/safe/safe_leaf_name_collision_file_reader.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "real-repo-precision-2026-07-13",
+        "leaf-name-collision",
+        "namespace-qualifier"
+      ],
+      "disabled": false,
+      "notes": "meilisearch dump-reader shape: stdlib File::open/BufReader::new share leaf names open/new with user methods Reader::open / IndexReader::new. The namespace-qualifier authority fix stops the resolver binding File::open to the enclosing impl and BufReader::new to a unique-arity ::new, so no spurious file_system->FILE_IO flow fires on constant paths (deep_engine_fixes: File::open dual Source+Sink self-referential flows)."
+    },
+    {
+      "case_id": "rs-path-010",
+      "file": "rust/path_traversal/leaf_collision_tainted_open.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          16,
+          16
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          15,
+          15
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-07-13",
+        "leaf-name-collision",
+        "recall-guard"
+      ],
+      "disabled": false,
+      "notes": "Recall counterpart to rs-safe-022: a tainted request header flows into File::open's path arg while the open/new collision decoys are present. File::open must still resolve to its stdlib FILE_IO sink label, not to the decoy methods."
+    },
+    {
+      "case_id": "rs-safe-023",
+      "file": "rust/safe/safe_dump_reader_sibling_reads.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "real-repo-precision-2026-07-14",
+        "file-io",
+        "self-referential-file-flow",
+        "bucket-1"
+      ],
+      "disabled": false,
+      "notes": "meilisearch dump-reader bucket-1: sibling fs::read(const) calls whose file_system-tainted results bleed into each other's path arg via implicit-trailing SSA uses; every path is constant, nothing must fire (path-argument confinement gate)."
+    },
+    {
+      "case_id": "rs-path-011",
+      "file": "rust/path_traversal/dump_reader_content_as_path.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.file_io.File"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          27,
+          27
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          25,
+          25
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-07-14",
+        "file-io",
+        "recall-guard"
+      ],
+      "disabled": false,
+      "notes": "fs::read_to_string content used directly as fs::read path arg (arg 0): a genuine file-content -> path-traversal flow that the path-argument confinement gate must keep."
+    },
+    {
+      "case_id": "cve-ruby-2026-40295-vulnerable",
+      "file": "cve_corpus/ruby/CVE-2026-40295/vulnerable.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "open_redirect",
+      "cwe": "CWE-601",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          31,
+          31
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          23,
+          23
+        ]
+      ],
+      "tags": [
+        "cve",
+        "devise",
+        "open-redirect",
+        "referrer",
+        "disabled"
+      ],
+      "disabled": true,
+      "disabled_reason": "Recall (vulnerable) deferred: multi-layer bare-Ruby-method-call source miss. The upstream flow is `request.referrer` (attacker Referer header) returned from `FailureApp#redirect_url`, handed to the sink `redirect_to redirect_url`. `redirect_url` is a receiver-less bare method call. In the taint findings run, top-level / seedless Ruby bodies are lowered with `scope_all=true` (no `SsaOp::Param` ops), and in that mode a bare-identifier call argument that is an undefined free var is DROPPED entirely: `redirect_to redirect_url` lowers to `redirect_to()` with no argument, so the sink has no value to taint. (`redirect_url`'s own body lowers cleanly to `v = request.referrer()` and its summary carries source_caps, but there is no arg to attach it to at the call.) Two engine layers must change together: (1) scope_all SSA lowering must preserve a bare-identifier call argument as a resolvable value instead of dropping it; (2) the taint layer must resolve that bare Ruby identifier against its same-file zero-arity source-returning summary (Ruby auto-calls bare method names; unsound for JS/TS/Python/Go where a bare identifier is a function reference). A resolve_callee_hinted-based seed on synthetic-external Params was prototyped this session and correctly resolves redirect_url's source_caps, but never fires in the findings run because that run has no Param ops for these bodies (scope_all). Both layers are broad, cross-language SSA-lowering changes; deferred. Tracked in nyx-dev-tools/CVE_DEFERRED.md. MIT.",
+      "notes": "CVE-2026-40295 / GHSA-jp94-3292-c3xv: Devise Timeoutable open-redirect. FailureApp#redirect_url returns the attacker-controlled request.referrer (HTTP Referer) for a non-GET session-timeout request and #redirect passes it to redirect_to. DISABLED (recall deferred) - bare Ruby method-call source dropped by scope_all lowering; see disabled_reason and CVE_DEFERRED.md."
+    },
+    {
+      "case_id": "cve-ruby-2026-40295-patched",
+      "file": "cve_corpus/ruby/CVE-2026-40295/patched.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-open-redirect",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "devise",
+        "open-redirect",
+        "patched",
+        "negative",
+        "disabled"
+      ],
+      "disabled": true,
+      "disabled_reason": "Deferred as the precision counterpart of cve-ruby-2026-40295-vulnerable (see its disabled_reason): the vulnerable recall side does not yet detect (bare-Ruby-method-call source dropped by scope_all lowering), so the patched precision side is not yet exercisable. Once recall lands, this fixture additionally requires recognising extract_path_from_location(request.referrer) (a URL path-component extraction, URI.parse(x).path, that strips the host) as an OPEN_REDIRECT sanitizer so the fixture stays silent. Tracked in nyx-dev-tools/CVE_DEFERRED.md. MIT.",
+      "notes": "CVE-2026-40295 patched counterpart: redirect_url wraps request.referrer in extract_path_from_location (URI path-component extraction, host stripped). DISABLED (precision deferred, pending recall). See disabled_reason and CVE_DEFERRED.md. MIT."
+    },
+    {
+      "case_id": "cve-go-2026-21859-vulnerable",
+      "file": "cve_corpus/go/CVE-2026-21859/vulnerable.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          67,
+          67
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          52,
+          52
+        ]
+      ],
+      "tags": [
+        "cve",
+        "mailpit",
+        "ssrf"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-21859: Mailpit screenshot-proxy SSRF - `url` query param reaches `http.NewRequest(\"GET\", uri, nil)` + `client.Do` guarded only by a `^https?://` prefix regex (not an SSRF sanitizer). Fires taint-unsanitised-flow at the NewRequest URL arg. MIT."
+    },
+    {
+      "case_id": "cve-go-2026-21859-patched",
+      "file": "cve_corpus/go/CVE-2026-21859/patched.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "mailpit",
+        "ssrf",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-21859 patched: the proxy restricts `uri` to the message's own asset URLs via `InArray(uri, links)` (value-first membership allowlist) before the outbound request. Regression guard: the camelCase membership guard must be recognised as an AllowlistCheck AND the narrowing must be copy-alias-aware (uri := parts[1] elides to a copy), so Nyx stays silent."
+    },
+    {
+      "case_id": "go-ssrf-safe-inarray-allowlist",
+      "file": "go/ssrf/safe_ssrf_inarray_allowlist.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "ssrf",
+        "allowlist",
+        "in_array",
+        "safe"
+      ],
+      "disabled": false,
+      "notes": "Synthetic (CVE-2026-21859 shape): InArray(uri, links) allowlist confines the outbound URL through a split/copy-derived uri. Pins value-first membership recognition + copy-alias-aware validation."
+    },
+    {
+      "case_id": "go-xss-safe-002",
+      "file": "go/safe/safe_fprintf_new_bytes_buffer.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo-distilled",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "xss",
+        "fmt-fprintf",
+        "bytes-buffer",
+        "new-builtin",
+        "safe",
+        "negative",
+        "real-repo-precision"
+      ],
+      "disabled": false,
+      "notes": "real-repo-precision 2026-07-14: fmt.Fprintf into a new(bytes.Buffer) writer is not reflected XSS; new(T) type arg recovered via extract_decl_type_go. gitea temp_repo.go:152."
+    },
+    {
+      "case_id": "go-xss-safe-003",
+      "file": "go/safe/safe_fprintf_os_file_loop.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo-distilled",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "xss",
+        "fmt-fprintf",
+        "os-file",
+        "loop",
+        "safe",
+        "negative",
+        "real-repo-precision"
+      ],
+      "disabled": false,
+      "notes": "real-repo-precision 2026-07-14: fmt.Fprintf into an os.Create file handle inside a loop is not reflected XSS; writer type read from flow-insensitive TypeFacts (path_env widens across loop head). gitea mock_http.go:103."
+    },
+    {
+      "case_id": "go-xss-safe-004",
+      "file": "go/safe/safe_fprintf_bytes_buffer.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo-distilled",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "xss",
+        "fmt-fprintf",
+        "bytes-buffer",
+        "safe",
+        "negative",
+        "real-repo-precision"
+      ],
+      "disabled": false,
+      "notes": "real-repo-precision 2026-07-14: fmt.Fprintf into a bytes.NewBuffer writer is not reflected XSS (regression coverage for the Go printf writer-type gate). gitea temp_repo.go."
+    },
+    {
+      "case_id": "go-auth-realrepo-003",
+      "file": "go/safe/safe_gitea_group_ownership_guard.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "go.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "gitea",
+        "closure-group",
+        "safe",
+        "negative",
+        "real-repo-precision-2026-07-14"
+      ],
+      "disabled": false,
+      "notes": "Gitea web.Router closure-group extractor precision: r.Group(path, func(){ r.Get(path, handler) }, reqRepoReader(...)) lifts the trailing ownership-guard middleware (factory closure reads ctx.Repo.Permission.CanRead / ctx.IsUserRepoAdmin / ctx.IsUserSiteAdmin, rejects with ctx.APIError) onto the lexically-nested handler; the id-scoped DAO read must NOT fire missing_ownership_check."
+    },
+    {
+      "case_id": "go-auth-realrepo-004",
+      "file": "go/auth/vuln_gitea_group_feature_gate.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-639",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "go.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "gitea",
+        "closure-group",
+        "positive",
+        "real-repo-precision-2026-07-14"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for the gitea closure-group extractor: trailing middleware reqStarsEnabled() is a FEATURE gate (factory closure reads setting.Repository.DisableStars, a global config field, NOT a ctx.* permission field), so the body-based recogniser must classify it non-authorization and the id-scoped DAO read must STILL fire missing_ownership_check."
+    },
+    {
+      "case_id": "c-path-005",
+      "file": "c/path_traversal/interproc_return_unconfined.c",
+      "language": "c",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          35,
+          44
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          43,
+          43
+        ]
+      ],
+      "tags": [
+        "strncmp",
+        "interproc",
+        "confinement-recall-guard",
+        "uftpd-shape"
+      ],
+      "disabled": false,
+      "notes": "uftpd BUG shape: compose_path confines the unresolved `dir` (strncmp(dir,...)), a different var than the returned `rpath`; the cross-function fopen(compose_path(...)) must still fire. Recall guard for confines_path_return (subject must match the returned value's name)."
+    },
+    {
+      "case_id": "c-safe-020",
+      "file": "c/safe/safe_interproc_path_return_confined.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "strncmp",
+        "interproc",
+        "path-return-confined",
+        "uftpd-fix-shape"
+      ],
+      "disabled": false,
+      "notes": "uftpd FIX shape: compose_path confines the realpath()-resolved `rpath` (strncmp(rpath,...)) before returning it; the confinement carries across the compose_abspath-less passthrough to the fopen() sink in handle_RETR() via the summary-level confines_path_return post-condition. Pins interprocedural path-return confinement."
+    },
+    {
+      "case_id": "ts-safe-025",
+      "file": "typescript/safe/safe_strapi_db_query_uid_ref.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-89",
+      "provenance": "real-repo-distilled",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": "NONE",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "real-repo-precision-2026-07-14",
+        "strapi",
+        "orm-chain"
+      ],
+      "disabled": false,
+      "notes": "Strapi ORM accessor `<obj>.db.query(UID).<orm_method>(...)` where the model UID is a variable / const identifier / member access rather than an inline string literal (dominant real-repo shape from strapi repository.ts:331 and release.ts). The trailing ORM method proves the chain is parameterised; the synthesised same-node Sanitizer(SQL_QUERY) suppresses cfg-unguarded-sink and taint-unsanitised-flow. Counterpart ts-sqli-004."
+    },
+    {
+      "case_id": "ts-sqli-004",
+      "file": "typescript/sqli/sqli_db_query_var_raw.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "sqli",
+        "real-repo-precision-2026-07-14",
+        "regression-guard"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for ts-safe-025: a variable holding raw interpolated SQL with NO trailing ORM method (`connection.query(sql)`) must still fire, and a concatenation arg 0 even with an ORM-method chain (`db.query('...'+term).findMany`) is refused by the model-UID-reference gate (binary_expression). Relaxing the ORM-chain recogniser to accept UID references must not blanket-suppress query(variable)."
+    },
+    {
+      "case_id": "cve-py-2022-24776-vulnerable",
+      "file": "cve_corpus/python/CVE-2022-24776/vulnerable.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "open_redirect",
+      "cwe": "CWE-601",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          39,
+          39
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          38,
+          38
+        ]
+      ],
+      "tags": [
+        "cve",
+        "flask-appbuilder",
+        "open_redirect",
+        "flask",
+        "positive"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-24776: Flask-AppBuilder DB-login view redirected to the raw `next` query param without a host/scheme allowlist; open redirect. BSD-3-Clause"
+    },
+    {
+      "case_id": "cve-py-2022-24776-patched",
+      "file": "cve_corpus/python/CVE-2022-24776/patched.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-open-redirect",
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "flask-appbuilder",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-24776 patched counterpart: `redirect(get_safe_redirect(next_url))` routes the URL through the same-origin `is_safe_redirect_url` confiner; the guarded-passthrough OPEN_REDIRECT confiner + nested-sink arg_uses recovery keep Nyx silent."
+    },
+    {
+      "case_id": "py-safe-023",
+      "file": "python/safe/safe_get_safe_redirect_confiner.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-601",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-open-redirect",
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "open_redirect",
+        "guarded-passthrough-confiner",
+        "get_safe_redirect",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "Pins the CVE-2022-24776 guarded-passthrough confiner: `redirect(get_safe_redirect(next_url))` where get_safe_redirect returns its param only under the `is_safe_redirect_url` same-origin guard must stay silent (detect_open_redirect_guarded_passthrough + nested-sink arg_uses OPEN_REDIRECT/SSRF strip)."
+    },
+    {
+      "case_id": "py-open_redirect-001",
+      "file": "python/open_redirect/redirect_weak_wrapper.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "open_redirect",
+      "cwe": "CWE-601",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-open-redirect"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          21,
+          21
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          20,
+          20
+        ]
+      ],
+      "tags": [
+        "open_redirect",
+        "weak-wrapper",
+        "recall-guard",
+        "regression"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for the CVE-2022-24776 confiner: a redirect wrapped by a non-validating helper (`normalize` = str.strip, not a URL-safety check) must still fire taint-open-redirect. Guards against over-suppression of the guarded-passthrough confiner recogniser."
+    },
+    {
+      "case_id": "java-safe-realrepo-resultset-001",
+      "file": "java/safe/SafeResultSetOwnedByStatement.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "resource",
+      "cwe": "CWE-404",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-resource-leak",
+        "cfg-resource-leak",
+        "state-resource-leak-possible"
+      ],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "resource-lifecycle",
+        "negative",
+        "jdbc",
+        "real-repo-precision-2026-07-14"
+      ],
+      "disabled": false,
+      "notes": "Precision guard for JDBC ResultSet ownership. A ResultSet from stmt.executeQuery() is owned by the Statement; closing the statement (here via try-with-resources) transitively closes the result set (JDBC contract), so no standalone resource-leak should fire. Distilled from openmrs DatabaseUpdater.java:288 and sonarqube ExportLineHashesStep.java:75. A standalone ResultSet leak is never a unique TP: if the statement is closed the RS is closed too, and if the statement leaks that leak already covers the RS."
+    },
+    {
+      "case_id": "java-safe-realrepo-borrowed-connection-001",
+      "file": "java/safe/SafeBorrowedConnectionFromManagedSession.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "resource",
+      "cwe": "CWE-404",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-resource-leak",
+        "cfg-resource-leak",
+        "state-resource-leak-possible"
+      ],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "resource-lifecycle",
+        "negative",
+        "jdbc",
+        "real-repo-precision-2026-07-14"
+      ],
+      "disabled": false,
+      "notes": "Precision guard for JDBC borrowed-vs-owned connection ownership. A Liquibase changeset borrows its Connection from the `Database` argument (`database.getConnection()`); Liquibase owns and closes it at the end of the changelog run, so the changeset must not close it and no resource-leak should fire. Receiver-type discrimination classifies the `Database`-typed receiver as a borrowed owner. Distilled from openmrs BooleanConceptChangeSet.java:71 (and 24 sibling databasechange changesets). Owned `DriverManager`/`DataSource` connections are unaffected and still leak (recall: tests/fixtures/state/java_db_connection_leak.java)."
+    },
+    {
+      "case_id": "java-safe-realrepo-statement-connection-001",
+      "file": "java/safe/SafeStatementFromManagedConnection.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "resource",
+      "cwe": "CWE-404",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-resource-leak",
+        "cfg-resource-leak",
+        "state-resource-leak-possible"
+      ],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "resource-lifecycle",
+        "negative",
+        "jdbc",
+        "real-repo-precision-2026-07-15"
+      ],
+      "disabled": false,
+      "notes": "Precision guard for JDBC Statement-from-Connection ownership (interior-node sibling of the ResultSet and borrowed-connection rules). A PreparedStatement opened on a Connection acquired locally in the same body (here borrowed from a managed Session via session.getConnection() and released with a static closeQuietly helper the release detector does not recognise) is transitively closed by that connection's lifecycle, so the standalone statement leak is a false positive. Suppressed at both the state and cfg passes via the derivation edge ps -> con. Distilled from sonarqube server/sonar-db-dao/.../FileSourceDao.java:66 and the Ce*Dao connection-per-statement shape. A statement on a long-lived field/parameter connection this body does not track is unaffected and still leaks (recall: tests/fixtures/state/java_statement_from_field_connection_leaks.java)."
+    },
+    {
+      "case_id": "cve-rs-2026-53956-vulnerable",
+      "file": "cve_corpus/rust/CVE-2026-53956/vulnerable.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          54,
+          54
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          40,
+          40
+        ]
+      ],
+      "tags": [
+        "cve",
+        "rattler",
+        "conda",
+        "cache-key"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-53956 / GHSA-h672-p7h7-97v9: rattler_cache package-cache path traversal \u2014 untrusted conda `build` string interpolated into the cache-key path (`path.join(cache_key.to_string())`) then written, with no `..`/separator rejection. BSD-3-Clause."
+    },
+    {
+      "case_id": "cve-rs-2026-53956-patched",
+      "file": "cve_corpus/rust/CVE-2026-53956/patched.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "rattler",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-53956 patched: the cache-key segment is routed through `ensure_safe_path_component(&segment)?`, a Result-returning path-safety guard that rejects `..`/separators. Regression guard that Nyx recognises the `?`-guarded path-component validator (result_reject_guard_params + apply_path_validator_confinement) and does not refire."
+    },
+    {
+      "case_id": "rs-safe-024",
+      "file": "rust/safe/safe_ensure_path_component.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "synthetic",
+        "path_traversal",
+        "negative",
+        "path-validator"
+      ],
+      "disabled": false,
+      "notes": "Pins CVE-2026-53956 confiner: a `..`/separator-rejecting `Result` guard named as a path-safety validator (`ensure_safe_path_component(x)?`) clears FILE_IO on its argument, so the guarded cache-key flow is silent."
+    },
+    {
+      "case_id": "rs-path-012",
+      "file": "rust/path_traversal/path_validator_defined_unused.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          42,
+          42
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          38,
+          38
+        ]
+      ],
+      "tags": [
+        "synthetic",
+        "path_traversal",
+        "path-validator",
+        "recall-guard"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for CVE-2026-53956: the path-safety validator is DEFINED but never called on the flow, so the unguarded build string still reaches fs::write and the flow fires. Merely defining a path-safety-named Result guard must not suppress."
+    },
+    {
+      "case_id": "cve-ts-2026-27728-vulnerable",
+      "file": "cve_corpus/typescript/CVE-2026-27728/vulnerable.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          61,
+          61
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          61,
+          61
+        ]
+      ],
+      "tags": [
+        "cve",
+        "oneuptime",
+        "cmdi",
+        "express",
+        "child_process"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-27728: OneUptime NetworkPathMonitor interpolates an attacker-configured destination into a `traceroute` shell command run via execAsync=promisify(exec). Interproc flow req.body.destination -> trace() -> performTraceroute() -> execAsync(command). Apache-2.0"
+    },
+    {
+      "case_id": "cve-ts-2026-27728-patched",
+      "file": "cve_corpus/typescript/CVE-2026-27728/patched.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "oneuptime",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2026-27728 patched: execFile(cmd, args) argv-array form (no shell) plus isValidDestination hostname/IP allowlist; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "ts-cmdi-003",
+      "file": "typescript/cmdi/cmdi_interproc_promisify_helper.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          25,
+          25
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          25,
+          25
+        ]
+      ],
+      "tags": [
+        "cmdi",
+        "interproc",
+        "promisify",
+        "execAsync",
+        "helper-chain"
+      ],
+      "disabled": false,
+      "notes": "Interproc cmdi: HTTP-sourced destination flows through a two-method static-class helper chain into a promisify(exec) shell sink. Recall guard for CVE-2026-27728."
+    },
+    {
+      "case_id": "ts-safe-026",
+      "file": "typescript/safe/safe_execfile_argv_helper.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "safe",
+        "execfile",
+        "promisify",
+        "argv-array",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "Same interproc helper chain but execFile(binary, argv-array) via promisify \u2014 no shell, tainted destination is a non-injectable argv element. Precision guard: promisify alias inherits the =execFile payload_args=[0] restriction."
+    },
+    {
+      "case_id": "js-safe-realrepo-sequelize-migration-001",
+      "file": "javascript/safe/safe_sequelize_migration_const_sql.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-world",
+      "equivalence_tier": "analogue",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "real-repo-precision-2026-07-15",
+        "migration",
+        "constant-sql",
+        "sequelize"
+      ],
+      "disabled": false,
+      "notes": "outline migration shape: constant DDL via sequelize.query inside a sequelize.transaction callback with a { transaction } options object. Const SQL (arg0) => no injection; cfg-unguarded-sink and taint must stay silent (payload_args=[0] gate + syntactic payload-const suppression + first_member_label scope isolation)."
+    },
+    {
+      "case_id": "js-sqli-realrepo-sequelize-001",
+      "file": "javascript/sqli/sqli_sequelize_interpolated.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "tags": [
+        "real-repo-recall-2026-07-15",
+        "sequelize",
+        "interpolated"
+      ],
+      "disabled": false,
+      "notes": "Recall guard for the payload_args=[0] gate: attacker input interpolated INTO the SQL string (arg0) of sequelize.query must still fire taint-unsanitised-flow even though the { type } options object (arg1) is a non-payload position."
+    },
+    {
+      "case_id": "js-safe-realrepo-sequelize-transaction-001",
+      "file": "javascript/safe/safe_sequelize_transaction_const_sql.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-world",
+      "equivalence_tier": "analogue",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "real-repo-precision-2026-07-15",
+        "migration",
+        "constant-sql",
+        "sequelize",
+        "transaction",
+        "hoisted-sink"
+      ],
+      "disabled": false,
+      "notes": "outline migration: constant DDL via sequelize.query inside a sequelize.transaction(async (t)=>{...}) callback. first_member_label hoists the inner query SQL_QUERY Sink onto the outer .transaction node; the recorded HoistedSink provenance (inner payload arg0 const) lets sink_payload_args_syntactic_const suppress the phantom cfg-unguarded-sink on the wrapper. No source => taint must stay silent."
+    },
+    {
+      "case_id": "js-sqli-realrepo-sequelize-transaction-001",
+      "file": "javascript/sqli/vuln_sequelize_transaction_tainted_sql.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "real-world",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          15,
+          15
+        ],
+        [
+          16,
+          16
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          14,
+          14
+        ]
+      ],
+      "tags": [
+        "real-repo-precision-2026-07-15",
+        "sequelize",
+        "transaction",
+        "hoisted-sink",
+        "interpolation"
+      ],
+      "disabled": false,
+      "notes": "Recall counterpart: interpolated ${name} inside the same sequelize.transaction wrapper. Inner query payload arg0 is a non-const template => HoistedSink provenance leaves it non-literal => syntactic payload-const suppression must NOT fire; taint-unsanitised-flow reports req.query.name -> sequelize.query."
+    },
+    {
+      "case_id": "cve-php-2025-48882-vulnerable",
+      "file": "cve_corpus/php/CVE-2025-48882/vulnerable.php",
+      "language": "php",
+      "is_vulnerable": true,
+      "vuln_class": "xxe",
+      "cwe": "CWE-611",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-xxe"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          51,
+          51
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          55,
+          55
+        ]
+      ],
+      "tags": [
+        "cve",
+        "phpoffice-math",
+        "xxe",
+        "libxml",
+        "loadxml"
+      ],
+      "disabled": false,
+      "notes": "CVE-2025-48882 / GHSA-42hm-pq2f-3r7m: PHPOffice/Math MathML::read passes attacker-controlled MathML content to DOMDocument->loadXML($content, LIBXML_DTDLOAD); the LIBXML_DTDLOAD option re-enables DTD/external-entity loading (XXE / local file read). MIT."
+    },
+    {
+      "case_id": "cve-php-2025-48882-patched",
+      "file": "cve_corpus/php/CVE-2025-48882/patched.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-xxe",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "phpoffice-math",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2025-48882 patched counterpart: MathML::read routes $content through $this->xmlScanner->scan() and drops the LIBXML_DTDLOAD option so loadXML($content) parses under the libxml >= 2.9 XXE-safe default. Silenced by the presence-aware gate fix (an ABSENT ValueMatch activation arg suppresses instead of firing conservatively). MIT."
+    },
+    {
+      "case_id": "php-xxe-loadxml-dtdload-001",
+      "file": "php/xxe/xxe_loadxml_dtdload.php",
+      "language": "php",
+      "is_vulnerable": true,
+      "vuln_class": "xxe",
+      "cwe": "CWE-611",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-xxe"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "xxe",
+        "loadxml",
+        "libxml-dtdload"
+      ],
+      "disabled": false,
+      "notes": "Recall guard: tainted XML into DOMDocument->loadXML with LIBXML_DTDLOAD fires taint-xxe (companion to the presence-aware gate fix for CVE-2025-48882)."
+    },
+    {
+      "case_id": "php-safe-xxe-loadxml-no-options-001",
+      "file": "php/safe/safe_xxe_loadxml_no_options.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-xxe"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "xxe",
+        "loadxml",
+        "no-options",
+        "safe",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "Precision guard for the presence-aware gate fix (CVE-2025-48882): tainted XML into DOMDocument->loadXML with NO options arg is XXE-safe (libxml >= 2.9 default); an absent ValueMatch activation arg must suppress taint-xxe."
+    },
+    {
+      "case_id": "py-safe-realrepo-django-signal-001",
+      "file": "python/safe/safe_django_signal_connect_not_leak.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real-repo-precision-2026-07-15",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cfg-resource-leak",
+        "state-resource-leak",
+        "state-resource-leak-possible"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "resource-lifecycle",
+        "negative",
+        "real-repo-precision-2026-07-15"
+      ],
+      "disabled": false,
+      "notes": "taiga Django signal registration shape (taiga/base/signals/cleanup_files.py, taiga/events/apps.py). `<signal>.connect(receiver, sender=/dispatch_uid=)` and `.disconnect(...)` share the `connect` callee leaf with real DB acquires but register observers (return None, hold no resource). Engine fix: src/cfg_analysis/resources.rs identifier-boundary matcher (`callee_matches_pattern` -> `disconnect` no longer suffix-matches `connect`) + `is_signal_registration_shape` (signal-API kwargs / bare-receiver+discarded-return). Closes the dominant Python cfg-resource-leak FP cluster (taiga 107->9, netbox, paperless-ngx)."
+    },
+    {
+      "case_id": "cve-ruby-2023-26153-vulnerable",
+      "file": "cve_corpus/ruby/CVE-2023-26153/vulnerable.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "deser",
+      "cwe": "CWE-502",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rb.deser.yaml_load"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          20,
+          20
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          20,
+          20
+        ]
+      ],
+      "tags": [
+        "cve",
+        "geokit-rails",
+        "deserialization",
+        "yaml"
+      ],
+      "disabled": false,
+      "notes": "CVE-2023-26153 (geokit-rails, MIT): the geo_location cookie is passed to YAML.load, enabling deserialization RCE. Index-form source cookies[:geo_location] flows directly into the YAML.load sink on the same line; fires rb.deser.yaml_load."
+    },
+    {
+      "case_id": "cve-ruby-2023-26153-patched",
+      "file": "cve_corpus/ruby/CVE-2023-26153/patched.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rb.deser.yaml_load",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "geokit-rails",
+        "deserialization",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "Patched counterpart of cve-ruby-2023-26153-vulnerable: the fix replaces YAML.load with JSON.parse (safe, data-only), so no deserialization sink fires."
     }
   ]
 }

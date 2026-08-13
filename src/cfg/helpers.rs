@@ -2,16 +2,136 @@ use super::anon_fn_name;
 use super::conditions::unwrap_parens;
 use crate::labels::{DataLabel, Kind, classify, lookup};
 use smallvec::SmallVec;
+use std::cell::Cell;
 use tree_sitter::Node;
 
 //                      Utility helpers
 
+// ── Pre-validated source fast path ──────────────────────────────────────────
+//
+// Node text extraction (`text_of` + the handful of `from_utf8(&code[range])`
+// sites) is one of the hottest CFG-build primitives — `core::str::from_utf8`
+// (i.e. `run_utf8_validation`) was ~1.6% of active CPU on mattermost/server/
+// channels/app (samply, 2026-07-14), driven by re-validating a fresh byte range
+// on *every* one of the millions of `text_of` calls. Each call re-scans its
+// node's bytes for UTF-8 validity even though the enclosing source file was
+// already whole-file valid UTF-8.
+//
+// Fix (algorithmic, `O(range_len)` → `O(1)` per call): validate the whole file
+// **once** when it is parsed ([`ValidSourceGuard::new`] in `ParsedSource::
+// try_new`) and record its byte span in a thread-local. Any later `slice_str`
+// on that exact slice then reinterprets the already-validated bytes as `&str`
+// for free and takes an `O(1)` char-boundary slice (`str::get`) instead of an
+// `O(range_len)` validation scan. Bit-identical: `str::get` returns `None` for
+// a non-char-boundary / out-of-range slice exactly where `from_utf8` returns
+// `Err` today, and yields identical `&str` content otherwise. Files that are
+// not whole-file valid UTF-8 register nothing → every `slice_str` on them falls
+// back to the original checked `from_utf8`, so behaviour is unchanged there too.
+
+thread_local! {
+    /// Byte span (`ptr`, `len`) of the source file currently being analysed on
+    /// this thread, recorded **only** when the file validated as whole-file
+    /// UTF-8. `None` when no validated source is active (or the active file is
+    /// not valid UTF-8). A live [`ValidSourceGuard`] keeps the referenced bytes
+    /// alive for as long as the entry is set.
+    static VALID_SOURCE: Cell<Option<(*const u8, usize)>> = const { Cell::new(None) };
+}
+
+/// Escape hatch / benchmark A-B toggle: `NYX_DISABLE_SRC_STR_CACHE=1` forces
+/// every [`slice_str`] onto the checked `from_utf8` fallback, so the pre-
+/// validated fast path can be measured against the baseline in a single binary.
+fn src_str_cache_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("NYX_DISABLE_SRC_STR_CACHE").is_ok())
+}
+
+/// RAII guard registering `bytes` as this thread's validated source for the
+/// guard's lifetime. Validates the whole file once (the single `O(file_len)`
+/// scan that replaces the per-node scans) and, if valid, records its span in
+/// [`VALID_SOURCE`]. The previous registration is saved and restored on drop so
+/// nested parses (a parse-within-parse on one thread) compose correctly. Stored
+/// inside `ParsedSource`, so the registered span stays alive exactly as long as
+/// the borrowed file bytes it points at, and is cleared before those bytes can
+/// be freed.
+pub(crate) struct ValidSourceGuard {
+    prev: Option<(*const u8, usize)>,
+}
+
+impl ValidSourceGuard {
+    pub(crate) fn new(bytes: &[u8]) -> Self {
+        let entry = if std::str::from_utf8(bytes).is_ok() {
+            Some((bytes.as_ptr(), bytes.len()))
+        } else {
+            None
+        };
+        let prev = VALID_SOURCE.with(|c| c.replace(entry));
+        ValidSourceGuard { prev }
+    }
+}
+
+impl Drop for ValidSourceGuard {
+    fn drop(&mut self) {
+        VALID_SOURCE.with(|c| c.set(self.prev));
+    }
+}
+
+/// Decode `code[start..end]` as `&str`.
+///
+/// When `code` is exactly the file registered by a live [`ValidSourceGuard`],
+/// this reinterprets the pre-validated bytes as `&str` for free and takes an
+/// `O(1)` char-boundary slice; otherwise it falls back to the original checked
+/// `O(range_len)` `from_utf8`. Both paths return `None` for an out-of-range or
+/// non-char-boundary slice, so the result is bit-identical.
+#[inline]
+pub(crate) fn slice_str(code: &[u8], start: usize, end: usize) -> Option<&str> {
+    if !src_str_cache_disabled()
+        && VALID_SOURCE.with(|c| c.get()) == Some((code.as_ptr(), code.len()))
+    {
+        // SAFETY: the active `ValidSourceGuard` validated this exact live slice
+        // (same ptr + len) as whole-file UTF-8, so viewing it as `&str` is
+        // sound. `str::get` still bounds- and char-boundary-checks the range in
+        // O(1) instead of the O(range_len) `from_utf8` validation scan.
+        let s = unsafe { std::str::from_utf8_unchecked(code) };
+        match s.get(start..end) {
+            Some(sub) => Some(sub),
+            // `str::get` diverges from the checked `from_utf8(&bytes[start..end])`
+            // path only for an empty range landing mid-codepoint: `get` -> None,
+            // but `from_utf8(b"")` -> Some(""). Node byte ranges are always
+            // codepoint boundaries so this never arises for real callers, but
+            // mirror the checked result to stay bit-identical for any range.
+            None if start == end && end <= code.len() => Some(""),
+            None => None,
+        }
+    } else {
+        code.get(start..end)
+            .and_then(|b| std::str::from_utf8(b).ok())
+    }
+}
+
 /// Return the text of a node.
 #[inline]
 pub(crate) fn text_of<'a>(n: Node<'a>, code: &'a [u8]) -> Option<String> {
-    std::str::from_utf8(&code[n.start_byte()..n.end_byte()])
-        .ok()
-        .map(|s| s.to_string())
+    slice_str(code, n.start_byte(), n.end_byte()).map(|s| s.to_string())
+}
+
+/// Borrowed sibling of [`text_of`]: return `code[n.start_byte()..n.end_byte()]`
+/// as `&str` **without allocating**, via the pre-validated-source fast path.
+///
+/// Bit-identical to `n.utf8_text(code).ok()` and to
+/// `std::str::from_utf8(&code[n.byte_range()]).ok()` — the same byte range, the
+/// same `Some`/`None` verdict (`None` only when that range is not valid UTF-8,
+/// which under a live [`ValidSourceGuard`] can only happen in a non-UTF-8 file
+/// where the guard registers nothing and this falls back to checked `from_utf8`
+/// anyway). Prefer this over `Node::utf8_text` / `from_utf8(&code[range])` on
+/// the per-file scan path so the `O(range_len)` UTF-8 re-validation collapses to
+/// an `O(1)` `str::get` once the file is registered by the guard.
+#[inline]
+pub(crate) fn node_str<'c>(n: Node<'_>, code: &'c [u8]) -> Option<&'c str> {
+    // The result borrows `code` only (the byte offsets are plain `usize`), so the
+    // node's tree lifetime is intentionally independent of the returned `&str` —
+    // mirroring the old `from_utf8(&code[n.byte_range()])` borrow shape.
+    slice_str(code, n.start_byte(), n.end_byte())
 }
 
 /// Walk through chained calls / member accesses to find the root receiver.
@@ -257,7 +377,40 @@ pub(crate) fn find_classifiable_inner_call<'a>(
     lang: &str,
     code: &'a [u8],
     extra: Option<&[crate::labels::RuntimeLabelRule]>,
-) -> Option<(String, DataLabel, (usize, usize))> {
+) -> Option<(String, DataLabel, Node<'a>)> {
+    find_inner_call_impl(n, lang, code, extra, false)
+}
+
+/// Like [`find_classifiable_inner_call`], but ONLY returns a nested call that
+/// classifies as a `Sink`, recursing PAST nested calls that classify as a
+/// Source / Sanitizer.  Used when the outer call already carries a non-Sink
+/// label (Sanitizer / Source) and a dangerous inner sink would otherwise be
+/// shadowed — e.g. `JSON.parse(await fsp.readFile(tainted))` (the FILE_IO
+/// path-traversal sink hidden under the `JSON.parse` sanitizer in vite
+/// CVE-2026-39365).  An outer sanitizer neutralises the *result* it returns,
+/// never the inner sink's path / query / command argument, so the inner sink
+/// must still be surfaced.
+pub(crate) fn find_inner_sink_call<'a>(
+    n: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+    extra: Option<&[crate::labels::RuntimeLabelRule]>,
+) -> Option<(String, DataLabel, Node<'a>)> {
+    find_inner_call_impl(n, lang, code, extra, true)
+}
+
+/// Shared walker for [`find_classifiable_inner_call`] /
+/// [`find_inner_sink_call`].  When `require_sink` is set, a non-`Sink`
+/// classification does not terminate the search: the walk continues into the
+/// call's arguments so a deeper sink is still found.
+fn find_inner_call_impl<'a>(
+    n: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+    extra: Option<&[crate::labels::RuntimeLabelRule]>,
+    require_sink: bool,
+) -> Option<(String, DataLabel, Node<'a>)> {
+    let accept = |lbl: &DataLabel| !require_sink || matches!(lbl, DataLabel::Sink(_));
     let mut cursor = n.walk();
     for c in n.children(&mut cursor) {
         // Do not descend into Kind::Function nodes, they will be extracted
@@ -305,8 +458,9 @@ pub(crate) fn find_classifiable_inner_call<'a>(
                 };
                 if let Some(ref id) = ident
                     && let Some(lbl) = classify(lang, id, extra)
+                    && accept(&lbl)
                 {
-                    return Some((id.clone(), lbl, (c.start_byte(), c.end_byte())));
+                    return Some((id.clone(), lbl, c));
                 }
                 // Receiver-type rewrite fallback: when the literal
                 // `recv.method` text didn't classify, AND we're inside
@@ -334,20 +488,85 @@ pub(crate) fn find_classifiable_inner_call<'a>(
                     && let Some(prefix) = crate::cfg::local_receiver_type_prefix(c, &recv, lang)
                 {
                     let alt = format!("{prefix}.{method}");
-                    if let Some(lbl) = classify(lang, &alt, extra) {
-                        return Some((alt, lbl, (c.start_byte(), c.end_byte())));
+                    if let Some(lbl) = classify(lang, &alt, extra)
+                        && accept(&lbl)
+                    {
+                        return Some((alt, lbl, c));
                     }
                 }
                 // Recurse into arguments of this call
-                if let Some(found) = find_classifiable_inner_call(c, lang, code, extra) {
+                if let Some(found) = find_inner_call_impl(c, lang, code, extra, require_sink) {
                     return Some(found);
                 }
             }
             _ => {
-                if let Some(found) = find_classifiable_inner_call(c, lang, code, extra) {
+                if let Some(found) = find_inner_call_impl(c, lang, code, extra, require_sink) {
                     return Some(found);
                 }
             }
+        }
+    }
+    None
+}
+
+/// Walk `n`'s descendants for a nested call whose callee classifies — via the
+/// *import-gated* registry with `ctx` (so the `fs/promises` import alias is
+/// resolved) — as a `Sink`, recursing past calls that do not.  Mirror of
+/// [`find_inner_sink_call`] for the gated post-pass: the CFG-time `classify`
+/// in `push_node` cannot see the per-file import view, so an import-gated sink
+/// (`fsp.readFile`) shadowed under a non-sink outer call
+/// (`JSON.parse(await fsp.readFile(tainted))`, vite CVE-2026-39365) is invisible
+/// until the import view is built.  Returns `(callee_text, label, span)`.
+pub(crate) fn find_inner_gated_sink_call<'a>(
+    n: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+    ctx: &crate::labels::ClassificationContext<'_>,
+) -> Option<(String, DataLabel, (usize, usize))> {
+    let mut cursor = n.walk();
+    for c in n.children(&mut cursor) {
+        if lookup(lang, c.kind()) == Kind::Function {
+            continue;
+        }
+        if matches!(
+            lookup(lang, c.kind()),
+            Kind::CallFn | Kind::CallMethod | Kind::CallMacro
+        ) {
+            let ident = match lookup(lang, c.kind()) {
+                Kind::CallMethod => {
+                    let func = c
+                        .child_by_field_name("method")
+                        .or_else(|| c.child_by_field_name("name"))
+                        .and_then(|f| text_of(f, code));
+                    let recv = c
+                        .child_by_field_name("object")
+                        .or_else(|| c.child_by_field_name("receiver"))
+                        .or_else(|| c.child_by_field_name("scope"))
+                        .and_then(|f| root_receiver_text(f, lang, code));
+                    match (recv, func) {
+                        (Some(r), Some(f)) => Some(format!("{r}.{f}")),
+                        (_, Some(f)) => Some(f),
+                        _ => None,
+                    }
+                }
+                _ => c
+                    .child_by_field_name("function")
+                    .or_else(|| c.child_by_field_name("method"))
+                    .or_else(|| c.child_by_field_name("name"))
+                    .and_then(|f| text_of(f, code)),
+            };
+            if let Some(id) = ident {
+                if let Some(lbl) = crate::labels::classify_gated_only(lang, &id, Some(ctx))
+                    .iter()
+                    .find(|l| matches!(l, DataLabel::Sink(_)))
+                    .copied()
+                {
+                    return Some((id, lbl, (c.start_byte(), c.end_byte())));
+                }
+            }
+        }
+        if let Some(found) = find_inner_gated_sink_call(c, lang, code, ctx) {
+            return Some(found);
         }
     }
     None
@@ -492,6 +711,81 @@ pub(crate) fn first_member_label(
         }
     }
     None
+}
+
+/// Locate the inner sink CALL node whose `Sink` label [`first_member_label`]
+/// hoisted onto an outer wrapper node from inside a callback-argument function
+/// literal.
+///
+/// This is the dual of [`first_member_label`] for the callback-descent case:
+/// where `first_member_label` returns only the `DataLabel`, this returns the
+/// enclosing `call_expression` so its own payload-arg positions + argument
+/// string literals can be recorded as [`super::HoistedSink`] provenance on the
+/// wrapper.  Motivated by the outline Sequelize-migration idiom
+/// `queryInterface.sequelize.transaction(async (t) => {
+/// queryInterface.sequelize.query(`…const DDL…`, { transaction: t }) })`, whose
+/// `.transaction` wrapper inherits the inner `sequelize.query` `Sink` and then
+/// fires a phantom `cfg-unguarded-sink` because the wrapper's own argument is
+/// the callback, not the constant SQL.
+///
+/// Descent only reports a sink call that lives **inside** a function-literal
+/// boundary (`Kind::Function`): a sink found in `n`'s own non-callback subtree
+/// returns `None`, so the ordinary member-source-on-wrapper hoist is
+/// unaffected.  Returns the FIRST such inner sink call in source order, so the
+/// provenance matches the first `Sink` label `first_member_label` would return.
+pub(crate) fn first_callback_sink_call<'a>(
+    n: Node<'a>,
+    lang: &str,
+    code: &[u8],
+    extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
+) -> Option<Node<'a>> {
+    fn walk<'a>(
+        n: Node<'a>,
+        lang: &str,
+        code: &[u8],
+        extra: Option<&[crate::labels::RuntimeLabelRule]>,
+        inside_fn: bool,
+    ) -> Option<Node<'a>> {
+        // Once inside a callback body, a call whose callee (function-field
+        // member expression) classifies as a `Sink` is the hoisted inner sink.
+        if inside_fn
+            && let Some(callee) = n
+                .child_by_field_name("function")
+                .or_else(|| n.child_by_field_name("method"))
+                .or_else(|| n.child_by_field_name("name"))
+            && let Some(callee_text) =
+                member_expr_text(callee, code).or_else(|| text_of(callee, code))
+            && matches!(
+                classify(lang, &callee_text, extra),
+                Some(DataLabel::Sink(_))
+            )
+        {
+            return Some(n);
+        }
+        let now_inside = inside_fn || lookup(lang, n.kind()) == Kind::Function;
+        // Never descend a call's callee/receiver side.  On a chained call
+        // (`http.get(target, cb).on('error', cb2)`) the receiver — including
+        // its own callback argument — hangs off the `function` field, so
+        // descending it would return a sink belonging to the RECEIVER call and
+        // hand the caller provenance for a call it does not own.  Argument
+        // positions are the only place a callback this node passes can live.
+        let callee_side = n
+            .child_by_field_name("function")
+            .or_else(|| n.child_by_field_name("method"))
+            .or_else(|| n.child_by_field_name("name"))
+            .map(|c| c.id());
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            if Some(child.id()) == callee_side {
+                continue;
+            }
+            if let Some(found) = walk(child, lang, code, extra, now_inside) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(n, lang, code, extra_labels, false)
 }
 
 /// Return the text of the first member expression found in `n`.
@@ -1088,4 +1382,229 @@ pub(crate) fn subscript_components<'a>(n: Node<'a>, code: &'a [u8]) -> Option<(S
     // don't use it for local array identifiers.
     let idx_text = text_of(idx, code)?;
     Some((arr_text, idx_text))
+}
+
+#[cfg(test)]
+mod source_str_tests {
+    use super::{VALID_SOURCE, ValidSourceGuard, node_str, slice_str};
+
+    /// `node_str` must decode every node's byte range identically to the checked
+    /// `from_utf8(&code[node.byte_range()]).ok()` it replaced at the scan-path
+    /// call sites (ast query pass, entry-point detection, import resolution),
+    /// with the pre-validated-source fast path active. Walks a real parsed tree
+    /// so the guard covers the actual `Node::start_byte()/end_byte()` offsets.
+    #[test]
+    fn node_str_matches_checked_over_parsed_tree() {
+        // `\xc3\xa9` is the UTF-8 encoding of `é`; written as an escape because
+        // a raw non-ASCII char is not permitted in a `b"..."` byte-string
+        // literal.  The decoded bytes are identical, so the multi-byte-char
+        // decode path is still exercised.
+        let code =
+            b"package main\nfunc handler(w http.ResponseWriter) { fmt.Println(\"h\xc3\xa9llo\") }\n";
+        let _g = ValidSourceGuard::new(code.as_slice());
+        assert_eq!(
+            VALID_SOURCE.with(|c| c.get()),
+            Some((code.as_ptr(), code.len())),
+            "fast path must be active for this exact slice",
+        );
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_go::LANGUAGE.into())
+            .expect("load go grammar");
+        let tree = parser.parse(code.as_slice(), None).expect("parse");
+
+        fn walk(n: tree_sitter::Node, code: &[u8]) {
+            let got = node_str(n, code).map(str::to_string);
+            let want = code
+                .get(n.start_byte()..n.end_byte())
+                .and_then(|b| std::str::from_utf8(b).ok())
+                .map(str::to_string);
+            assert_eq!(got, want, "node_str diverged at {:?}", n.byte_range());
+            let mut c = n.walk();
+            for child in n.children(&mut c) {
+                walk(child, code);
+            }
+        }
+        walk(tree.root_node(), code.as_slice());
+    }
+
+    /// Reference decode: exactly what `text_of`/the direct sites did before the
+    /// pre-validated fast path — an unconditional checked `from_utf8` of the
+    /// byte range. Every `slice_str` result must equal this on every range.
+    fn checked(code: &[u8], start: usize, end: usize) -> Option<String> {
+        code.get(start..end)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .map(|s| s.to_string())
+    }
+
+    fn slice_owned(code: &[u8], start: usize, end: usize) -> Option<String> {
+        slice_str(code, start, end).map(|s| s.to_string())
+    }
+
+    #[test]
+    fn fast_path_bit_identical_to_checked_ascii() {
+        let code = b"let handle = File::open(path).unwrap();";
+        let _g = ValidSourceGuard::new(code);
+        // Guard registered this exact slice -> fast path is active.
+        assert_eq!(
+            VALID_SOURCE.with(|c| c.get()),
+            Some((code.as_ptr(), code.len()))
+        );
+        for start in 0..=code.len() {
+            for end in start..=code.len() {
+                assert_eq!(
+                    slice_owned(code, start, end),
+                    checked(code, start, end),
+                    "mismatch at {start}..{end}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fast_path_multibyte_boundaries_match_checked() {
+        // Mixed multibyte: `é` (2 bytes), `€` (3 bytes), `𝄞` (4 bytes).
+        let s = "aé b€ c𝄞 d";
+        let code = s.as_bytes();
+        let _g = ValidSourceGuard::new(code);
+        for start in 0..=code.len() {
+            for end in start..=code.len() {
+                // Non-char-boundary ranges must yield None in BOTH paths.
+                assert_eq!(
+                    slice_owned(code, start, end),
+                    checked(code, start, end),
+                    "mismatch at {start}..{end}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_guard_uses_checked_path_and_matches() {
+        // With no active guard, VALID_SOURCE is None -> checked fallback.
+        let code = b"session.query(sql)";
+        VALID_SOURCE.with(|c| c.set(None));
+        assert_ne!(
+            VALID_SOURCE.with(|c| c.get()),
+            Some((code.as_ptr(), code.len()))
+        );
+        for start in 0..=code.len() {
+            for end in start..=code.len() {
+                assert_eq!(slice_owned(code, start, end), checked(code, start, end));
+            }
+        }
+    }
+
+    #[test]
+    fn guard_registers_only_valid_utf8() {
+        let good = b"valid ascii";
+        {
+            let _g = ValidSourceGuard::new(good);
+            assert_eq!(
+                VALID_SOURCE.with(|c| c.get()),
+                Some((good.as_ptr(), good.len()))
+            );
+        }
+        // Dropped -> restored to None.
+        assert_eq!(VALID_SOURCE.with(|c| c.get()), None);
+
+        // Invalid UTF-8 registers nothing (None) -> slice_str stays on the
+        // checked path, which returns None for the invalid range.
+        let bad = [b'o', b'k', 0xFF, 0xFE];
+        let _g = ValidSourceGuard::new(&bad);
+        assert_eq!(VALID_SOURCE.with(|c| c.get()), None);
+        assert_eq!(slice_str(&bad, 0, 4), None); // 0xFF 0xFE not valid UTF-8
+        assert_eq!(slice_str(&bad, 0, 2), Some("ok")); // valid prefix still decodes
+    }
+
+    #[test]
+    fn nested_guards_save_and_restore() {
+        let outer = b"outer source file";
+        let inner = b"inner nested snippet";
+        let g_outer = ValidSourceGuard::new(outer);
+        assert_eq!(
+            VALID_SOURCE.with(|c| c.get()),
+            Some((outer.as_ptr(), outer.len()))
+        );
+        {
+            let _g_inner = ValidSourceGuard::new(inner);
+            assert_eq!(
+                VALID_SOURCE.with(|c| c.get()),
+                Some((inner.as_ptr(), inner.len()))
+            );
+        }
+        // Inner dropped -> outer registration restored (composes for
+        // parse-within-parse on one thread).
+        assert_eq!(
+            VALID_SOURCE.with(|c| c.get()),
+            Some((outer.as_ptr(), outer.len()))
+        );
+        drop(g_outer);
+        assert_eq!(VALID_SOURCE.with(|c| c.get()), None);
+    }
+}
+
+#[cfg(test)]
+mod callback_sink_tests {
+    use super::{first_callback_sink_call, member_expr_text};
+    use tree_sitter::{Node, Parser};
+
+    fn callee_of(call: Node, code: &[u8]) -> Option<String> {
+        call.child_by_field_name("function")
+            .and_then(|f| member_expr_text(f, code))
+    }
+
+    /// The inner `sequelize.query` sink nested in the `.transaction` callback
+    /// body is located (through the arrow-function boundary), and its enclosing
+    /// call node is returned.
+    #[test]
+    fn finds_inner_sink_call_in_transaction_callback() {
+        let code = br#"function up(q) {
+  return q.sequelize.transaction(async (t) => {
+    return q.sequelize.query(`DROP VIEW x`, { transaction: t });
+  });
+}"#;
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_javascript::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(&code[..], None).unwrap();
+        // Root program → find the transaction call_expression.
+        fn find_transaction<'a>(n: Node<'a>, code: &[u8]) -> Option<Node<'a>> {
+            if n.kind() == "call_expression"
+                && callee_of(n, code).as_deref() == Some("q.sequelize.transaction")
+            {
+                return Some(n);
+            }
+            let mut c = n.walk();
+            for ch in n.children(&mut c) {
+                if let Some(f) = find_transaction(ch, code) {
+                    return Some(f);
+                }
+            }
+            None
+        }
+        let tx = find_transaction(tree.root_node(), &code[..]).expect("transaction call");
+        let inner = first_callback_sink_call(tx, "javascript", &code[..], None)
+            .expect("inner sink call inside the callback");
+        assert_eq!(
+            callee_of(inner, &code[..]).as_deref(),
+            Some("q.sequelize.query")
+        );
+    }
+
+    /// A member-source passed as a plain (non-callback) argument is not a
+    /// callback-nested sink → `None` (the ordinary hoist path is unaffected).
+    #[test]
+    fn ignores_non_callback_member_arg() {
+        let code = b"function h(req) { storeInto(req.query.input, items); }";
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_javascript::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(&code[..], None).unwrap();
+        assert!(
+            first_callback_sink_call(tree.root_node(), "javascript", &code[..], None).is_none()
+        );
+    }
 }

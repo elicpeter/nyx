@@ -16,7 +16,7 @@
 //!    decomposed into separate SSA operations (condition nodes → `Nop`).
 
 use crate::cfg::NodeInfo;
-use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::const_prop::ConstValues;
 use crate::ssa::ir::{BlockId, SsaBody, SsaValue};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -140,7 +140,7 @@ pub fn lower_condition(
     cond_info: &NodeInfo,
     ssa: &SsaBody,
     branch_block: BlockId,
-    const_values: Option<&HashMap<SsaValue, ConstLattice>>,
+    const_values: Option<&ConstValues>,
 ) -> ConditionExpr {
     let text = match cond_info.condition_text.as_deref() {
         Some(t) if !t.is_empty() => t,
@@ -206,7 +206,10 @@ pub fn lower_condition(
 /// separately via `seed_from_optimization`.
 pub fn lower_condition_with_stacks(
     cond_info: &NodeInfo,
-    var_stacks: &HashMap<String, Vec<SsaValue>>,
+    // `FxHashMap` to match the SSA-lowering `var_stacks` (rustc_hash); probed
+    // by key only (`var_stacks[name].last()`), so the hasher swap is
+    // output-invariant.
+    var_stacks: &rustc_hash::FxHashMap<String, Vec<SsaValue>>,
 ) -> ConditionExpr {
     let text = match cond_info.condition_text.as_deref() {
         Some(t) if !t.is_empty() => t,
@@ -604,13 +607,13 @@ mod tests {
             }],
             entry: BlockId(0),
             value_defs,
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         }
     }
 

@@ -135,6 +135,38 @@ pub mod index {
             UNIQUE(project, file_path)
         );
 
+        -- Cross-file authorization fact sets, one blob row per source file.
+        --
+        -- Raw per-file EDGES, never a folded accumulator.  `all_authorized` is
+        -- a conjunction and AND is not invertible, so a stored accumulator
+        -- could never be corrected when one contributing file is edited or
+        -- deleted.  Storing edges and rebuilding the fold on every scan makes
+        -- the accumulator a pure function of the surviving rows, exactly as
+        -- the non-indexed pass-1 fold rebuilds it from the files it analysed.
+        CREATE TABLE IF NOT EXISTS caller_scope_edges (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_hash BLOB NOT NULL,
+            edges BLOB NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(project, file_path)
+        );
+
+        -- `module_id` is stored rather than derived from `file_path` so a
+        -- future change to `router_facts::module_id_for_storage` cannot
+        -- silently reinterpret rows written by an older build.
+        CREATE TABLE IF NOT EXISTS router_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_hash BLOB NOT NULL,
+            module_id TEXT NOT NULL,
+            facts BLOB NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(project, file_path)
+        );
+
         CREATE TABLE IF NOT EXISTS scans (
             id TEXT PRIMARY KEY,
             status TEXT NOT NULL,
@@ -288,7 +320,16 @@ pub mod index {
     ///   underreport rules that emit them.  Bumping forces a rescan so
     ///   newly-emitted gates and sinks land in the cache with the wider
     ///   footprint.
-    pub const SCHEMA_VERSION: &str = "4";
+    ///
+    /// * `5` — added the `caller_scope_edges` and `router_facts` tables so
+    ///   the cross-file authorization fact sets survive into the indexed
+    ///   scan path.  The bump is what makes the new tables actually fill:
+    ///   creating them is not enough, because on an existing DB every file
+    ///   hash still matches, indexed pass 1 skips extraction wholesale, and
+    ///   the tables would stay empty forever.  Only the schema-version wipe
+    ///   clears `files` and forces the one full re-extract that populates
+    ///   them.
+    pub const SCHEMA_VERSION: &str = "5";
 
     /// A single issue row, ready for insertion.
     #[derive(Debug, Clone)]
@@ -659,6 +700,25 @@ pub mod index {
                     conn.execute_batch(SCHEMA)?;
                 }
 
+                // Ensure the cross-file authorization fact tables exist on
+                // DBs created before they were introduced.  Defence in depth
+                // only: SCHEMA_VERSION 5 already forces a full re-extract, so
+                // this branch matters if a future migration recreates a DB
+                // without them.
+                let auth_facts_exists: bool = conn
+                    .query_row(
+                        "SELECT 1 FROM sqlite_master
+                         WHERE type = 'table' AND name = 'caller_scope_edges'",
+                        [],
+                        |_| Ok(true),
+                    )
+                    .optional()?
+                    .unwrap_or(false);
+                if !auth_facts_exists {
+                    tracing::info!("creating caller_scope_edges / router_facts tables");
+                    conn.execute_batch(SCHEMA)?;
+                }
+
                 // Phase 21: ensure the `surface_map` table exists on
                 // DBs created before this column set was introduced.
                 let surface_exists: bool = conn
@@ -791,7 +851,9 @@ pub mod index {
                          DELETE FROM ssa_function_summaries;
                          DELETE FROM auth_check_summaries;
                          DELETE FROM files;
-                         DROP TABLE IF EXISTS cross_package_imports;",
+                         DROP TABLE IF EXISTS cross_package_imports;
+                         DROP TABLE IF EXISTS caller_scope_edges;
+                         DROP TABLE IF EXISTS router_facts;",
                     )?;
                     conn.execute_batch(SCHEMA)?;
                     conn.execute(
@@ -1806,6 +1868,8 @@ pub mod index {
                 &str,
                 &std::collections::HashMap<String, crate::symbol::FuncKey>,
             )>,
+            caller_scope_edges: &[crate::auth_analysis::persist::CallerScopeEdgeRow],
+            router_facts: Option<(&str, &crate::auth_analysis::persist::PerFileRouterFactsRow)>,
         ) -> NyxResult<()> {
             let tx = self.conn.transaction()?;
             let path_str = file_path.to_string_lossy();
@@ -1986,8 +2050,121 @@ pub mod index {
                 )?;
             }
 
+            // caller_scope_edges / router_facts: unconditional per-file DELETE
+            // then INSERT only when non-empty, matching the
+            // cross_package_imports contract above.  The unconditional DELETE
+            // is what keeps the rebuilt accumulator correct across edits: a
+            // file that loses its authorized route handler must stop
+            // contributing its authorized edges.
+            tx.execute(
+                "DELETE FROM caller_scope_edges WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+            if !caller_scope_edges.is_empty() {
+                let blob = rmp_serde::to_vec_named(caller_scope_edges)
+                    .map_err(|e| NyxError::Msg(format!("caller_scope_edges serialise: {e}")))?;
+                tx.execute(
+                    "INSERT OR REPLACE INTO caller_scope_edges
+                        (project, file_path, file_hash, edges, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![self.project, path_str, file_hash, blob, now],
+                )?;
+            }
+
+            tx.execute(
+                "DELETE FROM router_facts WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+            if let Some((module_id, facts)) = router_facts {
+                let blob = rmp_serde::to_vec_named(facts)
+                    .map_err(|e| NyxError::Msg(format!("router_facts serialise: {e}")))?;
+                tx.execute(
+                    "INSERT OR REPLACE INTO router_facts
+                        (project, file_path, file_hash, module_id, facts, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![self.project, path_str, file_hash, module_id, blob, now],
+                )?;
+            }
+
             tx.commit()?;
             Ok(())
+        }
+
+        /// Load every persisted caller-scope edge for this project.
+        ///
+        /// Ordered by `file_path` so the replayed fold sequence is a canonical
+        /// total order.  The fold itself is associative and commutative
+        /// (`has_caller` OR, `all_authorized` AND, `lifted_checks` union), so
+        /// order cannot change the accumulator's value; pinning it only makes
+        /// the resulting `lifted_checks` *sequence* deterministic, which the
+        /// non-indexed rayon reduce does not guarantee.
+        pub fn load_all_caller_scope_edges(
+            &self,
+        ) -> NyxResult<Vec<crate::auth_analysis::persist::CallerScopeEdgeRow>> {
+            let mut stmt = self.c().prepare(
+                "SELECT edges FROM caller_scope_edges
+                 WHERE project = ?1 ORDER BY file_path",
+            )?;
+            let blobs: Vec<Vec<u8>> = stmt
+                .query_map([&self.project], |row| row.get::<_, Vec<u8>>(0))?
+                .filter_map(|r| match r {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!("failed to read caller_scope_edges row: {e}");
+                        None
+                    }
+                })
+                .collect();
+
+            let mut out = Vec::new();
+            for blob in blobs {
+                match rmp_serde::from_slice::<Vec<crate::auth_analysis::persist::CallerScopeEdgeRow>>(
+                    &blob,
+                ) {
+                    Ok(rows) => out.extend(rows),
+                    Err(e) => {
+                        tracing::warn!("failed to deserialize caller_scope_edges blob: {e}");
+                    }
+                }
+            }
+            Ok(out)
+        }
+
+        /// Load every persisted per-file router-fact snapshot for this
+        /// project, as `(module_id, facts)`.
+        pub fn load_all_router_facts(
+            &self,
+        ) -> NyxResult<Vec<(String, crate::auth_analysis::persist::PerFileRouterFactsRow)>>
+        {
+            let mut stmt = self.c().prepare(
+                "SELECT module_id, facts FROM router_facts
+                 WHERE project = ?1 ORDER BY file_path",
+            )?;
+            let rows: Vec<(String, Vec<u8>)> = stmt
+                .query_map([&self.project], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })?
+                .filter_map(|r| match r {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!("failed to read router_facts row: {e}");
+                        None
+                    }
+                })
+                .collect();
+
+            let mut out = Vec::with_capacity(rows.len());
+            for (module_id, blob) in rows {
+                match rmp_serde::from_slice::<crate::auth_analysis::persist::PerFileRouterFactsRow>(
+                    &blob,
+                ) {
+                    Ok(facts) => out.push((module_id, facts)),
+                    Err(e) => {
+                        tracing::warn!("failed to deserialize router_facts blob: {e}");
+                    }
+                }
+            }
+            Ok(out)
         }
 
         /// Load every `AuthCheckSummary` for this project.
@@ -2220,6 +2397,18 @@ pub mod index {
             )?;
             tx.execute(
                 "DELETE FROM cross_package_imports WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str.as_ref()],
+            )?;
+            // Both fact sets must go with the file.  `all_authorized` is a
+            // conjunction, so a deleted file's leftover authorized-caller edge
+            // would keep a callee's lift alive after its only authorized
+            // caller is gone, silencing a real missing-ownership finding.
+            tx.execute(
+                "DELETE FROM caller_scope_edges WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str.as_ref()],
+            )?;
+            tx.execute(
+                "DELETE FROM router_facts WHERE project = ?1 AND file_path = ?2",
                 params![self.project, path_str.as_ref()],
             )?;
 
@@ -3020,11 +3209,18 @@ fn get_issues_from_file_recomputes_category_from_rule_id() {
             line: 1,
             col: 1,
         },
-        // Structural resource leak -> Reliability.
+        // May-analysis resource leak -> Reliability.
+        index::IssueRow {
+            rule_id: "cfg-resource-leak",
+            severity: "Medium",
+            line: 2,
+            col: 1,
+        },
+        // Must-analysis resource leak -> Security (CWE-401 exhaustion).
         index::IssueRow {
             rule_id: "state-resource-leak",
             severity: "Medium",
-            line: 2,
+            line: 4,
             col: 1,
         },
         // Taint-style id (not in any AST registry) -> Security fallback.
@@ -3050,7 +3246,13 @@ fn get_issues_from_file_recomputes_category_from_rule_id() {
         FindingCategory::Quality,
         "quality AST pattern must not be resurrected as Security on warm scans"
     );
-    assert_eq!(cat("state-resource-leak"), FindingCategory::Reliability);
+    assert_eq!(cat("cfg-resource-leak"), FindingCategory::Reliability);
+    assert_eq!(
+        cat("state-resource-leak"),
+        FindingCategory::Security,
+        "a must-leak is resource exhaustion, and the warm path must not \
+         demote it back to Reliability"
+    );
     assert_eq!(cat("taint-sql-injection"), FindingCategory::Security);
 }
 
@@ -3151,6 +3353,11 @@ fn ssa_summaries_round_trip() {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -3188,6 +3395,11 @@ fn ssa_summaries_round_trip() {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -3363,6 +3575,11 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             return_path_facts: smallvec::SmallVec::new(),
             typed_call_receivers: vec![],
             validated_params_to_return: smallvec::SmallVec::new(),
+            confines_path_params: smallvec::SmallVec::new(),
+            asserts_path_confined_params: Default::default(),
+            result_reject_guard_params: Default::default(),
+            sanitizes_open_redirect_return: false,
+            confines_path_return: false,
             param_to_gate_filters: vec![],
             entry_kind: None,
         },
@@ -3402,6 +3619,11 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             return_path_facts: smallvec::SmallVec::new(),
             typed_call_receivers: vec![],
             validated_params_to_return: smallvec::SmallVec::new(),
+            confines_path_params: smallvec::SmallVec::new(),
+            asserts_path_confined_params: Default::default(),
+            result_reject_guard_params: Default::default(),
+            sanitizes_open_redirect_return: false,
+            confines_path_return: false,
             param_to_gate_filters: vec![],
             entry_kind: None,
         },
@@ -3464,13 +3686,18 @@ fn replace_all_for_file_clears_stale_ssa_rows_when_emptied() {
             return_path_facts: smallvec::SmallVec::new(),
             typed_call_receivers: vec![],
             validated_params_to_return: smallvec::SmallVec::new(),
+            confines_path_params: smallvec::SmallVec::new(),
+            asserts_path_confined_params: Default::default(),
+            result_reject_guard_params: Default::default(),
+            sanitizes_open_redirect_return: false,
+            confines_path_return: false,
             param_to_gate_filters: vec![],
             entry_kind: None,
         },
     )];
 
     // Pass 1: file has one SSA summary.
-    idx.replace_all_for_file(&f, &hash_v1, &[], &ssa_sums, &[], &[], None)
+    idx.replace_all_for_file(&f, &hash_v1, &[], &ssa_sums, &[], &[], None, &[], None)
         .unwrap();
     assert_eq!(
         idx.load_all_ssa_summaries().unwrap().len(),
@@ -3481,7 +3708,7 @@ fn replace_all_for_file_clears_stale_ssa_rows_when_emptied() {
     // Pass 2: file gutted — new hash, empty SSA summaries/bodies.  The old
     // row must be deleted, not left behind.
     let hash_v2 = index::Indexer::digest_bytes(b"v2");
-    idx.replace_all_for_file(&f, &hash_v2, &[], &[], &[], &[], None)
+    idx.replace_all_for_file(&f, &hash_v2, &[], &[], &[], &[], None, &[], None)
         .unwrap();
     assert!(
         idx.load_all_ssa_summaries().unwrap().is_empty(),
@@ -3537,6 +3764,11 @@ fn clear_drops_ssa_summaries_table() {
             return_path_facts: smallvec::SmallVec::new(),
             typed_call_receivers: vec![],
             validated_params_to_return: smallvec::SmallVec::new(),
+            confines_path_params: smallvec::SmallVec::new(),
+            asserts_path_confined_params: Default::default(),
+            result_reject_guard_params: Default::default(),
+            sanitizes_open_redirect_return: false,
+            confines_path_return: false,
             param_to_gate_filters: vec![],
             entry_kind: None,
         },
@@ -3591,15 +3823,15 @@ fn make_test_callee_body(
             blocks,
             entry: BlockId(0),
             value_defs,
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::new(),
-            field_writes: std::collections::HashMap::new(),
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         },
         opt: crate::ssa::OptimizeResult {
-            const_values: std::collections::HashMap::new(),
+            const_values: crate::ssa::const_prop::ConstValues::default(),
             type_facts: crate::ssa::type_facts::TypeFactResult {
                 facts: std::collections::HashMap::new(),
             },
@@ -3634,19 +3866,29 @@ fn cross_package_imports_round_trip_via_replace_all_for_file() {
     let mut imports: std::collections::HashMap<String, FuncKey> = std::collections::HashMap::new();
     imports.insert(
         "escape".to_string(),
-        FuncKey {
-            lang: Lang::TypeScript,
-            namespace: "packages/util/src/escape.ts".to_string(),
-            container: String::new(),
-            name: "escape".to_string(),
-            arity: None,
-            disambig: None,
-            kind: FuncKind::Function,
-        },
+        FuncKey::from_parts(
+            Lang::TypeScript,
+            "packages/util/src/escape.ts",
+            String::new(),
+            "escape",
+            None,
+            None,
+            FuncKind::Function,
+        ),
     );
 
-    idx.replace_all_for_file(&f, &hash, &[], &[], &[], &[], Some(("caller.ts", &imports)))
-        .unwrap();
+    idx.replace_all_for_file(
+        &f,
+        &hash,
+        &[],
+        &[],
+        &[],
+        &[],
+        Some(("caller.ts", &imports)),
+        &[],
+        None,
+    )
+    .unwrap();
 
     let loaded = idx.load_all_cross_package_imports().unwrap();
     assert_eq!(loaded.len(), 1);
@@ -3662,9 +3904,112 @@ fn cross_package_imports_round_trip_via_replace_all_for_file() {
     assert_eq!(key.lang, Lang::TypeScript);
 
     // Empty input on rescan should drop the row.
-    idx.replace_all_for_file(&f, &hash, &[], &[], &[], &[], None)
+    idx.replace_all_for_file(&f, &hash, &[], &[], &[], &[], None, &[], None)
         .unwrap();
     assert!(idx.load_all_cross_package_imports().unwrap().is_empty());
+}
+
+/// Persisted caller-scope edges must rebuild the SAME accumulator that folding
+/// the in-memory edges directly produces.
+///
+/// This is the property the indexed path depends on: it never stores a folded
+/// `CalleeCallerAcc`, only the raw per-file edges, and rebuilds the fold on
+/// every scan.  If the round trip were lossy in either direction, an indexed
+/// scan would lift route auth onto a helper the non-indexed scan refuses to
+/// lift (silencing a real finding) or vice versa.
+#[test]
+fn caller_scope_edges_round_trip_and_reproduce_the_fold() {
+    use crate::auth_analysis::caller_scope::CallerScopeEdge;
+    use crate::auth_analysis::model::{AuthCheck, AuthCheckKind};
+    use crate::auth_analysis::persist::CallerScopeEdgeRow;
+    use crate::symbol::Lang;
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("routes.py");
+    std::fs::write(&f, "def route(): return helper()").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    let hash = index::Indexer::digest_bytes(b"routes content");
+
+    let route_check = AuthCheck {
+        kind: AuthCheckKind::Ownership,
+        callee: "requires_access_dag".into(),
+        subjects: vec![],
+        span: (0, 10),
+        line: 1,
+        args: vec![],
+        condition_text: None,
+        is_route_level: true,
+    };
+    // One authorized caller and one unauthorized caller of the same leaf: the
+    // AND in `all_authorized` must refuse the lift.
+    let edges = vec![
+        CallerScopeEdge {
+            lang: Lang::Python,
+            callee_leaf: "fetch_row".into(),
+            caller_authorized: true,
+            route_checks: vec![route_check.clone()],
+        },
+        CallerScopeEdge {
+            lang: Lang::Python,
+            callee_leaf: "purge_row".into(),
+            caller_authorized: true,
+            route_checks: vec![route_check],
+        },
+        CallerScopeEdge {
+            lang: Lang::Python,
+            callee_leaf: "purge_row".into(),
+            caller_authorized: false,
+            route_checks: vec![],
+        },
+    ];
+
+    let rows: Vec<CallerScopeEdgeRow> = edges.iter().map(CallerScopeEdgeRow::from).collect();
+    idx.replace_all_for_file(&f, &hash, &[], &[], &[], &[], None, &rows, None)
+        .unwrap();
+
+    // Fold the in-memory edges (what `--index off` does)...
+    let mut direct = crate::summary::GlobalSummaries::new();
+    for e in edges {
+        direct.fold_caller_scope_edge(e);
+    }
+    // ...and the reloaded ones (what `--index auto` does).
+    let mut reloaded = crate::summary::GlobalSummaries::new();
+    for row in idx.load_all_caller_scope_edges().unwrap() {
+        reloaded.fold_caller_scope_edge(row.into());
+    }
+
+    for leaf in ["fetch_row", "purge_row"] {
+        let a = direct.resolve_caller_scope(Lang::Python, leaf);
+        let b = reloaded.resolve_caller_scope(Lang::Python, leaf);
+        assert_eq!(
+            a.map(|acc| acc.should_lift()),
+            b.map(|acc| acc.should_lift()),
+            "lift decision for {leaf} must not depend on the scan path"
+        );
+    }
+    assert_eq!(
+        reloaded
+            .resolve_caller_scope(Lang::Python, "fetch_row")
+            .map(|acc| acc.should_lift()),
+        Some(true),
+        "single authorized caller lifts"
+    );
+    assert_eq!(
+        reloaded
+            .resolve_caller_scope(Lang::Python, "purge_row")
+            .map(|acc| acc.should_lift()),
+        Some(false),
+        "one unauthorized caller must refuse the lift"
+    );
+
+    // Emptied input on rescan clears the rows, so a file that lost its route
+    // handler stops contributing its authorized edges.
+    idx.replace_all_for_file(&f, &hash, &[], &[], &[], &[], None, &[], None)
+        .unwrap();
+    assert!(idx.load_all_caller_scope_edges().unwrap().is_empty());
 }
 
 #[test]
@@ -3864,6 +4209,11 @@ fn make_test_ssa_summary() -> crate::summary::ssa_summary::SsaFuncSummary {
         return_path_facts: smallvec::SmallVec::new(),
         typed_call_receivers: vec![],
         validated_params_to_return: smallvec::SmallVec::new(),
+        confines_path_params: smallvec::SmallVec::new(),
+        asserts_path_confined_params: Default::default(),
+        result_reject_guard_params: Default::default(),
+        sanitizes_open_redirect_return: false,
+        confines_path_return: false,
         param_to_gate_filters: vec![],
         entry_kind: None,
     }

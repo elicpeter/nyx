@@ -18,6 +18,7 @@ use petgraph::algo::dominators::{Dominators, simple_fast};
 use petgraph::graph::NodeIndex;
 use petgraph::prelude::*;
 use petgraph::visit::EdgeRef;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
@@ -57,7 +58,7 @@ use super::ir::*;
 #[allow(clippy::too_many_arguments)]
 fn try_lower_field_proj_chain(
     callee: &str,
-    var_stacks: &HashMap<String, Vec<SsaValue>>,
+    var_stacks: &FxHashMap<String, Vec<SsaValue>>,
     field_interner: &mut crate::ssa::ir::FieldInterner,
     block_idx: usize,
     block_id: BlockId,
@@ -149,7 +150,7 @@ fn try_lower_field_proj_chain(
 fn strip_implicit_chain_root(
     callee: &str,
     info: &crate::cfg::NodeInfo,
-    var_stacks: &HashMap<String, Vec<SsaValue>>,
+    var_stacks: &FxHashMap<String, Vec<SsaValue>>,
     args: &mut Vec<SmallVec<[SsaValue; 2]>>,
 ) {
     let Some(base_ident) = callee.split('.').next() else {
@@ -253,7 +254,7 @@ fn lower_to_ssa_inner(
         collect_reachable(cfg, entry, scope, traverse_all);
 
     // Build the set of nodes that should be treated as Nop (out-of-scope but included)
-    let nop_nodes: HashSet<NodeIndex> = if scope_nop {
+    let nop_nodes: FxHashSet<NodeIndex> = if scope_nop {
         let in_scope = |node: NodeIndex| -> bool {
             let info = &cfg[node];
             match scope {
@@ -267,7 +268,7 @@ fn lower_to_ssa_inner(
             .copied()
             .collect()
     } else {
-        HashSet::new()
+        FxHashSet::default()
     };
     if reachable.is_empty() {
         return Err(SsaError::EmptyCfg);
@@ -450,11 +451,11 @@ fn collect_reachable(
     scope: Option<&str>,
     scope_all: bool,
 ) -> (
-    HashSet<NodeIndex>,
+    FxHashSet<NodeIndex>,
     Vec<(NodeIndex, NodeIndex, EdgeKind)>,
     Vec<(NodeIndex, NodeIndex)>,
 ) {
-    let mut reachable = HashSet::new();
+    let mut reachable = FxHashSet::default();
     let mut edges = Vec::new();
     let mut exception_edges = Vec::new();
     let mut queue = VecDeque::new();
@@ -527,18 +528,23 @@ fn collect_reachable(
 fn form_blocks(
     cfg: &Cfg,
     entry: NodeIndex,
-    reachable: &HashSet<NodeIndex>,
+    reachable: &FxHashSet<NodeIndex>,
     filtered_edges: &[(NodeIndex, NodeIndex, EdgeKind)],
 ) -> (
     Vec<Vec<NodeIndex>>,
-    HashMap<NodeIndex, usize>,
+    FxHashMap<NodeIndex, usize>,
     Vec<Vec<usize>>,
     Vec<Vec<usize>>,
 ) {
-    // Build adjacency from filtered edges
-    let mut successors: HashMap<NodeIndex, Vec<(NodeIndex, EdgeKind)>> = HashMap::new();
-    let mut in_degree: HashMap<NodeIndex, usize> = HashMap::new();
-    let mut has_branching_in: HashMap<NodeIndex, bool> = HashMap::new();
+    // Build adjacency from filtered edges.  All node-keyed maps below use
+    // `FxHashMap`/`FxHashSet` (rustc_hash): keys are dense `NodeIndex`
+    // integers probed once per edge/node, and none are iterated in an
+    // output-observable order (`is_leader` is drained into a sorted vec;
+    // block IDs come from the BFS `leader_queue`), so swapping SipHash for
+    // the cheaper deterministic hasher is bit-identical.
+    let mut successors: FxHashMap<NodeIndex, Vec<(NodeIndex, EdgeKind)>> = FxHashMap::default();
+    let mut in_degree: FxHashMap<NodeIndex, usize> = FxHashMap::default();
+    let mut has_branching_in: FxHashMap<NodeIndex, bool> = FxHashMap::default();
 
     for node in reachable {
         in_degree.entry(*node).or_insert(0);
@@ -570,7 +576,7 @@ fn form_blocks(
     }
 
     // Determine block leaders
-    let mut is_leader: HashSet<NodeIndex> = HashSet::new();
+    let mut is_leader: FxHashSet<NodeIndex> = FxHashSet::default();
     is_leader.insert(entry); // entry is always a leader
 
     for &node in reachable {
@@ -594,13 +600,13 @@ fn form_blocks(
 
     // Build blocks by following single-successor Seq edges from each leader
     let mut blocks_nodes: Vec<Vec<NodeIndex>> = Vec::new();
-    let mut block_of_node: HashMap<NodeIndex, usize> = HashMap::new();
-    let mut visited: HashSet<NodeIndex> = HashSet::new();
+    let mut block_of_node: FxHashMap<NodeIndex, usize> = FxHashMap::default();
+    let mut visited: FxHashSet<NodeIndex> = FxHashSet::default();
 
     // BFS order to assign blocks deterministically (entry first)
     let mut leader_queue: VecDeque<NodeIndex> = VecDeque::new();
     leader_queue.push_back(entry);
-    let mut leader_visited: HashSet<NodeIndex> = HashSet::new();
+    let mut leader_visited: FxHashSet<NodeIndex> = FxHashSet::default();
     leader_visited.insert(entry);
 
     // Discover leaders in BFS order over `cfg`, but skip edges whose
@@ -619,7 +625,7 @@ fn form_blocks(
     // edges are bogus.
     {
         let mut bfs_queue: VecDeque<NodeIndex> = VecDeque::new();
-        let mut bfs_seen: HashSet<NodeIndex> = HashSet::new();
+        let mut bfs_seen: FxHashSet<NodeIndex> = FxHashSet::default();
         bfs_queue.push_back(entry);
         bfs_seen.insert(entry);
         while let Some(node) = bfs_queue.pop_front() {
@@ -887,7 +893,7 @@ fn reorder_external_vars(external: Vec<String>, formal_params: &[String]) -> Vec
 fn collect_var_defs(
     cfg: &Cfg,
     blocks_nodes: &[Vec<NodeIndex>],
-    nop_nodes: &HashSet<NodeIndex>,
+    nop_nodes: &FxHashSet<NodeIndex>,
 ) -> BTreeMap<String, HashSet<usize>> {
     let mut defs: BTreeMap<String, HashSet<usize>> = BTreeMap::new();
 
@@ -1092,20 +1098,24 @@ fn rename_variables(
     external_vars: &[String],
     formal_params: &[String],
     with_params: bool,
-    nop_nodes: &HashSet<NodeIndex>,
+    nop_nodes: &FxHashSet<NodeIndex>,
 ) -> (
     Vec<SsaBlock>,
     Vec<ValueDef>,
-    HashMap<NodeIndex, SsaValue>,
+    crate::ssa::ir::CfgNodeMap,
     crate::ssa::ir::FieldInterner,
-    HashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
-    HashSet<SsaValue>,
-    HashSet<SsaValue>,
+    FxHashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
+    FxHashSet<SsaValue>,
+    FxHashSet<SsaValue>,
 ) {
     let num_blocks = blocks_nodes.len();
     let mut next_value: u32 = 0;
     let mut value_defs: Vec<ValueDef> = Vec::new();
-    let mut cfg_node_map: HashMap<NodeIndex, SsaValue> = HashMap::new();
+    // Pre-sized to the CFG's node count so every `insert(node, _)` lands without
+    // a reallocation (`NodeIndex::index() < node_count` for a Graph built
+    // without node removals). Dense `Vec` side table — no hashing. See
+    // [`crate::ssa::ir::CfgNodeMap`].
+    let mut cfg_node_map = crate::ssa::ir::CfgNodeMap::with_node_count(cfg.node_count());
     // Per-body interner for FieldProj field names; populated when the
     // member-access decomposition (try_lower_field_proj_chain) emits a
     // chain for chained-receiver method calls (`a.b.c()`), and remains
@@ -1116,14 +1126,22 @@ fn rename_variables(
     // [`SsaOp::Assign`]'s defined value to its `(receiver, field)` pair.
     // Populated below at the synthetic-Assign emission site.  Read by
     // the taint engine to lift the assign into a structural field WRITE.
-    let mut field_writes: HashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)> = HashMap::new();
+    let mut field_writes: FxHashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)> =
+        FxHashMap::default();
     // SSA values whose `Assign` comes from a bare-array destructure
     // slot-scoped kill arm; the taint engine consults this set to skip
     // outer-node Source label pickup while still unioning operand taint.
-    let mut slot_scoped_assigns: HashSet<SsaValue> = HashSet::new();
+    let mut slot_scoped_assigns: FxHashSet<SsaValue> = FxHashSet::default();
 
     // Per-variable rename stacks
-    let mut var_stacks: HashMap<String, Vec<SsaValue>> = HashMap::new();
+    // `FxHashMap` (rustc_hash) over stdlib SipHash: `var_stacks` is the
+    // dominator-tree rename's per-variable SSA stack, probed and mutated on
+    // every def/use/phi during `process_block` (a top SSA-lowering hotspot),
+    // keyed on variable-name strings.  It is only ever iterated to snapshot
+    // stack depths for rollback (per-key length restore, order-independent),
+    // never in an output-observable order, so the faster hasher is
+    // bit-identical.
+    let mut var_stacks: FxHashMap<String, Vec<SsaValue>> = FxHashMap::default();
 
     // Pre-allocate SSA blocks
     let mut ssa_blocks: Vec<SsaBlock> = (0..num_blocks)
@@ -1180,16 +1198,16 @@ fn rename_variables(
         phi_placements: &[BTreeSet<String>],
         dom_tree_children: &[Vec<usize>],
         filtered_edges: &[(NodeIndex, NodeIndex, EdgeKind)],
-        var_stacks: &mut HashMap<String, Vec<SsaValue>>,
+        var_stacks: &mut FxHashMap<String, Vec<SsaValue>>,
         ssa_blocks: &mut [SsaBlock],
         phi_values: &mut [BTreeMap<String, SsaValue>],
         value_defs: &mut Vec<ValueDef>,
-        cfg_node_map: &mut HashMap<NodeIndex, SsaValue>,
+        cfg_node_map: &mut crate::ssa::ir::CfgNodeMap,
         next_value: &mut u32,
-        nop_nodes: &HashSet<NodeIndex>,
+        nop_nodes: &FxHashSet<NodeIndex>,
         field_interner: &mut crate::ssa::ir::FieldInterner,
-        field_writes: &mut HashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
-        slot_scoped_assigns: &mut HashSet<SsaValue>,
+        field_writes: &mut FxHashMap<SsaValue, (SsaValue, crate::ssa::ir::FieldId)>,
+        slot_scoped_assigns: &mut FxHashSet<SsaValue>,
     ) {
         let block_id = BlockId(block_idx as u32);
 
@@ -1210,7 +1228,7 @@ fn rename_variables(
 
             // Helper: build Call args from arg_uses, falling back to info.taint.uses
             let build_call_args = |info: &crate::cfg::NodeInfo,
-                                   var_stacks: &HashMap<String, Vec<SsaValue>>|
+                                   var_stacks: &FxHashMap<String, Vec<SsaValue>>|
              -> (Vec<SmallVec<[SsaValue; 2]>>, Option<SsaValue>) {
                 let receiver = info
                     .call
@@ -2253,7 +2271,7 @@ fn rename_variables(
     // unless it appears in `formal_params`, so the auto-seed pass cannot
     // mistake a bubbled-up free var (like `userId` lifted from a nested
     // jest test callback) for a formal of the outer body.
-    let mut synthetic_externals: HashSet<SsaValue> = HashSet::new();
+    let mut synthetic_externals: FxHashSet<SsaValue> = FxHashSet::default();
     let formal_set: HashSet<&str> = formal_params.iter().map(|s| s.as_str()).collect();
     let track_synthetic = with_params;
     if !external_vars.is_empty() {
@@ -3956,7 +3974,7 @@ mod tests {
     /// invoking `try_lower_field_proj_chain` in isolation.  Returns
     /// `(var_stacks, field_interner, ssa_blocks, value_defs, next_value)`.
     fn fresh_proj_scratch() -> (
-        std::collections::HashMap<String, Vec<SsaValue>>,
+        FxHashMap<String, Vec<SsaValue>>,
         crate::ssa::ir::FieldInterner,
         Vec<SsaBlock>,
         Vec<ValueDef>,
@@ -3971,7 +3989,7 @@ mod tests {
             succs: SmallVec::new(),
         }];
         (
-            std::collections::HashMap::new(),
+            FxHashMap::default(),
             crate::ssa::ir::FieldInterner::new(),
             blocks,
             Vec::new(),
@@ -3982,7 +4000,7 @@ mod tests {
     /// Seed a single SSA value `SsaValue(0)` for `name` so the chain
     /// helper's base lookup succeeds.
     fn seed_var(
-        var_stacks: &mut std::collections::HashMap<String, Vec<SsaValue>>,
+        var_stacks: &mut FxHashMap<String, Vec<SsaValue>>,
         value_defs: &mut Vec<ValueDef>,
         next_value: &mut u32,
         name: &str,

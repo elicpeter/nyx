@@ -342,23 +342,23 @@ fn load_global_summaries_from_pool(
         ssa_rows
     {
         let lang = crate::symbol::Lang::from_slug(&lang_str).unwrap_or(crate::symbol::Lang::Rust);
-        let key = crate::symbol::FuncKey {
+        let key = crate::symbol::FuncKey::from_parts(
             lang,
-            namespace: if namespace.is_empty() {
+            if namespace.is_empty() {
                 crate::symbol::normalize_namespace(&_file_path, Some(&root_str))
             } else {
                 namespace
             },
             container,
             name,
-            arity: if arity >= 0 {
+            if arity >= 0 {
                 Some(arity as usize)
             } else {
                 None
             },
             disambig,
             kind,
-        };
+        );
         global.insert_ssa(key, summary);
     }
 
@@ -447,6 +447,11 @@ mod tests {
                         return_path_facts: smallvec::SmallVec::new(),
                         typed_call_receivers: vec![],
                         validated_params_to_return: smallvec::SmallVec::new(),
+                        confines_path_params: smallvec::SmallVec::new(),
+                        asserts_path_confined_params: Default::default(),
+                        result_reject_guard_params: Default::default(),
+                        sanitizes_open_redirect_return: false,
+                        confines_path_return: false,
                         param_to_gate_filters: vec![],
                         entry_kind: None,
                     },
@@ -516,13 +521,13 @@ mod tests {
                 blocks: vec![],
                 entry: crate::ssa::ir::BlockId(0),
                 value_defs: vec![],
-                cfg_node_map: std::collections::HashMap::new(),
+                cfg_node_map: Default::default(),
                 exception_edges: vec![],
                 field_interner: crate::ssa::ir::FieldInterner::default(),
-                field_writes: std::collections::HashMap::new(),
+                field_writes: Default::default(),
 
-                synthetic_externals: std::collections::HashSet::new(),
-                slot_scoped_assigns: std::collections::HashSet::new(),
+                synthetic_externals: Default::default(),
+                slot_scoped_assigns: Default::default(),
             },
             false,
             false,
@@ -541,13 +546,13 @@ mod tests {
                 blocks: vec![],
                 entry: crate::ssa::ir::BlockId(0),
                 value_defs: vec![],
-                cfg_node_map: std::collections::HashMap::new(),
+                cfg_node_map: Default::default(),
                 exception_edges: vec![],
                 field_interner: crate::ssa::ir::FieldInterner::default(),
-                field_writes: std::collections::HashMap::new(),
+                field_writes: Default::default(),
 
-                synthetic_externals: std::collections::HashSet::new(),
-                slot_scoped_assigns: std::collections::HashSet::new(),
+                synthetic_externals: Default::default(),
+                slot_scoped_assigns: Default::default(),
             },
             true,
             true,
@@ -566,13 +571,13 @@ mod tests {
                 blocks: vec![],
                 entry: crate::ssa::ir::BlockId(0),
                 value_defs: vec![],
-                cfg_node_map: std::collections::HashMap::new(),
+                cfg_node_map: Default::default(),
                 exception_edges: vec![],
                 field_interner: crate::ssa::ir::FieldInterner::default(),
-                field_writes: std::collections::HashMap::new(),
+                field_writes: Default::default(),
 
-                synthetic_externals: std::collections::HashSet::new(),
-                slot_scoped_assigns: std::collections::HashSet::new(),
+                synthetic_externals: Default::default(),
+                slot_scoped_assigns: Default::default(),
             },
             true,
             false,
@@ -670,6 +675,11 @@ mod tests {
                         return_path_facts: smallvec::SmallVec::new(),
                         typed_call_receivers: vec![],
                         validated_params_to_return: smallvec::SmallVec::new(),
+                        confines_path_params: smallvec::SmallVec::new(),
+                        asserts_path_confined_params: Default::default(),
+                        result_reject_guard_params: Default::default(),
+                        sanitizes_open_redirect_return: false,
+                        confines_path_return: false,
                         param_to_gate_filters: vec![],
                         entry_kind: None,
                     },
@@ -680,13 +690,15 @@ mod tests {
         let global = load_global_summaries_from_pool(&scan_root, &pool)
             .expect("debug loader should recover project summaries");
 
-        let key = FuncKey {
-            lang: Lang::Rust,
-            namespace: "src/lib.rs".into(),
-            name: "helper".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let key = FuncKey::from_parts(
+            Lang::Rust,
+            "src/lib.rs",
+            String::new(),
+            "helper",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
 
         assert!(global.get(&key).is_some());
         assert!(

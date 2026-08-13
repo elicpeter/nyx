@@ -73,6 +73,1151 @@ fn rv_traces_to_constant(
     }
 }
 
+/// Walk the def-use closure of `v`, collecting the set of formal-parameter
+/// indices it depends on.
+///
+/// Traces through `Assign`/`Phi` operands, `Call` receiver + args (so a
+/// path-normalising wrapper like `normalizePath(id)` still reaches the
+/// underlying `id` parameter), and `FieldProj` receivers.  A value found in
+/// `param_index_of` is a leaf (its def is the `Param` op).  Bounded by a
+/// shared node `budget` and a `seen` set so a wide/cyclic SSA DAG cannot
+/// blow up.
+fn collect_reaching_params(
+    ssa: &SsaBody,
+    v: SsaValue,
+    param_index_of: &HashMap<SsaValue, usize>,
+    seen: &mut HashSet<SsaValue>,
+    out: &mut SmallVec<[usize; 2]>,
+    budget: &mut u32,
+) {
+    if *budget == 0 || !seen.insert(v) {
+        return;
+    }
+    *budget -= 1;
+    if let Some(&idx) = param_index_of.get(&v) {
+        if !out.contains(&idx) {
+            out.push(idx);
+        }
+        return;
+    }
+    match op_for_value(ssa, v) {
+        Some(SsaOp::Assign(uses)) => {
+            for &u in uses {
+                collect_reaching_params(ssa, u, param_index_of, seen, out, budget);
+            }
+        }
+        Some(SsaOp::Phi(operands)) => {
+            for &(_, u) in operands {
+                collect_reaching_params(ssa, u, param_index_of, seen, out, budget);
+            }
+        }
+        Some(SsaOp::Call { receiver, args, .. }) => {
+            if let Some(r) = receiver {
+                collect_reaching_params(ssa, *r, param_index_of, seen, out, budget);
+            }
+            for group in args {
+                for &u in group {
+                    collect_reaching_params(ssa, u, param_index_of, seen, out, budget);
+                }
+            }
+        }
+        Some(SsaOp::FieldProj { receiver, .. }) => {
+            collect_reaching_params(ssa, *receiver, param_index_of, seen, out, budget);
+        }
+        _ => {}
+    }
+}
+
+/// Detect parameters confined by a boolean path-prefix predicate.
+///
+/// Recognises the behaviour-based path-confinement helper shape: a function
+/// whose return value is a constant-prefix containment check on a parameter,
+/// e.g.
+///
+/// ```text
+/// const isOptimizedDepFile = (id: string): boolean =>
+///   normalizePath(id).startsWith(`${depsCacheDir}/`)   // JS/TS
+/// func isSafe(p string) bool { return strings.HasPrefix(p, "/safe") }  // Go
+/// def is_safe(p): return p.startswith("/safe")          // Python
+/// def safe?(p); p.start_with?("/safe"); end             // Ruby
+/// ```
+///
+/// For each `return <call>` block, follows single-operand `Assign` copies to
+/// the real defining op, requires it to be a prefix-containment call
+/// (`startsWith` / `startswith` / `start_with?` method forms, or Go's
+/// `strings.HasPrefix(subject, prefix)` function form), then:
+///
+///  * the **subject** (method receiver, or `HasPrefix` arg 0) must trace back
+///    to a formal parameter — that parameter is the one being confined;
+///  * the **prefix** (method arg 0, or `HasPrefix` arg 1) must be a *fixed*
+///    value: a string constant, or at minimum not derived from any parameter,
+///    so a caller cannot influence the safe-prefix the subject is checked
+///    against.
+///
+/// The recognised predicate is `BooleanTrueIsValid` (a `true` result proves
+/// containment).  Callers consume the returned indices in
+/// `apply_summary_confinement_narrowing` to strip `Cap::FILE_IO` from the
+/// matching argument on the surviving branch of a downstream truthiness gate.
+///
+/// Conservative by construction: a negated/rejection form (`!…startsWith` /
+/// `.contains("..")`) is *not* recognised here (opposite polarity), nor is a
+/// `path.relative(base, p)` not-`..` shape — both are documented follow-ups.
+/// Motivated by CVE-2026-39365 (Vite dev-server sourcemap path traversal).
+fn detect_path_confining_predicate_params(
+    ssa: &SsaBody,
+    consts: &crate::ssa::const_prop::ConstValues,
+    param_index_of: &HashMap<SsaValue, usize>,
+) -> SmallVec<[usize; 2]> {
+    let mut result: SmallVec<[usize; 2]> = SmallVec::new();
+    if param_index_of.is_empty() {
+        return result;
+    }
+
+    for block in &ssa.blocks {
+        let Terminator::Return(Some(rv)) = &block.terminator else {
+            continue;
+        };
+
+        // Follow single-operand Assign copies to the real defining op
+        // (`return t; t = recv.startsWith(p)` lowers `rv` to a copy of the
+        // call value on some paths).
+        let mut cur = *rv;
+        let mut hops = 0;
+        let def = loop {
+            match op_for_value(ssa, cur) {
+                Some(SsaOp::Assign(uses)) if uses.len() == 1 && hops < 8 => {
+                    cur = uses[0];
+                    hops += 1;
+                }
+                other => break other,
+            }
+        };
+        let Some(SsaOp::Call {
+            callee,
+            callee_text,
+            args,
+            receiver,
+        }) = def
+        else {
+            continue;
+        };
+
+        for p in prefix_confinement_params(
+            ssa,
+            consts,
+            param_index_of,
+            callee.as_str(),
+            callee_text.as_deref(),
+            *receiver,
+            args,
+        ) {
+            if !result.contains(&p) {
+                result.push(p);
+            }
+        }
+    }
+
+    result
+}
+
+/// Subject/prefix analysis for a resolved prefix-containment call
+/// (`recv.startsWith(prefix)`, `strings.HasPrefix(subject, prefix)`, Python
+/// `.startswith`, Ruby `.start_with?`).  Returns the formal-parameter indices a
+/// `true` result confines: params reaching the *subject* side, provided the
+/// *prefix* operand is a fixed value (a string constant, or not reachable from
+/// any formal parameter).  Empty when the call is not a fixed-prefix
+/// containment check.  Shared by the return-value confiner detector
+/// ([`detect_path_confining_predicate_params`]) and the assert-guard detector
+/// ([`detect_assert_path_confined_params`]).
+fn prefix_confinement_params(
+    ssa: &SsaBody,
+    consts: &crate::ssa::const_prop::ConstValues,
+    param_index_of: &HashMap<SsaValue, usize>,
+    callee: &str,
+    callee_text: Option<&str>,
+    receiver: Option<SsaValue>,
+    args: &[SmallVec<[SsaValue; 2]>],
+) -> SmallVec<[usize; 2]> {
+    use crate::ssa::const_prop::ConstLattice;
+    let mut result: SmallVec<[usize; 2]> = SmallVec::new();
+
+    let method = crate::labels::bare_method_name(callee_text.unwrap_or(callee));
+    let mlow = method.to_ascii_lowercase();
+    if !matches!(mlow.as_str(), "startswith" | "start_with?" | "hasprefix") {
+        return result;
+    }
+
+    // Resolve (subject operands, prefix value) per call form.
+    //
+    // Method form (`receiver.startsWith(prefix)`): SSA lowering of a
+    // chained-receiver method call puts the *explicit* arguments first
+    // and *appends* the chain's implicit-use operands (the free
+    // identifiers and the real subject param) as later arg groups
+    // (`build_call_args`).  So `args[0]` is the prefix and the subject
+    // param hides in `receiver` + `args[1..]` as an implicit use — the
+    // textual receiver (`normalizePath(id)`) is itself collapsed to a
+    // free-var Param, so the real `id` param is only observable through
+    // those implicit uses.
+    //
+    // Go function form (`strings.HasPrefix(subject, prefix)`): no
+    // receiver, `args[0]` is the subject and `args[1]` the prefix.
+    let (subject_vals, prefix): (SmallVec<[SsaValue; 4]>, Option<SsaValue>) =
+        if let Some(r) = receiver {
+            let prefix = args.first().and_then(|g| g.first()).copied();
+            let mut subs: SmallVec<[SsaValue; 4]> = SmallVec::new();
+            subs.push(r);
+            for g in args.iter().skip(1) {
+                subs.extend(g.iter().copied());
+            }
+            (subs, prefix)
+        } else if mlow == "hasprefix" {
+            let prefix = args.get(1).and_then(|g| g.first()).copied();
+            let subs: SmallVec<[SsaValue; 4]> = args
+                .first()
+                .map(|g| g.iter().copied().collect())
+                .unwrap_or_default();
+            (subs, prefix)
+        } else {
+            (SmallVec::new(), None)
+        };
+    let Some(prefix) = prefix else {
+        return result;
+    };
+
+    // Prefix must be a fixed value: a string constant, or not reachable
+    // from any *formal* parameter.  Captured module-scope values
+    // (`depsCacheDir`) appear as free-var Params with no formal index,
+    // so they read as fixed; a real param-derived prefix is
+    // attacker-influenced and proves no confinement.
+    let prefix_is_const = matches!(consts.get(&prefix), Some(ConstLattice::Str(_)));
+    let mut budget = 512u32;
+    let mut prefix_params: SmallVec<[usize; 2]> = SmallVec::new();
+    if !prefix_is_const {
+        let mut pseen = HashSet::new();
+        collect_reaching_params(
+            ssa,
+            prefix,
+            param_index_of,
+            &mut pseen,
+            &mut prefix_params,
+            &mut budget,
+        );
+        if !prefix_params.is_empty() {
+            return result;
+        }
+    }
+
+    // A formal parameter flowing into the subject side of the prefix
+    // check is confined: a `true` result constrains it to start with the
+    // fixed prefix.
+    let mut subj_params: SmallVec<[usize; 2]> = SmallVec::new();
+    for sv in subject_vals {
+        let mut sseen = HashSet::new();
+        collect_reaching_params(
+            ssa,
+            sv,
+            param_index_of,
+            &mut sseen,
+            &mut subj_params,
+            &mut budget,
+        );
+    }
+    for p in subj_params {
+        if !prefix_params.contains(&p) && !result.contains(&p) {
+            result.push(p);
+        }
+    }
+    result
+}
+
+/// Whether a callee (by lowercased bare name) is a *throw-if-false* assertion
+/// helper: any normal return after it proves its boolean argument held.
+/// Spring `Assert.isTrue`, commons-lang `Validate.isTrue`, Guava
+/// `Preconditions.checkArgument` / `checkState`, Node `assert(...)`.  Bounded
+/// to this small set so a non-guard call whose first argument happens to be a
+/// `startsWith` result cannot mint a spurious confinement.
+fn is_assert_true_callee(bare_lower: &str) -> bool {
+    matches!(
+        bare_lower,
+        "istrue" | "checkargument" | "checkstate" | "require" | "assert"
+    )
+}
+
+/// Detect the *assert-guard* path-confinement form: a guard method whose body
+/// asserts a fixed-prefix containment on a parameter and throws otherwise
+/// (`Assert.isTrue(canonical.startsWith(base), msg)`,
+/// `Preconditions.checkArgument(p.startsWith(dir))`).  Any normal return from
+/// such a method is a post-condition that the checked parameter is confined
+/// under the fixed prefix, so a *call* to it (no caller branch needed) clears
+/// `Cap::FILE_IO` from the confined arguments.  Distinct from
+/// [`detect_path_confining_predicate_params`], which recognises a *return-value*
+/// boolean confiner the caller must branch on.
+///
+/// The confinement is sound only when the assertion throws on a `false`
+/// containment: the recognised callees are all throw-if-false asserts, and the
+/// asserted operand must reduce to a prefix-containment check.  Two shapes:
+///   * Case A (collapsed method form, the dominant Java/Spring shape) — the
+///     chained `x.startsWith(y)` flattens into the assert's arg0 group with the
+///     `startsWith` method name surviving only as a synthetic-param leaf, split
+///     by [`confined_params_from_collapsed_assert_group`].
+///   * Case B (clean Call form, e.g. Go `strings.HasPrefix`) — arg0's def is a
+///     distinct `startsWith`/`hasPrefix` Call, resolved by
+///     [`prefix_confinement_params`].
+///
+/// A negated `Assert.isTrue(!x.startsWith(p))` (assert-NOT-contained) is not a
+/// real containment guard; in Case B its def is a unary-not op, not a
+/// `startsWith` Call, so it is naturally excluded.  This over-recognition is
+/// conservative-to-suppress only in the (non-idiomatic) collapsed-negated
+/// shape, and only ever clears `Cap::FILE_IO`.
+///
+/// Motivated by CVE-2021-21234 (spring-boot-actuator-logview path traversal).
+fn detect_assert_path_confined_params(
+    ssa: &SsaBody,
+    consts: &crate::ssa::const_prop::ConstValues,
+    param_index_of: &HashMap<SsaValue, usize>,
+) -> SmallVec<[usize; 2]> {
+    let mut result: SmallVec<[usize; 2]> = SmallVec::new();
+    if param_index_of.is_empty() {
+        return result;
+    }
+
+    for block in &ssa.blocks {
+        for inst in &block.body {
+            let SsaOp::Call {
+                callee,
+                callee_text,
+                args,
+                ..
+            } = &inst.op
+            else {
+                continue;
+            };
+            let assert_name =
+                crate::labels::bare_method_name(callee_text.as_deref().unwrap_or(callee.as_str()))
+                    .to_ascii_lowercase();
+            if !is_assert_true_callee(&assert_name) {
+                continue;
+            }
+
+            // The asserted boolean is the assert call's first argument group.
+            let Some(group) = args.first() else {
+                continue;
+            };
+
+            // Case A — collapsed method form (`Assert.isTrue(x.startsWith(dir))`).
+            // SSA lowering flattens the chained receiver-method call into this
+            // arg group: the receiver, the `startsWith` method name (surviving
+            // only as a synthetic-param leaf), and the prefix argument all
+            // appear as ordered leaves.  Split at the method phantom.  This is
+            // the dominant Java/Spring shape; the `startsWith` never survives
+            // as a distinct SSA Call op.
+            let confined =
+                confined_params_from_collapsed_assert_group(ssa, consts, param_index_of, group);
+            if !confined.is_empty() {
+                for p in confined {
+                    if !result.contains(&p) {
+                        result.push(p);
+                    }
+                }
+                continue;
+            }
+
+            // Case B — clean Call form (function-style, e.g. Go
+            // `strings.HasPrefix(p, dir)`): arg0's def is a distinct
+            // startsWith/hasPrefix Call.  Follow single-operand Assign copies
+            // to it, exactly as the return-value detector follows a return.
+            let Some(&cond_v) = group.first() else {
+                continue;
+            };
+            let mut cur = cond_v;
+            let mut hops = 0;
+            let def = loop {
+                match op_for_value(ssa, cur) {
+                    Some(SsaOp::Assign(uses)) if uses.len() == 1 && hops < 8 => {
+                        cur = uses[0];
+                        hops += 1;
+                    }
+                    other => break other,
+                }
+            };
+            let Some(SsaOp::Call {
+                callee: c2,
+                callee_text: ct2,
+                args: a2,
+                receiver: r2,
+            }) = def
+            else {
+                continue;
+            };
+            for p in prefix_confinement_params(
+                ssa,
+                consts,
+                param_index_of,
+                c2.as_str(),
+                ct2.as_deref(),
+                *r2,
+                a2,
+            ) {
+                if !result.contains(&p) {
+                    result.push(p);
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Detect a `Result`-returning *rejection-guard* and the formal parameters it
+/// rejects: parameters that reach an `Err(...)` construction in the body.  Such
+/// a function returns `Err` on (rather than transforms) its argument, so any
+/// *normal* completion of a call to it proves the argument satisfied the
+/// guard.  Recorded name-independently in
+/// [`SsaFuncSummary::result_reject_guard_params`].
+///
+/// Path-specificity is applied later, at the call site, by
+/// `apply_path_validator_confinement`: only a callee whose bare name matches
+/// the path-safety-validator grammar (`ensure_safe_path_component`,
+/// `validate_safe_path`, …) confines `Cap::FILE_IO` on the rejected argument.
+/// This split is forced by SSA reality — the path-traversal sentinels the guard
+/// rejects (`".."`, `'/'`, `'\\'`) are collapsed out of the SSA body by
+/// boolean-expression lowering (a `component == ".." || component.chars().any(
+/// |c| matches!(c, '/' | '\\'))` guard lowers to a single aggregate `Call` with
+/// no surviving string/char constants), and the branch condition text is only
+/// the bound flag (`is_unsafe`), so no structural path token survives.  The
+/// `?`-guarded call (`ensure_safe_path_component(&segment)?`) also never becomes
+/// a branch condition (`?` lowers to a discarded `Call`), so the
+/// `classify_condition` `ValidationCall` machinery never engages.
+///
+/// Motivated by CVE-2026-53956 (rattler package-cache path traversal).
+fn detect_result_reject_guard_params(
+    ssa: &SsaBody,
+    param_index_of: &HashMap<SsaValue, usize>,
+) -> SmallVec<[usize; 2]> {
+    let mut result: SmallVec<[usize; 2]> = SmallVec::new();
+    if param_index_of.is_empty() {
+        return result;
+    }
+
+    let mut budget = 512u32;
+    let mut constructs_err = false;
+    for block in &ssa.blocks {
+        for inst in &block.body {
+            let SsaOp::Call {
+                callee,
+                callee_text,
+                args,
+                ..
+            } = &inst.op
+            else {
+                continue;
+            };
+            if crate::labels::bare_method_name(callee_text.as_deref().unwrap_or(callee.as_str()))
+                != "Err"
+            {
+                continue;
+            }
+            constructs_err = true;
+            // Params reaching the rejected error's operands are the rejected
+            // parameters (`Err(InvalidPathComponentError { value: component
+            // .to_string() })` carries `component`).
+            for group in args {
+                for &u in group {
+                    let mut seen = HashSet::new();
+                    collect_reaching_params(
+                        ssa,
+                        u,
+                        param_index_of,
+                        &mut seen,
+                        &mut result,
+                        &mut budget,
+                    );
+                }
+            }
+        }
+    }
+
+    // A single-parameter rejection guard whose `Err` does not carry the
+    // parameter (`Err("bad component")`) still rejects that sole parameter.
+    if constructs_err && result.is_empty() && param_index_of.len() == 1 {
+        if let Some(&idx) = param_index_of.values().next() {
+            result.push(idx);
+        }
+    }
+
+    result
+}
+
+/// Whether a callee bare name matches the *path-safety-validator* grammar: a
+/// function whose name declares it checks a value is a safe path / path
+/// component / filename (`ensure_safe_path_component`, `validate_safe_path`,
+/// `is_safe_filename`, `check_path_component`, …).  Snake-cased and matched on
+/// token co-occurrence, not a per-callee list, so it generalises across the
+/// naming conventions real path validators use.  Consumed by
+/// `apply_path_validator_confinement`.
+pub(crate) fn is_path_safety_validator_name(bare: &str) -> bool {
+    let snake = crate::taint::path_state::to_snake_lower(bare);
+    // Explicit compound tokens that are unambiguously path-safety validators.
+    if snake.contains("safe_path")
+        || snake.contains("path_component")
+        || snake.contains("safe_component")
+        || snake.contains("safe_filename")
+        || snake.contains("safe_file_name")
+        || snake.contains("safe_segment")
+        || snake.contains("no_traversal")
+        || snake.contains("reject_traversal")
+        || snake.contains("path_traversal")
+    {
+        return true;
+    }
+    // Co-occurrence: a "safe"/validation verb together with a path noun.
+    let has_safe_verb = snake.contains("safe")
+        || snake.contains("valid")
+        || snake.contains("ensure")
+        || snake.contains("check")
+        || snake.contains("sanit");
+    let has_path_noun = snake.contains("path")
+        || snake.contains("component")
+        || snake.contains("filename")
+        || snake.contains("file_name")
+        || snake.contains("basename")
+        || snake.contains("dirname")
+        || snake.contains("segment");
+    // Require a *safe* signal for the noun co-occurrence form: a bare
+    // `validate_component` (no safety word) is too weak, but `safe` + noun, or
+    // `ensure`/`check`/`sanit` + `path`-family noun, is a real validator idiom.
+    has_safe_verb
+        && has_path_noun
+        && (snake.contains("safe") || snake.contains("path") || snake.contains("sanit"))
+}
+
+/// Reconstruct the confined formal-parameter indices from a *collapsed*
+/// prefix-containment assertion argument group.
+///
+/// When `Assert.isTrue(subject.startsWith(prefix), msg)` lowers, the chained
+/// `subject.startsWith(prefix)` receiver-method call flattens into the assert
+/// call's first argument group as ordered leaves — the subject receiver's
+/// operands, then the `startsWith` method name (as a synthetic-param leaf),
+/// then the prefix operands — with no surviving `startsWith` SSA Call.  Split
+/// the group at the method-name phantom: leaves before it are the *subject*,
+/// leaves after are the *prefix*.  A `true` result confines the formal params
+/// reaching the subject, provided the prefix is fixed (reaches no formal param
+/// — a param-derived prefix is attacker-influenced and proves nothing).
+///
+/// Returns the confined subject params, or empty when the group is not a
+/// collapsed prefix-containment check or the prefix is param-derived.
+fn confined_params_from_collapsed_assert_group(
+    ssa: &SsaBody,
+    consts: &crate::ssa::const_prop::ConstValues,
+    param_index_of: &HashMap<SsaValue, usize>,
+    group: &[SsaValue],
+) -> SmallVec<[usize; 2]> {
+    use crate::ssa::const_prop::ConstLattice;
+    let mut result: SmallVec<[usize; 2]> = SmallVec::new();
+
+    // Locate the (last) prefix-containment method-name phantom leaf.
+    let is_prefix_method = |v: SsaValue| -> bool {
+        ssa.value_defs
+            .get(v.0 as usize)
+            .and_then(|vd| vd.var_name.as_deref())
+            .map(|n| {
+                matches!(
+                    n.to_ascii_lowercase().as_str(),
+                    "startswith" | "start_with?" | "hasprefix"
+                )
+            })
+            .unwrap_or(false)
+    };
+    let Some(mi) = group.iter().rposition(|&v| is_prefix_method(v)) else {
+        return result;
+    };
+    let subject_vals = &group[..mi];
+    let prefix_vals = &group[mi + 1..];
+
+    let mut budget = 512u32;
+
+    // Prefix must be fixed: no non-const prefix leaf reaches a formal param.
+    let mut prefix_params: SmallVec<[usize; 2]> = SmallVec::new();
+    for &pv in prefix_vals {
+        if matches!(consts.get(&pv), Some(ConstLattice::Str(_))) {
+            continue;
+        }
+        let mut seen = HashSet::new();
+        collect_reaching_params(
+            ssa,
+            pv,
+            param_index_of,
+            &mut seen,
+            &mut prefix_params,
+            &mut budget,
+        );
+    }
+    if !prefix_params.is_empty() {
+        return result;
+    }
+
+    // Subject formal params are confined by a `true` result.
+    let mut subj_params: SmallVec<[usize; 2]> = SmallVec::new();
+    for &sv in subject_vals {
+        if is_prefix_method(sv) {
+            continue;
+        }
+        let mut seen = HashSet::new();
+        collect_reaching_params(
+            ssa,
+            sv,
+            param_index_of,
+            &mut seen,
+            &mut subj_params,
+            &mut budget,
+        );
+    }
+    for p in subj_params {
+        if !prefix_params.contains(&p) && !result.contains(&p) {
+            result.push(p);
+        }
+    }
+    result
+}
+
+/// Detect a *return-value path-prefix confiner* (CVE-2020-5221, uftpd).
+///
+/// Recognises a function whose *every* non-null return is guarded by a C
+/// prefix-containment check (`strncmp(rv, prefix, strlen(prefix))`) on the
+/// *returned* value, so any non-null path it returns is provably contained
+/// under a fixed directory prefix.  Consumed at the call site by
+/// `apply_call_return_confinement`, which clears [`Cap::FILE_IO`] from the
+/// call result.
+///
+/// This is the interprocedural analogue of the intra-function
+/// [`crate::taint::path_state::PredicateKind::PathPrefixConfined`] narrowing.
+/// The runtime narrowing clears `FILE_IO` from the confined *value* on the
+/// surviving branch, but in the uftpd shape the returned `rpath` is a `static`
+/// buffer written by a condition-embedded `realpath(dir, rpath)` — which lowers
+/// to a `nop`, so `rpath` never joins the tainted-parameter SSA chain.  The
+/// summary's return-caps then come from the param-taint fallback (the source
+/// parameter's `Cap::all`, re-attributed to the return), which the branch
+/// narrowing on `rpath` never touches.  Recording the confinement as a summary
+/// post-condition carries it across the return into the caller.
+///
+/// The vulnerable uftpd form `strncmp(dir, home, …)` confines a *different* var
+/// (`dir`) than the returned `rpath`, so `subject != return-value name` and
+/// this returns `false` — the exact bug/fix discriminator.  Conservative: a
+/// single non-null return that is not confined means the function can leak an
+/// unconfined path, so it is not a confiner.
+///
+/// A second, *transitive* case handles the thin-wrapper hop the uftpd flow
+/// routes through (`compose_abspath` just `return compose_path(...)`): a
+/// non-null return whose value is a call to a callee that itself
+/// `confines_path_return` is also confined.  This case fires only in the
+/// augmented re-extraction pass (where `ssa_summaries` carries the callee's
+/// first-pass flag); the merge back into the persisted summary is via
+/// `merge_sink_fields`.
+pub(crate) fn detect_path_confined_return(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    ssa_summaries: Option<
+        &HashMap<crate::symbol::FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+    >,
+    lang: Lang,
+) -> bool {
+    use crate::taint::path_state::{PredicateKind, classify_condition_with_target};
+
+    // Confined edges: for each `PathPrefixConfined` branch, the block reached
+    // when the prefix check *passes* (`strncmp == 0`), paired with the confined
+    // subject name.  The passing edge is the FALSE block (the reject sits in the
+    // `if (strncmp(...)) return NULL;` body), inverted under a leading `!`
+    // (`condition_negated`) — mirroring the runtime `apply_branch_predicates`
+    // polarity for `PredicateKind::PathPrefixConfined`.
+    let mut confined_edges: SmallVec<[(crate::ssa::ir::BlockId, String); 4]> = SmallVec::new();
+    for block in &ssa.blocks {
+        let Terminator::Branch {
+            cond,
+            true_blk,
+            false_blk,
+            ..
+        } = &block.terminator
+        else {
+            continue;
+        };
+        let Some(cond_info) = cfg.node_weight(*cond) else {
+            continue;
+        };
+        let Some(text) = cond_info.condition_text.as_deref() else {
+            continue;
+        };
+        let (kind, target) = classify_condition_with_target(text);
+        if kind != PredicateKind::PathPrefixConfined {
+            continue;
+        }
+        let Some(subject) = target else {
+            continue;
+        };
+        let confined_blk = if cond_info.condition_negated {
+            *true_blk
+        } else {
+            *false_blk
+        };
+        confined_edges.push((confined_blk, subject));
+    }
+
+    // NB: do not early-return when `confined_edges` is empty — a thin wrapper
+    // (`return compose_path(...)`) has no `strncmp` branch of its own yet is
+    // still a confiner via the transitive passthrough case below.
+
+    let mut confined_any = false;
+    for block in &ssa.blocks {
+        let Terminator::Return(Some(rv)) = &block.terminator else {
+            continue;
+        };
+        // NULL / constant rejection returns carry no path taint — skip.
+        if rv_traces_to_constant(ssa, *rv, &HashSet::new(), 0, &mut 256) {
+            continue;
+        }
+        // Transitive passthrough: `return confining_helper(...)`.
+        if return_block_is_confining_passthrough(ssa, block, *rv, ssa_summaries, lang) {
+            confined_any = true;
+            continue;
+        }
+        let Some(name) = return_value_subject_name(ssa, *rv) else {
+            return false;
+        };
+        let confined = confined_edges
+            .iter()
+            .any(|(blk, subj)| *blk == block.id && *subj == name);
+        if !confined {
+            return false;
+        }
+        confined_any = true;
+    }
+    confined_any
+}
+
+/// Whether a return block is a thin-wrapper passthrough of a
+/// `confines_path_return` helper (`return compose_path(...)`), resolved against
+/// the intra-file `ssa_summaries` map by same-language bare callee name.  Fires
+/// only in the augmented re-extraction pass (`ssa_summaries` present).
+///
+/// Two forms:
+///  1. the return value traces (through single-operand `Assign` copies) to a
+///     `Call` op — the clean, pre-optimisation shape; and
+///  2. the return value is a disconnected `Nop` (the SSA optimiser rewrites
+///     `v = assign(call_result); return v` to `v = nop; return v`, severing the
+///     use-def link to the call), in which case the return block's body is
+///     scanned for a confining `Call`.  Sound because it always resolves the
+///     *callee's* `confines_path_return` flag: a wrapper of a non-confiner (the
+///     vulnerable uftpd form where `compose_path` confines `dir`, not the
+///     returned `rpath`) stays unconfined.
+fn return_block_is_confining_passthrough(
+    ssa: &SsaBody,
+    block: &crate::ssa::ir::SsaBlock,
+    rv: SsaValue,
+    ssa_summaries: Option<
+        &HashMap<crate::symbol::FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+    >,
+    lang: Lang,
+) -> bool {
+    let Some(map) = ssa_summaries else {
+        return false;
+    };
+    let callee_confines = |callee: &str, callee_text: Option<&str>| -> bool {
+        let bare = crate::labels::bare_method_name(callee_text.unwrap_or(callee));
+        map.iter()
+            .any(|(key, sum)| key.lang == lang && key.name == bare && sum.confines_path_return)
+    };
+
+    // Form 1: return value traces to a Call.
+    let mut cur = rv;
+    let mut hops = 0;
+    loop {
+        match op_for_value(ssa, cur) {
+            Some(SsaOp::Assign(uses)) if uses.len() == 1 && hops < 8 => {
+                cur = uses[0];
+                hops += 1;
+            }
+            Some(SsaOp::Call {
+                callee,
+                callee_text,
+                ..
+            }) => {
+                return callee_confines(callee, callee_text.as_deref());
+            }
+            // Form 2: the return value is a disconnected `Nop` (optimiser
+            // artifact).  Scan this block's body for a confining Call.
+            Some(SsaOp::Nop) | None => {
+                return block.body.iter().any(|inst| {
+                    if let SsaOp::Call {
+                        callee,
+                        callee_text,
+                        ..
+                    } = &inst.op
+                    {
+                        callee_confines(callee, callee_text.as_deref())
+                    } else {
+                        false
+                    }
+                });
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Trace a return value through single-operand `Assign` copies to the name of
+/// the returned storage.  `return rpath` lowers to `Assign(rpath_val)` where
+/// the `rpath` name lives on the copied value, so the first hop reveals it.
+/// Returns the first `var_name` found, or `None` for a bare temporary /
+/// constant return with no name.
+fn return_value_subject_name(ssa: &SsaBody, rv: SsaValue) -> Option<String> {
+    let mut cur = rv;
+    let mut hops = 0;
+    loop {
+        if let Some(name) = ssa
+            .value_defs
+            .get(cur.0 as usize)
+            .and_then(|vd| vd.var_name.as_deref())
+        {
+            return Some(name.to_string());
+        }
+        match op_for_value(ssa, cur) {
+            Some(SsaOp::Assign(uses)) if uses.len() == 1 && hops < 8 => {
+                cur = uses[0];
+                hops += 1;
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Detect a *relative-URL confiner*: a helper whose return value is provably a
+/// same-origin (relative) URL, so redirecting to it cannot leave the trusted
+/// origin.
+///
+/// Recognises the WHATWG-correct confinement shape as three co-occurring
+/// behaviours in the function body, plus a parameter-derived return:
+///
+/// ```text
+/// const normalize_relative_url = (url) => {
+///   if (typeof url !== "string") return null;
+///   const normalised = url.replace(/\\/g, "/").trimStart();   // (1) normalise `\`->`/`
+///   if (normalised.startsWith("//")) return null;             // (2) reject protocol-relative
+///   if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(normalised)) return null;  // (3) reject scheme:
+///   return normalised;                                        // param-derived return
+/// };
+/// ```
+///
+///  1. a `.replace(...)` normalisation call (backslash-to-slash rewriting is
+///     what defeats the `/\evil.com` bypass — required for soundness, since a
+///     confiner that skips it still leaks through a browser `\`->`/` rewrite),
+///  2. a `startsWith("//")` protocol-relative rejection (const `"//"` arg), and
+///  3. a scheme rejection expressed as a regex `.test(...)` call.
+///
+/// All three together, with at least one return path carrying a
+/// parameter-derived value, mark the return as OPEN_REDIRECT-confined.
+///
+/// Conservative by construction: the *weak* validator
+/// `!url.includes("//") && !url.includes(":/")` matches none of these — it uses
+/// `.includes` (substring, not prefix) and never normalises backslashes — so a
+/// redirect gated only by it still fires.  Motivated by CVE-2026-42259
+/// (Saltcorn login open redirect): the patched `normalize_relative_url` is
+/// recognised here and stops the patched code from false-positiving.
+fn detect_open_redirect_normalizer(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    param_index_of: &HashMap<SsaValue, usize>,
+) -> bool {
+    if param_index_of.is_empty() {
+        return false;
+    }
+
+    let mut has_normalize_replace = false;
+    let mut has_protocol_relative_reject = false;
+    let mut has_scheme_reject = false;
+
+    // (1) Backslash-normalisation `.replace(...)` — appears as an SSA Call
+    // whose textual callee carries the `.replace(` chain segment (the outer
+    // `.trimStart()` swallows the method name, so match on the callee string
+    // rather than the bare terminal method).
+    for block in &ssa.blocks {
+        for inst in &block.body {
+            let SsaOp::Call {
+                callee,
+                callee_text,
+                ..
+            } = &inst.op
+            else {
+                continue;
+            };
+            let text = callee_text.as_deref().unwrap_or(callee.as_str());
+            if text.to_ascii_lowercase().contains(".replace(") {
+                has_normalize_replace = true;
+            }
+        }
+    }
+
+    // (2)+(3) Protocol-relative and scheme rejections live in `if (...)`
+    // conditions (`Branch` terminators), whose text the CFG node carries in
+    // `condition_text`.
+    for block in &ssa.blocks {
+        let Terminator::Branch { cond, .. } = &block.terminator else {
+            continue;
+        };
+        let Some(text) = cfg
+            .node_weight(*cond)
+            .and_then(|n| n.condition_text.as_deref())
+        else {
+            continue;
+        };
+        let lower = text.to_ascii_lowercase();
+        // Prefix-based protocol-relative rejection: `x.startsWith("//")`
+        // (NOT the weak `.includes("//")` substring form).
+        if lower.contains("startswith(\"//\")") || lower.contains("startswith('//')") {
+            has_protocol_relative_reject = true;
+        }
+        // Scheme rejection: a regex `.test(...)` whose pattern pins a
+        // `scheme:` (the `:` marker distinguishes it from an unrelated regex).
+        if lower.contains(".test(") && lower.contains(':') {
+            has_scheme_reject = true;
+        }
+    }
+
+    if !(has_normalize_replace && has_protocol_relative_reject && has_scheme_reject) {
+        return false;
+    }
+
+    // At least one return path must carry a parameter-derived (normalised)
+    // value — the confined result the caller redirects to.  Pure-`null`
+    // reject returns don't count.
+    let mut budget = 512u32;
+    for block in &ssa.blocks {
+        let Terminator::Return(Some(rv)) = &block.terminator else {
+            continue;
+        };
+        let mut seen = HashSet::new();
+        let mut params: SmallVec<[usize; 2]> = SmallVec::new();
+        collect_reaching_params(
+            ssa,
+            *rv,
+            param_index_of,
+            &mut seen,
+            &mut params,
+            &mut budget,
+        );
+        if !params.is_empty() {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Recognise a canonical open-redirect URL-safety validator callee by name.
+///
+/// These are the ecosystem-standard boolean guards that pin a redirect target
+/// to the current host / a relative URL before it is used: Django's
+/// `url_has_allowed_host_and_scheme` (and its legacy `is_safe_url` alias),
+/// Flask / Flask-AppBuilder's `is_safe_redirect_url`, and app-local helpers
+/// named `*safe*redirect*` / `*safe*url*` / `*valid*redirect*`.  Their bodies
+/// are frequently library-internal (Django's live in `django.utils.http`), so
+/// name recognition is the only available signal.  Conservative: the name must
+/// carry an explicit redirect/URL-safety token, so a generic `is_valid_email`
+/// does not match.
+fn is_open_redirect_validator_name(name: &str) -> bool {
+    let leaf = name.rsplit(['.', ':']).next().unwrap_or(name);
+    let l = leaf.to_ascii_lowercase();
+    l == "url_has_allowed_host_and_scheme"
+        || l == "is_safe_url"
+        || l == "url_is_safe"
+        || (l.contains("safe") && l.contains("redirect"))
+        || (l.contains("safe") && l.contains("url"))
+        || (l.contains("valid") && l.contains("redirect"))
+}
+
+/// True when a branch `condition_text` invokes an open-redirect URL-safety
+/// validator (`is_safe_redirect_url(url)`,
+/// `url_has_allowed_host_and_scheme(url=next, ...)`).  Scans every `<ident>(`
+/// call head and tests its leaf name against
+/// [`is_open_redirect_validator_name`].
+fn condition_calls_open_redirect_validator(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b'(' {
+            continue;
+        }
+        let mut j = i;
+        while j > 0 {
+            let c = bytes[j - 1];
+            if c.is_ascii_alphanumeric() || c == b'_' || c == b'.' {
+                j -= 1;
+            } else {
+                break;
+            }
+        }
+        if j < i && is_open_redirect_validator_name(&text[j..i]) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the branch condition is a leading negation (`not X` / `!X`), which
+/// flips which successor edge is the validated one.
+fn condition_is_leading_negation(text: &str) -> bool {
+    let t = text.trim_start();
+    t.strip_prefix("not ").is_some() || t.strip_prefix('!').is_some_and(|r| !r.starts_with('='))
+}
+
+/// Whether block `r` is dominated by block `t` in `ssa` — every path from the
+/// entry block to `r` passes through `t`.  Computed as: `r` is unreachable from
+/// the entry once `t` is deleted from the block graph.  Operates on
+/// [`crate::ssa::ir::BlockId`] values verbatim (which are not assumed equal to
+/// `Vec` positions).
+fn block_dominated_by(ssa: &SsaBody, r: u32, t: u32) -> bool {
+    if r == t {
+        return true;
+    }
+    let Some(entry) = ssa.blocks.first().map(|b| b.id.0) else {
+        return false;
+    };
+    if r == entry {
+        return false;
+    }
+    let mut visited: HashSet<u32> = HashSet::new();
+    let mut stack = vec![entry];
+    while let Some(b) = stack.pop() {
+        if b == t || !visited.insert(b) {
+            continue;
+        }
+        if let Some(blk) = ssa.blocks.iter().find(|x| x.id.0 == b) {
+            for s in &blk.succs {
+                stack.push(s.0);
+            }
+        }
+    }
+    !visited.contains(&r)
+}
+
+/// Detect a *guarded-passthrough open-redirect confiner*: a helper that returns
+/// its URL parameter only on the validated branch of a URL-safety guard, and a
+/// constant otherwise.
+///
+/// Shape (Flask-AppBuilder CVE-2022-24776 `get_safe_redirect`):
+///
+/// ```python
+/// def get_safe_redirect(url):
+///     if url and is_safe_redirect_url(url):   # URL-safety guard
+///         return url                          # param-derived return
+///     return "/"                              # constant fallback
+/// ```
+///
+/// Every param-derived return block must be **dominated by the validated edge**
+/// of a guard whose condition calls a recognised open-redirect validator
+/// ([`is_open_redirect_validator_name`]) and mentions the returned parameter, so
+/// the parameter can only escape after passing validation — the return is
+/// provably OPEN_REDIRECT-safe.  Sound by construction: an unguarded return of
+/// the parameter (dominance fails) or a guard on an unrelated variable (name tie
+/// fails) leaves the confiner unrecognised, so the redirect still fires.
+///
+/// Complements [`detect_open_redirect_normalizer`] (the JS backslash-normalise /
+/// protocol-relative-reject shape, CVE-2026-42259): this recognises the
+/// validate-then-passthrough shape common to Python/Flask/Django redirect
+/// wrappers.  Motivated by CVE-2022-24776.
+fn detect_open_redirect_guarded_passthrough(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    param_index_of: &HashMap<SsaValue, usize>,
+) -> bool {
+    if param_index_of.is_empty() {
+        return false;
+    }
+
+    // Map param index -> source-level name (to tie a guard to the return it
+    // protects).
+    let mut param_name: HashMap<usize, String> = HashMap::new();
+    for block in &ssa.blocks {
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            if let SsaOp::Param { index } = inst.op {
+                if let Some(n) = &inst.var_name {
+                    param_name.entry(index).or_insert_with(|| n.clone());
+                }
+            }
+        }
+    }
+
+    // (1) Param-derived return blocks + the param indices they carry.
+    let mut param_returns: SmallVec<[(u32, SmallVec<[usize; 2]>); 2]> = SmallVec::new();
+    let mut budget = 512u32;
+    for block in &ssa.blocks {
+        let Terminator::Return(Some(rv)) = &block.terminator else {
+            continue;
+        };
+        let mut seen = HashSet::new();
+        let mut params: SmallVec<[usize; 2]> = SmallVec::new();
+        collect_reaching_params(
+            ssa,
+            *rv,
+            param_index_of,
+            &mut seen,
+            &mut params,
+            &mut budget,
+        );
+        if !params.is_empty() {
+            param_returns.push((block.id.0, params));
+        }
+    }
+    if param_returns.is_empty() {
+        return false;
+    }
+
+    // (2) URL-safety guard branches -> (validated-edge block id, condition text).
+    let mut guards: SmallVec<[(u32, String); 2]> = SmallVec::new();
+    for block in &ssa.blocks {
+        let Terminator::Branch {
+            cond,
+            true_blk,
+            false_blk,
+            ..
+        } = &block.terminator
+        else {
+            continue;
+        };
+        let Some(text) = cfg
+            .node_weight(*cond)
+            .and_then(|n| n.condition_text.as_deref())
+        else {
+            continue;
+        };
+        if condition_calls_open_redirect_validator(text) {
+            let validated = if condition_is_leading_negation(text) {
+                false_blk
+            } else {
+                true_blk
+            };
+            guards.push((validated.0, text.to_string()));
+        }
+    }
+    if guards.is_empty() {
+        return false;
+    }
+
+    // (3) Every param-derived return must be dominated by the validated edge of
+    //     some guard whose condition names one of the returned params.
+    for (rblk, params) in &param_returns {
+        let names: SmallVec<[&str; 2]> = params
+            .iter()
+            .filter_map(|i| param_name.get(i).map(String::as_str))
+            .collect();
+        let confined = guards.iter().any(|(vblk, gtext)| {
+            let ties = names.is_empty() || names.iter().any(|n| gtext.contains(n));
+            ties && block_dominated_by(ssa, *rblk, *vblk)
+        });
+        if !confined {
+            return false;
+        }
+    }
+    true
+}
+
 /// Extract a precise per-parameter `SsaFuncSummary` from an already-lowered SSA body.
 ///
 /// For each parameter (up to `MAX_PROBE_PARAMS`), runs a taint probe by seeding
@@ -174,7 +1319,7 @@ pub fn extract_ssa_func_summary_full(
     // `Statement s = conn.createStatement(); s.execute(q);` to type `s`
     // as `DatabaseConnection`.
     let local_type_facts: Option<TypeFactResult> = param_types.map(|pt| {
-        let empty_consts: HashMap<SsaValue, crate::ssa::const_prop::ConstLattice> = HashMap::new();
+        let empty_consts = crate::ssa::const_prop::ConstValues::default();
         analyze_types_with_param_types(ssa, cfg, &empty_consts, Some(lang), pt)
     });
     let local_type_facts_ref: Option<&TypeFactResult> = local_type_facts.as_ref();
@@ -328,6 +1473,7 @@ pub fn extract_ssa_func_summary_full(
         let mut return_abstract: Option<crate::abstract_interp::AbstractValue> = None;
         // Per-return-block observations for per-path transforms.
         let mut per_return: Vec<ReturnBlockObs> = Vec::with_capacity(return_blocks.len());
+        let confinement = crate::taint::ssa_transfer::compute_confinement_gates(&transfer);
         for &bid in &return_blocks {
             if let Some(entry) = &block_states[bid] {
                 let empty_induction = HashSet::new();
@@ -339,6 +1485,7 @@ pub fn extract_ssa_func_summary_full(
                     entry.clone(),
                     &empty_induction,
                     None,
+                    confinement,
                 );
 
                 let ret_val = match &ssa.blocks[bid].terminator {
@@ -919,6 +2066,47 @@ pub fn extract_ssa_func_summary_full(
     //   3. Top: default; the entry is omitted (empty transfer is meaningless).
     let abstract_transfer = derive_abstract_transfer(ssa, &param_info, return_abstract.as_ref());
 
+    // Behaviour-based path-confinement predicate detection (CVE-2026-39365).
+    // Independent of the per-param taint probes above: a structural scan of
+    // the return-block call shapes for `<param>.startsWith(const)`-style
+    // confinement, keyed by the formal-param SSA value.
+    let param_index_of: HashMap<SsaValue, usize> =
+        param_info.iter().map(|(idx, _, v)| (*v, *idx)).collect();
+    let confines_path_params =
+        detect_path_confining_predicate_params(ssa, &probe_const_values, &param_index_of);
+
+    // Assert-guard path confinement (CVE-2021-21234): a `void` guard method
+    // that `Assert.isTrue(p.startsWith(base))`-throws unless its path arg is
+    // contained under a fixed prefix.  Consumed unconditionally at the call
+    // site by `apply_call_post_confinement`.
+    let asserts_path_confined_params =
+        detect_assert_path_confined_params(ssa, &probe_const_values, &param_index_of);
+    // `Result`-returning rejection-guard parameters (`ensure_safe_path_component(
+    // x)?` returning `Err` — rattler CVE-2026-53956).  Kept separate from the
+    // self-proving assert guards above because the confinement is applied only
+    // at a *path-safety-validator-named* call site (`apply_path_validator_
+    // confinement`), not unconditionally.
+    let result_reject_guard_params = detect_result_reject_guard_params(ssa, &param_index_of);
+
+    // Behaviour-based open-redirect confiner detection.  Two shapes mark the
+    // return as OPEN_REDIRECT-clean:
+    //   * `detect_open_redirect_normalizer` (CVE-2026-42259): normalise the
+    //     input then reject protocol-relative (`//`) and `scheme:` URLs before
+    //     returning the confined value (JS `normalize_relative_url`).
+    //   * `detect_open_redirect_guarded_passthrough` (CVE-2022-24776): return
+    //     the URL parameter only on the validated branch of a URL-safety guard
+    //     (`get_safe_redirect` -> `is_safe_redirect_url` /
+    //     `url_has_allowed_host_and_scheme`).
+    let sanitizes_open_redirect_return = detect_open_redirect_normalizer(ssa, cfg, &param_index_of)
+        || detect_open_redirect_guarded_passthrough(ssa, cfg, &param_index_of);
+
+    // Return-value path-prefix confinement (CVE-2020-5221, uftpd): a function
+    // whose every non-null return is guarded by `strncmp(rv, prefix,
+    // strlen(prefix))` on the *returned* value.  Carries the intra-function
+    // `PathPrefixConfined` narrowing across the interprocedural return the
+    // static-buffer/param-fallback shape otherwise defeats.
+    let confines_path_return = detect_path_confined_return(ssa, cfg, ssa_summaries, lang);
+
     SsaFuncSummary {
         param_to_return,
         param_to_sink,
@@ -947,6 +2135,11 @@ pub fn extract_ssa_func_summary_full(
         // caller patches it in.
         typed_call_receivers: Vec::new(),
         validated_params_to_return,
+        confines_path_params,
+        asserts_path_confined_params,
+        result_reject_guard_params,
+        sanitizes_open_redirect_return,
+        confines_path_return,
         // Phase-10 entry-point classification is attached post-extraction
         // by `taint::lower_all_functions_from_bodies` (which has access
         // to `FileCfg::entry_kinds`).  Empty here means the extractor
@@ -1432,6 +2625,43 @@ mod tests {
     use super::*;
     use crate::state::symbol::SymbolId;
     use crate::taint::domain::PredicateSummary;
+
+    /// The path-safety-validator name grammar recognises the real path
+    /// validator idioms and rejects non-path validators (CVE-2026-53956).
+    #[test]
+    fn is_path_safety_validator_name_grammar() {
+        // Positive: path-safety validator idioms (snake + camel).
+        for n in [
+            "ensure_safe_path_component",
+            "validate_safe_path",
+            "is_safe_filename",
+            "check_path_component",
+            "sanitize_path",
+            "ensureSafePathComponent",
+            "assert_no_traversal",
+            "reject_path_traversal",
+        ] {
+            assert!(
+                is_path_safety_validator_name(n),
+                "expected path-safety: {n}"
+            );
+        }
+        // Negative: non-path validators and unrelated calls must not match.
+        for n in [
+            "ensure_valid_email",
+            "is_authenticated",
+            "validate_component", // has a path noun but no safe/path/sanit signal
+            "check_length",
+            "to_path_buf", // a path *noun* but not a validator verb
+            "join",
+            "format",
+        ] {
+            assert!(
+                !is_path_safety_validator_name(n),
+                "expected NOT path-safety: {n}"
+            );
+        }
+    }
 
     /// Top state (no predicates, no validated_must) → all-zero sentinel.
     #[test]

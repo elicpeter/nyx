@@ -249,6 +249,73 @@ pub fn extract_findings(
                 }
             }
 
+            // Suppress leaks for a JDBC `ResultSet` whose lifecycle is owned
+            // by the `Statement` that produced it (see
+            // `is_jdbc_resultset_acquire`).  A standalone `ResultSet` leak is
+            // never a *unique* true positive: closing the owning `Statement`
+            // (via try-with-resources / explicit close) transitively closes
+            // the `ResultSet`, and if the `Statement` itself leaks that leak
+            // already covers the `ResultSet`.  Scoped to Java (the
+            // `executeQuery` acquire pair is Java-only).  Use-after-close /
+            // double-close on the `ResultSet` still fire — those come from
+            // transfer events, not this exit-time leak scan.
+            if lang == Lang::Java
+                && let Some(acq) = acquire_node
+                && is_jdbc_resultset_acquire(cfg[acq].call.callee.as_deref())
+            {
+                continue;
+            }
+
+            // Suppress leaks for a JDBC `Connection` BORROWED from a managed
+            // session / DB abstraction (Liquibase `Database`, Hibernate
+            // `Session`, MyBatis `SqlSession`, JPA `EntityManager`).  The
+            // owner closes the connection as part of its own lifecycle, so
+            // the borrowing body must not — closing it would break the
+            // framework's transaction.  The `borrowed_resource` flag is set
+            // at CFG build by receiver-type discrimination
+            // (`cfg::java_getconnection_receiver_is_borrowed`), so
+            // `DataSource` / static `DriverManager` connections (OWNED) still
+            // fire.  Twin of the suppression in `cfg_analysis::resources`.
+            if lang == Lang::Java
+                && let Some(acq) = acquire_node
+                && cfg[acq].borrowed_resource
+            {
+                continue;
+            }
+
+            // Suppress leaks for a JDBC `Statement` (`PreparedStatement` /
+            // `Statement` / `CallableStatement`) whose owning `Connection` is
+            // itself a resource tracked in THIS body.  Per JDBC, closing a
+            // `Connection` closes every `Statement` it produced, so a
+            // statement derived from a locally-acquired connection — whether
+            // the connection is closed in-body, borrowed/managed, or itself a
+            // leaking local (its own leak is the actionable root) — is never a
+            // unique true positive.  The derivation edge `ps -> con` is read
+            // off the acquire callee (`con.prepareStatement`); the owner is
+            // confirmed to be a locally-acquired `Connection` via its own
+            // acquire node.  A statement on a long-lived / field / parameter
+            // connection this body does not track is KEPT (it genuinely
+            // accumulates).  Java-only; twin of the suppression in
+            // `cfg_analysis::resources`.  Interior-node sibling of the
+            // `ResultSet` leaf suppression above.
+            if lang == Lang::Java
+                && let Some(acq) = acquire_node
+                && let Some(owner) = crate::cfg_analysis::rules::jdbc_statement_owning_connection(
+                    cfg[acq].call.callee.as_deref(),
+                )
+            {
+                let owner_scope = cfg[acq].ast.enclosing_func.as_deref();
+                if let Some(owner_sym) = interner.get_scoped(owner_scope, owner)
+                    && let Some(owner_acq) =
+                        find_acquire_node(cfg, owner_sym, interner, owner_scope)
+                    && crate::cfg_analysis::rules::is_jdbc_connection_acquire(
+                        cfg[owner_acq].call.callee.as_deref(),
+                    )
+                {
+                    continue;
+                }
+            }
+
             // Suppress leaks for variables with a deferred close call
             // (Go `defer f.Close()`). The deferred call guarantees cleanup
             // at function exit even though transfer didn't mark it CLOSED.
@@ -508,6 +575,32 @@ pub fn extract_findings(
 }
 
 /// Find the CFG node where a variable was acquired (defined via Call node).
+/// Whether an acquire-site callee produces a JDBC `ResultSet`
+/// (`stmt.executeQuery()` / `stmt.getResultSet()`).
+///
+/// A `ResultSet` is a leaf resource owned by the `Statement` that produced
+/// it.  Per the JDBC contract, closing a `Statement` closes its current
+/// `ResultSet`, and closing a `Connection` closes its `Statement`s — so the
+/// `ResultSet`'s close is always the statement's responsibility.  This makes
+/// a standalone `ResultSet` leak reported at function exit either a false
+/// positive (statement closed → result set transitively closed) or redundant
+/// (statement also leaks → that leak already covers the result set), never a
+/// unique true positive.  Real-repo drivers: openmrs
+/// `DatabaseUpdater.java:288` (`ResultSet resultSet = ps.executeQuery();`
+/// inside a try-with-resources on `ps`), sonarqube
+/// `ExportLineHashesStep.java:75`.
+///
+/// The `.getResultSet` form is future-proofing: it is not currently a
+/// tracked acquire pair, so the check is dormant for it today.
+fn is_jdbc_resultset_acquire(callee: Option<&str>) -> bool {
+    let Some(callee) = callee else { return false };
+    let callee = callee.to_ascii_lowercase();
+    callee == "executequery"
+        || callee.ends_with(".executequery")
+        || callee == "getresultset"
+        || callee.ends_with(".getresultset")
+}
+
 fn find_acquire_node(
     cfg: &Cfg,
     sym: super::symbol::SymbolId,
@@ -627,6 +720,25 @@ mod tests {
     }
 
     #[test]
+    fn jdbc_resultset_acquire_recognises_execute_query_and_get_result_set() {
+        // Receiver-qualified and (defensively) bare forms, case-insensitive.
+        assert!(is_jdbc_resultset_acquire(Some("ps.executeQuery")));
+        assert!(is_jdbc_resultset_acquire(Some("stmt.executeQuery")));
+        assert!(is_jdbc_resultset_acquire(Some("EXECUTEQUERY")));
+        assert!(is_jdbc_resultset_acquire(Some("rs.getResultSet")));
+        assert!(is_jdbc_resultset_acquire(Some(
+            "conn.prepareStatement().executeQuery"
+        )));
+        // Not a ResultSet producer: the owning statement / update path / a
+        // method that merely ends in a different verb.
+        assert!(!is_jdbc_resultset_acquire(Some("con.prepareStatement")));
+        assert!(!is_jdbc_resultset_acquire(Some("stmt.executeUpdate")));
+        assert!(!is_jdbc_resultset_acquire(Some("con.getConnection")));
+        assert!(!is_jdbc_resultset_acquire(Some("myExecuteQueryHelper")));
+        assert!(!is_jdbc_resultset_acquire(None));
+    }
+
+    #[test]
     fn detects_resource_leak() {
         // Entry → fopen(f) → Exit (no close)
         let mut cfg: Cfg = Graph::new();
@@ -659,6 +771,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -720,6 +833,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -855,6 +969,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -921,6 +1036,7 @@ mod tests {
             interner: &interner,
             resource_method_summaries: &[],
             ptr_proxy_hints: None,
+            nonescaping_field_containers: None,
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());

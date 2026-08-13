@@ -156,6 +156,67 @@ fn ruby_inner_call_fallback_classifies_bare_outer_around_file_read() {
     );
 }
 
+/// A FILE_IO sink nested as an argument to a *Sanitizer*-labelled outer call
+/// (`JSON.parse(fs.readFileSync(x))`) must still be surfaced: the outer
+/// sanitizer label fills `labels`, so the legacy `labels.is_empty()` gate
+/// skipped it and the inner sink was shadowed.  `find_inner_sink_call`
+/// recurses PAST the non-sink outer call.  Motivated by vite CVE-2026-39365.
+#[test]
+fn js_sanitizer_shadow_surfaces_inner_file_io_sink() {
+    let src =
+        b"function f(x) {\n  const m = JSON.parse(fs.readFileSync(x, 'utf-8'));\n  return m;\n}\n";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let sink = cfg
+        .node_indices()
+        .find(|&i| cfg[i].call.callee.as_deref() == Some("fs.readFileSync"))
+        .expect("inner FILE_IO sink must be surfaced past the JSON.parse sanitizer");
+    let info = &cfg[sink];
+    assert!(
+        info.taint
+            .labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(crate::labels::Cap::FILE_IO))),
+        "nested fs.readFileSync under JSON.parse must carry the FILE_IO sink label"
+    );
+    assert_eq!(
+        info.call.outer_callee.as_deref(),
+        Some("JSON.parse"),
+        "outer_callee must preserve the wrapping JSON.parse sanitizer callee"
+    );
+}
+
+/// Same Sanitizer-shadow shape, but the inner sink is the `node:fs/promises`
+/// import-alias form (`fsp.readFile`) whose label is only resolvable once the
+/// per-file import view is built (the gated post-pass).
+/// `apply_gated_label_rules` must walk into the JSON.parse argument and surface
+/// the import-gated FILE_IO sink.  Verbatim vite CVE-2026-39365 sink shape.
+#[test]
+fn js_sanitizer_shadow_surfaces_inner_fsp_readfile_via_import_view() {
+    let src = b"import fsp from 'node:fs/promises';\nasync function f(x) {\n  const m = JSON.parse(await fsp.readFile(x, 'utf-8'));\n  return m;\n}\n";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let sink = cfg
+        .node_indices()
+        .find(|&i| cfg[i].call.callee.as_deref() == Some("fsp.readFile"))
+        .expect("import-gated fsp.readFile must be surfaced past the JSON.parse sanitizer");
+    let info = &cfg[sink];
+    assert!(
+        info.taint
+            .labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(crate::labels::Cap::FILE_IO))),
+        "nested fsp.readFile under JSON.parse must carry the FILE_IO sink label"
+    );
+    assert_eq!(
+        info.call.outer_callee.as_deref(),
+        Some("JSON.parse"),
+        "outer_callee must preserve the wrapping JSON.parse sanitizer callee"
+    );
+}
+
 /// `classification_span()` must fall back to `ast.span` when no narrower
 /// sub-expression was recorded, so existing structural code paths keep
 /// working unchanged for nodes whose classification applies to the whole
@@ -1181,12 +1242,17 @@ fn clone_preserves_all_sub_structs() {
             arg_uses: vec![vec!["a".into()]],
             receiver: Some("obj".into()),
             sink_payload_args: Some(vec![1, 2]),
+            sink_reaching_uses: Some(vec!["a".into()]),
             kwargs: vec![("shell".into(), vec!["True".into()])],
             arg_string_literals: vec![Some("lit".into())],
             destination_uses: None,
             gate_filters: Vec::new(),
             is_constructor: false,
             produces_null_proto: false,
+            hoisted_sink: Some(Box::new(crate::cfg::HoistedSink {
+                payload_args: Some(vec![0]),
+                arg_string_literals: vec![Some("SELECT 1".into())],
+            })),
         },
         taint: TaintMeta {
             labels: {
@@ -1218,6 +1284,10 @@ fn clone_preserves_all_sub_structs() {
     assert_eq!(
         cloned.call.sink_payload_args,
         original.call.sink_payload_args
+    );
+    assert_eq!(
+        cloned.call.sink_reaching_uses,
+        original.call.sink_reaching_uses
     );
     assert_eq!(cloned.call.kwargs, original.call.kwargs);
     assert_eq!(cloned.taint.labels.len(), original.taint.labels.len());
@@ -1387,6 +1457,44 @@ fn rust_nested_use_as_alias() {
     assert_eq!(file_cfg.import_bindings.len(), 1);
     let b = &file_cfg.import_bindings["IoRead"];
     assert_eq!(b.original, "Read");
+}
+
+/// `Ok(Reader { meta: <tainted>, tasks: File::open(const) })` collapses the
+/// whole aggregate into one CFG node whose `Sink(FILE_IO)` label is
+/// contributed by the nested `File::open`.  The node's def-use set includes
+/// the tainted sibling field `meta`, which is NOT the sink's argument.
+/// `sink_reaching_uses` must capture the inner sink call's own identifiers
+/// (`dir`) and exclude the sibling (`meta`) so the taint sink scan does not
+/// spuriously report `meta` as reaching the `File::open` path argument
+/// (meilisearch `crates/dump/src/reader/v{2..6}/mod.rs`).
+#[test]
+fn rust_inner_sink_in_aggregate_records_reaching_uses_excluding_sibling() {
+    let src = br#"
+fn open(dir: &std::path::Path) -> std::io::Result<Reader> {
+    let meta_file = std::fs::read(dir.join("metadata.json")).unwrap();
+    let meta = String::from_utf8(meta_file).unwrap();
+    Ok(Reader { meta, tasks: File::open(dir.join("data.jsonl")).unwrap() })
+}
+"#;
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let node = cfg
+        .node_indices()
+        .find(|&n| {
+            let info = &cfg[n];
+            info.call.outer_callee.as_deref() == Some("Ok")
+                && info.call.sink_reaching_uses.is_some()
+        })
+        .expect("expected an inner-sink override node (outer=Ok) with sink_reaching_uses");
+    let reaching = cfg[node].call.sink_reaching_uses.as_ref().unwrap();
+    assert!(
+        reaching.iter().any(|u| u == "dir"),
+        "inner File::open path ident `dir` must be recorded, got {reaching:?}"
+    );
+    assert!(
+        !reaching.iter().any(|u| u == "meta"),
+        "sibling struct field `meta` must NOT be recorded, got {reaching:?}"
+    );
 }
 
 /// `format!("{x}")` uses x even though x is captured via the format
@@ -1667,6 +1775,58 @@ fn js_promisify_labels_carry_to_alias_call() {
     assert!(
         any_runasync_sink,
         "runAsync call site should inherit child_process.exec's SHELL_ESCAPE sink"
+    );
+}
+
+#[test]
+fn js_promisify_execfile_alias_carries_payload_args() {
+    // A promisify alias of `execFile` must inherit not only the SHELL_ESCAPE
+    // sink label but also the `=execFile` gate's `payload_args: &[0]`, so that
+    // only arg 0 (the binary) is taint-checked and a tainted argv element at
+    // arg 1 (`execFileAsync(cmd, [.., dest])`) does not spuriously fire.
+    // Regression guard for OneUptime CVE-2026-27728's patched (execFile) form.
+    let src = b"const execFileAsync = util.promisify(child_process.execFile);\n\
+                function f(bin, args) { execFileAsync(bin, args); }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    assert!(file_cfg.promisify_aliases.contains_key("execFileAsync"));
+    let alias_node = file_cfg
+        .bodies
+        .iter()
+        .flat_map(|b| b.graph.node_weights())
+        .find(|n| n.call.callee.as_deref() == Some("execFileAsync"))
+        .expect("execFileAsync call site present");
+    assert!(
+        alias_node.taint.labels.iter().any(|lbl| matches!(
+            lbl,
+            crate::labels::DataLabel::Sink(c) if c.intersects(crate::labels::Cap::SHELL_ESCAPE)
+        )),
+        "promisify(execFile) alias should carry SHELL_ESCAPE sink"
+    );
+    assert_eq!(
+        alias_node.call.sink_payload_args.as_deref(),
+        Some(&[0usize][..]),
+        "promisify(execFile) alias should inherit the =execFile gate's payload_args=[0]"
+    );
+}
+
+#[test]
+fn js_promisify_exec_alias_carries_payload_args() {
+    // `promisify(exec)` (shell string at arg 0) likewise inherits payload_args=[0].
+    let src = b"const execAsync = util.promisify(child_process.exec);\n\
+                function f(cmd, opts) { execAsync(cmd, opts); }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    let alias_node = file_cfg
+        .bodies
+        .iter()
+        .flat_map(|b| b.graph.node_weights())
+        .find(|n| n.call.callee.as_deref() == Some("execAsync"))
+        .expect("execAsync call site present");
+    assert_eq!(
+        alias_node.call.sink_payload_args.as_deref(),
+        Some(&[0usize][..]),
+        "promisify(exec) alias should inherit payload_args=[0]"
     );
 }
 
@@ -2473,6 +2633,46 @@ func f(userDb int) {
 }
 
 #[test]
+fn go_multi_target_assign_binds_first_ident_as_primary_define() {
+    // `f, err = os.Open(p)` — a bare multi-target `=` assignment whose LHS is
+    // Go's `expression_list` (not a recognised destructure pattern).  The
+    // primary `defines` must be the FIRST target `f` (the acquired resource
+    // handle), with the trailing `err` recorded as an `extra_define` — never
+    // dropped and never made primary.  Before the fix `def_use`'s Assignment
+    // arm used `idents.pop()` (the LAST ident) so `err` became the primary
+    // define: the resource-lifecycle transfer then bound the file handle to
+    // Go's trailing `error` return (never closeable) and every
+    // `handle, err = open()` reported a false resource-leak on `err` while the
+    // real handle went untracked.  Distilled from hugo
+    // internal/js/esbuild/build.go:139 (`contentr, err = hugofs.Os.Open(...)`).
+    let src = br#"package main
+import "os"
+func run(p string) error {
+    var (
+        f   *os.File
+        err error
+    )
+    f, err = os.Open(p)
+    _ = f
+    return err
+}
+"#;
+    let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "go", ts_lang);
+    let node = find_node_with_callee(&cfg, "os.Open").expect("go: os.Open node should be present");
+    assert_eq!(
+        node.taint.defines.as_deref(),
+        Some("f"),
+        "resource handle `f` (first LHS target) must be the primary define, not the trailing `err`"
+    );
+    assert!(
+        node.taint.extra_defines.contains(&"err".to_string()),
+        "trailing `err` must be recorded as an extra define, not dropped: {:?}",
+        node.taint.extra_defines
+    );
+}
+
+#[test]
 fn go_index_expr_read_lowers_to_index_get_call() {
     with_pointer_on(|| {
         let src = br#"package main
@@ -3238,6 +3438,42 @@ fn chained_method_call_rebinds_to_inner_gated_sink() {
     );
 }
 
+/// Regression guard for RUSTSEC-2022-0072 (hyper-staticfile open redirect).
+/// The gated `header` Location sink sits in the MIDDLE of a builder chain
+/// (`new().status(..).header(LOCATION, target).body(..)`).  The original
+/// `find_chained_inner_call` descended to the structurally-innermost
+/// `.status(..)` call, so the rebind dispatch saw no gate and the
+/// open-redirect flow was lost.  `find_chained_gated_sink_call` selects the
+/// chain level by GATE MATCH, so the chained node rebinds to `.header` and
+/// the Location gate populates `sink_payload_args` (payload arg position 1).
+#[test]
+fn chained_builder_rebinds_to_middle_gated_location_sink() {
+    let src =
+        b"fn f(target: String) { B::new().status(301).header(\"Location\", target).body(e); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _) = parse_and_build(src, "rust", ts_lang);
+
+    let mut found = false;
+    for n in cfg.node_indices() {
+        let info = &cfg[n];
+        if info.kind != StmtKind::Call {
+            continue;
+        }
+        let Some(callee) = info.call.callee.as_deref() else {
+            continue;
+        };
+        if callee.contains("header") && info.call.sink_payload_args.is_some() {
+            found = true;
+            break;
+        }
+    }
+    assert!(
+        found,
+        "expected the builder chain to rebind to the middle `.header` gated \
+         Location sink and populate sink_payload_args"
+    );
+}
+
 /// Ternary-RHS branches are lowered into a diamond CFG by
 /// `build_ternary_diamond` so the condition is control-flow and the
 /// branches are data-flow that joins at a phi.  But push_node only does
@@ -3329,6 +3565,55 @@ fn js_ternary_branch_subscript_source_classified() {
     assert!(
         found_source_branch,
         "expected ternary subscript branch defining `x` to carry a Source label"
+    );
+}
+
+/// `extract_arg_string_literals` must capture an interpolation-free JS/TS
+/// template literal (backtick) as a constant string, and return `None` for a
+/// template with `${...}` interpolation.  This is what lets the raw-SQL
+/// payload-const suppression recognise `sequelize.query(`…const DDL…`, opts)`.
+#[test]
+fn extract_arg_string_literals_handles_template_literals() {
+    fn first_call<'a>(n: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
+        if n.kind() == "call_expression" {
+            return Some(n);
+        }
+        let mut w = n.walk();
+        for c in n.children(&mut w) {
+            if let Some(f) = first_call(c) {
+                return Some(f);
+            }
+        }
+        None
+    }
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_javascript::LANGUAGE.into())
+        .unwrap();
+
+    // No-interpolation template → captured as a literal.
+    let src_const = b"q(`SELECT * FROM t`, opts);";
+    let tree = parser.parse(src_const.as_ref(), None).unwrap();
+    let call = first_call(tree.root_node()).unwrap();
+    let lits = extract_arg_string_literals(call, src_const);
+    assert_eq!(lits.len(), 2, "two positional args");
+    assert!(
+        lits[0].is_some(),
+        "no-interpolation template literal (arg 0) must be captured, got {lits:?}"
+    );
+    assert!(
+        lits[1].is_none(),
+        "the `opts` identifier (arg 1) is not a literal, got {lits:?}"
+    );
+
+    // Interpolated template → NOT a constant.
+    let src_interp = b"q(`SELECT ${name}`, opts);";
+    let tree = parser.parse(src_interp.as_ref(), None).unwrap();
+    let call = first_call(tree.root_node()).unwrap();
+    let lits = extract_arg_string_literals(call, src_interp);
+    assert!(
+        lits[0].is_none(),
+        "an interpolated template literal must NOT be captured as constant, got {lits:?}"
     );
 }
 
@@ -4078,4 +4363,440 @@ class C {
     // It folds to a definite bool once `num` is known constant.
     let r = |name: &str| if name == "num" { Some(86) } else { None };
     assert_eq!(arith[0].eval_bool(&r), Some(true));
+}
+
+// ── numeric_confined_uses (inline numeric-chain confinement) ──────────────
+
+/// Find the sink node carrying a non-empty `numeric_confined_uses`, plus the
+/// node whose callee contains `needle` (the collapsed sink chain text).
+fn confined_uses_of<'a>(cfg: &'a Cfg, needle: &str) -> Option<&'a Vec<String>> {
+    cfg.node_indices()
+        .map(|i| &cfg[i])
+        .find(|n| n.call.callee.as_deref().is_some_and(|c| c.contains(needle)))
+        .map(|n| &n.numeric_confined_uses)
+}
+
+#[test]
+fn numeric_confined_inline_parse_chain_into_shell_arg() {
+    // `Command::new("nc").arg(e.parse::<u16>().unwrap().to_string())` — the
+    // tainted leaf `e` is consumed only by a numeric parse, so it must be
+    // recorded as numeric-confined on the sink node.
+    let src = b"fn f() { let e = std::env::var(\"P\").unwrap_or_default(); \
+                let _ = std::process::Command::new(\"nc\").arg(e.parse::<u16>().unwrap().to_string()).output(); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "Command").expect("sink node present");
+    assert!(
+        confined.iter().any(|u| u == "e"),
+        "expected `e` numeric-confined; got {confined:?}"
+    );
+}
+
+#[test]
+fn numeric_confined_skips_string_tostring_receiver() {
+    // `Command::new("nc").arg(e.to_string())` where `e` is a String — the
+    // receiver of `.to_string()` is not numeric, so `e` must NOT be confined
+    // (the command injection must still fire).
+    let src = b"fn f() { let e = std::env::var(\"P\").unwrap_or_default(); \
+                let _ = std::process::Command::new(\"nc\").arg(e.to_string()).output(); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "Command").expect("sink node present");
+    assert!(
+        !confined.iter().any(|u| u == "e"),
+        "`e.to_string()` on a String must not be numeric-confined; got {confined:?}"
+    );
+}
+
+#[test]
+fn numeric_confined_blocked_by_raw_occurrence() {
+    // Same leaf used raw AND parsed: `Command::new(e.clone()).arg(e.parse::<u16>()…)`
+    // — the raw `e.clone()` occurrence (receiver of a non-numeric call) must
+    // block confinement so the real injection still fires.  Soundness guard.
+    let src = b"fn f() { let e = std::env::var(\"P\").unwrap_or_default(); \
+                let _ = std::process::Command::new(e.clone()).arg(e.parse::<u16>().unwrap().to_string()).output(); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "Command").expect("sink node present");
+    assert!(
+        !confined.iter().any(|u| u == "e"),
+        "raw `e.clone()` occurrence must block confinement of `e`; got {confined:?}"
+    );
+}
+
+#[test]
+fn numeric_confined_only_on_sink_nodes() {
+    // A non-sink node (`let n = e.parse::<u16>()` with no sink label) must not
+    // carry confinement entries — the field is gated to Sink nodes.
+    let src = b"fn f() { let e = std::env::var(\"P\").unwrap_or_default(); \
+                let n = e.parse::<u16>().unwrap(); let _ = n; }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    for i in cfg.node_indices() {
+        assert!(
+            cfg[i].numeric_confined_uses.is_empty(),
+            "non-sink node carried confinement entries: {:?}",
+            cfg[i].numeric_confined_uses
+        );
+    }
+}
+
+#[test]
+fn numeric_confined_format_macro_parse_chain() {
+    // `fs::read(format!("/d/{}", g.parse::<u32>().unwrap()))` — tree-sitter
+    // flattens the macro body to a token_tree, so `g` is recovered as confined
+    // only by re-parsing the interpolated argument expression.
+    let src = b"fn f() { let g = std::env::var(\"ID\").unwrap(); \
+                let _ = std::fs::read(format!(\"/d/{}\", g.parse::<u32>().unwrap())); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "fs::read").expect("sink node present");
+    assert!(
+        confined.iter().any(|u| u == "g"),
+        "expected `g` numeric-confined inside format!; got {confined:?}"
+    );
+}
+
+#[test]
+fn numeric_confined_format_macro_mixed_idents() {
+    // `format!("/d/{}/{}", h, g.parse::<u32>())` — `g` is numeric-confined but
+    // the raw `h` interpolation must NOT be, so the path traversal via `h`
+    // still fires.
+    let src = b"fn f() { let h = std::env::var(\"A\").unwrap(); \
+                let g = std::env::var(\"B\").unwrap(); \
+                let _ = std::fs::read(format!(\"/d/{}/{}\", h, g.parse::<u32>().unwrap())); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "fs::read").expect("sink node present");
+    assert!(
+        confined.iter().any(|u| u == "g"),
+        "expected `g` confined; got {confined:?}"
+    );
+    assert!(
+        !confined.iter().any(|u| u == "h"),
+        "raw `h` interpolation must not be confined; got {confined:?}"
+    );
+}
+
+#[test]
+fn numeric_confined_format_macro_pathbuf_turbofish_not_confined() {
+    // `format!("/d/{}", p.parse::<PathBuf>())` — a non-numeric explicit
+    // turbofish target proves the value is NOT an integer, so `p` must stay
+    // un-confined and the FILE_IO flow fires.
+    let src = b"fn f() { let p = std::env::var(\"C\").unwrap(); \
+                let _ = std::fs::read(format!(\"/d/{}\", p.parse::<std::path::PathBuf>().unwrap())); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "fs::read").expect("sink node present");
+    assert!(
+        !confined.iter().any(|u| u == "p"),
+        "`parse::<PathBuf>()` must not be numeric-confined; got {confined:?}"
+    );
+}
+
+#[test]
+fn numeric_confined_format_macro_blocked_by_raw_occurrence() {
+    // Same leaf raw AND parsed inside one format!: `format!("/d/{}/{}", v,
+    // v.parse::<u32>())` — the raw `v` occurrence blocks confinement.
+    let src = b"fn f() { let v = std::env::var(\"E\").unwrap(); \
+                let _ = std::fs::read(format!(\"/d/{}/{}\", v, v.parse::<u32>().unwrap())); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let confined = confined_uses_of(&cfg, "fs::read").expect("sink node present");
+    assert!(
+        !confined.iter().any(|u| u == "v"),
+        "raw `v` occurrence must block confinement; got {confined:?}"
+    );
+}
+
+#[test]
+fn format_macro_method_idents_records_machinery() {
+    // The phantom method/macro-name tokens (`format`, `parse`, `unwrap`) of a
+    // confined format! interpolation are recorded so the structural confinement
+    // check can skip the SSA Param operands they lower to.
+    let src = b"fn f() { let g = std::env::var(\"ID\").unwrap(); \
+                let _ = std::fs::read(format!(\"/d/{}\", g.parse::<u32>().unwrap())); }";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    let sink = cfg
+        .node_indices()
+        .map(|i| &cfg[i])
+        .find(|n| {
+            n.call
+                .callee
+                .as_deref()
+                .is_some_and(|c| c.contains("fs::read"))
+        })
+        .expect("sink node present");
+    for name in ["format", "parse", "unwrap"] {
+        assert!(
+            sink.format_macro_method_idents.iter().any(|m| m == name),
+            "expected `{name}` in format_macro_method_idents; got {:?}",
+            sink.format_macro_method_idents
+        );
+    }
+    // The confined value leaf `g` is a real value, not machinery.
+    assert!(
+        !sink.format_macro_method_idents.iter().any(|m| m == "g"),
+        "value leaf `g` must not be machinery; got {:?}",
+        sink.format_macro_method_idents
+    );
+}
+
+// ── Java borrowed-vs-owned JDBC connection classification ───────────────
+// Pins `NodeInfo.borrowed_resource`, set at CFG build by receiver-type
+// discrimination (`java_getconnection_receiver_is_borrowed`).  A connection
+// borrowed from a managed session / DB abstraction (Liquibase `Database`,
+// Hibernate `Session`, MyBatis `SqlSession`, JPA `EntityManager`) is closed
+// by its owner, so leak-at-exit on the borrower is a false positive; an
+// OWNED `DataSource` / static `DriverManager` connection stays a real leak.
+
+fn java_any_borrowed_resource(src: &[u8]) -> bool {
+    let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "java", ts_lang);
+    cfg.node_weights().any(|n| n.borrowed_resource)
+}
+
+#[test]
+fn java_borrowed_connection_from_liquibase_database_param_is_flagged() {
+    // openmrs Liquibase changeset shape: `database` is a `Database` parameter
+    // whose connection Liquibase owns and closes.
+    let src = br#"class C {
+  public void execute(Database database) throws Exception {
+    JdbcConnection connection = (JdbcConnection) database.getConnection();
+    connection.prepareStatement("x");
+  }
+}"#;
+    assert!(java_any_borrowed_resource(src));
+}
+
+#[test]
+fn java_borrowed_connection_from_hibernate_local_session_is_flagged() {
+    // A local `Session` (Hibernate) owns its JDBC connection.
+    let src = br#"class C {
+  void run(SessionFactory sf) {
+    Session s = sf.openSession();
+    java.sql.Connection c = s.getConnection();
+    c.prepareStatement("x");
+  }
+}"#;
+    assert!(java_any_borrowed_resource(src));
+}
+
+#[test]
+fn java_borrowed_connection_from_mybatis_field_is_flagged() {
+    // A `SqlSession` (MyBatis) class field owns its connection.
+    let src = br#"class Dao {
+  private SqlSession dbSession;
+  void run() {
+    java.sql.Connection c = dbSession.getConnection();
+    c.prepareStatement("x");
+  }
+}"#;
+    assert!(java_any_borrowed_resource(src));
+}
+
+#[test]
+fn java_owned_connection_from_driver_manager_static_is_not_flagged() {
+    // `DriverManager.getConnection(...)` returns an OWNED connection: the
+    // receiver `DriverManager` resolves to no local / param / field, so the
+    // leak stays a true positive.
+    let src = br#"class C {
+  void run(String url) throws Exception {
+    java.sql.Connection c = java.sql.DriverManager.getConnection(url);
+    c.prepareStatement("x");
+  }
+}"#;
+    assert!(!java_any_borrowed_resource(src));
+}
+
+#[test]
+fn java_owned_connection_from_datasource_is_not_flagged() {
+    // A `DataSource` connection is OWNED by the caller (must close).
+    let src = br#"class C {
+  private javax.sql.DataSource ds;
+  void run() throws Exception {
+    java.sql.Connection c = ds.getConnection();
+    c.prepareStatement("x");
+  }
+}"#;
+    assert!(!java_any_borrowed_resource(src));
+}
+
+#[test]
+fn java_bare_getconnection_call_is_not_flagged() {
+    // A bare `getConnection()` (self / static helper, no receiver) has no
+    // receiver type to discriminate → stays a real leak.
+    let src = br#"class C {
+  void run() throws Exception {
+    java.sql.Connection c = getConnection();
+    c.prepareStatement("x");
+  }
+}"#;
+    assert!(!java_any_borrowed_resource(src));
+}
+
+#[test]
+fn java_borrowed_owner_type_classifier_and_leaf() {
+    assert_eq!(
+        super::java_type_leaf("liquibase.database.Database"),
+        "Database"
+    );
+    assert_eq!(super::java_type_leaf("org.hibernate.Session"), "Session");
+    assert_eq!(super::java_type_leaf("List<Session>"), "List");
+    assert_eq!(super::java_type_leaf("Foo[]"), "Foo");
+    assert!(super::is_java_borrowed_connection_owner("Database"));
+    assert!(super::is_java_borrowed_connection_owner(
+        "org.hibernate.Session"
+    ));
+    assert!(super::is_java_borrowed_connection_owner("SqlSession"));
+    assert!(super::is_java_borrowed_connection_owner(
+        "javax.persistence.EntityManager"
+    ));
+    // `*Session` suffix generalises across frameworks (sonarqube `DbSession`
+    // extends MyBatis `SqlSession`; Hibernate `StatelessSession`).
+    assert!(super::is_java_borrowed_connection_owner(
+        "org.sonar.db.DbSession"
+    ));
+    assert!(super::is_java_borrowed_connection_owner("StatelessSession"));
+    // OWNED-connection receivers must NOT be borrowed owners (recall).
+    assert!(!super::is_java_borrowed_connection_owner(
+        "javax.sql.DataSource"
+    ));
+    assert!(!super::is_java_borrowed_connection_owner("DriverManager"));
+    assert!(!super::is_java_borrowed_connection_owner("Connection"));
+    assert!(!super::is_java_borrowed_connection_owner("BasicDataSource"));
+}
+
+/// `sequelize.transaction(async (t) => { sequelize.query(`const`, {t}) })`:
+/// `first_member_label` hoists the inner query SQL_QUERY Sink onto the outer
+/// `.transaction` wrapper node.  The wrapper must carry `HoistedSink`
+/// provenance recording the INNER call's own payload-arg positions ([0], from
+/// the sequelize.query gate) and per-argument string literals (arg0 = the
+/// constant SQL template), so the cfg-unguarded-sink layer can prove the inner
+/// payload constant and suppress the phantom wrapper finding.
+#[test]
+fn transaction_wrapper_records_hoisted_sink_const_payload() {
+    let src = br#"module.exports = {
+  async up(queryInterface) {
+    await queryInterface.sequelize.transaction(async (transaction) => {
+      await queryInterface.sequelize.query(`DROP VIEW x`, { transaction });
+    });
+  },
+};
+"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let fc = parse_to_file_cfg(src, "javascript", ts_lang);
+    let wrapper = fc
+        .bodies
+        .iter()
+        .flat_map(|b| b.graph.node_indices().map(move |i| &b.graph[i]))
+        .find(|n| n.call.callee.as_deref() == Some("queryInterface.sequelize.transaction"))
+        .expect("transaction wrapper node");
+    let h = wrapper
+        .call
+        .hoisted_sink
+        .as_ref()
+        .expect("wrapper carries HoistedSink provenance from the callback body");
+    assert_eq!(h.payload_args.as_deref(), Some(&[0usize][..]));
+    assert_eq!(
+        h.arg_string_literals.first(),
+        Some(&Some("DROP VIEW x".to_string()))
+    );
+}
+
+/// Interpolated inner SQL: the same wrapper shape but the inner query payload
+/// is a `${…}` template (non-const).  The recorded `HoistedSink` must leave
+/// payload position 0 non-literal so the syntactic payload-const suppression
+/// does NOT fire and a tainted inner flow still reports.
+#[test]
+fn transaction_wrapper_hoisted_sink_interpolated_payload_not_literal() {
+    let src = br#"async function h(name) {
+  await sequelize.transaction(async (transaction) => {
+    await sequelize.query(`SELECT * FROM u WHERE n = '${name}'`, { transaction });
+  });
+}
+"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let fc = parse_to_file_cfg(src, "javascript", ts_lang);
+    let wrapper = fc
+        .bodies
+        .iter()
+        .flat_map(|b| b.graph.node_indices().map(move |i| &b.graph[i]))
+        .find(|n| n.call.callee.as_deref() == Some("sequelize.transaction"))
+        .expect("transaction wrapper node");
+    let h = wrapper
+        .call
+        .hoisted_sink
+        .as_ref()
+        .expect("wrapper carries HoistedSink provenance");
+    assert_eq!(h.payload_args.as_deref(), Some(&[0usize][..]));
+    // Interpolated template => no captured literal at the payload position.
+    assert_eq!(h.arg_string_literals.first(), Some(&None));
+}
+
+/// Ordinary member-source-on-wrapper hoist (no callback body) must NOT be
+/// treated as a hoisted callback sink: `storeInto(req.query.input, items)`
+/// hoists the `req.query.input` Source onto the wrapper, which is not a
+/// callback-nested Sink, so `hoisted_sink` stays `None`.
+#[test]
+fn member_source_wrapper_has_no_hoisted_sink() {
+    let src = b"function h(req, items) { storeInto(req.query.input, items); }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let fc = parse_to_file_cfg(src, "javascript", ts_lang);
+    for b in &fc.bodies {
+        for i in b.graph.node_indices() {
+            assert!(
+                b.graph[i].call.hoisted_sink.is_none(),
+                "no callback sink hoist expected for a member-source wrapper"
+            );
+        }
+    }
+}
+
+/// A chained call must not inherit `HoistedSink` provenance from a sink nested
+/// in its RECEIVER's callback.  In
+/// `http.get(target, res => { res.send('ok') }).on('error', cb)` the `.on` node
+/// owns only `'error'` and `cb`; `res.send('ok')` belongs to the `http.get`
+/// receiver.  Recording it made the unrelated `'ok'` literal look like a
+/// constant payload for the `.on` node, and `sink_payload_args_syntactic_const`
+/// then suppressed a real SSRF finding (benchmark case `js-ssrf-003`).
+#[test]
+fn chained_call_takes_no_hoisted_sink_from_receiver_callback() {
+    let src = br#"const http = require('http');
+app.get('/probe', (req, res) => {
+    const target = req.query.url;
+    http.get(target, response => {
+        res.send('ok');
+    }).on('error', e => {
+        res.status(500).send(e.message);
+    });
+});
+"#;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let fc = parse_to_file_cfg(src, "javascript", ts_lang);
+    let on_node = fc
+        .bodies
+        .iter()
+        .flat_map(|b| b.graph.node_indices().map(move |i| &b.graph[i]))
+        .find(|n| {
+            n.call
+                .outer_callee
+                .as_deref()
+                .is_some_and(|c| c.ends_with(".on"))
+        });
+    if let Some(n) = on_node {
+        // Provenance may be absent, or present only from the `.on` node's own
+        // argument callback (`res.status(500).send(e.message)`), whose payload
+        // is NOT a literal.  What must never happen is inheriting the
+        // receiver's constant `'ok'`.
+        if let Some(h) = &n.call.hoisted_sink {
+            assert!(
+                !h.arg_string_literals
+                    .iter()
+                    .any(|l| l.as_deref() == Some("ok")),
+                "chained `.on` node inherited `'ok'` from the receiver's callback: {h:?}"
+            );
+        }
+    }
 }

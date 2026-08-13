@@ -44,6 +44,7 @@ use state::{
 pub(crate) use state::{
     push_origin_bounded, record_engine_note, reset_body_engine_notes, take_body_engine_notes,
 };
+pub(crate) use summary_extract::detect_path_confined_return;
 pub use summary_extract::{extract_ssa_func_summary, extract_ssa_func_summary_full};
 
 use crate::abstract_interp::AbstractState;
@@ -65,6 +66,7 @@ use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 // ── SSA Taint Transfer ──────────────────────────────────────────────────
 
@@ -109,7 +111,7 @@ pub struct SsaTaintTransfer<'a> {
     pub receiver_seed: Option<&'a VarTaint>,
     /// Per-SSA-value constant lattice from constant propagation.
     /// Used for SSA-level literal suppression at sinks.
-    pub const_values: Option<&'a HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>>,
+    pub const_values: Option<&'a crate::ssa::const_prop::ConstValues>,
     /// Type facts from type analysis.
     /// Used for type-aware sink filtering (e.g., suppress SQL injection for int-typed values).
     pub type_facts: Option<&'a crate::ssa::type_facts::TypeFactResult>,
@@ -275,7 +277,11 @@ pub fn run_ssa_taint_full(
     cfg: &Cfg,
     transfer: &SsaTaintTransfer,
 ) -> (Vec<SsaTaintEvent>, Vec<Option<SsaTaintState>>) {
-    let result = run_ssa_taint_internal(ssa, cfg, transfer);
+    // `block_exit_states` is discarded here, so skip building it entirely —
+    // that elides one full `SsaTaintState` clone per block pop on the entire
+    // main taint path (summary extraction + main analysis + sink augmentation,
+    // all 10 languages).  See `run_ssa_taint_internal`'s `track_exit_states`.
+    let result = run_ssa_taint_internal(ssa, cfg, transfer, false);
     (result.events, result.block_states)
 }
 
@@ -290,7 +296,7 @@ pub fn run_ssa_taint_full_with_exits(
     Vec<Option<SsaTaintState>>,
     Vec<Option<SsaTaintState>>,
 ) {
-    let result = run_ssa_taint_internal(ssa, cfg, transfer);
+    let result = run_ssa_taint_internal(ssa, cfg, transfer, true);
     (result.events, result.block_states, result.block_exit_states)
 }
 
@@ -298,8 +304,25 @@ fn run_ssa_taint_internal(
     ssa: &SsaBody,
     cfg: &Cfg,
     transfer: &SsaTaintTransfer,
+    // When `false`, the per-block exit states are never stored into
+    // `block_exit_states` (it stays all-`None`).  The dominant callers
+    // (`run_ssa_taint_full`: summary extraction, main analysis, and
+    // parent/child sink augmentation) discard `block_exit_states`, so
+    // filling it means cloning the full `SsaTaintState` once per block pop
+    // for a value that is thrown away.  Only `run_ssa_taint_full_with_exits`
+    // (the k=1 inline-callee return-shape extractor and the debug endpoint)
+    // consults it, and it passes `true`.  When `true`, the exit state is
+    // *moved* into `block_exit_states` after its last borrow rather than
+    // cloned, so even the tracking path pays no clone here.
+    track_exit_states: bool,
 ) -> SsaTaintRunResult {
     let num_blocks = ssa.blocks.len();
+
+    // Path-confinement gates: computed once for the whole body so the per-call
+    // confinement passes (and their string-grammar name checks) are skipped in
+    // both the worklist and the event-collection replays when the file has no
+    // confiner summary.  See [`ConfinementGates`].
+    let confinement = compute_confinement_gates(transfer);
 
     // Detect induction variables before analysis
     let back_edges = detect_back_edges(ssa);
@@ -541,9 +564,9 @@ fn run_ssa_taint_internal(
 
     // Seed entry block's PathEnv from optimization results
     if let Some(ref mut entry_state) = block_states[ssa.entry.0 as usize] {
-        if let Some(ref mut env) = entry_state.path_env {
+        if let Some(env) = entry_state.path_env.as_mut() {
             if let (Some(cv), Some(tf)) = (transfer.const_values, transfer.type_facts) {
-                env.seed_from_optimization(cv, tf);
+                Arc::make_mut(env).seed_from_optimization(cv, tf);
             }
         }
     }
@@ -552,15 +575,19 @@ fn run_ssa_taint_internal(
     if let Some(ref mut entry_state) = block_states[ssa.entry.0 as usize] {
         if let Some(ref mut abs) = entry_state.abstract_state {
             if let Some(cv) = transfer.const_values {
+                // COW fork: only deep-copy the shared AbstractState when there
+                // are const values to seed (an entry block with no const-prop
+                // facts keeps sharing its `initial()` Arc).
+                let abs = Arc::make_mut(abs);
                 use crate::abstract_interp::{
                     AbstractValue, BitFact, IntervalFact, PathFact, StringFact,
                 };
                 use crate::ssa::const_prop::ConstLattice;
-                for (v, cl) in cv {
+                for (v, cl) in cv.iter() {
                     match cl {
                         ConstLattice::Int(n) => {
                             abs.set(
-                                *v,
+                                v,
                                 AbstractValue {
                                     interval: IntervalFact::exact(*n),
                                     string: StringFact::top(),
@@ -571,7 +598,7 @@ fn run_ssa_taint_internal(
                         }
                         ConstLattice::Str(s) => {
                             abs.set(
-                                *v,
+                                v,
                                 AbstractValue {
                                     interval: IntervalFact::top(),
                                     string: StringFact::exact(s),
@@ -653,8 +680,8 @@ fn run_ssa_taint_internal(
             entry_state,
             &induction_vars,
             Some(&pred_states),
+            confinement,
         );
-        block_exit_states[bid] = Some(exit_state.clone());
 
         // Build per-successor states (branch-aware for Branch terminators)
         let succ_states = compute_succ_states(block, cfg, ssa, transfer, &exit_state);
@@ -678,7 +705,7 @@ fn run_ssa_taint_internal(
                             (&joined.abstract_state, &existing.abstract_state)
                         {
                             let widened = old_abs.widen(new_abs);
-                            joined.abstract_state = Some(widened);
+                            joined.abstract_state = Some(Arc::new(widened));
                         }
                     }
                     joined
@@ -726,6 +753,18 @@ fn run_ssa_taint_internal(
                     worklist.push_back(catch_idx);
                 }
             }
+        }
+
+        // Store the block's exit state ONLY for callers that consult it
+        // (`track_exit_states`).  This is the last use of `exit_state`, so it
+        // is *moved* here rather than cloned — the store used to sit before
+        // `compute_succ_states` / the exception-edge loop and paid a full
+        // `SsaTaintState::clone` on every block pop; those consumers borrow
+        // `exit_state`, so deferring the store past them lets it be moved.
+        // `block_exit_states[bid]` is write-once and read only after the
+        // worklist converges, so this reorder is output-identical.
+        if track_exit_states {
+            block_exit_states[bid] = Some(exit_state);
         }
     }
 
@@ -778,6 +817,7 @@ fn run_ssa_taint_internal(
             &mut events,
             &induction_vars,
             Some(&pred_states),
+            confinement,
         );
     }
 
@@ -812,6 +852,7 @@ pub fn extract_ssa_exit_state(
 ) -> HashMap<BindingKey, VarTaint> {
     // Compute exit states by replaying transfer on converged entry states
     let empty_induction = HashSet::new();
+    let confinement = compute_confinement_gates(transfer);
     let mut joined = SsaTaintState::initial();
     for (bid, entry_state) in block_states.iter().enumerate() {
         if let Some(state) = entry_state {
@@ -823,6 +864,7 @@ pub fn extract_ssa_exit_state(
                 state.clone(),
                 &empty_induction,
                 None,
+                confinement,
             );
             joined = joined.join(&exit_state);
         }
@@ -1018,6 +1060,10 @@ pub(super) fn transfer_block(
     mut state: SsaTaintState,
     induction_vars: &HashSet<SsaValue>,
     pred_states: Option<&PredStates>,
+    // Which path-confinement post-conditions can fire for this body (computed
+    // once per body via `compute_confinement_gates`); skips the per-call string
+    // work when no confiner summary exists.  See [`ConfinementGates`].
+    confinement: ConfinementGates,
 ) -> SsaTaintState {
     // Process phis
     let block_idx = block.id.0 as usize;
@@ -1152,7 +1198,7 @@ pub(super) fn transfer_block(
 
                 if any_operand {
                     if let Some(ref mut abs) = state.abstract_state {
-                        abs.set(phi.value, joined);
+                        Arc::make_mut(abs).set(phi.value, joined);
                     }
                 }
             }
@@ -1162,9 +1208,193 @@ pub(super) fn transfer_block(
     // Process body
     for inst in &block.body {
         transfer_inst(inst, cfg, ssa, transfer, &mut state);
+        // Assert-guard path confinement (CVE-2021-21234): if this call is to a
+        // helper whose SSA summary records `asserts_path_confined_params` (a
+        // `void` guard that `Assert.isTrue(p.startsWith(base))`-throws unless
+        // its path arg is contained under a fixed prefix), strip `Cap::FILE_IO`
+        // from the confined arguments.  Runs *after* `transfer_inst` so the
+        // clearing lands on the args' current caps, and *before* the same
+        // block's later sink call (`streamContent(path, …)`) reads them.
+        if confinement.assert {
+            apply_call_post_confinement(inst, ssa, transfer, &mut state);
+        }
+        // Path-safety-validator rejection confinement (CVE-2026-53956): if this
+        // call is to a path-safety-named validator whose summary records
+        // `result_reject_guard_params`, strip `Cap::FILE_IO` from the rejected
+        // arguments so a downstream `path.join(segment)` -> `fs::write` does not
+        // fire on the `?`-guarded value.
+        if confinement.path_validator {
+            apply_path_validator_confinement(inst, ssa, transfer, &mut state);
+        }
+        // Return-value path confinement (CVE-2020-5221): if this call is to a
+        // helper whose summary records `confines_path_return`, strip
+        // `Cap::FILE_IO` from the call *result* so a downstream `fopen(result)`
+        // does not fire.
+        if confinement.return_confiner {
+            apply_call_return_confinement(inst, transfer, &mut state);
+        }
     }
 
     state
+}
+
+/// Text-only PathFact classification of a branch condition.
+///
+/// Split out of [`apply_path_fact_branch_narrowing_with_interner`] so the
+/// state-independent text classification (`classify_path_rejection_axes` /
+/// `classify_path_assertion` / `cond_has_pre_negated_islocal_clause`, all
+/// pure `&str -> _`) can be computed once per branch node and reused across
+/// worklist re-visits, while the state-dependent narrowing still runs per
+/// visit.
+#[derive(Clone, Debug, PartialEq)]
+struct PathBranchClass {
+    rejection_axes: SmallVec<[crate::abstract_interp::path_domain::PathRejection; 3]>,
+    assertion: crate::abstract_interp::path_domain::PathAssertion,
+    rejection_pre_negated: bool,
+}
+
+/// Classify a branch condition's text against the PathFact rejection /
+/// assertion idioms.  Pure function of `cond_text`.
+fn classify_path_branch(cond_text: &str) -> PathBranchClass {
+    use crate::abstract_interp::path_domain::{
+        classify_path_assertion, classify_path_rejection_axes, cond_has_pre_negated_islocal_clause,
+    };
+    PathBranchClass {
+        rejection_axes: classify_path_rejection_axes(cond_text),
+        assertion: classify_path_assertion(cond_text),
+        rejection_pre_negated: cond_has_pre_negated_islocal_clause(cond_text),
+    }
+}
+
+/// Text-only classification of a branch condition, memoized per distinct
+/// condition *text* in the persistent per-thread [`COND_CLASS_CACHE`].
+///
+/// Every field is a deterministic function of the immutable condition text
+/// (the per-node `condition_negated` flag is applied by the caller), never
+/// of the mutable `SsaTaintState`.  The block-level worklist re-visits a
+/// branch block once per predecessor-state change (avg ~1.4×, more for
+/// loop-body branches), and the same body's worklist is re-run ~5×/file
+/// (summary extraction + main analysis + parent/child sink augmentation);
+/// previously each first visit re-ran `classify_condition_with_target`, the
+/// `has_semantic_negation` string scan, and the three PathFact text
+/// classifiers on the *same* `cond_text`.  Those `str::find` / `str::contains`
+/// scans (via `StrSearcher::new`) were ≈5% of static-engine self-time on
+/// mm/channels/app.  Caching the result keyed on the condition text turns
+/// every re-visit — within a worklist run, across the ~5 passes, and across
+/// every other body/file with the same condition idiom — into an O(1)
+/// `FxHashMap` hit; only the state-application steps (which read taint state /
+/// SSA defs) still run per visit.
+#[derive(Clone, Debug, PartialEq)]
+struct BranchCondClass {
+    kind: PredicateKind,
+    target_var: Option<String>,
+    /// Semantic negation not captured by AST-level `condition_negated`
+    /// (Python `not in`, TypeCheck `!==`/`!=`, negative-polarity validator).
+    has_semantic_negation: bool,
+    path: PathBranchClass,
+}
+
+/// Compute the (state-independent) classification of a branch condition.
+/// Result is memoized per condition node — see [`BranchCondClass`].
+fn classify_branch_cond(cond_text: &str) -> BranchCondClass {
+    let (kind, target_var) = classify_condition_with_target(cond_text);
+    // `has_semantic_negation` only consults the lowercased text for the
+    // AllowlistCheck / TypeCheck kinds, so compute the (allocating) lowercase
+    // lazily — most conditions are neither and skip it entirely.  The boolean
+    // result is identical to the prior unconditional-lowercase `||` chain.
+    let has_semantic_negation = match kind {
+        PredicateKind::AllowlistCheck => cond_text.to_ascii_lowercase().contains(" not in "),
+        PredicateKind::TypeCheck => {
+            let lower = cond_text.to_ascii_lowercase();
+            lower.contains("!==") || lower.contains("!=")
+        }
+        PredicateKind::ValidationCall => {
+            crate::taint::path_state::is_negative_polarity_validation_callee(cond_text)
+        }
+        _ => false,
+    };
+    BranchCondClass {
+        kind,
+        target_var,
+        has_semantic_negation,
+        path: classify_path_branch(cond_text),
+    }
+}
+
+/// Escape hatch: `NYX_DISABLE_COND_MEMO=1` forces every branch-condition
+/// classification to recompute instead of consulting [`COND_CLASS_CACHE`].
+/// Used to A/B the cached vs re-classifying path from a single binary
+/// (criterion baseline, differential-correctness check) and as a safety
+/// toggle.  Cached so the env read is paid once per process.  The two paths
+/// are bit-identical — the cache only stores a pure function's result — so
+/// this changes only performance.
+fn cond_class_memo_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("NYX_DISABLE_COND_MEMO")
+            .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false)
+    })
+}
+
+thread_local! {
+    /// Persistent per-thread cache of the text-only branch-condition
+    /// classification ([`BranchCondClass`]), keyed by the condition *text* —
+    /// the sole input to [`classify_branch_cond`].
+    ///
+    /// Keyed on text, **not** on the CFG condition node index: the `Cfg` is
+    /// per-body (`taint/mod.rs` binds `let cfg = &body.graph`), so node
+    /// indices collide across the file's functions and a node-index key would
+    /// return one function's classification for another's condition.  The
+    /// condition *text* is the collision-free invariant and is identical
+    /// across every worklist re-visit, every pass, every function, and every
+    /// file that contains the same condition idiom (`if err != nil`,
+    /// `if (x == null)`, …), so the cache captures all of that reuse.
+    ///
+    /// session-0015 used a worklist-local `FxHashMap<u32, BranchCondClass>`
+    /// (rebuilt empty per `run_ssa_taint_internal` call), which only caught
+    /// re-visits within one worklist run; the first visit of every branch in
+    /// every one of the ~5 passes/file still re-ran the string scans.  This
+    /// per-thread cache classifies each distinct condition text once for the
+    /// whole scan.  Lives across files via the rayon worker thread (each file
+    /// is processed start-to-finish on one worker); correctness is independent
+    /// of cache state because the stored value is a pure function of the key.
+    static COND_CLASS_CACHE: RefCell<rustc_hash::FxHashMap<String, BranchCondClass>> =
+        RefCell::new(rustc_hash::FxHashMap::default());
+}
+
+/// Soft cap on [`COND_CLASS_CACHE`].  Distinct branch-condition texts are
+/// bounded in practice (a handful of idioms dominate), but an XL repo could
+/// accumulate many across a worker's lifetime; clearing the map when it
+/// exceeds the cap bounds per-thread memory to ~`CAP` entries.  Safe: the
+/// value is a pure function of the text, so a post-clear miss only forfeits a
+/// future hit, never correctness.
+const COND_CLASS_CACHE_CAP: usize = 1 << 16;
+
+/// Fetch-or-compute the text-only [`BranchCondClass`] for `cond_text` via the
+/// persistent per-thread [`COND_CLASS_CACHE`].  Returns an owned value (a cheap
+/// clone on a hit — a small enum + one optional short `String` + an inline
+/// `SmallVec`, vs the multi-`StrSearcher` recompute it replaces) so the caller
+/// holds no borrow into the cache.
+fn classify_branch_cond_cached(cond_text: &str) -> BranchCondClass {
+    if cond_class_memo_disabled() {
+        return classify_branch_cond(cond_text);
+    }
+    COND_CLASS_CACHE.with(|cell| {
+        {
+            let map = cell.borrow();
+            if let Some(hit) = map.get(cond_text) {
+                return hit.clone();
+            }
+        }
+        let computed = classify_branch_cond(cond_text);
+        let mut map = cell.borrow_mut();
+        if map.len() >= COND_CLASS_CACHE_CAP {
+            map.clear();
+        }
+        map.insert(cond_text.to_string(), computed.clone());
+        computed
+    })
 }
 
 /// Compute per-successor states with branch-aware predicate handling.
@@ -1172,6 +1402,11 @@ pub(super) fn transfer_block(
 /// For `Branch` terminators, inspects the condition node for validation/predicate
 /// info and produces specialized true/false states. For other terminators,
 /// propagates the exit state uniformly.
+///
+/// Branch-condition classification is cached in the persistent per-thread
+/// [`COND_CLASS_CACHE`] (see [`classify_branch_cond_cached`]) so the
+/// per-condition string scans run once per distinct condition text for the
+/// whole scan, not once per worklist re-visit / pass / body.
 fn compute_succ_states(
     block: &SsaBlock,
     cfg: &Cfg,
@@ -1199,12 +1434,20 @@ fn compute_succ_states(
             };
             if cond_info.condition_text.is_some() && !cond_info.condition_vars.is_empty() {
                 let cond_text = cond_info.condition_text.as_deref().unwrap_or("");
-                let (kind, target_var) = classify_condition_with_target(cond_text);
+                // Fetch-or-compute the text-only classification for this
+                // condition.  Cached per distinct condition text in the
+                // persistent per-thread `COND_CLASS_CACHE`, so the
+                // `classify_condition_with_target` + `has_semantic_negation` +
+                // PathFact-classifier string scans run once per condition idiom
+                // for the whole scan rather than once per worklist re-visit /
+                // pass / body.
+                let class = classify_branch_cond_cached(cond_text);
+                let kind = class.kind;
 
                 // Determine which vars to apply validation to:
                 // If we extracted a specific target, narrow to just that var
                 // (if it's in condition_vars). Otherwise use all condition_vars.
-                let effective_vars: Vec<String> = if let Some(ref target) = target_var {
+                let effective_vars: Vec<String> = if let Some(ref target) = class.target_var {
                     if cond_info.condition_vars.iter().any(|v| v == target) {
                         vec![target.clone()]
                     } else {
@@ -1217,18 +1460,13 @@ fn compute_succ_states(
                 let mut true_state = exit_state.clone();
                 let mut false_state = exit_state.clone();
 
-                // Detect semantic negation that isn't captured by AST-level
-                // `condition_negated` (which only detects unary `!`/`not`).
-                //
-                // - Python `not in`: comparison operator, not unary negation
-                // - TypeCheck with `!==`/`!=`: "typeof x !== 'number'" means
-                //   the true branch is the REJECT path (type mismatch)
-                let cond_lower = cond_text.to_ascii_lowercase();
-                let has_semantic_negation = (kind == PredicateKind::AllowlistCheck
-                    && cond_lower.contains(" not in "))
-                    || (kind == PredicateKind::TypeCheck
-                        && (cond_lower.contains("!==") || cond_lower.contains("!=")));
-                let effective_negated = if has_semantic_negation {
+                // Semantic negation not captured by AST-level
+                // `condition_negated` (Python `not in`, TypeCheck `!==`/`!=`,
+                // negative-polarity validator like `isInvalidUrl(x)`).  The
+                // text scan that derives this is memoized in `class` (see
+                // [`classify_branch_cond`]); only the per-node
+                // `condition_negated` combination happens here.
+                let effective_negated = if class.has_semantic_negation {
                     !cond_info.condition_negated
                 } else {
                     cond_info.condition_negated
@@ -1281,7 +1519,7 @@ fn compute_succ_states(
                 apply_path_fact_branch_narrowing_with_interner(
                     &mut true_state,
                     &mut false_state,
-                    cond_text,
+                    &class.path,
                     &effective_vars,
                     ssa,
                     Some(transfer.interner),
@@ -1339,6 +1577,26 @@ fn compute_succ_states(
                         block.id,
                         transfer.interner,
                     );
+
+                    // Behaviour-based path-confinement narrowing.  Recognises
+                    // a gate on a helper whose SSA summary records a
+                    // constant-prefix path-confinement predicate
+                    // (`if (!isOptimizedDepFile(p)) return next()`), and
+                    // strips `Cap::FILE_IO` from the confined argument on the
+                    // surviving branch.  Lifts the inline
+                    // `x.startsWith("/safe/")` narrowing through a wrapper
+                    // helper recognised by behaviour (not name).
+                    // Motivated by CVE-2026-39365 (Vite sourcemap traversal).
+                    apply_summary_confinement_narrowing(
+                        &mut true_state,
+                        &mut false_state,
+                        cond_text,
+                        &cond_info.condition_vars,
+                        cond_info.condition_negated,
+                        ssa,
+                        block.id,
+                        transfer,
+                    );
                 }
 
                 // Constraint refinement
@@ -1359,9 +1617,15 @@ fn compute_succ_states(
                         constraint::lower_condition(cond_info, ssa, block.id, transfer.const_values)
                     };
                     if !matches!(cond_expr, constraint::ConditionExpr::Unknown) {
-                        if let Some(ref mut env) = true_state.path_env {
-                            *env = constraint::refine_env(env, &cond_expr, true);
-                            if env.is_unsat() {
+                        if let Some(env) = true_state.path_env.as_mut() {
+                            // Full replacement: read the (possibly shared) env,
+                            // build the refined copy, swap the Arc pointer. This
+                            // is cheaper than `make_mut` (which would clone the
+                            // shared inner only to immediately overwrite it).
+                            let refined = constraint::refine_env(env, &cond_expr, true);
+                            let unsat = refined.is_unsat();
+                            *env = Arc::new(refined);
+                            if unsat {
                                 tracing::debug!(
                                     block = ?block.id,
                                     cond = cond_text,
@@ -1369,9 +1633,11 @@ fn compute_succ_states(
                                 );
                             }
                         }
-                        if let Some(ref mut env) = false_state.path_env {
-                            *env = constraint::refine_env(env, &cond_expr, false);
-                            if env.is_unsat() {
+                        if let Some(env) = false_state.path_env.as_mut() {
+                            let refined = constraint::refine_env(env, &cond_expr, false);
+                            let unsat = refined.is_unsat();
+                            *env = Arc::new(refined);
+                            if unsat {
                                 tracing::debug!(
                                     block = ?block.id,
                                     cond = cond_text,
@@ -1539,6 +1805,19 @@ fn apply_branch_predicates(
     if kind == PredicateKind::ShellMetaValidated && !polarity {
         for var in condition_vars {
             clear_cap_alias_aware(state, var, Cap::SHELL_ESCAPE, ssa, base_aliases);
+        }
+    }
+
+    // PathPrefixConfined: inverted polarity, the FALSE (starts-with-prefix)
+    // branch is the confined path; the TRUE (non-zero strncmp) branch is the
+    // rejection path.  Cap-aware: a `strncmp(x, prefix, strlen(prefix))` guard
+    // only proves `x` is confined to the fixed directory prefix, so clear
+    // `Cap::FILE_IO` from the confined variable's taint and let other sink
+    // classes still fire on the residual caps.  `condition_vars` is already
+    // scoped to the strncmp subject via `classify_condition_with_target`.
+    if kind == PredicateKind::PathPrefixConfined && !polarity {
+        for var in condition_vars {
+            clear_cap_alias_aware(state, var, Cap::FILE_IO, ssa, base_aliases);
         }
     }
 
@@ -1927,6 +2206,576 @@ fn apply_input_validator_branch_narrowing(
     }
 }
 
+/// Look up the path-confinement positions of a callee by bare name in the
+/// intra-file SSA summary map.
+///
+/// Returns the callee's [`SsaFuncSummary::confines_path_params`] when a
+/// same-language summary whose `FuncKey.name` matches `bare_name` records at
+/// least one confined parameter.  Intra-file only: confinement helpers
+/// (`isSafePath`, `isOptimizedDepFile`) overwhelmingly live in the same
+/// module as their caller, so the per-file `ssa_summaries` map carries them.
+/// A cross-file extension would index `GlobalSummaries` by `(lang, name)`.
+fn summary_confined_positions<'b>(
+    transfer: &'b SsaTaintTransfer,
+    bare_name: &str,
+) -> Option<&'b [usize]> {
+    let map = transfer.ssa_summaries?;
+    for (key, sum) in map.iter() {
+        if key.lang == transfer.lang
+            && key.name == bare_name
+            && !sum.confines_path_params.is_empty()
+        {
+            return Some(sum.confines_path_params.as_slice());
+        }
+    }
+    None
+}
+
+/// Confined argument positions for an *assert-guard* path-confinement helper.
+///
+/// Mirrors [`summary_confined_positions`] but reads
+/// [`crate::summary::ssa_summary::SsaFuncSummary::asserts_path_confined_params`]:
+/// the callee is a `void` guard (`Assert.isTrue(p.startsWith(base))`) whose
+/// *normal completion* proves the argument at each returned position is
+/// contained under a fixed prefix.  Intra-file only — a path-check helper lives
+/// in the same class as the handler it guards.  Motivated by CVE-2021-21234.
+fn summary_asserts_confined_positions<'b>(
+    transfer: &'b SsaTaintTransfer,
+    bare_name: &str,
+) -> Option<&'b [usize]> {
+    let map = transfer.ssa_summaries?;
+    for (key, sum) in map.iter() {
+        if key.lang == transfer.lang
+            && key.name == bare_name
+            && !sum.asserts_path_confined_params.is_empty()
+        {
+            return Some(sum.asserts_path_confined_params.as_slice());
+        }
+    }
+    None
+}
+
+/// Which of the three per-call *path-confinement* post-conditions can possibly
+/// fire for the body under analysis.
+///
+/// Each of [`apply_call_post_confinement`] (assert-guard, CVE-2021-21234),
+/// [`apply_path_validator_confinement`] (`?`-rejection guard, CVE-2026-53956),
+/// and [`apply_call_return_confinement`] (`strncmp`-return confiner,
+/// CVE-2020-5221) is a *no-op* unless the file's SSA summary map contains a
+/// summary that records the corresponding flag: only a callee whose summary was
+/// proved a confiner can strip `Cap::FILE_IO`.  But each pass was invoked
+/// unconditionally on **every** `Call` instruction in both the dataflow
+/// (`transfer_block`) and event (`collect_block_events`) replays, ~5 passes per
+/// body — and `apply_path_validator_confinement` in particular runs the
+/// `is_path_safety_validator_name` grammar (a `to_snake_lower` allocation plus
+/// ~20 substring `contains` scans) on the callee name of every call before it
+/// even consults the summary map.  On a body whose file has no path-confiner
+/// summary (the overwhelming majority — the whole of Go/most code) that is pure
+/// wasted string work; profiling mm/channels/app attributed ≈1000
+/// `StrSearcher::new` / `is_contained_in` samples to it alone.
+///
+/// This gate hoists the loop-invariant "does any summary confine?" existence
+/// check out of the per-call loops: it is computed **once per body analysis**
+/// by [`compute_confinement_gates`] (a single cheap scan of `ssa_summaries`,
+/// no string work) and each pass is skipped entirely when its flag is `false`.
+/// Bit-identical: when a flag is `false` the pass could only ever have found
+/// nothing (its summary scan returns `None`), so skipping it is output-identical;
+/// when `true` the pass runs exactly as before and the per-call name filter
+/// still selects which calls actually confine.
+#[derive(Clone, Copy, Default)]
+pub(super) struct ConfinementGates {
+    /// A summary records non-empty `asserts_path_confined_params`.
+    assert: bool,
+    /// A summary records non-empty `result_reject_guard_params`.
+    path_validator: bool,
+    /// A summary records `confines_path_return`.
+    return_confiner: bool,
+}
+
+/// Scan `transfer.ssa_summaries` once for path-confiner summaries, producing the
+/// per-body [`ConfinementGates`].  O(number of file summaries) cheap flag reads
+/// (no string classification — the per-call name grammar stays inside the
+/// individual passes and only runs when the gate is open).  All-`false` when
+/// `ssa_summaries` is `None`.
+pub(super) fn compute_confinement_gates(transfer: &SsaTaintTransfer) -> ConfinementGates {
+    // Escape hatch: `NYX_DISABLE_CONFINEMENT_GATE=1` forces all three gates open,
+    // restoring the pre-hoist behaviour where every per-call confinement pass
+    // ran unconditionally.  Used to A/B the gated vs ungated path from a single
+    // binary (criterion baseline, differential-correctness check) and as a
+    // safety toggle.  Bit-identical to the gated path — an open gate only makes
+    // a pass run a scan that finds nothing when no confiner exists.
+    if confinement_gate_disabled() {
+        return ConfinementGates {
+            assert: true,
+            path_validator: true,
+            return_confiner: true,
+        };
+    }
+    let Some(map) = transfer.ssa_summaries else {
+        return ConfinementGates::default();
+    };
+    let mut g = ConfinementGates::default();
+    for (key, sum) in map.iter() {
+        if key.lang != transfer.lang {
+            continue;
+        }
+        g.assert |= !sum.asserts_path_confined_params.is_empty();
+        g.path_validator |= !sum.result_reject_guard_params.is_empty();
+        g.return_confiner |= sum.confines_path_return;
+        if g.assert && g.path_validator && g.return_confiner {
+            break;
+        }
+    }
+    g
+}
+
+/// Whether `NYX_DISABLE_CONFINEMENT_GATE=1` is set (forces all confinement
+/// gates open — the pre-hoist unconditional behaviour).  Cached so the env read
+/// is paid once per process.
+fn confinement_gate_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("NYX_DISABLE_CONFINEMENT_GATE")
+            .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false)
+    })
+}
+
+/// Apply an assert-guard path confinement as a call post-condition.
+///
+/// When `inst` is a call to a helper whose SSA summary records
+/// `asserts_path_confined_params` (a `void` guard that
+/// `Assert.isTrue(p.startsWith(base))`-style throws unless its path arg is
+/// contained under a fixed prefix — CVE-2021-21234), strip [`Cap::FILE_IO`]
+/// from the SSA values passed at each confined argument position.
+/// **Unconditional**: any normal completion of the callee proves the assertion
+/// held, so no caller branch is needed (unlike
+/// [`apply_summary_confinement_narrowing`], which gates a return-value confiner
+/// on the surviving branch).  A no-op when `transfer.ssa_summaries` is `None`
+/// or the callee is not a recognised assert-guard.
+fn apply_call_post_confinement(
+    inst: &SsaInst,
+    ssa: &SsaBody,
+    transfer: &SsaTaintTransfer,
+    state: &mut SsaTaintState,
+) {
+    let SsaOp::Call {
+        callee,
+        callee_text,
+        args,
+        ..
+    } = &inst.op
+    else {
+        return;
+    };
+    let bare = crate::labels::bare_method_name(callee_text.as_deref().unwrap_or(callee.as_str()));
+    let Some(positions) = summary_asserts_confined_positions(transfer, bare) else {
+        return;
+    };
+    // Copy the positions out so the immutable borrow of `transfer` is released
+    // before `clear_cap_alias_aware` takes `&mut state` (which also reads
+    // `transfer.base_aliases`).
+    let positions: SmallVec<[usize; 2]> = positions.iter().copied().collect();
+    for pos in positions {
+        let Some(group) = args.get(pos) else {
+            continue;
+        };
+        for &v in group {
+            if let Some(name) = ssa
+                .value_defs
+                .get(v.0 as usize)
+                .and_then(|vd| vd.var_name.as_deref())
+            {
+                clear_cap_alias_aware(state, name, Cap::FILE_IO, ssa, transfer.base_aliases);
+            }
+        }
+    }
+}
+
+/// Confined argument positions for a *path-safety-validator* rejection guard.
+///
+/// Reads [`crate::summary::ssa_summary::SsaFuncSummary::result_reject_guard_params`]
+/// — the params the callee rejects via a `Result` `Err` — but **only** for a
+/// callee whose bare name matches the path-safety-validator grammar
+/// (`ensure_safe_path_component`, `validate_safe_path`, …).  The structural
+/// summary gate proves the callee is a rejection guard; the call-site name gate
+/// proves it is a *path* rejection guard: the path-traversal sentinels the
+/// guard rejects (`".."`, `'/'`) are collapsed out of the SSA body by
+/// boolean-expression lowering, so the callee name is the only surviving
+/// path-specificity signal (see `detect_result_reject_guard_params`).  Intra-
+/// file only — a path-component validator lives in the same module as the
+/// cache-key builder it guards.  Motivated by CVE-2026-53956 (rattler).
+fn summary_path_validator_confined_positions<'b>(
+    transfer: &'b SsaTaintTransfer,
+    bare_name: &str,
+) -> Option<&'b [usize]> {
+    if !summary_extract::is_path_safety_validator_name(bare_name) {
+        return None;
+    }
+    let map = transfer.ssa_summaries?;
+    for (key, sum) in map.iter() {
+        if key.lang == transfer.lang
+            && key.name == bare_name
+            && !sum.result_reject_guard_params.is_empty()
+        {
+            return Some(sum.result_reject_guard_params.as_slice());
+        }
+    }
+    None
+}
+
+/// Apply a path-safety-validator rejection confinement as a call post-condition.
+///
+/// When `inst` calls a path-safety-named validator whose SSA summary records
+/// `result_reject_guard_params`, strip [`Cap::FILE_IO`] from the SSA values
+/// passed at each rejected position — a normal completion of
+/// `ensure_safe_path_component(&segment)?` proves `segment` is a single safe
+/// path component that cannot escape its parent directory.  The mirror of
+/// [`apply_call_post_confinement`] for the `Result`-guard (`?`-propagated)
+/// shape, which is *not* a branch condition and so bypasses the
+/// `classify_condition` `ValidationCall` narrowing.  Runs in both the dataflow
+/// (`transfer_block`) and event-emission (`collect_block_events`) replays.
+/// Motivated by CVE-2026-53956 (rattler package-cache path traversal).
+fn apply_path_validator_confinement(
+    inst: &SsaInst,
+    ssa: &SsaBody,
+    transfer: &SsaTaintTransfer,
+    state: &mut SsaTaintState,
+) {
+    let SsaOp::Call {
+        callee,
+        callee_text,
+        args,
+        ..
+    } = &inst.op
+    else {
+        return;
+    };
+    let bare = crate::labels::bare_method_name(callee_text.as_deref().unwrap_or(callee.as_str()));
+    let Some(positions) = summary_path_validator_confined_positions(transfer, bare) else {
+        return;
+    };
+    let positions: SmallVec<[usize; 2]> = positions.iter().copied().collect();
+    for pos in positions {
+        let Some(group) = args.get(pos) else {
+            continue;
+        };
+        for &v in group {
+            if let Some(name) = ssa
+                .value_defs
+                .get(v.0 as usize)
+                .and_then(|vd| vd.var_name.as_deref())
+            {
+                clear_cap_alias_aware(state, name, Cap::FILE_IO, ssa, transfer.base_aliases);
+            }
+        }
+    }
+}
+
+/// Whether the callee (by bare name) is a recognised *return-value path-prefix
+/// confiner* whose return value clears [`Cap::FILE_IO`].
+///
+/// Mirrors [`summary_confines_open_redirect`]: looks the callee up in the
+/// intra-file SSA summary map by same-language `FuncKey.name` and returns its
+/// [`SsaFuncSummary::confines_path_return`] flag.  Intra-file only — a
+/// path-composition helper (`compose_path`) lives in the same module as the
+/// handler that consumes its result.  Motivated by CVE-2020-5221 (uftpd).
+fn summary_confines_path_return(transfer: &SsaTaintTransfer, bare_name: &str) -> bool {
+    let Some(map) = transfer.ssa_summaries else {
+        return false;
+    };
+    map.iter().any(|(key, sum)| {
+        key.lang == transfer.lang && key.name == bare_name && sum.confines_path_return
+    })
+}
+
+/// Apply a return-value path confinement as a call post-condition.
+///
+/// When `inst` is a call to a helper whose SSA summary records
+/// `confines_path_return` (its every non-null return is `strncmp`-confined
+/// under a fixed directory prefix — CVE-2020-5221), strip [`Cap::FILE_IO`]
+/// from the call *result*.  This is the interprocedural analogue of the
+/// intra-function `PathPrefixConfined` narrowing: the confinement proven inside
+/// the callee (on a `static` buffer disconnected from the tainted-parameter SSA
+/// chain) is carried across the return that otherwise defeats it.  A no-op when
+/// `transfer.ssa_summaries` is `None` or the callee is not a recognised
+/// return-value confiner.  Runs in both the dataflow (`transfer_block`) and the
+/// event-emission (`collect_block_events`) replays so it affects both the
+/// computed exit state and the emitted sink findings.
+fn apply_call_return_confinement(
+    inst: &SsaInst,
+    transfer: &SsaTaintTransfer,
+    state: &mut SsaTaintState,
+) {
+    let SsaOp::Call {
+        callee,
+        callee_text,
+        ..
+    } = &inst.op
+    else {
+        return;
+    };
+    let bare = crate::labels::bare_method_name(callee_text.as_deref().unwrap_or(callee.as_str()));
+    if !summary_confines_path_return(transfer, bare) {
+        return;
+    }
+    if let Some(taint) = state.get(inst.value).cloned() {
+        let new_caps = taint.caps & !Cap::FILE_IO;
+        if new_caps.is_empty() {
+            state.remove(inst.value);
+        } else {
+            state.set(
+                inst.value,
+                VarTaint {
+                    caps: new_caps,
+                    origins: taint.origins,
+                    uses_summary: taint.uses_summary,
+                },
+            );
+        }
+    }
+}
+
+/// Whether a callee (by bare name) is a recognised relative-URL confiner
+/// whose return value clears [`Cap::OPEN_REDIRECT`].
+///
+/// Mirrors [`summary_confined_positions`]: looks the callee up in the
+/// intra-file SSA summary map by same-language `FuncKey.name` and returns
+/// its [`SsaFuncSummary::sanitizes_open_redirect_return`] flag.  Intra-file
+/// only — relative-URL confiners (`normalize_relative_url`) live in the same
+/// module as the redirect handler.  Motivated by CVE-2026-42259.
+fn summary_confines_open_redirect(transfer: &SsaTaintTransfer, bare_name: &str) -> bool {
+    let Some(map) = transfer.ssa_summaries else {
+        return false;
+    };
+    map.iter().any(|(key, sum)| {
+        key.lang == transfer.lang && key.name == bare_name && sum.sanitizes_open_redirect_return
+    })
+}
+
+/// Whether an OPEN_REDIRECT sink's argument expression is wrapped by an
+/// open-redirect confiner whose call the SSA collapsed away.
+///
+/// `sink(confiner(source))` in one nested expression (Flask-AppBuilder
+/// CVE-2022-24776 `redirect(get_safe_redirect(next_url))`) lowers to
+/// `redirect(next_url)` — the SSA drops the unlabeled wrapper `get_safe_redirect`
+/// (it carries no source/sink/sanitizer label, so `find_classifiable_inner_call`
+/// never preserves it), and the tainted `next_url` flows straight into the sink
+/// as a direct arg.  The confiner-return strip in the Call handler therefore has
+/// nothing to latch onto.  The wrapper name does survive in the sink node's
+/// [`CallMeta::arg_uses`] though, so recover it here: if any argument-expression
+/// identifier resolves to a summary that [`SsaFuncSummary::
+/// sanitizes_open_redirect_return`], the URL was validated inside that wrapper
+/// before reaching the redirect — same-origin, so OPEN_REDIRECT does not apply.
+/// Intra-file (mirrors [`summary_confines_open_redirect`]); a no-op when
+/// `ssa_summaries` is `None` or no arg identifier names a confiner.
+fn sink_arg_wrapped_by_open_redirect_confiner(
+    info: &crate::cfg::NodeInfo,
+    transfer: &SsaTaintTransfer,
+) -> bool {
+    info.call
+        .arg_uses
+        .iter()
+        .flatten()
+        .chain(info.call.outer_callee.as_ref())
+        .any(|ident| {
+            summary_confines_open_redirect(transfer, crate::labels::bare_method_name(ident))
+        })
+}
+
+/// Source-level identifiers whose value flows through an open-redirect confiner
+/// wrapper somewhere in this body's call arguments.
+///
+/// The nested `redirect(get_safe_redirect(next_url))` (CVE-2022-24776) lowers to
+/// two `redirect(next_url)` SSA calls — the standalone call node and the
+/// `return`-expression duplicate.  Only the standalone node carries the wrapper
+/// in [`CallMeta::arg_uses`]; the return node's `arg_uses` is empty, so the
+/// per-node [`sink_arg_wrapped_by_open_redirect_confiner`] check misses it.  This
+/// harvests every argument identifier that co-occurs with a confiner across the
+/// whole body (here `next_url`), so both redirect sinks — matched by their SSA
+/// argument's `var_name` — can be recognised as confined.  Empty (fast) for the
+/// common case where no call argument names a confiner.
+fn open_redirect_confined_arg_names(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    transfer: &SsaTaintTransfer,
+) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut seen_nodes = HashSet::new();
+    for block in &ssa.blocks {
+        for inst in &block.body {
+            if !seen_nodes.insert(inst.cfg_node) {
+                continue;
+            }
+            for group in &cfg[inst.cfg_node].call.arg_uses {
+                let has_confiner = group.iter().any(|id| {
+                    summary_confines_open_redirect(transfer, crate::labels::bare_method_name(id))
+                });
+                if has_confiner {
+                    for id in group {
+                        if !summary_confines_open_redirect(
+                            transfer,
+                            crate::labels::bare_method_name(id),
+                        ) {
+                            out.insert(id.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Extract the bare callee name of an inline call condition.
+///
+/// Strips leading `!` / `(` / whitespace and a Python `not ` keyword, then
+/// returns the identifier token before the first `(` (last segment after a
+/// `.`/`::` receiver path).  Returns `None` when the condition is not a call
+/// (no `(`) or no identifier precedes it.  Mirrors the callee-token peel in
+/// [`crate::taint::path_state::classify_condition`].
+fn parse_inline_call_callee(text: &str) -> Option<String> {
+    if !text.contains('(') {
+        return None;
+    }
+    let trimmed = text.trim_start_matches(['(', '!', ' ', '\t']);
+    let trimmed = trimmed.strip_prefix("not ").unwrap_or(trimmed).trim();
+    let callee_part = trimmed.split('(').next().unwrap_or("");
+    let bare = callee_part
+        .rsplit(['.', ':'])
+        .next()
+        .unwrap_or(callee_part)
+        .trim();
+    if bare.is_empty()
+        || !bare
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+    {
+        return None;
+    }
+    Some(bare.to_string())
+}
+
+/// Behaviour-based path-confinement branch narrowing.
+///
+/// Recognises a downstream truthiness gate on a helper whose
+/// [`SsaFuncSummary::confines_path_params`] records that its boolean return
+/// value confines an argument to a fixed path prefix, and strips
+/// `Cap::FILE_IO` from that argument on the surviving (confined) branch.
+///
+/// Two condition shapes are handled:
+///
+/// ```text
+/// // inline (Vite CVE-2026-39365)
+/// if (!isOptimizedDepFile(sourcemapPath)) return next();
+/// fsp.readFile(sourcemapPath);   // confined: FILE_IO stripped on this edge
+///
+/// // two-statement
+/// const ok = isOptimizedDepFile(p);
+/// if (!ok) return;
+/// fsp.readFile(p);
+/// ```
+///
+/// The predicate is `BooleanTrueIsValid` — a `true` result proves
+/// confinement — so the validated edge is where the helper returned `true`:
+/// the FALSE edge under a leading `!` (captured by `condition_negated`), the
+/// TRUE edge otherwise.  Cap-aware (clears only `Cap::FILE_IO`, mirroring the
+/// inline `RelativeUrlValidated`/`ShellMetaValidated` handlers), so a
+/// confined value that *also* flows to a SQL/command sink still fires.
+///
+/// Strict-additive: a no-op when the condition is not a call to a
+/// confinement helper, no summary records confinement, or no argument
+/// var_name is recoverable.
+fn apply_summary_confinement_narrowing(
+    true_state: &mut SsaTaintState,
+    false_state: &mut SsaTaintState,
+    cond_text: &str,
+    condition_vars: &[String],
+    condition_negated: bool,
+    ssa: &SsaBody,
+    block: BlockId,
+    transfer: &SsaTaintTransfer,
+) {
+    if condition_vars.is_empty() {
+        return;
+    }
+
+    let mut confined_names: SmallVec<[String; 2]> = SmallVec::new();
+
+    // Two-statement shape: `const ok = helper(p); if (!ok)`.  The single
+    // condition var resolves to the helper's Call result; the confined arg
+    // var_names are read off the recorded confined positions.
+    if condition_vars.len() == 1
+        && let Some(rv) = resolve_var_to_ssa_value(condition_vars[0].as_str(), ssa, block)
+        && let Some(def) = ssa
+            .blocks
+            .iter()
+            .flat_map(|b| b.body.iter())
+            .find(|i| i.value == rv)
+        && let SsaOp::Call { callee, args, .. } = &def.op
+    {
+        let bare = crate::labels::bare_method_name(callee);
+        if let Some(positions) = summary_confined_positions(transfer, bare) {
+            for &pos in positions {
+                if let Some(group) = args.get(pos) {
+                    for &v in group {
+                        if let Some(name) = ssa
+                            .value_defs
+                            .get(v.0 as usize)
+                            .and_then(|vd| vd.var_name.as_deref())
+                            && !confined_names.iter().any(|s: &String| s == name)
+                        {
+                            confined_names.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Inline shape: `if (!helper(p))`.  The callee is parsed from the
+    // condition text; the confined args are the condition's own variable
+    // uses (the call arguments).  Clearing FILE_IO on the condition vars is
+    // sound because the gate only confines a path arg, and the value is the
+    // one the helper inspected.  Compound conditions (`&&` / `||`) are
+    // skipped: the parsed callee is only the first call, so clearing every
+    // condition var could over-suppress a sibling clause's taint.
+    if confined_names.is_empty()
+        && !cond_text.contains("&&")
+        && !cond_text.contains("||")
+        && let Some(bare) = parse_inline_call_callee(cond_text)
+        && summary_confined_positions(transfer, &bare).is_some()
+    {
+        for name in condition_vars {
+            if !confined_names.iter().any(|s: &String| s == name) {
+                confined_names.push(name.clone());
+            }
+        }
+    }
+
+    if confined_names.is_empty() {
+        return;
+    }
+
+    // BooleanTrueIsValid polarity: the confined branch is where the helper
+    // returned `true`.  `condition_negated` captures a leading `!`, so a
+    // `!helper(x)` condition puts the confined edge on the FALSE branch.
+    let confined_state = if condition_negated {
+        false_state
+    } else {
+        true_state
+    };
+    for name in &confined_names {
+        clear_cap_alias_aware(
+            confined_state,
+            name,
+            Cap::FILE_IO,
+            ssa,
+            transfer.base_aliases,
+        );
+    }
+}
+
 /// JS/TS Array-method validator-callback narrowing.
 ///
 /// `arr.filter(isSafeIdentifier)`, `arr.find(isValidId)`, and the
@@ -2095,7 +2944,7 @@ fn apply_path_fact_branch_narrowing(
     apply_path_fact_branch_narrowing_with_interner(
         true_state,
         false_state,
-        cond_text,
+        &classify_path_branch(cond_text),
         effective_vars,
         ssa,
         None,
@@ -2106,20 +2955,20 @@ fn apply_path_fact_branch_narrowing(
 fn apply_path_fact_branch_narrowing_with_interner(
     true_state: &mut SsaTaintState,
     false_state: &mut SsaTaintState,
-    cond_text: &str,
+    class: &PathBranchClass,
     effective_vars: &[String],
     ssa: &SsaBody,
     interner: Option<&SymbolInterner>,
     negated: bool,
 ) {
     use crate::abstract_interp::PathFact;
-    use crate::abstract_interp::path_domain::{
-        PathAssertion, PathRejection, classify_path_assertion, classify_path_rejection_axes,
-        cond_has_pre_negated_islocal_clause,
-    };
+    use crate::abstract_interp::path_domain::{PathAssertion, PathRejection};
 
-    let rejection_axes = classify_path_rejection_axes(cond_text);
-    let assertion = classify_path_assertion(cond_text);
+    // The (state-independent) text classification is precomputed in `class`
+    // and memoized per condition node by the caller — see [`classify_path_branch`]
+    // / [`BranchCondClass`].
+    let rejection_axes = &class.rejection_axes;
+    let assertion = &class.assertion;
 
     if rejection_axes.is_empty() && matches!(assertion, PathAssertion::None) {
         return;
@@ -2140,7 +2989,7 @@ fn apply_path_fact_branch_narrowing_with_interner(
     // arm is the TRUE branch of the whole condition.  So when
     // `negated == true` AND no clause is the pre-negated IsLocal idiom,
     // flip the narrow target.
-    let rejection_pre_negated = cond_has_pre_negated_islocal_clause(cond_text);
+    let rejection_pre_negated = class.rejection_pre_negated;
     let rejection_safe_is_true = negated && !rejection_pre_negated;
 
     // Mark validated_may on the safe arm when a path-rejection
@@ -2210,7 +3059,7 @@ fn apply_path_fact_branch_narrowing_with_interner(
 
     // Apply assertion (positive): true branch narrows prefix_lock.
     let narrow_true = |fact: &mut PathFact| {
-        if let PathAssertion::PrefixLock(ref root) = assertion {
+        if let PathAssertion::PrefixLock(root) = assertion {
             let updated = fact.clone().with_prefix_lock(root);
             *fact = updated;
         }
@@ -2237,7 +3086,7 @@ fn apply_path_fact_branch_narrowing_with_interner(
             let mut av = abs.get(*v);
             narrow_false(&mut av.path);
             if !av.is_top() {
-                abs.set(*v, av);
+                Arc::make_mut(abs).set(*v, av);
             }
         }
     }
@@ -2260,7 +3109,7 @@ fn apply_path_fact_branch_narrowing_with_interner(
             let mut av = abs.get(*v);
             narrow_true(&mut av.path);
             if !av.is_top() {
-                abs.set(*v, av);
+                Arc::make_mut(abs).set(*v, av);
             }
         }
     }
@@ -2489,7 +3338,8 @@ fn inline_analyse_callee_with_seeds(
 
     let (callee_key, callee_body) = if let (Some(k), Some(b)) = (intra_key, intra_body) {
         (k, b)
-    } else if let Some(gs) = transfer.global_summaries {
+    } else {
+        let gs = transfer.global_summaries?;
         // Cross-file fallback.  Build a structured query mirroring
         // resolve_callee_full (qualifier/receiver_var/caller_container) so that
         // qualified-first policy is preserved.
@@ -2546,8 +3396,6 @@ fn inline_analyse_callee_with_seeds(
             }
             _ => return None,
         }
-    } else {
-        return None;
     };
 
     // Skip very large function bodies
@@ -2865,6 +3713,7 @@ fn extract_inline_return_taint(
     block_exit_states: &[Option<SsaTaintState>],
     induction_vars: &HashSet<SsaValue>,
 ) -> CachedInlineShape {
+    let confinement = compute_confinement_gates(transfer);
     // Collect all param SSA values to separate from derived values
     let param_values: HashSet<SsaValue> = ssa
         .blocks
@@ -3013,6 +3862,7 @@ fn extract_inline_return_taint(
                 entry_state.clone(),
                 induction_vars,
                 None,
+                confinement,
             );
 
             if let Some(rv) = ret_val {
@@ -3080,6 +3930,7 @@ fn extract_inline_return_taint(
                                 pred_exit.clone(),
                                 induction_vars,
                                 None,
+                                confinement,
                             );
                             if let Some(ref abs) = per_pred_exit.abstract_state {
                                 let fact = abs.get(rv).path;
@@ -4495,55 +5346,30 @@ pub(super) fn transfer_inst(
             // hardcoded-URL fetch does not create a phantom
             // `taint-unsanitised-flow` finding when its result is
             // echoed/printed later in the same scope.
-            let is_network_fetch_source = info
-                .taint
-                .labels
-                .iter()
-                .any(|l| matches!(l, DataLabel::Source(_)))
-                && info
-                    .taint
-                    .labels
-                    .iter()
-                    .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(Cap::SSRF)));
             // Detect a hardcoded URL via three channels:
             //   1. `info.string_prefix`, populated by the JS/TS template-
             //      literal extractor and inline call shapes.
-            //   2. AbstractState `StringFact` on the first positional arg ,
+            //   2. AbstractState `StringFact` on the first positional arg,
             //      populated by const propagation for plain string literals.
             //   3. As a last resort when `info.call.first_arg_text` is
             //      populated with a hardcoded literal, extracted at CFG
             //      construction time for network-fetch primitive callees.
-            let url_prefix_safe_via_node = info
-                .string_prefix
-                .as_deref()
-                .map(|p| {
-                    let synthetic = crate::abstract_interp::StringFact::from_prefix(p);
-                    is_string_safe_for_ssrf(&synthetic)
-                })
-                .unwrap_or(false);
-            let url_prefix_safe_via_abs = state.abstract_state.as_ref().is_some_and(|abs| {
-                args.first().is_some_and(|first_arg| {
-                    !first_arg.is_empty()
-                        && first_arg
-                            .iter()
-                            .all(|v| is_string_safe_for_ssrf(&abs.get(*v).string))
-                })
-            });
-            let url_prefix_safe_via_first_arg_text = is_network_fetch_source
-                && info
-                    .call
-                    .arg_string_literals
-                    .first()
-                    .and_then(|v| v.as_deref())
-                    .map(|s| {
-                        let synthetic = crate::abstract_interp::StringFact::from_prefix(s);
-                        is_string_safe_for_ssrf(&synthetic)
+            // Channels 1 and 3 read only the CFG node, so they live in
+            // `node_is_hardcoded_network_fetch_source` where the structural
+            // `cfg-unguarded-sink` pass (which has no abstract state) shares
+            // them.  Channel 2 needs this block's `AbstractState` and stays
+            // here.
+            let url_prefix_safe_via_abs = is_network_fetch_source(info)
+                && state.abstract_state.as_ref().is_some_and(|abs| {
+                    args.first().is_some_and(|first_arg| {
+                        !first_arg.is_empty()
+                            && first_arg
+                                .iter()
+                                .all(|v| is_string_safe_for_ssrf(&abs.get(*v).string))
                     })
-                    .unwrap_or(false);
-            let url_is_hardcoded_safe = is_network_fetch_source
-                && (url_prefix_safe_via_node
-                    || url_prefix_safe_via_abs
-                    || url_prefix_safe_via_first_arg_text);
+                });
+            let url_is_hardcoded_safe =
+                node_is_hardcoded_network_fetch_source(info) || url_prefix_safe_via_abs;
 
             for lbl in &info.taint.labels {
                 if let DataLabel::Source(bits) = lbl {
@@ -4659,7 +5485,7 @@ pub(super) fn transfer_inst(
                                 &result.return_path_fact,
                             );
                             if !av.is_top() {
-                                abs.set(inst.value, av);
+                                Arc::make_mut(abs).set(inst.value, av);
                             }
                         }
                     }
@@ -4823,11 +5649,11 @@ pub(super) fn transfer_inst(
                 // type (from SSA summary), inject it into the caller's path env
                 // so downstream type-qualified resolution can use it.
                 if let Some(ref rtype) = resolved.return_type {
-                    if let Some(ref mut env) = state.path_env {
+                    if let Some(env) = state.path_env.as_mut() {
                         use crate::constraint::domain::{TypeSet, ValueFact};
                         let mut fact = ValueFact::top();
                         fact.types = TypeSet::singleton(rtype);
-                        env.refine(inst.value, &fact);
+                        Arc::make_mut(env).refine(inst.value, &fact);
                     }
                 }
 
@@ -4989,6 +5815,18 @@ pub(super) fn transfer_inst(
                     return_bits &= !resolved.sanitizer_caps;
                 }
 
+                // Behaviour-based open-redirect confiner (CVE-2026-42259):
+                // when the callee normalises its input and rejects
+                // protocol-relative (`//`) and `scheme:` URLs before
+                // returning the confined value, its return is provably
+                // same-origin — strip OPEN_REDIRECT so redirecting to the
+                // result no longer fires.  Sound because the recogniser
+                // requires backslash normalisation + `//`-prefix rejection +
+                // scheme rejection (see `detect_open_redirect_normalizer`);
+                // the weak `!url.includes("//")` form is not recognised.
+                // (Applied at the universal result-commit point below so it
+                // runs regardless of which resolution path handled the call.)
+
                 // Validated-flow propagation through callee summaries.
                 //
                 // When the callee's body validates a parameter on every
@@ -5019,7 +5857,7 @@ pub(super) fn transfer_inst(
                             callee,
                             *rv,
                             transfer.type_facts,
-                            state.path_env.as_ref(),
+                            state.path_env.as_deref(),
                             transfer.lang,
                             transfer.extra_labels,
                             Some(ssa),
@@ -5690,6 +6528,39 @@ pub(super) fn transfer_inst(
                 }
             }
 
+            // Behaviour-based open-redirect confiner (CVE-2026-42259): when
+            // the callee normalises its input and rejects protocol-relative
+            // (`//`) and `scheme:` URLs before returning the confined value,
+            // its return is provably same-origin — strip OPEN_REDIRECT so
+            // redirecting to the result no longer fires.  Applied at this
+            // universal commit point so it holds regardless of which
+            // resolution path (inline / summary / label) produced
+            // `return_bits`.  Sound: the recogniser requires backslash
+            // normalisation + `//`-prefix rejection + scheme rejection (see
+            // `detect_open_redirect_normalizer`); the weak
+            // `!url.includes("//")` form is not recognised.
+            // The confining call is often the *outer* wrapper of a nested
+            // source expression — `const dest = normalize_relative_url(
+            // decodeURIComponent(req.body.dest))` lowers to the `req.body.dest`
+            // source flowing straight into `dest`, with the wrapper recorded
+            // only in `info.call.outer_callee`.  Consult both the primary
+            // callee and the outer wrapper.
+            if return_bits.contains(Cap::OPEN_REDIRECT) {
+                let primary_confines = summary_confines_open_redirect(
+                    transfer,
+                    crate::labels::bare_method_name(callee),
+                );
+                let outer_confines = info.call.outer_callee.as_deref().is_some_and(|oc| {
+                    summary_confines_open_redirect(transfer, crate::labels::bare_method_name(oc))
+                });
+                if primary_confines || outer_confines {
+                    return_bits &= !Cap::OPEN_REDIRECT;
+                    if return_bits.is_empty() {
+                        return_origins.clear();
+                    }
+                }
+            }
+
             // Write result
             if return_bits.is_empty() {
                 state.remove(inst.value);
@@ -6252,16 +7123,22 @@ pub(super) fn transfer_inst(
         apply_container_read_receiver_validation(inst, ssa, transfer, state);
     }
 
-    // Constraint propagation through instructions
-    if let Some(ref mut env) = state.path_env {
+    // Constraint propagation through instructions.
+    //
+    // `path_env` is `Arc`-shared (copy-on-write). Reads (`env.get`) borrow
+    // through the `Arc` without cloning; `Arc::make_mut` is taken lazily,
+    // only once a mutation is actually about to happen. Instructions that
+    // fall through to the `_ =>` arm (the common case: calls, phis, sources,
+    // multi-use assigns) never deep-copy the env, so a block performing no
+    // constraint refinement shares its predecessor's `PathEnv` for free.
+    if let Some(env_arc) = state.path_env.as_mut() {
         match &inst.op {
             SsaOp::Assign(uses) if uses.len() == 1 => {
-                // Copy: propagate facts from source to destination
-                let src_fact = env.get(uses[0]);
-                if !src_fact.is_top() {
-                    env.refine(inst.value, &src_fact);
-                    env.assert_equal(inst.value, uses[0]);
-                }
+                // Copy: propagate facts from source to destination.
+                // Read first (immutable, no clone), decide whether any
+                // mutation is needed, then `make_mut` once.
+                let src_fact = env_arc.get(uses[0]);
+                let do_copy = !src_fact.is_top();
                 // Cast/assertion type narrowing.
                 //
                 // If this Assign's CFG node is a cast/type-assertion expression,
@@ -6275,8 +7152,17 @@ pub(super) fn transfer_inst(
                 // In ALL cases: taint is preserved. Narrowing the type does NOT
                 // erase taint, a tainted value cast to String is still tainted.
                 let node_info = &cfg[inst.cfg_node];
-                if let Some(ref cast_type) = node_info.cast_target_type {
-                    if let Some(kind) = crate::constraint::solver::parse_type_name(cast_type) {
+                let cast_kind = node_info
+                    .cast_target_type
+                    .as_ref()
+                    .and_then(|cast_type| crate::constraint::solver::parse_type_name(cast_type));
+                if do_copy || cast_kind.is_some() {
+                    let env = Arc::make_mut(env_arc);
+                    if do_copy {
+                        env.refine(inst.value, &src_fact);
+                        env.assert_equal(inst.value, uses[0]);
+                    }
+                    if let Some(kind) = cast_kind {
                         let mut fact = constraint::ValueFact::top();
                         fact.types = constraint::TypeSet::singleton(&kind);
                         fact.null = constraint::Nullability::NonNull;
@@ -6287,6 +7173,7 @@ pub(super) fn transfer_inst(
             SsaOp::Const(Some(text)) => {
                 // Constant: seed fact from literal value
                 if let Some(cv) = constraint::ConstValue::parse_literal(text) {
+                    let env = Arc::make_mut(env_arc);
                     let mut fact = constraint::ValueFact::top();
                     fact.exact = Some(cv.clone());
                     match &cv {
@@ -6331,9 +7218,13 @@ pub(super) fn transfer_inst(
         }
     }
 
-    // Forward abstract value transfer
+    // Forward abstract value transfer. `Arc::make_mut` forks the shared
+    // AbstractState lazily, the first mutating instruction in a block pays
+    // the single deep copy; all later instructions mutate the now-unique Arc
+    // in place. Stored snapshots (exit-state, pred_states) keep sharing the
+    // pre-fork Arc as refcount bumps.
     if let Some(ref mut abs) = state.abstract_state {
-        transfer_abstract(inst, cfg, abs, Some(transfer.lang));
+        transfer_abstract(inst, cfg, Arc::make_mut(abs), Some(transfer.lang));
     }
 
     // Cross-file abstract return injection.
@@ -6341,7 +7232,7 @@ pub(super) fn transfer_inst(
     // default Top that transfer_abstract assigns to unknown callees.
     if let Some(ref abs_val) = callee_return_abstract {
         if let Some(ref mut abs) = state.abstract_state {
-            abs.set(inst.value, abs_val.clone());
+            Arc::make_mut(abs).set(inst.value, abs_val.clone());
         }
     }
 }
@@ -6993,6 +7884,9 @@ fn collect_block_events(
     events: &mut Vec<SsaTaintEvent>,
     induction_vars: &HashSet<SsaValue>,
     pred_states: Option<&PredStates>,
+    // See [`transfer_block`]; skips the per-call confinement string work when no
+    // confiner summary exists for this body.
+    confinement: ConfinementGates,
 ) {
     // Replay phis to get accurate state (mirrors transfer_block phi handling)
     let block_idx = block.id.0 as usize;
@@ -7118,16 +8012,45 @@ fn collect_block_events(
 
                 if any_operand {
                     if let Some(ref mut abs) = state.abstract_state {
-                        abs.set(phi.value, joined);
+                        Arc::make_mut(abs).set(phi.value, joined);
                     }
                 }
             }
         }
     }
 
+    // Lazily-computed set of argument names wrapped by an open-redirect
+    // confiner across the whole body (CVE-2022-24776); only built when the
+    // block actually reaches an OPEN_REDIRECT sink whose own `arg_uses` did not
+    // already reveal the wrapper.
+    let mut or_confined_names: Option<HashSet<String>> = None;
+
     // Process body with sink detection
     for inst in &block.body {
         transfer_inst(inst, cfg, ssa, transfer, &mut state);
+        // Assert-guard path confinement (CVE-2021-21234).  Mirror the clearing
+        // done in `transfer_block`: this event-collection replay is a distinct
+        // pass over the block body, so the FILE_IO strip on an
+        // `Assert.isTrue(p.startsWith(base))`-style guard's confined args must
+        // be applied here too — otherwise the later sink call in the same block
+        // (`streamContent(path, …)`) is scanned against un-narrowed taint and
+        // re-fires the finding the confinement was meant to suppress.
+        if confinement.assert {
+            apply_call_post_confinement(inst, ssa, transfer, &mut state);
+        }
+        // Path-safety-validator rejection confinement (CVE-2026-53956): mirror
+        // the `apply_path_validator_confinement` FILE_IO strip so the emitted
+        // `fs::write(path.join(segment), …)` finding is suppressed in the
+        // event-collection replay, not just in the dataflow replay.
+        if confinement.path_validator {
+            apply_path_validator_confinement(inst, ssa, transfer, &mut state);
+        }
+        // Return-value path confinement (CVE-2020-5221): mirror the call-result
+        // FILE_IO strip so the emitted `fopen(compose_abspath(...))` finding is
+        // suppressed here, not just in the dataflow replay.
+        if confinement.return_confiner {
+            apply_call_return_confinement(inst, transfer, &mut state);
+        }
 
         // Check for sink
         let info = &cfg[inst.cfg_node];
@@ -7142,6 +8065,36 @@ fn collect_block_events(
 
         let sink_info = resolve_sink_info(info, transfer);
         let mut sink_caps = sink_info.caps;
+
+        // Nested-expression open-redirect confiner (CVE-2022-24776).  When the
+        // redirect target is wrapped by a same-origin confiner in one nested
+        // expression (`redirect(get_safe_redirect(next_url))`), the SSA dropped
+        // the unlabeled wrapper and the tainted URL reaches the sink directly.
+        // Recover the confinement from the sink node's `arg_uses`, falling back
+        // to the whole-body confined-argument-name set for the `return`-node
+        // duplicate whose `arg_uses` is empty.  The same-origin host check
+        // neutralises both OPEN_REDIRECT and the SSRF bit the redirect sink also
+        // carries, so a validated redirect no longer fires either finding.
+        if sink_caps.intersects(Cap::OPEN_REDIRECT) {
+            let mut wrapped = sink_arg_wrapped_by_open_redirect_confiner(info, transfer);
+            if !wrapped {
+                let set = or_confined_names
+                    .get_or_insert_with(|| open_redirect_confined_arg_names(ssa, cfg, transfer));
+                if !set.is_empty() {
+                    if let SsaOp::Call { args, .. } = &inst.op {
+                        wrapped = args.iter().flatten().any(|v| {
+                            ssa.def_of(*v)
+                                .var_name
+                                .as_deref()
+                                .is_some_and(|n| set.contains(n))
+                        });
+                    }
+                }
+            }
+            if wrapped {
+                sink_caps &= !(Cap::OPEN_REDIRECT | Cap::SSRF);
+            }
+        }
 
         // [detectors.data_exfil] enabled toggle.  When the detector class is
         // disabled per-project, strip Cap::DATA_EXFIL from sink_caps so no
@@ -7198,7 +8151,7 @@ fn collect_block_events(
                         callee,
                         *rv,
                         transfer.type_facts,
-                        state.path_env.as_ref(),
+                        state.path_env.as_deref(),
                         transfer.lang,
                         transfer.extra_labels,
                         Some(ssa),
@@ -7606,20 +8559,44 @@ fn collect_block_events(
         // Go interface satisfaction check.
         // For Go sinks that require http.ResponseWriter (e.g., fmt.Fprintf),
         // skip if the first argument's type is known to NOT satisfy the interface.
-        if transfer.lang == Lang::Go {
-            if let Some(ref env) = state.path_env {
-                if let SsaOp::Call { args, .. } = &inst.op {
-                    if let Some(first_arg_vals) = args.first() {
-                        if let Some(&first_val) = first_arg_vals.first() {
-                            if let Some(kind) = env.get(first_val).types.as_singleton() {
-                                if crate::ssa::type_facts::GoInterfaceTable::definitely_not(
-                                    &kind,
-                                    "http.ResponseWriter",
-                                ) && sink_caps.intersects(Cap::HTML_ESCAPE)
-                                {
-                                    sink_caps &= !Cap::HTML_ESCAPE;
-                                }
-                            }
+        // Go `fmt.Fprint*` reflected-XSS gate: the HTML_ESCAPE label only
+        // applies when the writer (positional arg 0) can be an
+        // `http.ResponseWriter`.  When the writer is provably a non-response
+        // byte sink (`*bytes.Buffer`, `*os.File`, `bufio.Writer`, `io.Writer`
+        // param, …) the call is a stream/buffer write, not response
+        // rendering.  Prefer the flow-insensitive static [`TypeFactResult`]:
+        // the flow-sensitive abstract env widens the writer's type to
+        // `Unknown` inside loops (gitea `mock_http.go` writes to an
+        // `os.Create` handle inside a nested `for`), so consulting only
+        // `path_env` misses the suppression and re-opens the FP.  The env is
+        // a fallback for values the static pass could not type.
+        if transfer.lang == Lang::Go && sink_caps.intersects(Cap::HTML_ESCAPE) {
+            if let SsaOp::Call { args, callee, .. } = &inst.op {
+                // Restricted to the `fmt.Fprint*` family: only there is arg 0
+                // the WRITER whose type decides response-vs-buffer.  For a
+                // `template.HTML(x)` sink arg 0 is the payload, so a
+                // non-response arg type (e.g. a tainted `String`) must NOT
+                // strip the XSS label.
+                let is_fprintf = matches!(
+                    callee.as_str(),
+                    "fmt.Fprintf" | "fmt.Fprint" | "fmt.Fprintln"
+                );
+                if is_fprintf {
+                    if let Some(&first_val) = args.first().and_then(|g| g.first()) {
+                        let writer_kind = transfer
+                            .type_facts
+                            .and_then(|tf| tf.get_type(first_val).cloned())
+                            .or_else(|| {
+                                state
+                                    .path_env
+                                    .as_ref()
+                                    .and_then(|env| env.get(first_val).types.as_singleton())
+                            });
+                        if writer_kind
+                            .as_ref()
+                            .is_some_and(crate::ssa::type_facts::go_writer_is_non_response)
+                        {
+                            sink_caps &= !Cap::HTML_ESCAPE;
                         }
                     }
                 }
@@ -7851,6 +8828,33 @@ fn collect_block_events(
         } else {
             Vec::new()
         };
+        // Multi-sink-per-param de-masking.  When a *summary-resolved* sink's
+        // `param_to_sink_sites` records consumptions in DISTINCT capability
+        // classes (e.g. a helper param flows to SSRF at `new HttpGet(url)`
+        // co-located with HEADER_INJECTION at `req.addHeader("X", url)`), the
+        // legacy single-union pass collapses every site's cap into one
+        // `sink_caps` mask and emits a single event.  The cap→rule routing in
+        // `ast.rs` then resolves the union to the single most-specific rule id
+        // (`taint-header-injection`), MASKING the generic-routed flow
+        // (`SSRF` → `taint-unsanitised-flow`).  Split into one filter pass per
+        // distinct site cap so each event carries exactly the cap consumed at
+        // its attributed location.  `collect_tainted_sink_values` (Priority 2,
+        // keyed on `param_to_sink` ∩ `sink_caps`) and `pick_primary_sink_sites`
+        // both re-filter per pass, so a cap with no actual tainted flow yields
+        // an empty `tainted` set and is skipped — no spurious zero-cap events.
+        //
+        // Naturally scoped to summary-resolved sinks: `resolve_sink_info`
+        // returns an empty `param_to_sink_sites` for direct label / gated
+        // sinks (the early `label_sink_caps` return) and for the type-qualified
+        // ORM raw-SQL path, so those single-pass behaviors are byte-identical.
+        // The explicit `tq_payload_args.is_none()` guard keeps the ORM
+        // payload-restriction path single-pass even if it ever co-occurs.
+        let multi_sink_caps: smallvec::SmallVec<[Cap; 4]> =
+            if !multi_gate && !summary_per_position && tq_payload_args.is_none() {
+                distinct_summary_sink_caps(&sink_info.param_to_sink_sites, sink_caps)
+            } else {
+                smallvec::SmallVec::new()
+            };
         let filter_iter: smallvec::SmallVec<[FilterEntry<'_>; 2]> = if multi_gate {
             info.call
                 .gate_filters
@@ -7868,6 +8872,8 @@ fn collect_block_events(
                 .iter()
                 .map(|e| (sink_caps & e.caps, Some(e.idx.as_slice()), None))
                 .collect()
+        } else if multi_sink_caps.len() > 1 {
+            multi_sink_caps.iter().map(|&c| (c, None, None)).collect()
         } else {
             smallvec::smallvec![(sink_caps, tq_payload_args, None)]
         };
@@ -7914,7 +8920,6 @@ fn collect_block_events(
             if tainted.is_empty() {
                 continue;
             }
-
             // Compute all_validated: check if all tainted vars are validated
             let all_validated = tainted.iter().all(|(val, _, _)| {
                 let var_name = ssa
@@ -7922,16 +8927,41 @@ fn collect_block_events(
                     .get(val.0 as usize)
                     .and_then(|vd| vd.var_name.as_deref());
                 if let Some(name) = var_name {
+                    // Require validation on EVERY reaching path
+                    // (intersection-on-join) before suppressing the
+                    // sink.  `validated_may` is the union over
+                    // predecessors (validated on SOME path), so a value
+                    // validated on one branch but bypassable on another
+                    // would be wrongly silenced (`if (valid(x)) {...}
+                    // else {} sink(x)`).  `validated_must` is the sound
+                    // "all paths validated" gate.
                     if let Some(sym) = transfer.interner.get(name) {
-                        // Require validation on EVERY reaching path
-                        // (intersection-on-join) before suppressing the
-                        // sink.  `validated_may` is the union over
-                        // predecessors (validated on SOME path), so a value
-                        // validated on one branch but bypassable on another
-                        // would be wrongly silenced (`if (valid(x)) {...}
-                        // else {} sink(x)`).  `validated_must` is the sound
-                        // "all paths validated" gate.
-                        return state.validated_must.contains(sym);
+                        if state.validated_must.contains(sym) {
+                            return true;
+                        }
+                    }
+                    // Copy-alias-aware validation: the branch guard records
+                    // `validated_must` keyed by the condition's variable name
+                    // (e.g. `uri` in `if !in_array(uri, allow)`), but the
+                    // value reaching the sink can be reported under a must-
+                    // alias name after copy propagation / an elided container
+                    // index (`uri := parts[1]` lowers to `uri = assign(parts)`,
+                    // so the sink taint may surface as `parts`).  Mirror
+                    // `clear_cap_alias_aware`: treat the value as validated when
+                    // any of its copy must-aliases is in `validated_must`.
+                    // Sound because `base_aliases` groups only pure-copy
+                    // must-aliases (the same SSA value under different names).
+                    // Motivated by CVE-2026-21859 (Mailpit `InArray(uri, links)`
+                    // SSRF allowlist reached through a base64/split-derived uri).
+                    if let Some(aliases) = transfer.base_aliases.and_then(|a| a.aliases_of(name)) {
+                        if aliases.iter().any(|alias| {
+                            transfer
+                                .interner
+                                .get(alias)
+                                .is_some_and(|sym| state.validated_must.contains(sym))
+                        }) {
+                            return true;
+                        }
                     }
                 }
                 false
@@ -7996,11 +9026,11 @@ fn refine_exec_argv_array_shell_taint(
     }
 
     for (value, caps, origins) in tainted.iter_mut() {
-        if !argv_values.iter().any(|argv| argv == value) {
+        let Some(vector) = exec_argv_vector_for(*value, argv_values, ssa) else {
             continue;
-        }
+        };
         let Some((argv_caps, argv_origins)) =
-            exec_argv_non_executable_shell_taint(*value, inst.value, state, ssa)
+            exec_argv_non_executable_shell_taint(vector, inst.value, state, ssa)
         else {
             continue;
         };
@@ -8011,6 +9041,56 @@ fn refine_exec_argv_array_shell_taint(
     }
 
     tainted.retain(|(_, caps, _)| caps.contains(Cap::SHELL_ESCAPE));
+}
+
+/// Resolve the argv vector that a tainted `execv*` operand speaks for.
+///
+/// Returns the vector itself when `value` IS the argv argument, and the
+/// container it was read out of when `value` is the synthetic `__index_get__`
+/// result the CFG pre-emits for a subscript argument.  The alias matters
+/// because the executable path is idiomatically read back out of the vector
+/// (`execvp(args[0], (char *const *)args)`): with pointer analysis on, arg 0
+/// binds to a `__nyx_idxget_*` element read, a value distinct from `args`, so
+/// a plain membership test sees the two operands as unrelated.
+///
+/// Both operands are governed by the same rule.  Taint that only reaches the
+/// executable slot of the vector chooses *which* binary the vector runs — the
+/// `GIT_SSH` shape behind CVE-2017-1000117 — which
+/// [`exec_argv_non_executable_shell_taint`] already separates from argv
+/// injection.  Resolving arg 0 back to the vector keeps that separation now
+/// that the executable path is a payload position of the `execv*` gates.
+///
+/// `None` for an operand unrelated to the vector, so a program path that does
+/// NOT come out of argv (`execvp(getenv("PROG_PATH"), NULL)`) keeps its
+/// SHELL_ESCAPE taint: nothing about the argv vector says anything about it.
+fn exec_argv_vector_for(
+    value: SsaValue,
+    argv_values: &[SsaValue],
+    ssa: &SsaBody,
+) -> Option<SsaValue> {
+    if argv_values.contains(&value) {
+        return Some(value);
+    }
+    for block in &ssa.blocks {
+        for candidate in block.phis.iter().chain(block.body.iter()) {
+            if candidate.value != value {
+                continue;
+            }
+            let SsaOp::Call {
+                callee,
+                receiver: Some(receiver),
+                ..
+            } = &candidate.op
+            else {
+                return None;
+            };
+            if callee == "__index_get__" && argv_values.contains(receiver) {
+                return Some(*receiver);
+            }
+            return None;
+        }
+    }
+    None
 }
 
 fn exec_argv_non_executable_shell_taint(
@@ -8172,6 +9252,46 @@ fn pick_primary_sink_sites(
         }
     }
     out
+}
+
+/// Distinct per-site capability masks for the multi-sink-per-param
+/// de-masking split in [`collect_block_events`].
+///
+/// A summary-resolved sink records one [`SinkSite`] per distinct
+/// consumption capability of a helper parameter (e.g. SSRF at
+/// `new HttpGet(url)` co-located with HEADER_INJECTION at
+/// `req.addHeader(name, url)`).  Without splitting, the caller-side
+/// emission unions every site's cap into a single mask and the cap->rule
+/// routing in `ast.rs` collapses the union to the single most-specific
+/// rule id, masking the generically-routed flow (e.g. SSRF, which surfaces
+/// as `taint-unsanitised-flow`).
+///
+/// Returns the deduped list of `site.cap & sink_caps` masks across all
+/// resolved sites (cap-only sites with `line == 0` are skipped, since they
+/// carry no attribution and would split off a phantom event).  A result of
+/// length > 1 drives one per-cap filter pass; length 0 or 1 keeps the
+/// single-pass union behavior byte-identical.  Order follows
+/// `param_to_sink_sites` iteration (deterministic for a fixed summary).
+fn distinct_summary_sink_caps(
+    param_to_sink_sites: &[(usize, SmallVec<[SinkSite; 1]>)],
+    sink_caps: Cap,
+) -> smallvec::SmallVec<[Cap; 4]> {
+    let mut distinct: smallvec::SmallVec<[Cap; 4]> = smallvec::SmallVec::new();
+    for (_, sites) in param_to_sink_sites {
+        for site in sites {
+            if site.line == 0 {
+                continue;
+            }
+            let c = site.cap & sink_caps;
+            if c.is_empty() {
+                continue;
+            }
+            if !distinct.contains(&c) {
+                distinct.push(c);
+            }
+        }
+    }
+    distinct
 }
 
 /// Pick primary [`SinkSite`]s for the callback-pattern path, where the
@@ -9269,6 +10389,7 @@ fn collect_tainted_sink_values(
                     }
                 }
             }
+            retain_inner_sink_reaching_uses(&mut result, info, ssa);
             apply_field_aware_suppression(&mut result, inst, info, state, sink_caps, ssa);
             apply_arg_type_safe_suppression(
                 &mut result,
@@ -9276,6 +10397,7 @@ fn collect_tainted_sink_values(
                 transfer.type_facts,
                 inst,
                 info,
+                ssa,
             );
             return result;
         }
@@ -9305,6 +10427,7 @@ fn collect_tainted_sink_values(
                     }
                 }
             }
+            retain_inner_sink_reaching_uses(&mut result, info, ssa);
             apply_field_aware_suppression(&mut result, inst, info, state, sink_caps, ssa);
             apply_arg_type_safe_suppression(
                 &mut result,
@@ -9312,6 +10435,7 @@ fn collect_tainted_sink_values(
                 transfer.type_facts,
                 inst,
                 info,
+                ssa,
             );
             return result;
         }
@@ -9327,9 +10451,52 @@ fn collect_tainted_sink_values(
         check_heap_taint(v, &mut result);
     }
 
+    retain_inner_sink_reaching_uses(&mut result, info, ssa);
+
     apply_field_aware_suppression(&mut result, inst, info, state, sink_caps, ssa);
-    apply_arg_type_safe_suppression(&mut result, sink_caps, transfer.type_facts, inst, info);
+    apply_arg_type_safe_suppression(&mut result, sink_caps, transfer.type_facts, inst, info, ssa);
     result
+}
+
+/// Inner-nested-sink argument attribution.  When this node's `Sink` label was
+/// contributed by a call nested inside a larger non-sink outer expression
+/// (`Ok(Reader { meta: <tainted>, h: File::open(const) })`, `str(eval(x))`),
+/// only values that syntactically appear inside that inner sink call are its
+/// payload.  A tainted value occupying a DIFFERENT sub-position of the
+/// enclosing aggregate is a sibling that reaches the aggregate's returned
+/// value, not the sink's argument, so drop it.  Named values outside the set
+/// are dropped; unnamed temporaries are kept (conservative — the inner sink's
+/// payload may be an unnamed sub-call).
+///
+/// This runs on EVERY priority tier of [`collect_tainted_sink_values`], not
+/// just the Priority-3 aggregate fallback.  A gated file-IO sink
+/// (`sink_payload_args = [0]`, e.g. the Rust `File::open` path-confinement
+/// gate) whose call is ALSO nested inside an `Ok(Struct { … })` aggregate hits
+/// Priority 1, whose `positions` restriction lands on the flattened
+/// aggregate's single `args[0]` — which lumps the path idents together with
+/// every sibling struct field.  Without applying this retain there, the
+/// FileSystem-tainted siblings survive the early return and re-introduce the
+/// self-referential `file_system -> FILE_IO` flow the gate was meant to close
+/// (meilisearch `crates/dump/src/reader/v6/mod.rs:140`).  It is a no-op when
+/// `sink_reaching_uses` is `None` (the common non-nested sink), so the added
+/// call on the Priority-1/2 fast paths never changes their result there.
+fn retain_inner_sink_reaching_uses(
+    result: &mut Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)>,
+    info: &NodeInfo,
+    ssa: &SsaBody,
+) {
+    if let Some(reaching) = info.call.sink_reaching_uses.as_deref() {
+        result.retain(|(v, _, _)| {
+            match ssa
+                .value_defs
+                .get(v.0 as usize)
+                .and_then(|vd| vd.var_name.as_deref())
+            {
+                Some(name) => reaching.iter().any(|n| n == name),
+                None => true,
+            }
+        });
+    }
 }
 
 /// Drop tainted argument SSA values from the per-call sink-emission set
@@ -9354,8 +10521,9 @@ fn apply_arg_type_safe_suppression(
     _type_facts: Option<&crate::ssa::type_facts::TypeFactResult>,
     inst: &SsaInst,
     info: &NodeInfo,
+    ssa: &SsaBody,
 ) {
-    use crate::ssa::type_facts::is_safe_string_producing_callee;
+    use crate::ssa::type_facts::{is_int_producing_callee, is_safe_string_producing_callee};
     if result.is_empty() {
         return;
     }
@@ -9380,6 +10548,26 @@ fn apply_arg_type_safe_suppression(
     if !sink_fully_type_suppressible {
         return;
     }
+    // Numeric-confinement drop: an inline numeric call-chain argument
+    // (`sink(s.parse::<u16>().unwrap().to_string())`) never lowers to its own
+    // SSA value, so the tainted source leaf `s` is flattened directly into the
+    // sink's use set with its original (string) taint.  `NodeInfo.numeric_
+    // confined_uses` records, from an AST walk at CFG construction, the
+    // value-use identifiers whose *every* occurrence in this node is consumed
+    // by a numeric / safe-string producer — i.e. the leaf reaches the sink
+    // only as a number.  Drop those tainted leaves here, the arg-level
+    // analogue of the value-level `TypeKind::Int` suppression.  Confinement is
+    // soundness-gated at extraction time (a single raw occurrence blocks it),
+    // so this never masks an injection through the same variable.
+    if !info.numeric_confined_uses.is_empty() {
+        result.retain(|(v, _, _)| match ssa.def_of(*v).var_name.as_deref() {
+            Some(name) => !info.numeric_confined_uses.iter().any(|n| n == name),
+            None => true,
+        });
+        if result.is_empty() {
+            return;
+        }
+    }
     // Identify SSA values whose enclosing arg position has an inner
     // call to a safe-string producer
     // ([`is_safe_string_producing_callee`]).  The CFG/SSA pipeline does
@@ -9399,11 +10587,27 @@ fn apply_arg_type_safe_suppression(
     let mut safe_string_values: std::collections::HashSet<SsaValue> =
         std::collections::HashSet::new();
     for (pos, arg_vals) in args.iter().enumerate() {
-        let safe = info
-            .arg_callees
-            .get(pos)
-            .and_then(|c| c.as_deref())
-            .map(is_safe_string_producing_callee)
+        let arg_callee = info.arg_callees.get(pos).and_then(|c| c.as_deref());
+        // Two arg shapes are provably non-payload-bearing:
+        //   1. A "safe-string" producer — numeric/boolean to-string conversion
+        //      or a class-name accessor (`Integer.toString`, `Class.getName`).
+        //   2. A numeric-producing call chain — `Atoi(s)` / `parseInt(s)` /
+        //      `int(s)` / `s.parse::<u16>().unwrap().to_string()`.  When the
+        //      ENTIRE arg expression is such a chain its value is numeric (or a
+        //      numeric stringified by an identity/to-string tail), which cannot
+        //      encode CRLF, `..`, quote, or shell metacharacters.  This is the
+        //      arg-level analogue of the value-level `TypeKind::Int` suppression
+        //      in `is_type_safe_for_sink`: the inline shape
+        //      `sink(s.parse::<u16>().unwrap().to_string())` never lowers the
+        //      inner chain to its own SSA value (the outer call's arg list
+        //      captures the tainted source leaf `s` directly), so there is no
+        //      intermediate value to carry the `Int` fact — the only place to
+        //      recover "this arg is a numeric producer" is the `arg_callees`
+        //      text.  The let-bound form `let n = s.parse()…; sink(n)` is
+        //      already suppressed because `n` materialises as an `Int`-typed
+        //      SSA value.
+        let safe = arg_callee
+            .map(|c| is_safe_string_producing_callee(c) || is_int_producing_callee(c))
             .unwrap_or(false);
         if safe {
             for &v in arg_vals {
@@ -10004,10 +11208,7 @@ fn propagate_taint_to_aliases(
 // ── SSA-Level Precision Helpers ──────────────────────────────────────────
 
 /// Check if all argument SSA values of a call instruction are known constants.
-fn all_args_const(
-    inst: &SsaInst,
-    const_values: &HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>,
-) -> bool {
+fn all_args_const(inst: &SsaInst, const_values: &crate::ssa::const_prop::ConstValues) -> bool {
     let used = inst_use_values(inst);
     if used.is_empty() {
         return false; // no args → not a call or nothing to suppress
@@ -11056,6 +12257,51 @@ fn is_inst_data_exfil_destination_trusted(inst: &SsaInst, abs: &AbstractState, c
     })
 }
 
+/// True when this call node is a network-fetch primitive: it carries BOTH a
+/// `Source` label and a `Sink(SSRF)` label (PHP `file_get_contents` /
+/// `curl_exec`, Python `requests.get`, JS `axios.get`, …).  Such a call is a
+/// source only because it reaches out over the network, so what it returns is
+/// exactly as trustworthy as the URL it was handed.
+fn is_network_fetch_source(info: &crate::cfg::NodeInfo) -> bool {
+    info.taint
+        .labels
+        .iter()
+        .any(|l| matches!(l, DataLabel::Source(_)))
+        && info
+            .taint
+            .labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(Cap::SSRF)))
+}
+
+/// Node-only half of the network-fetch source suppression applied in the
+/// `SsaOp::Call` transfer: a network-fetch primitive invoked with a hardcoded
+/// URL whose prefix passes [`is_string_safe_for_ssrf`] (a fully-formed
+/// `scheme://host/path`) has its endpoint bound at compile time, so the
+/// response body is developer-chosen, not attacker-chosen, and the `Source`
+/// label does not apply.
+///
+/// Lives here, on the node rather than on the dataflow state, so the
+/// structural `cfg-unguarded-sink` pass in `cfg_analysis::guards` can consult
+/// the same predicate.  Both engines must agree on which nodes introduce
+/// untrusted data: when only the taint engine honours the suppression, the
+/// structural rule keeps treating the fetch result as a source and fires on
+/// whatever consumes it, re-creating the finding the suppression removed.
+pub(crate) fn node_is_hardcoded_network_fetch_source(info: &crate::cfg::NodeInfo) -> bool {
+    if !is_network_fetch_source(info) {
+        return false;
+    }
+    let safe_prefix =
+        |p: &str| is_string_safe_for_ssrf(&crate::abstract_interp::StringFact::from_prefix(p));
+    info.string_prefix.as_deref().is_some_and(safe_prefix)
+        || info
+            .call
+            .arg_string_literals
+            .first()
+            .and_then(|v| v.as_deref())
+            .is_some_and(safe_prefix)
+}
+
 /// SSRF safety: prefix includes scheme + full host + path separator.
 ///
 /// Soundness: if the prefix contains `scheme://host/`, the attacker cannot
@@ -11143,6 +12389,134 @@ fn split_qualifier(raw: &str) -> (Option<&str>, Option<&str>) {
     (None, None)
 }
 
+/// Per-file index of `local_summaries` keyed by function leaf name.
+///
+/// `resolve_callee_full` resolves the callee string of *every* `Call`
+/// instruction against `local_summaries` (the file's
+/// [`FuncSummaries`]).  The historical resolvers
+/// ([`caller_container_for`], [`resolve_local_func_key_query`],
+/// [`resolve_local_func_key`], and the ambiguity probe in
+/// [`resolve_callee_full`]) each did a *full linear scan* over
+/// `local_summaries.keys()` filtering by `(name, lang)`.  With `C`
+/// call-sites and `F` functions per file that is `O(C·F)` ≈ `O(F²)`
+/// per file, and it runs once for *every* taint pass (summary
+/// extraction, the main analysis, child-sink augmentation — ~5×/body).
+/// On large source files (hundreds of methods per class) the quadratic
+/// dominates callee resolution.
+///
+/// This index is built once per file from the same `local_summaries`
+/// and turns each lookup into an `O(1)` hash probe returning the
+/// handful of same-leaf-name candidates.  The single biggest payoff is
+/// the *no-match* case (the common one — most callees are external /
+/// stdlib functions with no local definition): the linear scan visited
+/// all `F` keys to discover "no candidate", whereas the index answers
+/// in `O(1)`.
+///
+/// Keyed by owned name `String` (not a borrow) so the index is a plain
+/// owned value with no lifetime, published for the duration of a file's
+/// taint passes via the [`with_local_name_index`] scoped guard (mirrors
+/// the [`crate::ssa::type_facts::with_file_imports`] /
+/// [`crate::cfg::safe_fields::with_safe_lookup_fields`] idiom).  When no
+/// index is published the resolvers fall back to the original linear
+/// scan, so behaviour is identical for unit tests / probes that analyse
+/// a synthetic body without a published index.
+pub(crate) struct FuncNameIndex {
+    by_name: rustc_hash::FxHashMap<String, SmallVec<[FuncKey; 2]>>,
+}
+
+impl FuncNameIndex {
+    /// Build the index from a file's `local_summaries`.  `O(F)` clones of
+    /// `FuncKey` (3 `String`s each), paid once per file in exchange for
+    /// removing the per-call-site `O(F)` scan.
+    pub(crate) fn build(local_summaries: &FuncSummaries) -> Self {
+        let mut by_name: rustc_hash::FxHashMap<String, SmallVec<[FuncKey; 2]>> =
+            rustc_hash::FxHashMap::default();
+        for k in local_summaries.keys() {
+            by_name.entry(k.name.clone()).or_default().push(k.clone());
+        }
+        FuncNameIndex { by_name }
+    }
+}
+
+thread_local! {
+    /// Per-file `local_summaries` name index published by
+    /// [`with_local_name_index`] around the taint passes that drive
+    /// callee resolution.  `None` outside a published scope, in which
+    /// case the resolvers use their linear-scan fallback.
+    static LOCAL_NAME_INDEX_TLS: RefCell<Option<FuncNameIndex>> = const { RefCell::new(None) };
+}
+
+/// RAII guard that publishes a [`FuncNameIndex`] as the per-thread
+/// callee-resolution view for the lifetime of the guard, restoring the
+/// prior value on drop so nested publications compose (e.g.
+/// `lower_all_functions_from_bodies` then `analyse_file_with_lowered`
+/// both publish their own index over the same file).
+///
+/// Use at the top of a file-scoped taint entry point:
+/// `let _idx = LocalNameIndexGuard::publish(FuncNameIndex::build(local_summaries));`
+pub(crate) struct LocalNameIndexGuard(Option<FuncNameIndex>);
+
+impl LocalNameIndexGuard {
+    pub(crate) fn publish(index: FuncNameIndex) -> Self {
+        // Escape hatch: `NYX_DISABLE_NAME_INDEX=1` suppresses publication so
+        // the resolvers fall back to the linear `local_summaries.keys()`
+        // scan.  Used to A/B the indexed vs linear path from a single binary
+        // (criterion baseline, differential-correctness check) and as a
+        // safety toggle.  Cached so the env read is paid once per process.
+        static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let disabled = *DISABLED.get_or_init(|| {
+            std::env::var("NYX_DISABLE_NAME_INDEX")
+                .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(false)
+        });
+        if disabled {
+            return LocalNameIndexGuard(None);
+        }
+        let prev = LOCAL_NAME_INDEX_TLS.with(|cell| cell.borrow_mut().replace(index));
+        LocalNameIndexGuard(prev)
+    }
+}
+
+impl Drop for LocalNameIndexGuard {
+    fn drop(&mut self) {
+        LOCAL_NAME_INDEX_TLS.with(|cell| *cell.borrow_mut() = self.0.take());
+    }
+}
+
+/// Runs `f` over the file-local candidates for `name` (lang-filtered) held by
+/// the per-file `FuncNameIndex`, without deep-cloning them out of the
+/// thread-local index. `f` receives borrowed `&FuncKey`s that live only for
+/// the duration of its call, so it extracts what it needs (typically cloning
+/// at most the single winning key) before returning.
+///
+/// Returns `None` when no index is published, so the caller falls back to a
+/// linear `local_summaries` scan (unit-test / probe paths). Returns
+/// `Some(f(&[]))` when an index is published but holds no same-lang candidate
+/// for `name`.
+///
+/// Replaces the former `indexed_local_candidates`, which materialised an owned
+/// `SmallVec<[FuncKey; 2]>` (a full `FuncKey` clone, three `String` allocations
+/// each, per candidate) on every callee resolution, only for the caller to
+/// borrow the copies, filter them, and clone at most one winner. Handing the
+/// borrowed refs through a closure drops that per-resolution candidate-list
+/// clone entirely; the sole remaining `FuncKey` clone is the one winning key
+/// each resolver returns by value.
+fn with_indexed_local_candidates<R>(
+    name: &str,
+    lang: Lang,
+    f: impl FnOnce(&[&FuncKey]) -> R,
+) -> Option<R> {
+    LOCAL_NAME_INDEX_TLS.with(|cell| {
+        let borrowed = cell.borrow();
+        let index = borrowed.as_ref()?;
+        let refs: SmallVec<[&FuncKey; 2]> = match index.by_name.get(name) {
+            Some(keys) => keys.iter().filter(|k| k.lang == lang).collect(),
+            None => SmallVec::new(),
+        };
+        Some(f(&refs))
+    })
+}
+
 /// Look up the caller's own container by matching its name in
 /// `local_summaries`.  Used so bare self-calls (`foo()` inside a class
 /// method) prefer same-class candidates over free functions.
@@ -11150,20 +12524,32 @@ fn caller_container_for(transfer: &SsaTaintTransfer, caller_func: &str) -> Optio
     if caller_func.is_empty() {
         return None;
     }
-    let mut containers: Vec<&str> = transfer
+    // Pick the sole non-empty container shared by every same-name candidate,
+    // or `None` if zero or ambiguous.  Operates on borrowed refs so the
+    // indexed path never clones the candidate list.
+    fn pick(keys: &[&FuncKey]) -> Option<String> {
+        let mut containers: Vec<&str> = keys
+            .iter()
+            .map(|k| k.container.as_str())
+            .filter(|c| !c.is_empty())
+            .collect();
+        containers.sort();
+        containers.dedup();
+        if containers.len() == 1 {
+            Some(containers[0].to_string())
+        } else {
+            None
+        }
+    }
+    if let Some(res) = with_indexed_local_candidates(caller_func, transfer.lang, pick) {
+        return res;
+    }
+    let keys: Vec<&FuncKey> = transfer
         .local_summaries
         .keys()
         .filter(|k| k.lang == transfer.lang && k.name == caller_func)
-        .map(|k| k.container.as_str())
-        .filter(|c| !c.is_empty())
         .collect();
-    containers.sort();
-    containers.dedup();
-    if containers.len() == 1 {
-        Some(containers[0].to_string())
-    } else {
-        None
-    }
+    pick(&keys)
 }
 
 /// Query-based equivalent of [`resolve_local_func_key`].
@@ -11176,10 +12562,25 @@ pub(crate) fn resolve_local_func_key_query(
     local_summaries: &FuncSummaries,
     q: &CalleeQuery<'_>,
 ) -> Option<FuncKey> {
+    // Prefer the per-file name index (O(1) probe, borrowed candidates → no
+    // clone); fall back to the linear scan when no index is published
+    // (unit-test / probe paths).
+    if let Some(res) =
+        with_indexed_local_candidates(q.name, q.caller_lang, |all| resolve_lfk_query_from(all, q))
+    {
+        return res;
+    }
     let all: Vec<&FuncKey> = local_summaries
         .keys()
         .filter(|k| k.name == q.name && k.lang == q.caller_lang)
         .collect();
+    resolve_lfk_query_from(&all, q)
+}
+
+/// Qualified-first resolution over an already-collected candidate slice.
+/// Shared by the indexed (borrowed refs) and linear-scan fallback paths of
+/// [`resolve_local_func_key_query`] so neither clones the candidate list.
+fn resolve_lfk_query_from(all: &[&FuncKey], q: &CalleeQuery<'_>) -> Option<FuncKey> {
     if all.is_empty() {
         return None;
     }
@@ -11217,6 +12618,32 @@ pub(crate) fn resolve_local_func_key_query(
     if let Some(nq) = q.namespace_qualifier {
         if let Some(k) = pick_with_container(nq) {
             return Some(k);
+        }
+        // A `::`-qualified callee (`Type::method` / `module::func`) names a
+        // concrete type or module.  When no local definition has
+        // `container == <qualifier>`, the call is an external associated
+        // function (stdlib / third-party crate) or a module-path free
+        // function — never a same-leaf METHOD living in a different,
+        // unrelated container.  Refuse to fall through to the
+        // caller-container / arity-only / receiver-var heuristics below,
+        // which would otherwise bind the stdlib `File::open` to
+        // `impl V5Reader { fn open }` (caller-container self-collision) or
+        // `BufReader::new` to a unique-arity `UpdateFile::new` (arity-only
+        // leaf collision).  The one legitimate fall-through is a unique
+        // same-leaf FREE function (empty container, e.g.
+        // `crate::util::sanitize` → top-level `fn sanitize`).  `Self::` /
+        // `self::` is a genuine self-call and defers to caller_container.
+        if !matches!(nq, "Self" | "self") {
+            let free: Vec<&FuncKey> = all
+                .iter()
+                .copied()
+                .filter(|k| k.container.is_empty() && arity_matches(k))
+                .collect();
+            return if free.len() == 1 {
+                Some(free[0].clone())
+            } else {
+                None
+            };
         }
     }
 
@@ -11269,13 +12696,29 @@ pub(crate) fn resolve_local_func_key(
     // `local_summaries` is file-local; every entry shares the same namespace
     // (raw file path from `build_cfg`). We do not filter by namespace here so
     // callers can pass whichever form they have (raw or normalized).
-    let mut candidates: Vec<&FuncKey> = local_summaries
+    //
+    // Prefer the per-file name index (borrowed candidates → no clone); fall
+    // back to the linear scan when no index is published.
+    if let Some(res) = with_indexed_local_candidates(leaf_name, lang, |keys| {
+        resolve_lfk_from(keys, container_hint)
+    }) {
+        return res;
+    }
+    let candidates: Vec<&FuncKey> = local_summaries
         .keys()
         .filter(|k| k.name == leaf_name && k.lang == lang)
         .collect();
-    if candidates.is_empty() {
+    resolve_lfk_from(&candidates, container_hint)
+}
+
+/// Container-hint narrowing over an already-collected candidate slice.  Shared
+/// by the indexed and fallback paths of [`resolve_local_func_key`]; clones
+/// only the single winning key (`&FuncKey` refs are pointer copies).
+fn resolve_lfk_from(all: &[&FuncKey], container_hint: Option<&str>) -> Option<FuncKey> {
+    if all.is_empty() {
         return None;
     }
+    let mut candidates: Vec<&FuncKey> = all.to_vec();
     if candidates.len() > 1 {
         if let Some(container) = container_hint {
             let narrowed: Vec<&FuncKey> = candidates
@@ -11839,12 +13282,16 @@ fn resolve_callee_full(
         // Multiple same-name local candidates with no disambiguating
         // container hint: refuse to pick one rather than fall through to a
         // less precise global summary that might be the wrong definition.
-        let ambiguous_local = transfer
-            .local_summaries
-            .keys()
-            .filter(|k| k.name == normalized && k.lang == transfer.lang)
-            .count()
-            > 1;
+        let ambiguous_local =
+            with_indexed_local_candidates(normalized, transfer.lang, |keys| keys.len() > 1)
+                .unwrap_or_else(|| {
+                    transfer
+                        .local_summaries
+                        .keys()
+                        .filter(|k| k.name == normalized && k.lang == transfer.lang)
+                        .count()
+                        > 1
+                });
         if ambiguous_local {
             return None;
         }
@@ -12409,5 +13856,140 @@ mod engine_audit_fixes_tests {
         assert!(is_string_safe_for_ssrf(&StringFact::from_prefix(
             "https://api.internal/"
         )));
+    }
+}
+
+#[cfg(test)]
+mod namespace_qualifier_authority_tests {
+    //! Regression pins for the `::`-qualified callee authority rule in
+    //! [`resolve_local_func_key_query`].  Distilled from meilisearch
+    //! `crates/dump/src/reader/v5/mod.rs`, where the stdlib `File::open`
+    //! (leaf `open`) and `BufReader::new` (leaf `new`) share their leaf
+    //! names with the user methods `Reader::open` / `IndexReader::new`.  A
+    //! qualified callee whose qualifier matches no local container must not
+    //! bind a same-leaf method from an unrelated container.
+    use super::*;
+    use crate::cfg::{FuncSummaries, LocalFuncSummary};
+    use crate::summary::CalleeQuery;
+    use crate::symbol::{FuncKey, FuncKind};
+    use petgraph::graph::NodeIndex;
+
+    fn method_key(container: &str, name: &str, arity: usize) -> FuncKey {
+        FuncKey::from_parts(
+            Lang::Rust,
+            "mod.rs",
+            container,
+            name,
+            Some(arity),
+            None,
+            FuncKind::Method,
+        )
+    }
+
+    fn stub_summary(arity: usize) -> LocalFuncSummary {
+        // The query only reads `local_summaries` keys; the value is inert.
+        LocalFuncSummary {
+            entry: NodeIndex::new(0),
+            source_caps: Cap::empty(),
+            sanitizer_caps: Cap::empty(),
+            sink_caps: Cap::empty(),
+            param_count: arity,
+            param_names: Vec::new(),
+            propagating_params: Vec::new(),
+            tainted_sink_params: Vec::new(),
+            callees: Vec::new(),
+            container: String::new(),
+            disambig: None,
+            kind: FuncKind::Method,
+        }
+    }
+
+    fn summaries() -> FuncSummaries {
+        // `Reader::open(dump)` and `IndexReader::new(path)` — both non-empty
+        // containers, both arity 1, plus a free `sanitize(s)` helper.
+        let mut m = FuncSummaries::default();
+        m.insert(method_key("Reader", "open", 1), stub_summary(1));
+        m.insert(method_key("IndexReader", "new", 1), stub_summary(1));
+        m.insert(
+            FuncKey::new_function(Lang::Rust, "mod.rs", "sanitize", Some(1)),
+            stub_summary(1),
+        );
+        m
+    }
+
+    fn q<'a>(
+        name: &'a str,
+        qualifier: Option<&'a str>,
+        caller_container: Option<&'a str>,
+    ) -> CalleeQuery<'a> {
+        CalleeQuery {
+            name,
+            caller_lang: Lang::Rust,
+            caller_namespace: "mod.rs",
+            caller_container,
+            receiver_type: None,
+            namespace_qualifier: qualifier,
+            receiver_var: None,
+            arity: Some(1),
+        }
+    }
+
+    #[test]
+    fn file_open_does_not_bind_caller_container_open_method() {
+        // `File::open(...)` inside `impl Reader { fn open }`: qualifier
+        // `File` has no local container, and the caller-container fallback
+        // must NOT bind the enclosing `Reader::open`.
+        let s = summaries();
+        let r = resolve_local_func_key_query(&s, &q("open", Some("File"), Some("Reader")));
+        assert!(
+            r.is_none(),
+            "File::open must not resolve to caller-container Reader::open, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn bufreader_new_does_not_bind_unique_arity_new_method() {
+        // `BufReader::new(x)` with a unique arity-1 `IndexReader::new`: the
+        // arity-only leaf fallback must not bind it.
+        let s = summaries();
+        let r = resolve_local_func_key_query(&s, &q("new", Some("BufReader"), Some("Reader")));
+        assert!(
+            r.is_none(),
+            "BufReader::new must not resolve to IndexReader::new, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn qualifier_matching_container_still_resolves() {
+        // A genuine `Reader::open(...)` (qualifier == container) resolves.
+        let s = summaries();
+        let r = resolve_local_func_key_query(&s, &q("open", Some("Reader"), None));
+        assert_eq!(r, Some(method_key("Reader", "open", 1)));
+    }
+
+    #[test]
+    fn self_qualifier_defers_to_caller_container() {
+        // `Self::open(...)` inside `impl Reader` is a real self-call and must
+        // still resolve to `Reader::open`.
+        let s = summaries();
+        let r = resolve_local_func_key_query(&s, &q("open", Some("Self"), Some("Reader")));
+        assert_eq!(r, Some(method_key("Reader", "open", 1)));
+    }
+
+    #[test]
+    fn module_path_free_function_still_resolves() {
+        // `crate::util::sanitize(x)` (qualifier `util`) must still bind the
+        // unique same-leaf FREE function.
+        let s = summaries();
+        let r = resolve_local_func_key_query(&s, &q("sanitize", Some("util"), Some("Reader")));
+        assert_eq!(
+            r,
+            Some(FuncKey::new_function(
+                Lang::Rust,
+                "mod.rs",
+                "sanitize",
+                Some(1)
+            ))
+        );
     }
 }

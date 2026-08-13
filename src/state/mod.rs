@@ -149,12 +149,17 @@ pub fn run_state_analysis(
     }
 
     let resource_pairs = rules::resource_pairs(lang);
+    // C/C++ struct-value containers whose field-acquire genuinely leaks
+    // (a non-escaping stack struct) — lift the ownership-transfer
+    // suppression for those.  Empty for other languages.
+    let nonescaping_field_containers = transfer::nonescaping_local_field_containers(cfg, lang);
     let transfer = DefaultTransfer {
         lang,
         resource_pairs,
         interner: &interner,
         resource_method_summaries,
         ptr_proxy_hints,
+        nonescaping_field_containers: Some(&nonescaping_field_containers),
     };
 
     // Seed initial auth level from decorator-based authorization markers.

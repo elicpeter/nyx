@@ -194,6 +194,15 @@ fn php_simplexml_load_string_default_options_clean() {
     assert_clean("php", "safe_xxe.php");
 }
 
+/// CVE-2025-48882 regression guard: `simplexml_load_string($xml)` with NO
+/// options argument is XXE-safe (libxml >= 2.9 default).  The presence-aware
+/// gate fix suppresses the XXE gate when the ValueMatch activation (options)
+/// arg is absent, instead of firing conservatively.
+#[test]
+fn php_simplexml_load_string_no_options_arg_clean() {
+    assert_clean("php", "safe_xxe_no_options.php");
+}
+
 #[test]
 fn php_irrelevant_xml_call_clean() {
     assert_clean("php", "irrelevant_xml_call.php");

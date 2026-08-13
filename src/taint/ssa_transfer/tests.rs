@@ -81,16 +81,16 @@ mod cross_file_tests {
                         block: BlockId(0),
                     },
                 ],
-                cfg_node_map: std::collections::HashMap::new(),
+                cfg_node_map: Default::default(),
                 exception_edges: vec![],
                 field_interner: crate::ssa::ir::FieldInterner::default(),
-                field_writes: std::collections::HashMap::new(),
+                field_writes: Default::default(),
 
-                synthetic_externals: std::collections::HashSet::new(),
-                slot_scoped_assigns: std::collections::HashSet::new(),
+                synthetic_externals: Default::default(),
+                slot_scoped_assigns: Default::default(),
             },
             opt: crate::ssa::OptimizeResult {
-                const_values: std::collections::HashMap::new(),
+                const_values: crate::ssa::const_prop::ConstValues::default(),
                 type_facts: crate::ssa::type_facts::TypeFactResult {
                     facts: std::collections::HashMap::new(),
                 },
@@ -245,10 +245,15 @@ mod inline_cache_epoch_tests {
     use smallvec::SmallVec;
 
     fn key(name: &str) -> FuncKey {
-        FuncKey {
-            name: name.into(),
-            ..Default::default()
-        }
+        FuncKey::from_parts(
+            crate::symbol::Lang::Rust,
+            String::new(),
+            String::new(),
+            name,
+            None,
+            None,
+            crate::symbol::FuncKind::Function,
+        )
     }
 
     fn sig() -> ArgTaintSig {
@@ -751,7 +756,6 @@ mod primary_sink_location_tests {
     use petgraph::graph::NodeIndex;
     use petgraph::prelude::*;
     use smallvec::smallvec;
-    use std::collections::HashMap;
 
     /// Build a caller CFG that models `sink(source())`: two nodes, where
     /// the sink node carries `callee = "dangerous_exec"` so
@@ -786,7 +790,7 @@ mod primary_sink_location_tests {
 
     /// Build an SSA body for `v0 = source(); v1 = dangerous_exec(v0); ret`.
     fn caller_body(source_node: NodeIndex, sink_node: NodeIndex) -> SsaBody {
-        let mut cfg_node_map = HashMap::new();
+        let mut cfg_node_map = crate::ssa::ir::CfgNodeMap::default();
         cfg_node_map.insert(source_node, SsaValue(0));
         cfg_node_map.insert(sink_node, SsaValue(1));
         SsaBody {
@@ -834,10 +838,10 @@ mod primary_sink_location_tests {
             cfg_node_map,
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         }
     }
 
@@ -968,13 +972,13 @@ mod goto_succ_propagation_tests {
             blocks: vec![block.clone()],
             entry: BlockId(0),
             value_defs: vec![],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let cfg: Cfg = Graph::new();
@@ -1067,13 +1071,13 @@ mod goto_succ_propagation_tests {
             blocks: vec![block.clone()],
             entry: BlockId(0),
             value_defs: vec![],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let cfg: Cfg = Graph::new();
         let interner = SymbolInterner::new();
@@ -1122,6 +1126,38 @@ mod goto_succ_propagation_tests {
         assert_eq!(succ_states[0].0, BlockId(1));
     }
 
+    /// The persistent per-thread branch-condition cache
+    /// (`classify_branch_cond_cached`) is a transparent memo over the pure
+    /// `classify_branch_cond`: the cached result on both the cold (first) and
+    /// warm (second) lookup must equal the uncached classification for the
+    /// same text.  Covers texts that exercise each `has_semantic_negation`
+    /// branch (AllowlistCheck `not in`, TypeCheck `!==`, ValidationCall
+    /// negative-polarity) plus a PathFact rejection idiom, so a future change
+    /// that breaks the cache↔pure-function equivalence is caught here rather
+    /// than as a silent finding drift on a real repo.
+    #[test]
+    fn branch_cond_cache_matches_uncached_cold_and_warm() {
+        let texts = [
+            "err != nil",
+            "x == null",
+            "scheme not in allowed",
+            "typeof x !== 'string'",
+            "isInvalidUrl(u)",
+            "p.contains(\"..\")",
+            "user.isAdmin",
+        ];
+        for t in texts {
+            let pure = classify_branch_cond(t);
+            // Cold lookup (first time this text is seen on this thread): the
+            // cache misses, computes, and inserts.
+            let cold = classify_branch_cond_cached(t);
+            // Warm lookup: the cache hits and returns a clone.
+            let warm = classify_branch_cond_cached(t);
+            assert_eq!(cold, pure, "cold cache result diverged for {t:?}");
+            assert_eq!(warm, pure, "warm cache result diverged for {t:?}");
+        }
+    }
+
     // ── PathFact branch-narrowing smoke tests ─────────────────────────────
 
     /// Build a minimal `SsaBody` with a single value def named `var_name`.
@@ -1135,19 +1171,21 @@ mod goto_succ_propagation_tests {
                 cfg_node: NodeIndex::new(0),
                 block: BlockId(0),
             }],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         }
     }
 
     fn initial_state_with_abstract() -> SsaTaintState {
         let mut s = SsaTaintState::initial();
-        s.abstract_state = Some(crate::abstract_interp::AbstractState::empty());
+        s.abstract_state = Some(std::sync::Arc::new(
+            crate::abstract_interp::AbstractState::empty(),
+        ));
         s
     }
 
@@ -1263,7 +1301,7 @@ mod goto_succ_propagation_tests {
         super::super::apply_path_fact_branch_narrowing_with_interner(
             &mut true_state,
             &mut false_state,
-            "!path.contains(\"..\")",
+            &super::super::classify_path_branch("!path.contains(\"..\")"),
             &["path".to_string()],
             &ssa,
             None,
@@ -1297,7 +1335,7 @@ mod goto_succ_propagation_tests {
         super::super::apply_path_fact_branch_narrowing_with_interner(
             &mut true_state,
             &mut false_state,
-            "!filepath.IsLocal(p)",
+            &super::super::classify_path_branch("!filepath.IsLocal(p)"),
             &["p".to_string()],
             &ssa,
             None,
@@ -1398,13 +1436,13 @@ mod goto_succ_propagation_tests {
                 cfg_node: NodeIndex::new(0),
                 block: BlockId(0),
             }],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         }
     }
 
@@ -1453,7 +1491,6 @@ mod receiver_candidates_field_proj_tests {
     use crate::symbol::Lang;
     use petgraph::graph::NodeIndex;
     use smallvec::smallvec;
-    use std::collections::HashMap;
 
     fn empty_value_def(name: &str) -> ValueDef {
         ValueDef {
@@ -1526,13 +1563,13 @@ mod receiver_candidates_field_proj_tests {
                 empty_value_def("c.client"),
                 empty_value_def("c.client.send"),
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: interner,
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         }
     }
 
@@ -1614,13 +1651,13 @@ mod receiver_candidates_field_proj_tests {
             blocks,
             entry: BlockId(0),
             value_defs: vec![empty_value_def("v0")],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: interner,
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let cands =
             super::super::receiver_candidates_for_type_lookup(SsaValue(0), Some(&body), Lang::Go);
@@ -2018,18 +2055,18 @@ mod field_write_tests {
                 block: BlockId(0),
             },
         ];
-        let mut field_writes = HashMap::new();
+        let mut field_writes = rustc_hash::FxHashMap::default();
         field_writes.insert(SsaValue(2), (SsaValue(0), cache_id));
         let body = SsaBody {
             blocks,
             entry: BlockId(0),
             value_defs,
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner,
             field_writes,
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         (body, cache_id)
     }
@@ -2337,16 +2374,16 @@ mod field_write_tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner,
             field_writes: {
-                let mut m = HashMap::new();
+                let mut m = rustc_hash::FxHashMap::default();
                 m.insert(SsaValue(2), (SsaValue(0), cache_id));
                 m
             },
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let pf = crate::pointer::analyse_body(&body, crate::cfg::BodyId(0));
         // v0 is Const → empty pt, the hook should not insert anything.
@@ -2586,13 +2623,13 @@ mod container_elem_tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         // Run pointer analysis first to confirm the result of `shift()`
@@ -2727,13 +2764,13 @@ mod container_elem_tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let pf = crate::pointer::analyse_body(&body, crate::cfg::BodyId(7));
@@ -2876,13 +2913,13 @@ mod container_elem_tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let interner = SymbolInterner::new();
@@ -2955,7 +2992,6 @@ mod cross_call_field_tests {
     use crate::taint::ssa_transfer::state::FieldTaintKey;
     use petgraph::graph::NodeIndex;
     use smallvec::smallvec;
-    use std::collections::HashMap;
 
     /// W3 / W4: shared empty interner, these unit tests don't seed
     /// validation bits, so a fresh interner is sufficient for the
@@ -3008,13 +3044,13 @@ mod cross_call_field_tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner,
-            field_writes: HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let pf = crate::pointer::analyse_body(&body, crate::cfg::BodyId(7));
         (body, cache_id, pf)
@@ -3383,13 +3419,13 @@ mod field_taint_origin_cap_tests {
                     block: BlockId(0),
                 },
             ],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner,
-            field_writes: HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         (body, cache_id, cfg, n_proj)
     }
@@ -3707,7 +3743,7 @@ mod pointer_lattice_worklist_tests {
             },
         ];
 
-        let mut field_writes = HashMap::new();
+        let mut field_writes = rustc_hash::FxHashMap::default();
         field_writes.insert(SsaValue(2), (SsaValue(0), cache_id));
         field_writes.insert(SsaValue(3), (SsaValue(0), cache_id));
 
@@ -3715,12 +3751,12 @@ mod pointer_lattice_worklist_tests {
             blocks: vec![block0, block1, block2, block3],
             entry: BlockId(0),
             value_defs,
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner,
             field_writes,
-            synthetic_externals: HashSet::new(),
-            slot_scoped_assigns: HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let mut interner = SymbolInterner::new();
@@ -3828,6 +3864,56 @@ mod pointer_lattice_worklist_tests {
         );
     }
 
+    /// Gating `block_exit_states` (the `track_exit_states` flag added
+    /// 2026-07-14 to elide a full `SsaTaintState::clone` per block pop on the
+    /// main taint path) must not change the analysis result.  `run_ssa_taint_full`
+    /// (`track=false`, discards exit states) and `run_ssa_taint_full_with_exits`
+    /// (`track=true`, moves them in) must agree bit-for-bit on the emitted
+    /// events and the converged per-block entry states across a real
+    /// multi-block (diamond) body; only `block_exit_states` differs (populated
+    /// for the tracking variant, unavailable via the non-tracking API).
+    #[test]
+    fn exit_state_tracking_gate_preserves_events_and_block_states() {
+        let (body, cfg, _cache_id, interner) = build_diamond_body(true);
+        let pf = crate::pointer::analyse_body(&body, crate::cfg::BodyId(7));
+        let local_summaries: FuncSummaries = HashMap::new();
+        let transfer = build_transfer(&interner, &local_summaries, &pf);
+
+        let (events_untracked, states_untracked) =
+            crate::taint::ssa_transfer::run_ssa_taint_full(&body, &cfg, &transfer);
+        let (events_tracked, states_tracked, exit_states) =
+            crate::taint::ssa_transfer::run_ssa_taint_full_with_exits(&body, &cfg, &transfer);
+
+        // Converged per-block ENTRY states are identical (SsaTaintState: PartialEq).
+        assert_eq!(
+            states_untracked, states_tracked,
+            "block entry states must be identical regardless of exit-state tracking"
+        );
+
+        // Emitted events are identical (SsaTaintEvent has no PartialEq; compare
+        // count + Debug projection, which covers sink_node/caps/validation).
+        assert_eq!(
+            events_untracked.len(),
+            events_tracked.len(),
+            "event count must be identical regardless of exit-state tracking"
+        );
+        assert_eq!(
+            format!("{events_untracked:?}"),
+            format!("{events_tracked:?}"),
+            "event contents must be identical regardless of exit-state tracking"
+        );
+
+        // The tracking variant populates exit states for every reached block;
+        // reached blocks are exactly those with a converged entry state.
+        for (bid, entry) in states_tracked.iter().enumerate() {
+            assert_eq!(
+                entry.is_some(),
+                exit_states[bid].is_some(),
+                "block {bid}: exit state presence must match entry state presence"
+            );
+        }
+    }
+
     /// A2.b: early-exit branch, only B1 writes, B2 reaches B3 via
     /// an empty body.  After the join, the cell exists (B1 wrote
     /// it), but `validated_must` is `false` (B2 didn't write, the
@@ -3884,5 +3970,231 @@ mod pointer_lattice_worklist_tests {
             "validated_may from the writer's side survives the join"
         );
         assert!(cell.taint.caps.contains(Cap::ENV_VAR));
+    }
+}
+
+// ── distinct_summary_sink_caps (multi-sink-per-param de-masking) ─────────
+#[cfg(test)]
+mod distinct_summary_sink_caps_tests {
+    use super::super::distinct_summary_sink_caps;
+    use crate::labels::Cap;
+    use crate::summary::SinkSite;
+    use smallvec::{SmallVec, smallvec};
+
+    fn site(line: u32, cap: Cap) -> SinkSite {
+        SinkSite {
+            file_rel: "Fetcher.java".to_string(),
+            line,
+            col: 9,
+            snippet: String::new(),
+            cap,
+            from_chain: true,
+        }
+    }
+
+    /// One param flowing to two distinct-cap sinks yields two split masks
+    /// (the masking case: SSRF co-located with HEADER_INJECTION).
+    #[test]
+    fn distinct_caps_split_into_per_cap_masks() {
+        let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> = vec![(
+            1usize,
+            smallvec![site(12, Cap::SSRF), site(13, Cap::HEADER_INJECTION)],
+        )];
+        let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF | Cap::HEADER_INJECTION);
+        assert_eq!(out.len(), 2, "two distinct caps => two split passes");
+        assert!(out.contains(&Cap::SSRF));
+        assert!(out.contains(&Cap::HEADER_INJECTION));
+    }
+
+    /// A single-cap summary sink produces one mask, preserving the legacy
+    /// single-pass union behavior (`len() <= 1` keeps the else-branch).
+    #[test]
+    fn single_cap_no_split() {
+        let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> =
+            vec![(0usize, smallvec![site(12, Cap::SSRF)])];
+        let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], Cap::SSRF);
+    }
+
+    /// Repeated identical caps across sites/params dedup to one mask, so a
+    /// param reaching the same cap twice does not over-split.
+    #[test]
+    fn duplicate_caps_dedup() {
+        let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> = vec![
+            (0usize, smallvec![site(12, Cap::SSRF)]),
+            (1usize, smallvec![site(20, Cap::SSRF)]),
+        ];
+        let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF);
+        assert_eq!(out.len(), 1, "same cap at two sites => one mask");
+    }
+
+    /// Each split mask is narrowed to the propagated `sink_caps`: a site
+    /// cap that does not intersect the propagated mask is dropped entirely.
+    #[test]
+    fn caps_narrowed_to_propagated_sink_caps() {
+        let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> = vec![(
+            0usize,
+            smallvec![site(12, Cap::SSRF), site(13, Cap::HEADER_INJECTION)],
+        )];
+        // HEADER_INJECTION was stripped upstream (e.g. type-safe arg) —
+        // only SSRF remains in the propagated mask, so only it splits out.
+        let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF);
+        assert_eq!(out, smallvec![Cap::SSRF] as SmallVec<[Cap; 4]>);
+    }
+
+    /// Cap-only sites (`line == 0`, no resolved coordinates) are skipped:
+    /// they carry no attributable location and must not split off a phantom
+    /// per-cap event.
+    #[test]
+    fn cap_only_sites_skipped() {
+        let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> = vec![(
+            0usize,
+            smallvec![
+                site(12, Cap::SSRF),
+                SinkSite::cap_only(Cap::HEADER_INJECTION)
+            ],
+        )];
+        let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF | Cap::HEADER_INJECTION);
+        assert_eq!(out, smallvec![Cap::SSRF] as SmallVec<[Cap; 4]>);
+    }
+
+    /// No sites => empty (single-pass union path retained).
+    #[test]
+    fn empty_sites_empty_result() {
+        let p2ss: Vec<(usize, SmallVec<[SinkSite; 1]>)> = vec![];
+        let out = distinct_summary_sink_caps(&p2ss, Cap::SSRF | Cap::HEADER_INJECTION);
+        assert!(out.is_empty());
+    }
+}
+
+// ── ConfinementGates hoist: gate-flag correctness ────────────────────────
+#[cfg(test)]
+mod confinement_gate_tests {
+    use super::super::*;
+    use crate::summary::ssa_summary::SsaFuncSummary;
+    use crate::symbol::{FuncKey, FuncKind};
+
+    use smallvec::smallvec;
+
+    /// Build a minimal `SsaTaintTransfer` (Go, no seeds) pointing at `summaries`.
+    fn transfer_with<'a>(
+        interner: &'a SymbolInterner,
+        local_summaries: &'a FuncSummaries,
+        summaries: Option<&'a std::collections::HashMap<FuncKey, SsaFuncSummary>>,
+    ) -> SsaTaintTransfer<'a> {
+        SsaTaintTransfer {
+            lang: Lang::Go,
+            namespace: "",
+            interner,
+            local_summaries,
+            global_summaries: None,
+            interop_edges: &[],
+            owner_body_id: crate::cfg::BodyId(0),
+            parent_body_id: None,
+            global_seed: None,
+            param_seed: None,
+            receiver_seed: None,
+            const_values: None,
+            type_facts: None,
+            xml_parser_config: None,
+            xpath_config: None,
+            ssa_summaries: summaries,
+            extra_labels: None,
+            base_aliases: None,
+            callee_bodies: None,
+            inline_cache: None,
+            context_depth: 0,
+            callback_bindings: None,
+            points_to: None,
+            dynamic_pts: None,
+            import_bindings: None,
+            promisify_aliases: None,
+            module_aliases: None,
+            static_map: None,
+            auto_seed_handler_params: false,
+            cross_file_bodies: None,
+            pointer_facts: None,
+            cross_package_imports: None,
+            entry_kind: None,
+            param_route_capture: None,
+            recording_summary: false,
+        }
+    }
+
+    fn key(name: &str, lang: Lang) -> FuncKey {
+        FuncKey::from_parts(lang, "", "", name, Some(1), None, FuncKind::Function)
+    }
+
+    #[test]
+    fn none_summaries_close_all_gates() {
+        let interner = SymbolInterner::new();
+        let ls: FuncSummaries = std::collections::HashMap::new();
+        let t = transfer_with(&interner, &ls, None);
+        let g = compute_confinement_gates(&t);
+        assert!(!g.assert && !g.path_validator && !g.return_confiner);
+    }
+
+    #[test]
+    fn empty_summaries_close_all_gates() {
+        let interner = SymbolInterner::new();
+        let ls: FuncSummaries = std::collections::HashMap::new();
+        let map: std::collections::HashMap<FuncKey, SsaFuncSummary> =
+            std::collections::HashMap::new();
+        let t = transfer_with(&interner, &ls, Some(&map));
+        let g = compute_confinement_gates(&t);
+        assert!(!g.assert && !g.path_validator && !g.return_confiner);
+    }
+
+    #[test]
+    fn each_flag_opens_only_its_gate() {
+        let interner = SymbolInterner::new();
+        let ls: FuncSummaries = std::collections::HashMap::new();
+
+        // confines_path_return -> return_confiner only.
+        let ret = SsaFuncSummary {
+            confines_path_return: true,
+            ..Default::default()
+        };
+        let mut m1 = std::collections::HashMap::new();
+        m1.insert(key("compose_path", Lang::Go), ret);
+        let g = compute_confinement_gates(&transfer_with(&interner, &ls, Some(&m1)));
+        assert!(g.return_confiner && !g.assert && !g.path_validator);
+
+        // asserts_path_confined_params -> assert only.
+        let asrt = SsaFuncSummary {
+            asserts_path_confined_params: smallvec![0],
+            ..Default::default()
+        };
+        let mut m2 = std::collections::HashMap::new();
+        m2.insert(key("check_under", Lang::Go), asrt);
+        let g = compute_confinement_gates(&transfer_with(&interner, &ls, Some(&m2)));
+        assert!(g.assert && !g.return_confiner && !g.path_validator);
+
+        // result_reject_guard_params -> path_validator only.
+        let rej = SsaFuncSummary {
+            result_reject_guard_params: smallvec![0],
+            ..Default::default()
+        };
+        let mut m3 = std::collections::HashMap::new();
+        m3.insert(key("ensure_safe_path", Lang::Go), rej);
+        let g = compute_confinement_gates(&transfer_with(&interner, &ls, Some(&m3)));
+        assert!(g.path_validator && !g.assert && !g.return_confiner);
+    }
+
+    #[test]
+    fn different_lang_summary_leaves_gates_closed() {
+        // A confiner summary in another language must not open a same-language
+        // body's gate (the passes filter on `key.lang == transfer.lang`).
+        let interner = SymbolInterner::new();
+        let ls: FuncSummaries = std::collections::HashMap::new();
+        let ret = SsaFuncSummary {
+            confines_path_return: true,
+            ..Default::default()
+        };
+        let mut m = std::collections::HashMap::new();
+        m.insert(key("compose_path", Lang::C), ret); // C, transfer is Go
+        let g = compute_confinement_gates(&transfer_with(&interner, &ls, Some(&m)));
+        assert!(!g.return_confiner && !g.assert && !g.path_validator);
     }
 }

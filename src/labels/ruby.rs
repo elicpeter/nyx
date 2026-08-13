@@ -80,8 +80,15 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
+    // `Kernel#system` / `Kernel#exec` are the receiver-less command-execution
+    // primitives.  The `=` exact-match sigil restricts these to the bare
+    // (no-receiver) form so a same-named method on a typed receiver keeps its
+    // own semantics: `conn.exec(sql)` on a `PG::Connection` is a SQL sink, not
+    // a shell sink (resolved via the `DatabaseConnection.exec` type-qualified
+    // rule below).  Bare `system(cmd)` / `exec(cmd)` still match.  Motivated by
+    // CVE-2026-42087 (OpenC3 COSMOS: `@@conn.exec("…'#{start_time}'…")`).
     LabelRule {
-        matchers: &["system", "exec"],
+        matchers: &["=system", "=exec"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
     },
@@ -281,6 +288,24 @@ pub static RULES: &[LabelRule] = &[
             "ActiveRecordRelation.select_all",
             "ActiveRecordRelation.select_one",
             "ActiveRecordRelation.select_value",
+        ],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+    },
+    // Raw `pg` gem driver sinks.  `constructor_type` tags
+    // `PG::Connection.new(...)` / `PG.connect(...)` receivers as
+    // `DatabaseConnection`; the type-qualified resolver rewrites
+    // `conn.exec(sql)` → `DatabaseConnection.exec`.  Only the
+    // string-interpolating verbs are sinks — `exec_params` /
+    // `exec_prepared` / `async_exec_params` use libpq `$1` placeholders and
+    // are the documented safe form (CVE-2026-42087's fix swaps `exec` for
+    // `exec_params`), so they are intentionally absent.
+    LabelRule {
+        matchers: &[
+            "DatabaseConnection.exec",
+            "DatabaseConnection.async_exec",
+            "DatabaseConnection.exec_query",
+            "DatabaseConnection.query",
         ],
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: true,
@@ -566,6 +591,12 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     // data-flow
     "call"                  => Kind::CallMethod,
     "assignment"            => Kind::Assignment,
+    // Ruby augmented assignment (`x ||= y`, `x += y`, `x <<= y`, …).  Shares
+    // the `left`/`right` fields with `assignment`; modelling it as an
+    // Assignment makes the LHS depend on the RHS for taint/type purposes
+    // (sound: `x op= y` always reads `y` into `x`).  Covers the memoised-
+    // connection idiom `@@conn ||= PG::Connection.new(...)` (CVE-2026-42087).
+    "operator_assignment"   => Kind::Assignment,
     "method"                => Kind::Function,
     "singleton_method"      => Kind::Function,
     // Backtick shell execution: treat as a synthetic call so push_node

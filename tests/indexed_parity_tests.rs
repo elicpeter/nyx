@@ -340,6 +340,16 @@ const FULL_MODE_PARITY_FIXTURES: &[&str] = &[
     // Auth analysis
     "auth_analysis_integration",
     "auth_analysis_frameworks_integration",
+    // Cross-file authorization.  These exercise the two fact sets that only
+    // reach pass 2 through SQLite on the indexed path (caller-scope edges and
+    // FastAPI router facts).  Before those were persisted, every one of these
+    // produced MORE findings under `--index auto` than under `--index off`,
+    // because the cross-file lift silently degraded to a no-op.
+    "auth_analysis_cross_file_caller_scope",
+    "auth_analysis_fastapi_cross_file_include_router",
+    "auth_analysis_fastapi_transitive_include_router",
+    "auth_analysis_gitea_cross_file",
+    "auth_analysis_graphene_cross_file",
     // AST / pattern heavy
     "patterns",
     // Termination + state
@@ -348,6 +358,37 @@ const FULL_MODE_PARITY_FIXTURES: &[&str] = &[
     // Noise-reduction / suppression
     "route_registration_noise",
 ];
+
+#[test]
+fn parity_full_auth_analysis_cross_file_caller_scope() {
+    run_parity("auth_analysis_cross_file_caller_scope", AnalysisMode::Full);
+}
+
+#[test]
+fn parity_full_auth_analysis_fastapi_cross_file_include_router() {
+    run_parity(
+        "auth_analysis_fastapi_cross_file_include_router",
+        AnalysisMode::Full,
+    );
+}
+
+#[test]
+fn parity_full_auth_analysis_fastapi_transitive_include_router() {
+    run_parity(
+        "auth_analysis_fastapi_transitive_include_router",
+        AnalysisMode::Full,
+    );
+}
+
+#[test]
+fn parity_full_auth_analysis_gitea_cross_file() {
+    run_parity("auth_analysis_gitea_cross_file", AnalysisMode::Full);
+}
+
+#[test]
+fn parity_full_auth_analysis_graphene_cross_file() {
+    run_parity("auth_analysis_graphene_cross_file", AnalysisMode::Full);
+}
 
 #[test]
 fn parity_full_cross_file_js_sqli() {
@@ -527,6 +568,31 @@ fn parity_warm_auth_analysis_integration() {
 #[test]
 fn parity_warm_patterns_ast_mode() {
     run_parity_warm("patterns", AnalysisMode::Ast);
+}
+
+/// Warm parity is the test that actually pins cross-file auth persistence.
+///
+/// A cold indexed scan can pass on the `build_index` write alone.  Only the
+/// warm run exercises the incremental pass-1 path, where every file's hash
+/// matches, extraction is skipped wholesale, and the fact sets have to come
+/// back out of SQLite or not at all.  That is the exact failure mode the
+/// comment in `commands::index` already documents for auth summaries.
+#[test]
+fn parity_warm_auth_analysis_cross_file_caller_scope() {
+    run_parity_warm("auth_analysis_cross_file_caller_scope", AnalysisMode::Full);
+}
+
+#[test]
+fn parity_warm_auth_analysis_fastapi_cross_file_include_router() {
+    run_parity_warm(
+        "auth_analysis_fastapi_cross_file_include_router",
+        AnalysisMode::Full,
+    );
+}
+
+#[test]
+fn parity_warm_auth_analysis_gitea_cross_file() {
+    run_parity_warm("auth_analysis_gitea_cross_file", AnalysisMode::Full);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

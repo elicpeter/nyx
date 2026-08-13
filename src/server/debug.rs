@@ -1641,9 +1641,16 @@ pub fn analyse_file_summaries(
     config: &Config,
 ) -> Result<GlobalSummaries, StatusCode> {
     let bytes = std::fs::read(file_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let (func_summaries, ssa_rows, _ssa_bodies, auth_rows, cross_pkg_imports) =
-        crate::ast::extract_all_summaries_from_bytes(&bytes, file_path, config, None)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (
+        func_summaries,
+        ssa_rows,
+        _ssa_bodies,
+        auth_rows,
+        cross_pkg_imports,
+        caller_scope_facts,
+        router_facts,
+    ) = crate::ast::extract_all_summaries_from_bytes(&bytes, file_path, config, None)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut global = crate::summary::merge_summaries(func_summaries, None);
 
@@ -1655,6 +1662,12 @@ pub fn analyse_file_summaries(
     }
     if let Some((ns, map)) = cross_pkg_imports {
         global.insert_cross_package_imports(ns, map);
+    }
+    for edge in caller_scope_facts {
+        global.fold_caller_scope_edge(edge);
+    }
+    if let Some((module_id, facts)) = router_facts {
+        global.insert_router_facts(module_id, facts);
     }
 
     Ok(global)
@@ -1867,13 +1880,15 @@ function consume() {
 
         // Create non-empty global summaries to simulate having run a scan
         let mut global = crate::summary::GlobalSummaries::default();
-        let key = crate::symbol::FuncKey {
-            lang: crate::symbol::Lang::JavaScript,
-            namespace: "src/helper.js".into(),
-            name: "getInput".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let key = crate::symbol::FuncKey::from_parts(
+            crate::symbol::Lang::JavaScript,
+            "src/helper.js",
+            String::new(),
+            "getInput",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         global.insert_ssa(
             key,
             crate::summary::ssa_summary::SsaFuncSummary {
@@ -1898,6 +1913,11 @@ function consume() {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -2050,13 +2070,13 @@ async function recentAuditLogs() {
             }],
             entry: BlockId(0),
             value_defs,
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner,
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let facts = analyse_body(&body, BodyId(0));

@@ -139,6 +139,55 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: true,
     },
+    // GORM query-builder methods that accept a raw SQL fragment at arg 0.
+    // GORM's `*gorm.DB` is conventionally bound to a `db`-named receiver, so
+    // the suffix `db.Where` / `db.Order` etc. carries the GORM semantic
+    // (stdlib `*sql.DB` has none of these methods, so the suffix can't collide
+    // with `database/sql`).  Each takes the SQL string at arg 0; the variadic
+    // forms (`Where(query, args...)`, `Having`, `Or`, `Not`, `Joins`) send
+    // subsequent positional args through the driver's parameterised path, so
+    // payload-arg gating (`payload_args: &[0]` in `GATED_SINKS`) keeps the safe
+    // `db.Where("col = ?", val)` shape silent while the raw-concat
+    // `db.Where("col = '" + v + "'")` / `db.Order(userInput)` shapes fire.
+    // `Order` / `Group` have no parameterised form (the whole arg is the
+    // ORDER BY / GROUP BY clause) and so are always raw.  Motivated by
+    // CVE-2024-37896 (gin-vue-admin export `db.Order(values.Get("order"))`).
+    //
+    // NOTE: only the *terminal* / assigned builder call resolves by suffix
+    // (`db = db.Order(x)` → callee text `db.Order`); a builder chained before a
+    // finisher (`db.Where(x).Find(&out)` → `db.Where.Find`) collapses to a
+    // single Call whose suffix is the finisher, so the inner builder is not yet
+    // recognised — that depends on the chained-method-call SSA-lowering split
+    // tracked in CVE_DEFERRED.md.
+    LabelRule {
+        matchers: &[
+            "db.Where",
+            "db.Order",
+            "db.Group",
+            "db.Having",
+            "db.Or",
+            "db.Not",
+            "db.Joins",
+        ],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
+    // Receiver-typed GORM builder variants (case-sensitive), for receivers
+    // tagged `GormDb` by `constructor_type` (`gorm.Open(...)`) whose identifier
+    // text does not end in `db` (e.g. `tx := gorm.Open(...); tx.Order(x)`).
+    LabelRule {
+        matchers: &[
+            "GormDb.Where",
+            "GormDb.Order",
+            "GormDb.Group",
+            "GormDb.Having",
+            "GormDb.Or",
+            "GormDb.Not",
+            "GormDb.Joins",
+        ],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+    },
     // fmt.Printf/Sprintf write to stdout or build strings in memory, not
     // security sinks.  fmt.Fprintf writes to an io.Writer (often http.ResponseWriter)
     // so it IS a security sink for XSS.
@@ -978,6 +1027,205 @@ pub static GATED_SINKS: &[SinkGate] = &[
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: true,
         payload_args: &[1],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    // GORM query-builder gates: SQL fragment at arg 0, bind values at
+    // arg 1+ travel the parameterised path (safe).  Mirrors db.Where /
+    // db.Raw above.  CVE-2024-37896.
+    SinkGate {
+        callee_matcher: "db.Where",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "db.Order",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "db.Group",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "db.Having",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "db.Or",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "db.Not",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "db.Joins",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "GormDb.Where",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "GormDb.Order",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "GormDb.Group",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "GormDb.Having",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "GormDb.Or",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "GormDb.Not",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "GormDb.Joins",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+        payload_args: &[0],
         keyword_name: None,
         dangerous_kwargs: &[],
         activation: GateActivation::Destination {

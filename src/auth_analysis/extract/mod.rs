@@ -14,6 +14,8 @@ pub mod express;
 pub mod fastify;
 pub mod flask;
 pub mod gin;
+pub mod gitea;
+pub mod graphene;
 pub mod koa;
 pub mod rails;
 pub mod rocket;
@@ -53,14 +55,16 @@ pub fn extract_authorization_model(
     rules: &AuthAnalysisRules,
     cross_file_router_deps: Option<&HashMap<String, Vec<(CallSite, bool)>>>,
 ) -> AuthorizationModel {
-    let extractors: [&dyn AuthExtractor; 13] = [
+    let extractors: [&dyn AuthExtractor; 15] = [
         &express::ExpressExtractor,
         &koa::KoaExtractor,
         &fastify::FastifyExtractor,
         &gin::GinExtractor,
+        &gitea::GiteaExtractor,
         &echo::EchoExtractor,
         &flask::FlaskExtractor,
         &django::DjangoExtractor,
+        &graphene::GrapheneExtractor,
         &spring::SpringExtractor,
         &rails::RailsExtractor,
         &sinatra::SinatraExtractor,

@@ -803,3 +803,105 @@ pub fn resource_pairs(lang: Lang) -> &'static [ResourcePair] {
         Lang::JavaScript | Lang::TypeScript => JS_RESOURCES,
     }
 }
+
+// ── JDBC derivation-edge helpers ───────────────────────────────────────
+//
+// A JDBC `Statement` / `PreparedStatement` / `CallableStatement` is a
+// resource *derived* from the `Connection` that produced it: per the JDBC
+// contract, closing a `Connection` closes every `Statement` it opened.  So a
+// `Statement` whose owning `Connection` is itself a resource this body
+// already accounts for (acquired locally — whether closed, borrowed/managed,
+// or itself leaking) is never a *unique* true positive:
+//   * connection closed in-body        → statement transitively closed (FP);
+//   * connection borrowed / managed     → framework closes it → statement
+//                                         transitively closed (FP);
+//   * connection itself leaks locally   → the connection leak is the single
+//                                         actionable root; the derived
+//                                         statement is redundant.
+// A `Statement` opened on a *long-lived* connection this body does NOT track
+// (a field / method parameter / pooled handle held elsewhere) genuinely
+// accumulates and stays a leak.  These two helpers implement the derivation
+// edge (`ps -> con`) so both the `state::facts` and `cfg_analysis::resources`
+// leak passes can apply the same suppression.  Sibling of
+// `state::facts::is_jdbc_resultset_acquire` (the leaf `ResultSet` case).
+
+/// Whether `callee` acquires a JDBC `Connection` (`getConnection`).  A
+/// borrowed connection (`session.getConnection()`) is still a `getConnection`
+/// acquire — the borrowed-vs-owned distinction lives on the acquire node's
+/// `borrowed_resource` flag, not here.
+pub(crate) fn is_jdbc_connection_acquire(callee: Option<&str>) -> bool {
+    let Some(c) = callee else { return false };
+    let c = c.to_ascii_lowercase();
+    c == "getconnection" || c.ends_with(".getconnection")
+}
+
+/// If `callee` acquires a JDBC `Statement` from a `Connection`
+/// (`con.prepareStatement(...)` / `con.createStatement()` /
+/// `con.prepareCall(...)`), return the receiver connection variable
+/// (`con`).  Returns `None` for any other callee, a bare (receiverless)
+/// call, or a non-identifier receiver (`this.con`, `getConn().…`) — those do
+/// not name a locally-trackable connection variable, so the derived
+/// statement is kept as a potential leak.
+pub(crate) fn jdbc_statement_owning_connection(callee: Option<&str>) -> Option<&str> {
+    let c = callee?;
+    let dot = c.rfind('.')?;
+    let (recv, leaf) = (&c[..dot], &c[dot + 1..]);
+    let leaf_l = leaf.to_ascii_lowercase();
+    if leaf_l == "preparestatement" || leaf_l == "createstatement" || leaf_l == "preparecall" {
+        // Only a simple identifier receiver names a trackable local var.
+        if !recv.is_empty() && !recv.contains('.') && !recv.contains('(') {
+            return Some(recv);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod jdbc_derivation_tests {
+    use super::{is_jdbc_connection_acquire, jdbc_statement_owning_connection};
+
+    #[test]
+    fn connection_acquire_recognises_getconnection_forms() {
+        assert!(is_jdbc_connection_acquire(Some("getConnection")));
+        assert!(is_jdbc_connection_acquire(Some("dbSession.getConnection")));
+        assert!(is_jdbc_connection_acquire(Some(
+            "DriverManager.getConnection"
+        )));
+        assert!(is_jdbc_connection_acquire(Some("GETCONNECTION")));
+        // Not a connection acquire.
+        assert!(!is_jdbc_connection_acquire(Some("con.prepareStatement")));
+        assert!(!is_jdbc_connection_acquire(Some("getConnectionInfo")));
+        assert!(!is_jdbc_connection_acquire(None));
+    }
+
+    #[test]
+    fn statement_owning_connection_extracts_simple_receiver() {
+        assert_eq!(
+            jdbc_statement_owning_connection(Some("connection.prepareStatement")),
+            Some("connection")
+        );
+        assert_eq!(
+            jdbc_statement_owning_connection(Some("con.createStatement")),
+            Some("con")
+        );
+        assert_eq!(
+            jdbc_statement_owning_connection(Some("c.prepareCall")),
+            Some("c")
+        );
+        // Non-identifier receivers name no trackable local: keep the leak.
+        assert_eq!(
+            jdbc_statement_owning_connection(Some("this.conn.prepareStatement")),
+            None
+        );
+        assert_eq!(
+            jdbc_statement_owning_connection(Some("prepareStatement")),
+            None
+        );
+        // Unrelated callees.
+        assert_eq!(
+            jdbc_statement_owning_connection(Some("ps.executeQuery")),
+            None
+        );
+        assert_eq!(jdbc_statement_owning_connection(None), None);
+    }
+}

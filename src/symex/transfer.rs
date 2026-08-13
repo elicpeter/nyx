@@ -9,7 +9,7 @@
 #![allow(clippy::if_same_then_else, clippy::too_many_arguments)]
 
 use crate::cfg::Cfg;
-use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::const_prop::{ConstLattice, ConstValues};
 use crate::ssa::heap::PointsToResult;
 use crate::ssa::ir::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue};
 use crate::ssa::pointsto::{ContainerOp, classify_container_op};
@@ -50,7 +50,7 @@ pub struct SymexHeapCtx<'a> {
     pub points_to: &'a PointsToResult,
     pub ssa: &'a SsaBody,
     pub lang: Lang,
-    pub const_values: &'a std::collections::HashMap<SsaValue, ConstLattice>,
+    pub const_values: &'a ConstValues,
 }
 
 /// Result of resolving a callee symbolically via its summary.
@@ -996,13 +996,13 @@ mod tests {
             blocks: vec![],
             entry: BlockId(0),
             value_defs: vec![],
-            cfg_node_map: std::collections::HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         }
     }
 
@@ -1510,13 +1510,15 @@ mod tests {
     }
 
     fn make_func_key(name: &str, arity: usize) -> FuncKey {
-        FuncKey {
-            lang: Lang::JavaScript,
-            namespace: "helper.js".into(),
-            name: name.into(),
-            arity: Some(arity),
-            ..Default::default()
-        }
+        FuncKey::from_parts(
+            Lang::JavaScript,
+            "helper.js",
+            String::new(),
+            name,
+            Some(arity),
+            None,
+            crate::symbol::FuncKind::Function,
+        )
     }
 
     /// Insert both a regular FuncSummary (for resolve_callee_key lookup) and
@@ -1583,6 +1585,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -1654,6 +1661,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -1725,6 +1737,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -1791,6 +1808,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -1857,6 +1879,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -1987,13 +2014,15 @@ mod tests {
         arity: usize,
         ssa: SsaFuncSummary,
     ) {
-        let key = FuncKey {
-            lang: Lang::Java,
-            namespace: namespace.into(),
-            name: name.into(),
-            arity: Some(arity),
-            ..Default::default()
-        };
+        let key = FuncKey::from_parts(
+            Lang::Java,
+            namespace,
+            String::new(),
+            name,
+            Some(arity),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         gs.insert(
             key.clone(),
             FuncSummary {
@@ -2057,6 +2086,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -2138,6 +2172,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -2220,6 +2259,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -2252,6 +2296,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -2284,6 +2333,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -2365,6 +2419,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -2448,6 +2507,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },
@@ -2479,6 +2543,11 @@ mod tests {
                 return_path_facts: smallvec::SmallVec::new(),
                 typed_call_receivers: vec![],
                 validated_params_to_return: smallvec::SmallVec::new(),
+                confines_path_params: smallvec::SmallVec::new(),
+                asserts_path_confined_params: Default::default(),
+                result_reject_guard_params: Default::default(),
+                sanitizes_open_redirect_return: false,
+                confines_path_return: false,
                 param_to_gate_filters: vec![],
                 entry_kind: None,
             },

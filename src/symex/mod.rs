@@ -30,9 +30,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::cfg::Cfg;
 use crate::evidence::{SymbolicVerdict, Verdict};
-use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::const_prop::ConstValues;
 use crate::ssa::heap::PointsToResult;
-use crate::ssa::ir::{BlockId, SsaBody, SsaValue};
+use crate::ssa::ir::{BlockId, SsaBody};
 use crate::ssa::type_facts::TypeFactResult;
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
@@ -46,7 +46,7 @@ use crate::taint::Finding;
 pub struct SymexContext<'a> {
     pub ssa: &'a SsaBody,
     pub cfg: &'a Cfg,
-    pub const_values: &'a HashMap<SsaValue, ConstLattice>,
+    pub const_values: &'a ConstValues,
     pub type_facts: &'a TypeFactResult,
     /// Cross-file summaries for interprocedural symbolic modeling.
     /// When `Some`, callee calls can be modeled via `SsaFuncSummary`
@@ -374,10 +374,10 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let finding = Finding {
@@ -450,10 +450,10 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let finding = Finding {
@@ -492,7 +492,7 @@ mod tests {
         let ctx = SymexContext {
             ssa: &ssa,
             cfg: &Cfg::new(),
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
@@ -552,19 +552,19 @@ mod tests {
             blocks: vec![],
             entry: BlockId(0),
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let ctx = SymexContext {
             ssa: &ssa,
             cfg: &Cfg::new(),
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
@@ -615,19 +615,19 @@ mod tests {
             blocks: vec![],
             entry: BlockId(0),
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let ctx = SymexContext {
             ssa: &ssa,
             cfg: &Cfg::new(),
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,

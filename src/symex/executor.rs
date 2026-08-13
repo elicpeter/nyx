@@ -23,7 +23,7 @@ use smallvec::SmallVec;
 use crate::cfg::Cfg;
 use crate::constraint;
 use crate::evidence::{SymbolicVerdict, Verdict};
-use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::const_prop::ConstValues;
 use crate::ssa::ir::{BlockId, SsaBody, SsaValue, Terminator};
 use crate::taint::Finding;
 
@@ -382,7 +382,7 @@ fn run_path(
     state: &mut ExplorationState,
     ssa: &SsaBody,
     cfg: &Cfg,
-    const_values: &HashMap<SsaValue, ConstLattice>,
+    const_values: &ConstValues,
     reachable: &HashSet<BlockId>,
     on_path: &HashSet<BlockId>,
     loop_info: &LoopInfo,
@@ -898,7 +898,7 @@ fn apply_branch_constraint(
     state: &mut ExplorationState,
     cfg: &Cfg,
     ssa: &SsaBody,
-    const_values: &HashMap<SsaValue, ConstLattice>,
+    const_values: &ConstValues,
     block_id: BlockId,
     cond: petgraph::graph::NodeIndex,
     pre_lowered: &Option<Box<constraint::ConditionExpr>>,
@@ -964,7 +964,7 @@ fn fork_at_branch(
     state: &mut ExplorationState,
     cfg: &Cfg,
     ssa: &SsaBody,
-    const_values: &HashMap<SsaValue, ConstLattice>,
+    const_values: &ConstValues,
     block_id: BlockId,
     cond: petgraph::graph::NodeIndex,
     pre_lowered: &Option<Box<constraint::ConditionExpr>>,
@@ -1391,13 +1391,13 @@ mod tests {
             ],
             entry: b0,
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let empty_succs = HashMap::new();
@@ -1453,13 +1453,13 @@ mod tests {
             ],
             entry: b0,
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let empty_succs = HashMap::new();
@@ -1574,12 +1574,12 @@ mod tests {
             ],
             entry: b0,
             value_defs: vec![make_value_def(b0, n0), make_value_def(b1, n1)],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            field_writes: Default::default(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
         let cfg = Cfg::new();
         let finding = make_finding(n0, n1);
@@ -1662,17 +1662,17 @@ mod tests {
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let finding = make_finding(n0, n1);
         let ctx = super::SymexContext {
             ssa: &ssa,
             cfg: &Cfg::new(),
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
@@ -1772,10 +1772,10 @@ mod tests {
             .collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         // Finding path goes through B0 → B1 → B3
@@ -1820,7 +1820,7 @@ mod tests {
         let ctx = super::SymexContext {
             ssa: &ssa,
             cfg: &cfg_graph,
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
@@ -1921,10 +1921,10 @@ mod tests {
                 .collect(),
             exception_edges: vec![],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let finding = Finding {
@@ -1968,7 +1968,7 @@ mod tests {
         let ctx = super::SymexContext {
             ssa: &ssa,
             cfg: &cfg_graph,
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
@@ -2033,13 +2033,13 @@ mod tests {
             ],
             entry: b0,
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![(b0, b2)],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let mut exc_succs: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
@@ -2102,13 +2102,13 @@ mod tests {
             ],
             entry: b0,
             value_defs: vec![],
-            cfg_node_map: HashMap::new(),
+            cfg_node_map: Default::default(),
             exception_edges: vec![(b0, b2)],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let mut exc_succs: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
@@ -2215,10 +2215,10 @@ mod tests {
             .collect(),
             exception_edges: vec![(b1, b2)],
             field_interner: crate::ssa::ir::FieldInterner::default(),
-            field_writes: std::collections::HashMap::new(),
+            field_writes: Default::default(),
 
-            synthetic_externals: std::collections::HashSet::new(),
-            slot_scoped_assigns: std::collections::HashSet::new(),
+            synthetic_externals: Default::default(),
+            slot_scoped_assigns: Default::default(),
         };
 
         let finding = Finding {
@@ -2258,7 +2258,7 @@ mod tests {
         let ctx = super::SymexContext {
             ssa: &ssa,
             cfg: &cfg_graph,
-            const_values: &HashMap::new(),
+            const_values: &ConstValues::default(),
             type_facts: &empty_type_facts(),
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,

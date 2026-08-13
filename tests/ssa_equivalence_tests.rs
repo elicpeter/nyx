@@ -438,12 +438,12 @@ fn summary_extraction_is_deterministic() {
         let Ok(bytes) = std::fs::read(&fixture.source_path) else {
             continue;
         };
-        let Ok((fn_a, ssa_a, _bodies_a, _auth_a, _cpi_a)) =
+        let Ok((fn_a, ssa_a, _bodies_a, _auth_a, _cpi_a, _cs_a, _rf_a)) =
             extract_all_summaries_from_bytes(&bytes, &fixture.source_path, &cfg, None)
         else {
             continue;
         };
-        let Ok((fn_b, ssa_b, _bodies_b, _auth_b, _cpi_b)) =
+        let Ok((fn_b, ssa_b, _bodies_b, _auth_b, _cpi_b, _cs_b, _rf_b)) =
             extract_all_summaries_from_bytes(&bytes, &fixture.source_path, &cfg, None)
         else {
             continue;
@@ -831,10 +831,10 @@ fn orphan_catch_block_triggers_reachability_invariant() {
         cfg_node_map: Default::default(),
         exception_edges: vec![], // intentionally empty, the orphan condition,
         field_interner: nyx_scanner::ssa::ir::FieldInterner::default(),
-        field_writes: std::collections::HashMap::new(),
+        field_writes: Default::default(),
 
-        synthetic_externals: std::collections::HashSet::new(),
-        slot_scoped_assigns: std::collections::HashSet::new(),
+        synthetic_externals: Default::default(),
+        slot_scoped_assigns: Default::default(),
     };
 
     let err = check_catch_block_reachability(&body)
@@ -895,10 +895,10 @@ fn normally_reachable_catch_block_passes_invariant() {
         cfg_node_map: Default::default(),
         exception_edges: vec![],
         field_interner: nyx_scanner::ssa::ir::FieldInterner::default(),
-        field_writes: std::collections::HashMap::new(),
+        field_writes: Default::default(),
 
-        synthetic_externals: std::collections::HashSet::new(),
-        slot_scoped_assigns: std::collections::HashSet::new(),
+        synthetic_externals: Default::default(),
+        slot_scoped_assigns: Default::default(),
     };
 
     assert!(check_catch_block_reachability(&body).is_ok());
@@ -951,10 +951,10 @@ fn exception_edge_catch_block_passes_invariant() {
         cfg_node_map: Default::default(),
         exception_edges: vec![(BlockId(0), BlockId(1))],
         field_interner: nyx_scanner::ssa::ir::FieldInterner::default(),
-        field_writes: std::collections::HashMap::new(),
+        field_writes: Default::default(),
 
-        synthetic_externals: std::collections::HashSet::new(),
-        slot_scoped_assigns: std::collections::HashSet::new(),
+        synthetic_externals: Default::default(),
+        slot_scoped_assigns: Default::default(),
     };
 
     assert!(check_catch_block_reachability(&body).is_ok());

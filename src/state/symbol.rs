@@ -1,6 +1,6 @@
 use crate::cfg::Cfg;
 use petgraph::visit::IntoNodeReferences;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Cheap `Copy` handle into a [`SymbolInterner`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -25,7 +25,12 @@ struct ScopedKey {
 /// - [`from_cfg_scoped`](Self::from_cfg_scoped): function-scoped interning, used by state analysis
 #[derive(Default)]
 pub struct SymbolInterner {
-    to_id: HashMap<ScopedKey, SymbolId>,
+    /// `FxHashMap` (rustc_hash) replaces stdlib SipHash: this map is probed on
+    /// every `intern_scoped` / `get_scoped` call during SSA lowering (one of
+    /// the hottest paths), keyed on short variable-name strings.  Never
+    /// iterated — `SymbolId` assignment order is driven solely by `to_str`
+    /// (push order) — so the faster deterministic hasher is output-invariant.
+    to_id: FxHashMap<ScopedKey, SymbolId>,
     /// Clean variable names for user-facing resolution (not scoped keys).
     to_str: Vec<String>,
 }

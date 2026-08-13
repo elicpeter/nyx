@@ -15,6 +15,18 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tree_sitter::Node;
 
+/// A/B escape hatch: `NYX_DISABLE_AUTH_WALK_GATE=1` forces the applicability
+/// pre-checks in the auth-extraction pass OFF, so the language- / framework-
+/// specific sub-analysis walks run unconditionally (their pre-gate behaviour).
+/// The gates are provably output-neutral — each only skips a walk that could
+/// not have produced any output on the file/language — so this toggle exists
+/// purely to A/B the walk-elision cost on a single binary.  Cached once (the
+/// gate is consulted on the per-unit hot path).
+pub(crate) fn auth_walk_gate_enabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    !*DISABLED.get_or_init(|| std::env::var("NYX_DISABLE_AUTH_WALK_GATE").is_ok())
+}
+
 pub fn collect_top_level_units(
     root: Node<'_>,
     bytes: &[u8],
@@ -718,7 +730,15 @@ pub fn build_function_unit_with_meta(
         .cloned()
         .collect();
 
-    let is_nextauth_options_factory = body_returns_nextauth_options(node, bytes);
+    // `body_returns_nextauth_options` recognises a NextAuth options factory by
+    // scanning the whole body for `object` / `object_expression` literal nodes,
+    // a shape only the JS/TS grammar produces.  On every other auth language it
+    // walks the entire body and returns `false`, so gate it on the language to
+    // skip that fruitless per-unit whole-body walk (bit-identical: the scan's
+    // result is `false` on non-JS/TS regardless).
+    let run_nextauth_scan = !auth_walk_gate_enabled() || rules.is_object_literal_lang();
+    let is_nextauth_options_factory =
+        run_nextauth_scan && body_returns_nextauth_options(node, bytes);
 
     AnalysisUnit {
         kind,
@@ -1224,44 +1244,32 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
         .child_by_field_name("arguments")
         .map(named_children)
         .unwrap_or_default();
-    let mut subjects: Vec<ValueRef> = call_receiver_subjects(node, bytes);
-    subjects.extend(
-        args.iter()
-            .flat_map(|arg| extract_value_refs(*arg, bytes))
-            .collect::<Vec<_>>(),
-    );
     let line = node.start_position().row + 1;
-    let string_args: Vec<String> = args.iter().map(|arg| text(*arg, bytes)).collect();
+    let mut string_args: Vec<String> = args.iter().map(|arg| text(*arg, bytes)).collect();
+    // Each argument's value-refs, computed exactly once.  `call_sites` stores
+    // this per-argument grouping directly; the auth-check / sensitive-operation
+    // `subjects` (built lazily below) derive from it by cloning.  The previous
+    // form ran the recursive `extract_value_refs` AST walk over every argument
+    // a SECOND time to seed `subjects` — pure duplicate work on the hottest
+    // auth-extraction path (profiled: `collect_call` was the dominant caller of
+    // alloc / memmove / from_utf8 on mm/channels/app).
     let args_value_refs: Vec<Vec<ValueRef>> = args
         .iter()
         .map(|arg| extract_value_refs(*arg, bytes))
         .collect();
-    let node_text = text(node, bytes);
-    state.call_sites.push(CallSite {
-        name: callee.clone(),
-        args: string_args.clone(),
-        span: span(node),
-        args_value_refs,
-    });
 
-    if rules.is_authorization_check(&callee) {
-        state.auth_checks.push(AuthCheck {
-            kind: classify_auth_check(&callee, rules),
-            callee: callee.clone(),
-            subjects: subjects.clone(),
-            span: span(node),
-            line,
-            args: string_args,
-            condition_text: None,
-            is_route_level: false,
-        });
-    }
+    // Borrow the call text.  The classification below reads it as `&str`, and
+    // only a sensitive operation materializes it into an owned `String` (its
+    // `text` field).  Ordinary calls — neither token-lookup nor sink, the
+    // overwhelming majority — never allocate the whole-call text.
+    let node_text: &str =
+        crate::cfg::slice_str(bytes, node.start_byte(), node.end_byte()).unwrap_or("");
 
     // Split classification into OperationKind (what verb?) and
     // SinkClass (what resource?).  The sink class drives the
     // ownership gate; OperationKind is kept for partial-batch / stale-
     // session checks that care about read-vs-mutation semantics.
-    let (op_kind, sink_class) = if rules.is_token_lookup_call(&callee, &node_text) {
+    let (op_kind, sink_class) = if rules.is_token_lookup_call(&callee, node_text) {
         (Some(OperationKind::TokenLookup), None)
     } else if let Some(class) = rules.classify_sink_class(&callee, &state.non_sink_vars) {
         let op = match class {
@@ -1291,6 +1299,50 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
         (None, None)
     };
 
+    let is_auth = rules.is_authorization_check(&callee);
+
+    // `subjects` (call receiver ++ flattened argument value-refs) is consumed
+    // ONLY by an auth check or a sensitive operation.  Build it lazily so
+    // ordinary calls skip the receiver-chain walk and the per-ref clones
+    // entirely.  Order is identical to the old eager form: receiver refs first,
+    // then each argument's refs in argument order.
+    let subjects: Vec<ValueRef> = if is_auth || op_kind.is_some() {
+        let mut subjects = call_receiver_subjects(node, bytes);
+        subjects.reserve(args_value_refs.iter().map(Vec::len).sum());
+        for refs in &args_value_refs {
+            subjects.extend(refs.iter().cloned());
+        }
+        subjects
+    } else {
+        Vec::new()
+    };
+
+    state.call_sites.push(CallSite {
+        name: callee.clone(),
+        // Move `string_args` into the call site; clone only when the auth check
+        // below also needs it (the rare case).
+        args: if is_auth {
+            string_args.clone()
+        } else {
+            std::mem::take(&mut string_args)
+        },
+        span: span(node),
+        args_value_refs,
+    });
+
+    if is_auth {
+        state.auth_checks.push(AuthCheck {
+            kind: classify_auth_check(&callee, rules),
+            callee: callee.clone(),
+            subjects: subjects.clone(),
+            span: span(node),
+            line,
+            args: string_args,
+            condition_text: None,
+            is_route_level: false,
+        });
+    }
+
     if let Some(kind) = op_kind {
         state.operations.push(SensitiveOperation {
             kind,
@@ -1299,7 +1351,7 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
             subjects,
             span: span(node),
             line,
-            text: node_text,
+            text: node_text.to_string(),
         });
     }
 }
@@ -3954,14 +4006,27 @@ fn collect_param_names(
         // and lifts typed-bounded scalar ids (`UserId: number`) into
         // `unit.params`, over-firing the user-input gate on non-route helpers.
         // Mirrors the Rust `parameter` arm plus the Go/Python id-like filter.
+        //
+        // The id-like drop is gated on the ANNOTATION, exactly like the Go
+        // arm's `type_is_bounded_scalar` gate: only a payload-incompatible
+        // primitive (`number` / `bigint` / `boolean`) makes an id-shaped name
+        // a caller-passed scope key rather than user input.  Gating on the
+        // name alone is unsound in TypeScript specifically, because TS
+        // annotates EVERY parameter — `targetUserId: string` is the canonical
+        // route-handed foreign-id shape, and dropping it left single-param
+        // helpers with an empty `unit.params`, closing
+        // `unit_has_user_input_evidence` and silencing
+        // `js.auth.missing_ownership_check` on the whole TS helper layer.
         "required_parameter" | "optional_parameter" => {
             if let Some(pattern) = node.child_by_field_name("pattern") {
-                if pattern.kind() == "identifier" && node.child_by_field_name("type").is_some() {
+                if pattern.kind() == "identifier"
+                    && let Some(type_node) = node.child_by_field_name("type")
+                {
                     let name = text(pattern, bytes);
-                    if !name.is_empty()
-                        && !out.contains(&name)
-                        && (include_id_like_typed || !is_python_id_like_typed_param(&name))
-                    {
+                    let drop_id_like = !include_id_like_typed
+                        && is_ts_payload_incompatible_type(type_node, bytes)
+                        && is_python_id_like_typed_param(&name);
+                    if !name.is_empty() && !out.contains(&name) && !drop_id_like {
                         out.push(name);
                     }
                 } else {
@@ -4031,6 +4096,29 @@ fn is_go_non_user_input_type(type_node: Node<'_>, bytes: &[u8]) -> bool {
 fn is_python_id_like_typed_param(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower == "id" || lower.ends_with("id") || lower.ends_with("_id") || lower.ends_with("ids")
+}
+
+/// True iff a TypeScript parameter's type annotation names a
+/// **payload-incompatible** primitive: `number`, `bigint`, or
+/// `boolean`.  Same vocabulary as `cfg::params::ts_type_to_kind`'s
+/// `TypeKind::Int` / `TypeKind::Bool` arms and as the
+/// `typed_bounded_vars` set that
+/// `auth_analysis::checks::is_typed_bounded_subject` reasons over; the
+/// three must move in lockstep (the cfg helper is `pub(super)` to its
+/// own module, so it cannot be shared directly, mirroring the
+/// `is_python_id_like_typed_param` / `is_go_id_like_typed_param`
+/// duplication above).
+///
+/// Used by the TS arm of `collect_param_names` to decide whether an
+/// id-shaped parameter name is a caller-passed scope key (`userId:
+/// number`) or user-controlled input (`targetUserId: string`).
+/// Deliberately narrow: only the bare primitive matches.  `string`,
+/// `any`, unions, interfaces, and DTO classes are payload-carrying
+/// shapes and keep their param name so the user-input gate stays open.
+fn is_ts_payload_incompatible_type(type_node: Node<'_>, bytes: &[u8]) -> bool {
+    let annotation = text(type_node, bytes);
+    let stripped = annotation.trim().trim_start_matches(':').trim();
+    matches!(stripped, "number" | "bigint" | "boolean")
 }
 
 /// Same shape predicate used by the Go typed-param fallback in
@@ -4834,7 +4922,13 @@ pub fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
 }
 
 pub fn text(node: Node<'_>, bytes: &[u8]) -> String {
-    node.utf8_text(bytes).unwrap_or("").to_string()
+    // `slice_str` takes the pre-validated source fast path (O(1) boundary slice)
+    // when `bytes` is the file registered by the active `ValidSourceGuard`, else
+    // falls back to a checked decode. Bit-identical to `node.utf8_text(bytes)`:
+    // both yield the same `&str` for a valid range and `""` otherwise.
+    crate::cfg::slice_str(bytes, node.start_byte(), node.end_byte())
+        .unwrap_or("")
+        .to_string()
 }
 
 pub fn span(node: Node<'_>) -> (usize, usize) {
@@ -5859,7 +5953,14 @@ export default function CalComAdapter(client: any) {
 }
 "#;
         let tree = parser.parse(src.as_slice(), None).unwrap();
-        let rules = crate::auth_analysis::config::AuthAnalysisRules::disabled();
+        // Production-faithful TS rules (finding_prefix `js.auth`): the NextAuth
+        // options-factory scan is gated to `is_object_literal_lang()`, which a TS
+        // file always satisfies in the real pipeline.  (`disabled()` rules would
+        // suppress the scan.)
+        let rules = crate::auth_analysis::config::build_auth_rules(
+            &crate::utils::config::Config::default(),
+            "typescript",
+        );
         let mut model = crate::auth_analysis::model::AuthorizationModel::default();
         super::collect_top_level_units(tree.root_node(), src, &rules, &mut model);
         let unit = model
@@ -5900,7 +6001,13 @@ export function makeUserRepo() {
 }
 "#;
         let tree = parser.parse(src.as_slice(), None).unwrap();
-        let rules = crate::auth_analysis::config::AuthAnalysisRules::disabled();
+        // Production-faithful TS rules (see the positive test): the recogniser
+        // must genuinely REJECT this generic CRUD repo, not merely be skipped by
+        // the language gate.
+        let rules = crate::auth_analysis::config::build_auth_rules(
+            &crate::utils::config::Config::default(),
+            "typescript",
+        );
         let mut model = crate::auth_analysis::model::AuthorizationModel::default();
         super::collect_top_level_units(tree.root_node(), src, &rules, &mut model);
         let unit = model

@@ -1097,6 +1097,12 @@ struct ParsedSource<'a> {
     bytes: &'a [u8],
     path: &'a Path,
     file_path_str: Cow<'a, str>,
+    /// Registers `bytes` as this thread's validated source (once, on parse) so
+    /// node-text extraction can slice the pre-validated bytes as `&str` instead
+    /// of re-validating each range. Kept last so its `Drop` clears the thread-
+    /// local registration before the borrowed `bytes` can be freed by the
+    /// caller. See [`crate::cfg::ValidSourceGuard`].
+    _valid_source: crate::cfg::ValidSourceGuard,
 }
 
 impl<'a> ParsedSource<'a> {
@@ -1157,6 +1163,10 @@ impl<'a> ParsedSource<'a> {
             return Err(NyxError::Other("tree-sitter failed".into()));
         };
         let file_path_str = path.to_string_lossy();
+        // Validate the whole file as UTF-8 exactly once and register it so the
+        // per-node `slice_str` fast path can skip re-validation. The guard's
+        // registration is torn down when `ParsedSource` drops.
+        let _valid_source = crate::cfg::ValidSourceGuard::new(bytes);
         Ok(Some(Self {
             tree,
             ts_lang,
@@ -1164,17 +1174,55 @@ impl<'a> ParsedSource<'a> {
             bytes,
             path,
             file_path_str,
+            _valid_source,
         }))
     }
 
     /// Run AST pattern queries and return diagnostics.
     fn run_ast_queries(&self, cfg: &Config) -> Vec<Diag> {
         let root = self.tree.root_node();
-        let compiled = query_cache::for_lang(self.lang_slug, self.ts_lang.clone());
         let mut cursor = QueryCursor::new();
         let mut out = Vec::new();
         let in_test_file = is_test_file(self.path);
 
+        // Fast path: one combined multi-pattern query walks the AST ONCE for
+        // all rules, instead of the legacy loop's one full tree walk per rule
+        // (`O(rules × nodes)` traversal collapses to `O(nodes)`, and
+        // tree-sitter tests every rule in a single matcher pass). The output is
+        // re-sorted/deduped by `finalize_diags`, so the combined query's
+        // different match emission order is irrelevant — only the diag *set*
+        // matters, and a combined query yields the exact union of the per-rule
+        // matches. `NYX_DISABLE_QUERY_COMBINE=1` forces the legacy loop
+        // (single-binary A/B + fallback when the combined query fails to build).
+        if let Some(cq) = query_cache::combined_for_lang(self.lang_slug, self.ts_lang.clone())
+            .as_ref()
+            .as_ref()
+            .filter(|_| !query_combine_disabled())
+        {
+            let mut matches = cursor.matches(&cq.query, root, self.bytes);
+            while let Some(m) = matches.next() {
+                let slot = &cq.slots[m.pattern_index];
+                if slot.meta.severity > cfg.scanner.min_severity {
+                    continue;
+                }
+                if in_test_file && is_test_suppressible_pattern(slot.meta.id) {
+                    continue;
+                }
+                if let Some(cap) = m
+                    .captures
+                    .iter()
+                    .find(|c| c.index == slot.primary_capture_index)
+                    && let Some(diag) = self.ast_query_diag(&slot.meta, cap.node)
+                {
+                    out.push(diag);
+                }
+            }
+            return out;
+        }
+
+        // Legacy fallback: one `QueryCursor::matches` (one full tree walk) per
+        // rule. Kept as the combined-query fallback and the bit-identity oracle.
+        let compiled = query_cache::for_lang(self.lang_slug, self.ts_lang.clone());
         for cq in compiled.iter() {
             if cq.meta.severity > cfg.scanner.min_severity {
                 continue;
@@ -1185,237 +1233,314 @@ impl<'a> ParsedSource<'a> {
             }
             let mut matches = cursor.matches(&cq.query, root, self.bytes);
             while let Some(m) = matches.next() {
-                if let Some(cap) = m.captures.iter().find(|c| c.index == 0) {
-                    // Layer A: suppress Security findings on calls with all-literal args.
-                    //
-                    // Carve-outs for categories where the literal argument IS
-                    // the bug (algorithm choice, hardcoded secret, insecure
-                    // protocol scheme, unsafe config flag): suppression would
-                    // silence the actual signal.  Hash algorithms picked from
-                    // string literals (`MessageDigest.getInstance("MD5")`,
-                    // `hashlib.md5(b"…")`) are weak regardless of caller-side
-                    // data flow.
-                    if cq.meta.category.finding_category() == FindingCategory::Security
-                        && !matches!(
-                            cq.meta.category,
-                            PatternCategory::Crypto
-                                | PatternCategory::Secrets
-                                | PatternCategory::InsecureConfig
-                                | PatternCategory::InsecureTransport
-                        )
-                        && is_call_all_args_literal(cap.node, self.bytes, self.lang_slug)
-                    {
-                        continue;
-                    }
-                    // Layer B: PHP `include $var` where $var is a formal parameter
-                    // of the immediately enclosing function/method/closure and is
-                    // not reassigned before the include.  This is the canonical
-                    // PHP autoloader / scope-isolated-include shape (composer's
-                    // ClassLoader, PSR-4 loaders, route-file loaders); the
-                    // pattern rule is heuristic without taint and over-fires
-                    // here.  A taint-aware sink check (the engine's
-                    // taint-unsanitised-flow rule) still catches the case where
-                    // a tainted value reaches the parameter at the call site.
-                    if cq.meta.id == "php.path.include_variable"
-                        && self.lang_slug == "php"
-                        && is_php_include_param_passthrough(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer C: PHP `unserialize($x, ['allowed_classes' => [...]])`
-                    // or `unserialize($x, ['allowed_classes' => false])` ,
-                    // PHP 7+ structural mitigation against object injection.
-                    // When the call passes an `allowed_classes` option set to
-                    // either `false` (no class instantiation) or an array
-                    // literal of explicit class names, the deserialised data
-                    // cannot construct arbitrary user classes.  Skip
-                    // `allowed_classes => true` (the unsafe default) and
-                    // dynamic / variable values (let those fire).
-                    if cq.meta.id == "php.deser.unserialize"
-                        && self.lang_slug == "php"
-                        && is_php_unserialize_allowed_classes_restricted(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer C2: PHP `Serializable::unserialize($input)` magic
-                    // method body — `public function unserialize($x) { ...
-                    // unserialize($x) ... }`.  This is the legacy
-                    // `Serializable` interface contract (deprecated since PHP
-                    // 8.1).  PHP itself invokes the method when restoring an
-                    // instance, so the body's `\unserialize($x)` call cannot
-                    // be removed without breaking the interface.  The
-                    // actionable signal is at the class level (the class
-                    // implements Serializable — fix is to migrate to
-                    // `__serialize` / `__unserialize`), not at this call
-                    // site.  Genuine deserialization sinks (free-function
-                    // `unserialize($_GET[..])`, helpers reading from session
-                    // / cache, etc.) keep firing because they are not inside
-                    // a method declaration named `unserialize` with a single
-                    // formal parameter passed straight to the call.
-                    if cq.meta.id == "php.deser.unserialize"
-                        && self.lang_slug == "php"
-                        && is_php_unserialize_magic_method_passthrough(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer C3: PHP `unserialize($x)` inside a PHPUnit
-                    // assertion of the form
-                    // `$this->assertSame(LITERAL, unserialize($x))`
-                    // (or `assertEquals` / `assertNull` / static / self
-                    // / parent dispatch variants).  The literal expected
-                    // value bounds the unserialize result so the
-                    // call-site cannot release attacker-controlled
-                    // object graphs into the test process — failed
-                    // assertions abort the test rather than leak side
-                    // effects.  Drupal / Joomla / Nextcloud each carry
-                    // tens of these `Serializable` round-trip
-                    // assertions in their test trees and every firing
-                    // is noise.
-                    if cq.meta.id == "php.deser.unserialize"
-                        && self.lang_slug == "php"
-                        && is_php_unserialize_inside_phpunit_assertion(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer C4: Python `pickle.loads` / `yaml.load` /
-                    // `shelve.open` / kindred deserialization sinks
-                    // wrapped in a `unittest.TestCase` assertion whose
-                    // other argument is a literal expected value (or
-                    // whose verb itself constrains the result, e.g.
-                    // `assertIsNone(pickle.loads(blob))`).  The
-                    // assertion bounds the deser result so attacker-
-                    // controlled blobs would fail loudly rather than
-                    // leak side effects out of the test boundary.
-                    // Mirrors the PHP Layer C3 recogniser; deferred
-                    // note in `project_realrepo_*.md` flagged the same
-                    // FP shape on Python test trees.
-                    if matches!(
-                        cq.meta.id,
-                        "py.deser.pickle_loads" | "py.deser.yaml_load" | "py.deser.shelve_open"
-                    ) && self.lang_slug == "python"
-                        && is_python_deser_inside_unittest_assertion(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer C5: Ruby `Marshal.load` / `YAML.load` /
-                    // `Psych.load` wrapped in a Minitest assertion
-                    // (`assert_equal LIT, deser`, `assert_nil deser`,
-                    // `assert deser`, `refute_equal LIT, deser`, ...) or
-                    // an RSpec matcher chain (`expect(deser).to eq(LIT)`,
-                    // `expect(deser).to be_nil`, `be_a(TYPE)`, ...).
-                    // Same bounding semantics as the PHP / Python paths:
-                    // a poisoned blob fails the assertion loudly rather
-                    // than leak object-injection side effects out of
-                    // the test boundary.
-                    if matches!(cq.meta.id, "rb.deser.marshal_load" | "rb.deser.yaml_load")
-                        && self.lang_slug == "ruby"
-                        && is_ruby_deser_inside_test_assertion(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer D: C/C++ buffer-overflow pattern rules
-                    // (`{c,cpp}.memory.strcpy`, `strcat`, `sprintf`) fire
-                    // syntactically on every call regardless of argument
-                    // bounds.  The pattern's stated danger ("no bounds
-                    // checking on destination buffer" / "no length limit on
-                    // output buffer") is only realisable when the source /
-                    // format-string contributes attacker-controlled length.
-                    // When the source argument is a string literal (or a
-                    // ternary of two string literals), the contributed length
-                    // is statically bounded, there is no overflow vector
-                    // for an attacker even if the destination buffer is
-                    // mis-sized.  Same principle for `sprintf` when the
-                    // format string is a literal containing no bare `%s`
-                    // (only width-bounded numeric / char specifiers, or
-                    // precision-bounded `%.<N>s` / `%.*s`).
-                    if (self.lang_slug == "c" || self.lang_slug == "cpp")
-                        && is_c_buffer_call_literal_safe(cq.meta.id, cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer E: C++ `reinterpret_cast<T>(x)` when T is a
-                    // type explicitly defined as safe by the C++ aliasing
-                    // rules — byte-pointer family (`char*`, `unsigned
-                    // char*`, `uint8_t*`, `std::byte*`, etc., per
-                    // [basic.lval]/11), `void*`, the integer round-trip
-                    // types `uintptr_t` / `intptr_t`, and the BSD-socket
-                    // `sockaddr` family (POSIX intentionally type-puns
-                    // `sockaddr*` <-> `sockaddr_in*` etc.).  A pattern
-                    // rule cannot tell these from genuinely dangerous
-                    // strict-aliasing UB casts, so it over-fires
-                    // dramatically on serialization, hashing, and
-                    // socket-API code where the cast is the canonical
-                    // (and standard-blessed) idiom.
-                    if self.lang_slug == "cpp"
-                        && is_cpp_cast_target_type_safe(cq.meta.id, cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    // Layer F: PHP `md5()` / `sha1()` flagged as weak hash
-                    // functions, but used in a non-cryptographic context
-                    // (ETag generation, cache-key / array-index hashing,
-                    // identifier fingerprinting, deduplication).  The
-                    // pattern rule cannot distinguish weak-hash crypto
-                    // misuse from these idiomatic uses, so it over-fires
-                    // on every `md5(...)` callsite regardless of the
-                    // surrounding consuming context.  Suppress when the
-                    // call's *consuming context* yields a name that
-                    // matches a recognised non-cryptographic identifier
-                    // pattern (variable / field / array-key / method
-                    // suffix).  Genuine weak-hash crypto misuse —
-                    // `$password_hash = md5(...)`, `$signature = md5(...)`,
-                    // `$tokenHash = md5(...)` — keeps firing because the
-                    // name contains an excluded crypto-keyword substring.
-                    if (cq.meta.id == "php.crypto.md5" || cq.meta.id == "php.crypto.sha1")
-                        && self.lang_slug == "php"
-                        && is_php_weak_hash_non_crypto_use(cap.node, self.bytes)
-                    {
-                        continue;
-                    }
-                    let point = cap.node.start_position();
-                    out.push(Diag {
-                        path: self.path.to_string_lossy().into_owned(),
-                        line: point.row + 1,
-                        col: point.column + 1,
-                        severity: cq.meta.severity,
-                        id: cq.meta.id.to_owned(),
-                        category: cq.meta.category.finding_category(),
-                        path_validated: false,
-                        guard_kind: None,
-                        message: Some(cq.meta.description.to_owned()),
-                        labels: vec![],
-                        confidence: Some(cq.meta.confidence),
-                        evidence: Some(Evidence {
-                            source: None,
-                            sink: Some(SpanEvidence {
-                                path: self.path.to_string_lossy().into_owned(),
-                                line: (point.row + 1) as u32,
-                                col: (point.column + 1) as u32,
-                                kind: "sink".into(),
-                                snippet: None,
-                            }),
-                            guards: vec![],
-                            sanitizers: vec![],
-                            state: None,
-                            notes: vec![],
-                            ..Default::default()
-                        }),
-                        rank_score: None,
-                        rank_reason: None,
-                        exposure: None,
-                        suppressed: false,
-                        suppression: None,
-                        triage_state: "open".to_string(),
-                        triage_note: String::new(),
-                        rollup: None,
-                        finding_id: String::new(),
-                        alternative_finding_ids: Vec::new(),
-                        stable_hash: 0,
-                    });
+                if let Some(cap) = m.captures.iter().find(|c| c.index == 0)
+                    && let Some(diag) = self.ast_query_diag(&cq.meta, cap.node)
+                {
+                    out.push(diag);
                 }
             }
         }
         out
+    }
+
+    /// Apply the Layer A–H suppression recognisers to one pattern match and,
+    /// when it survives, build the [`Diag`]. `meta` is the matched rule's
+    /// metadata; `cap_node` is the rule's primary capture node — the legacy
+    /// `c.index == 0` anchor — used both by the recognisers (which walk up to
+    /// the enclosing call) and as the finding span position. Returns `None`
+    /// when a recogniser suppresses the match. Shared verbatim by the
+    /// combined-query fast path and the legacy per-rule loop so they cannot drift.
+    fn ast_query_diag(
+        &self,
+        meta: &crate::patterns::Pattern,
+        cap_node: tree_sitter::Node,
+    ) -> Option<Diag> {
+        // Layer A: suppress Security findings on calls with all-literal args.
+        //
+        // Carve-outs for categories where the literal argument IS
+        // the bug (algorithm choice, hardcoded secret, insecure
+        // protocol scheme, unsafe config flag): suppression would
+        // silence the actual signal.  Hash algorithms picked from
+        // string literals (`MessageDigest.getInstance("MD5")`,
+        // `hashlib.md5(b"…")`) are weak regardless of caller-side
+        // data flow.
+        if meta.category.finding_category() == FindingCategory::Security
+            && !matches!(
+                meta.category,
+                PatternCategory::Crypto
+                    | PatternCategory::Secrets
+                    | PatternCategory::InsecureConfig
+                    | PatternCategory::InsecureTransport
+            )
+            && is_call_all_args_literal(cap_node, self.bytes, self.lang_slug)
+        {
+            return None;
+        }
+        // Layer B: PHP `include $var` where $var is a formal parameter
+        // of the immediately enclosing function/method/closure and is
+        // not reassigned before the include.  This is the canonical
+        // PHP autoloader / scope-isolated-include shape (composer's
+        // ClassLoader, PSR-4 loaders, route-file loaders); the
+        // pattern rule is heuristic without taint and over-fires
+        // here.  A taint-aware sink check (the engine's
+        // taint-unsanitised-flow rule) still catches the case where
+        // a tainted value reaches the parameter at the call site.
+        if meta.id == "php.path.include_variable"
+            && self.lang_slug == "php"
+            && is_php_include_param_passthrough(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer C: PHP `unserialize($x, ['allowed_classes' => [...]])`
+        // or `unserialize($x, ['allowed_classes' => false])` ,
+        // PHP 7+ structural mitigation against object injection.
+        // When the call passes an `allowed_classes` option set to
+        // either `false` (no class instantiation) or an array
+        // literal of explicit class names, the deserialised data
+        // cannot construct arbitrary user classes.  Skip
+        // `allowed_classes => true` (the unsafe default) and
+        // dynamic / variable values (let those fire).
+        if meta.id == "php.deser.unserialize"
+            && self.lang_slug == "php"
+            && is_php_unserialize_allowed_classes_restricted(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer C2: PHP `Serializable::unserialize($input)` magic
+        // method body — `public function unserialize($x) { ...
+        // unserialize($x) ... }`.  This is the legacy
+        // `Serializable` interface contract (deprecated since PHP
+        // 8.1).  PHP itself invokes the method when restoring an
+        // instance, so the body's `\unserialize($x)` call cannot
+        // be removed without breaking the interface.  The
+        // actionable signal is at the class level (the class
+        // implements Serializable — fix is to migrate to
+        // `__serialize` / `__unserialize`), not at this call
+        // site.  Genuine deserialization sinks (free-function
+        // `unserialize($_GET[..])`, helpers reading from session
+        // / cache, etc.) keep firing because they are not inside
+        // a method declaration named `unserialize` with a single
+        // formal parameter passed straight to the call.
+        if meta.id == "php.deser.unserialize"
+            && self.lang_slug == "php"
+            && is_php_unserialize_magic_method_passthrough(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer C3: PHP `unserialize($x)` inside a PHPUnit
+        // assertion of the form
+        // `$this->assertSame(LITERAL, unserialize($x))`
+        // (or `assertEquals` / `assertNull` / static / self
+        // / parent dispatch variants).  The literal expected
+        // value bounds the unserialize result so the
+        // call-site cannot release attacker-controlled
+        // object graphs into the test process — failed
+        // assertions abort the test rather than leak side
+        // effects.  Drupal / Joomla / Nextcloud each carry
+        // tens of these `Serializable` round-trip
+        // assertions in their test trees and every firing
+        // is noise.
+        if meta.id == "php.deser.unserialize"
+            && self.lang_slug == "php"
+            && is_php_unserialize_inside_phpunit_assertion(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer C4: Python `pickle.loads` / `yaml.load` /
+        // `shelve.open` / kindred deserialization sinks
+        // wrapped in a `unittest.TestCase` assertion whose
+        // other argument is a literal expected value (or
+        // whose verb itself constrains the result, e.g.
+        // `assertIsNone(pickle.loads(blob))`).  The
+        // assertion bounds the deser result so attacker-
+        // controlled blobs would fail loudly rather than
+        // leak side effects out of the test boundary.
+        // Mirrors the PHP Layer C3 recogniser; deferred
+        // note in `project_realrepo_*.md` flagged the same
+        // FP shape on Python test trees.
+        if matches!(
+            meta.id,
+            "py.deser.pickle_loads" | "py.deser.yaml_load" | "py.deser.shelve_open"
+        ) && self.lang_slug == "python"
+            && is_python_deser_inside_unittest_assertion(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer C5: Ruby `Marshal.load` / `YAML.load` /
+        // `Psych.load` wrapped in a Minitest assertion
+        // (`assert_equal LIT, deser`, `assert_nil deser`,
+        // `assert deser`, `refute_equal LIT, deser`, ...) or
+        // an RSpec matcher chain (`expect(deser).to eq(LIT)`,
+        // `expect(deser).to be_nil`, `be_a(TYPE)`, ...).
+        // Same bounding semantics as the PHP / Python paths:
+        // a poisoned blob fails the assertion loudly rather
+        // than leak object-injection side effects out of
+        // the test boundary.
+        if matches!(meta.id, "rb.deser.marshal_load" | "rb.deser.yaml_load")
+            && self.lang_slug == "ruby"
+            && is_ruby_deser_inside_test_assertion(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer D: C/C++ buffer-overflow pattern rules
+        // (`{c,cpp}.memory.strcpy`, `strcat`, `sprintf`) fire
+        // syntactically on every call regardless of argument
+        // bounds.  The pattern's stated danger ("no bounds
+        // checking on destination buffer" / "no length limit on
+        // output buffer") is only realisable when the source /
+        // format-string contributes attacker-controlled length.
+        // When the source argument is a string literal (or a
+        // ternary of two string literals), the contributed length
+        // is statically bounded, there is no overflow vector
+        // for an attacker even if the destination buffer is
+        // mis-sized.  Same principle for `sprintf` when the
+        // format string is a literal containing no bare `%s`
+        // (only width-bounded numeric / char specifiers, or
+        // precision-bounded `%.<N>s` / `%.*s`).
+        if (self.lang_slug == "c" || self.lang_slug == "cpp")
+            && is_c_buffer_call_literal_safe(meta.id, cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer E: C++ `reinterpret_cast<T>(x)` when T is a
+        // type explicitly defined as safe by the C++ aliasing
+        // rules — byte-pointer family (`char*`, `unsigned
+        // char*`, `uint8_t*`, `std::byte*`, etc., per
+        // [basic.lval]/11), `void*`, the integer round-trip
+        // types `uintptr_t` / `intptr_t`, and the BSD-socket
+        // `sockaddr` family (POSIX intentionally type-puns
+        // `sockaddr*` <-> `sockaddr_in*` etc.).  A pattern
+        // rule cannot tell these from genuinely dangerous
+        // strict-aliasing UB casts, so it over-fires
+        // dramatically on serialization, hashing, and
+        // socket-API code where the cast is the canonical
+        // (and standard-blessed) idiom.
+        if self.lang_slug == "cpp" && is_cpp_cast_target_type_safe(meta.id, cap_node, self.bytes) {
+            return None;
+        }
+        // Layer F: PHP `md5()` / `sha1()` flagged as weak hash
+        // functions, but used in a non-cryptographic context
+        // (ETag generation, cache-key / array-index hashing,
+        // identifier fingerprinting, deduplication).  The
+        // pattern rule cannot distinguish weak-hash crypto
+        // misuse from these idiomatic uses, so it over-fires
+        // on every `md5(...)` callsite regardless of the
+        // surrounding consuming context.  Suppress when the
+        // call's *consuming context* yields a name that
+        // matches a recognised non-cryptographic identifier
+        // pattern (variable / field / array-key / method
+        // suffix).  Genuine weak-hash crypto misuse —
+        // `$password_hash = md5(...)`, `$signature = md5(...)`,
+        // `$tokenHash = md5(...)` — keeps firing because the
+        // name contains an excluded crypto-keyword substring.
+        if (meta.id == "php.crypto.md5" || meta.id == "php.crypto.sha1")
+            && self.lang_slug == "php"
+            && is_php_weak_hash_non_crypto_use(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer G: Python `<env>.from_string(...)` where `<env>` is a
+        // Jinja2 *sandboxed* environment
+        // (`jinja2.sandbox.SandboxedEnvironment` /
+        // `ImmutableSandboxedEnvironment`).  The `py.xss.jinja_from_string`
+        // pattern fires syntactically on every `.from_string(...)` call,
+        // but the sandbox blocks the attribute-traversal payloads
+        // (`{{ ...__globals__.__builtins__... }}`) that make an
+        // *unrestricted* `Environment` a template-injection-to-RCE sink.
+        // Rendering untrusted input through a sandbox is the canonical
+        // remediation (CVE-2024-32651 changedetection.io fix routes
+        // notification bodies through
+        // `ImmutableSandboxedEnvironment(...).from_string(...)`), so a
+        // sandboxed receiver here is a false positive.  Plain
+        // `Environment(loader=BaseLoader).from_string(x)` keeps firing.
+        if meta.id == "py.xss.jinja_from_string"
+            && self.lang_slug == "python"
+            && is_python_sandboxed_jinja_from_string(cap_node, self.bytes)
+        {
+            return None;
+        }
+        // Layer H: PHP `assert()` flagged as string-eval code
+        // execution, but the matched string is the *description*
+        // (second) argument of the modern PHP 7.2+
+        // `assert(bool_expr, "message")` form — which PHP never
+        // evaluates.  The query matches a `(string)` in any
+        // argument slot, so it over-fires on the two-argument
+        // form's description string (pervasive in PHPUnit / atoum
+        // test suites).  Suppress unless the call's FIRST argument
+        // is itself a string literal — the genuinely dangerous
+        // `assert("code")` shape the rule targets.
+        if meta.id == "php.code_exec.assert_string"
+            && self.lang_slug == "php"
+            && !is_php_assert_string_first_arg(cap_node)
+        {
+            return None;
+        }
+        // Layer I: Ruby `instance_eval` / `class_eval` / `module_eval`
+        // flagged as string-eval code execution, but invoked in the BLOCK
+        // form (`model.class_eval do … end` / `obj.instance_eval { … }`).
+        // The rule query matches the method name with no argument
+        // constraint, so it over-fires on the pervasive Ruby
+        // metaprogramming DSL idiom (`included(model) { model.class_eval
+        // do … end }` mixins, RSpec `subject.instance_eval { … }` probes)
+        // where the evaluated code is a statically-authored block — there
+        // is no injection surface.  These reflection methods evaluate code
+        // dynamically only when passed a STRING argument
+        // (`klass.class_eval("def #{m}; end")`), which lives in the call's
+        // argument list; a `do … end` / `{ … }` block lives in the
+        // separate `block:` field and a `&proc` block-pass is not a code
+        // string either.  Suppress unless the call carries a code-string
+        // argument.  Constant-string forms (`instance_eval("2 + 2")`) are
+        // already handled by the Layer A all-literal-args suppression, so
+        // what survives here is the genuinely dynamic
+        // string-eval shape.
+        if matches!(
+            meta.id,
+            "rb.code_exec.instance_eval" | "rb.code_exec.class_eval"
+        ) && self.lang_slug == "ruby"
+            && !is_ruby_eval_string_arg(cap_node)
+        {
+            return None;
+        }
+        let point = cap_node.start_position();
+        Some(Diag {
+            path: self.path.to_string_lossy().into_owned(),
+            line: point.row + 1,
+            col: point.column + 1,
+            severity: meta.severity,
+            id: meta.id.to_owned(),
+            category: meta.category.finding_category(),
+            path_validated: false,
+            guard_kind: None,
+            message: Some(meta.description.to_owned()),
+            labels: vec![],
+            confidence: Some(meta.confidence),
+            evidence: Some(Evidence {
+                source: None,
+                sink: Some(SpanEvidence {
+                    path: self.path.to_string_lossy().into_owned(),
+                    line: (point.row + 1) as u32,
+                    col: (point.column + 1) as u32,
+                    kind: "sink".into(),
+                    snippet: None,
+                }),
+                guards: vec![],
+                sanitizers: vec![],
+                state: None,
+                notes: vec![],
+                ..Default::default()
+            }),
+            rank_score: None,
+            rank_reason: None,
+            exposure: None,
+            suppressed: false,
+            suppression: None,
+            triage_state: "open".to_string(),
+            triage_note: String::new(),
+            rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
+            stable_hash: 0,
+        })
     }
 
     /// Sort, dedup, and optionally downgrade severity for non-production paths.
@@ -2293,6 +2418,47 @@ pub fn build_cfg_for_file(path: &Path, cfg: &Config) -> NyxResult<Option<(FileCf
     Ok(Some((parsed.file_cfg, lang)))
 }
 
+/// Benchmark/test hook: parse `bytes` and run **only** the AST pattern-query
+/// pass ([`ParsedSource::run_ast_queries`]), returning the produced diags.
+///
+/// Isolates the query pass — the combined-vs-legacy traversal switchable via
+/// `NYX_DISABLE_QUERY_COMBINE` — from the rest of the per-file pipeline so a
+/// criterion bench can measure it directly. Returns an empty vec for binary
+/// files / unsupported languages.
+#[doc(hidden)]
+pub fn bench_run_ast_queries(bytes: &[u8], path: &Path, cfg: &Config) -> Vec<Diag> {
+    match ParsedSource::try_new(bytes, path) {
+        Ok(Some(source)) => source.run_ast_queries(cfg),
+        _ => Vec::new(),
+    }
+}
+
+/// Benchmark hook isolating the node-text extraction path: parse `bytes` (which
+/// installs the [`crate::cfg::ValidSourceGuard`] fast path) then decode every
+/// node's text via `slice_str`, returning a checksum of the total decoded
+/// length. Exercises exactly the `from_utf8` / `str::get` primitive that the
+/// pre-validated source cache optimises. `NYX_DISABLE_SRC_STR_CACHE=1` forces
+/// the checked baseline for a single-binary A/B. Returns 0 for binary /
+/// unsupported files.
+#[doc(hidden)]
+pub fn bench_node_text_walk(bytes: &[u8], path: &Path) -> usize {
+    let Ok(Some(source)) = ParsedSource::try_new(bytes, path) else {
+        return 0;
+    };
+    fn walk(n: tree_sitter::Node, code: &[u8], total: &mut usize) {
+        if let Some(s) = crate::cfg::slice_str(code, n.start_byte(), n.end_byte()) {
+            *total = total.wrapping_add(s.len());
+        }
+        let mut c = n.walk();
+        for child in n.children(&mut c) {
+            walk(child, code, total);
+        }
+    }
+    let mut total = 0usize;
+    walk(source.tree.root_node(), source.bytes, &mut total);
+    total
+}
+
 /// Parse a file and return its `AuthorizationModel` for debug inspection.
 ///
 /// Runs only the auth-extraction pipeline, no taint, no CFG construction.
@@ -2479,17 +2645,23 @@ pub fn extract_all_summaries_from_bytes(
         String,
         std::sync::Arc<HashMap<String, crate::symbol::FuncKey>>,
     )>,
+    Vec<auth_analysis::caller_scope::CallerScopeEdge>,
+    Option<(String, auth_analysis::router_facts::PerFileRouterFacts)>,
 )> {
     let _span = tracing::debug_span!("extract_all_summaries", file = %path.display()).entered();
     let Some(source) = ParsedSource::try_new(bytes, path)? else {
-        return Ok((vec![], vec![], vec![], vec![], None));
+        return Ok((vec![], vec![], vec![], vec![], None, vec![], None));
     };
     let lang_slug = source.lang_slug;
     let parsed = ParsedFile::from_source(source, cfg);
     let func_summaries = parsed.export_summaries_with_root(scan_root);
     let (ssa_summaries, ssa_bodies) =
         parsed.extract_ssa_artifacts(None, scan_root, cfg.module_graph.as_deref());
-    let auth_summaries = auth_analysis::extract_auth_summaries_by_key(
+    // Both auth fact sets come from ONE authorization model: the indexed
+    // path has to persist the caller-scope edges and router facts that the
+    // fused path folds in memory, or `--index auto` silently loses the
+    // cross-file auth analysis (see `auth_analysis::persist`).
+    let (auth_summaries, caller_scope_facts) = auth_analysis::extract_auth_facts_by_key(
         &parsed.source.tree,
         parsed.source.bytes,
         lang_slug,
@@ -2497,6 +2669,20 @@ pub fn extract_all_summaries_from_bytes(
         cfg,
         scan_root,
     );
+    // Router facts are extracted unconditionally for Python, matching the
+    // fused path: the auth analysis runs only under Full, but the index has
+    // to be populated by the time pass 2 launches.
+    let router_facts = if lang_slug == "python" {
+        auth_analysis::router_facts::module_id_for_storage(parsed.source.path).map(|module_id| {
+            let facts = auth_analysis::router_facts::extract_router_facts_for_python(
+                &parsed.source.tree,
+                parsed.source.bytes,
+            );
+            (module_id, facts)
+        })
+    } else {
+        None
+    };
     let cross_package_imports = if parsed.file_cfg.resolved_imports.is_empty() {
         None
     } else {
@@ -2525,10 +2711,25 @@ pub fn extract_all_summaries_from_bytes(
         ssa_bodies,
         auth_summaries,
         cross_package_imports,
+        caller_scope_facts,
+        router_facts,
     ))
 }
 
 //  Constant-argument suppression helper
+
+/// `NYX_DISABLE_QUERY_COMBINE=1` (or `true`) forces `run_ast_queries` onto the
+/// legacy one-query-per-rule loop, for single-binary A/B of the combined-query
+/// fast path. Cached: the env is read once per process.
+fn query_combine_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("NYX_DISABLE_QUERY_COMBINE")
+            .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "on"))
+            .unwrap_or(false)
+    })
+}
 
 /// Returns `true` when the captured call node has only literal arguments
 /// (string, number, boolean, null/nil/none), or identifier arguments that
@@ -2610,7 +2811,7 @@ fn is_literal_or_named_scalar(
     // wrapper (PHP / Go) lifts a single child — unwrap and recurse.
     match kind {
         "identifier" | "variable_name" => {
-            let Ok(text) = std::str::from_utf8(&bytes[node.byte_range()]) else {
+            let Some(text) = crate::cfg::node_str(node, bytes) else {
                 return false;
             };
             scalars.contains(text)
@@ -2777,9 +2978,9 @@ fn is_php_include_param_passthrough(include_node: tree_sitter::Node, bytes: &[u8
     let Some(name_node) = name_node else {
         return false;
     };
-    let var_name = match std::str::from_utf8(&bytes[name_node.byte_range()]) {
-        Ok(s) => s,
-        Err(_) => return false,
+    let var_name = match crate::cfg::node_str(name_node, bytes) {
+        Some(s) => s,
+        None => return false,
     };
 
     // Walk up to the enclosing function/method/closure.
@@ -2830,6 +3031,149 @@ fn is_php_include_param_passthrough(include_node: tree_sitter::Node, bytes: &[u8
     false
 }
 
+/// Layer G recogniser: the matched `<recv>.from_string(...)` call (captured by
+/// the `py.xss.jinja_from_string` pattern) has a receiver that is a Jinja2
+/// *sandboxed* environment, so the template-injection finding is a false
+/// positive.  Recognises two shapes:
+///   * inline — `ImmutableSandboxedEnvironment(...).from_string(x)`
+///     (receiver is itself a sandboxed-env constructor call), and
+///   * the two-statement form
+///     `env = jinja2.sandbox.ImmutableSandboxedEnvironment(...); env.from_string(x)`
+///     (receiver is a local whose only environment-constructor assignment in
+///     the enclosing function is a sandboxed env).
+///
+/// Conservative: an unresolved receiver (field access, subscript, parameter,
+/// or a name also assigned an unrestricted `Environment` / `Template`) keeps
+/// the finding firing.
+fn is_python_sandboxed_jinja_from_string(captured: tree_sitter::Node, bytes: &[u8]) -> bool {
+    // The pattern's index-0 capture is the `from_string` identifier; walk up to
+    // the enclosing `<recv>.from_string(...)` call.
+    let Some(call_node) = find_enclosing_call(captured) else {
+        return false;
+    };
+    // call_node = (call function: (attribute object: <recv> attribute: "from_string"))
+    let Some(func) = call_node.child_by_field_name("function") else {
+        return false;
+    };
+    if func.kind() != "attribute" {
+        return false;
+    }
+    let Some(recv) = func.child_by_field_name("object") else {
+        return false;
+    };
+    match recv.kind() {
+        // Inline: `ImmutableSandboxedEnvironment(...).from_string(x)`.
+        "call" => is_sandboxed_env_ctor_call(recv, bytes),
+        // Local variable: resolve its environment-constructor assignment in the
+        // enclosing function / module body.
+        "identifier" => {
+            let Some(name) = crate::cfg::node_str(recv, bytes) else {
+                return false;
+            };
+            python_local_is_sandboxed_env(call_node, name, bytes)
+        }
+        _ => false,
+    }
+}
+
+/// True when `call_node` is a constructor call for a Jinja2 sandboxed
+/// environment (`SandboxedEnvironment` or `ImmutableSandboxedEnvironment`,
+/// dotted-qualified or bare).
+fn is_sandboxed_env_ctor_call(call_node: tree_sitter::Node, bytes: &[u8]) -> bool {
+    if call_node.kind() != "call" {
+        return false;
+    }
+    match python_call_ctor_name(call_node, bytes) {
+        Some(name) => is_sandboxed_env_name(name),
+        None => false,
+    }
+}
+
+/// The final identifier of a Python call's `function` (the constructor / method
+/// name): `jinja2.sandbox.ImmutableSandboxedEnvironment(...)` -> `"ImmutableSandboxedEnvironment"`,
+/// `Environment(...)` -> `"Environment"`.
+fn python_call_ctor_name<'a>(call_node: tree_sitter::Node, bytes: &'a [u8]) -> Option<&'a str> {
+    let func = call_node.child_by_field_name("function")?;
+    let ident = match func.kind() {
+        "identifier" => func,
+        "attribute" => func.child_by_field_name("attribute")?,
+        _ => return None,
+    };
+    crate::cfg::node_str(ident, bytes)
+}
+
+fn is_sandboxed_env_name(name: &str) -> bool {
+    // `ImmutableSandboxedEnvironment` ends with `SandboxedEnvironment`, so a
+    // single suffix test covers both sandbox classes.
+    name.ends_with("SandboxedEnvironment")
+}
+
+/// An unrestricted Jinja2 environment / template constructor — assigning one of
+/// these to the receiver name means the receiver is NOT guaranteed sandboxed,
+/// so the finding must keep firing.
+fn is_unrestricted_jinja_env_name(name: &str) -> bool {
+    matches!(name, "Environment" | "NativeEnvironment" | "Template")
+}
+
+/// Resolve a local receiver name to whether it holds a Jinja2 sandboxed
+/// environment at the `from_string` use site.  Scans the enclosing
+/// `function_definition` (or module) body for assignments `name = <ctor>(...)`:
+/// returns true iff at least one assignment constructs a sandboxed environment
+/// and none constructs an unrestricted `Environment` / `Template`.
+fn python_local_is_sandboxed_env(use_node: tree_sitter::Node, name: &str, bytes: &[u8]) -> bool {
+    // Find the enclosing scope to bound the assignment search.
+    let mut scope = use_node;
+    loop {
+        match scope.kind() {
+            "function_definition" | "lambda" | "module" => break,
+            _ => match scope.parent() {
+                Some(p) => scope = p,
+                None => break,
+            },
+        }
+    }
+    let mut saw_sandboxed = false;
+    let mut saw_unrestricted = false;
+    scan_python_env_assignments(
+        scope,
+        name,
+        bytes,
+        &mut saw_sandboxed,
+        &mut saw_unrestricted,
+    );
+    saw_sandboxed && !saw_unrestricted
+}
+
+/// Recursively walk `node`'s subtree collecting environment-constructor
+/// assignments to `name` (`name = <ctor>(...)`), classifying each as sandboxed
+/// or unrestricted.
+fn scan_python_env_assignments(
+    node: tree_sitter::Node,
+    name: &str,
+    bytes: &[u8],
+    saw_sandboxed: &mut bool,
+    saw_unrestricted: &mut bool,
+) {
+    if node.kind() == "assignment"
+        && let Some(lhs) = node.child_by_field_name("left")
+        && lhs.kind() == "identifier"
+        && crate::cfg::node_str(lhs, bytes) == Some(name)
+        && let Some(rhs) = node.child_by_field_name("right")
+        && rhs.kind() == "call"
+        && let Some(ctor) = python_call_ctor_name(rhs, bytes)
+    {
+        if is_sandboxed_env_name(ctor) {
+            *saw_sandboxed = true;
+        } else if is_unrestricted_jinja_env_name(ctor) {
+            *saw_unrestricted = true;
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        scan_python_env_assignments(child, name, bytes, saw_sandboxed, saw_unrestricted);
+    }
+}
+
 fn find_named_child_of_kind<'a>(
     parent: tree_sitter::Node<'a>,
     kind: &str,
@@ -2873,7 +3217,7 @@ fn param_list_contains_name(params: tree_sitter::Node, target_name: &str, bytes:
         let Some(name_node) = name_node else {
             continue;
         };
-        if let Ok(name) = std::str::from_utf8(&bytes[name_node.byte_range()])
+        if let Some(name) = crate::cfg::node_str(name_node, bytes)
             && name == target_name
         {
             return true;
@@ -2910,7 +3254,7 @@ fn is_var_reassigned_before(
             if let Some(lhs) = lhs
                 && lhs.kind() == "variable_name"
                 && let Some(n) = lhs.named_child(0)
-                && let Ok(s) = std::str::from_utf8(&bytes[n.byte_range()])
+                && let Some(s) = crate::cfg::node_str(n, bytes)
                 && s == target_name
             {
                 return true;
@@ -3019,7 +3363,7 @@ fn is_php_unserialize_allowed_classes_restricted(
         //                                    the unsafe default.
         match value.kind() {
             "boolean" => {
-                if let Ok(s) = std::str::from_utf8(&bytes[value.byte_range()])
+                if let Some(s) = crate::cfg::node_str(value, bytes)
                     && s.eq_ignore_ascii_case("false")
                 {
                     return true;
@@ -3114,7 +3458,7 @@ fn is_php_unserialize_magic_method_passthrough(cap_node: tree_sitter::Node, byte
     else {
         return false;
     };
-    let Ok(method_name) = std::str::from_utf8(&bytes[name_node.byte_range()]) else {
+    let Some(method_name) = crate::cfg::node_str(name_node, bytes) else {
         return false;
     };
     if !method_name.eq_ignore_ascii_case("unserialize") {
@@ -3160,7 +3504,7 @@ fn is_php_unserialize_magic_method_passthrough(cap_node: tree_sitter::Node, byte
     let Some(inner_name_node) = inner_name_node else {
         return false;
     };
-    let Ok(param_name) = std::str::from_utf8(&bytes[inner_name_node.byte_range()]) else {
+    let Some(param_name) = crate::cfg::node_str(inner_name_node, bytes) else {
         return false;
     };
 
@@ -3187,7 +3531,7 @@ fn is_php_unserialize_magic_method_passthrough(cap_node: tree_sitter::Node, byte
     let Some(arg_name_node) = inner.named_child(0) else {
         return false;
     };
-    let Ok(arg_name) = std::str::from_utf8(&bytes[arg_name_node.byte_range()]) else {
+    let Some(arg_name) = crate::cfg::node_str(arg_name_node, bytes) else {
         return false;
     };
     arg_name == param_name
@@ -3295,7 +3639,7 @@ fn is_php_unserialize_inside_phpunit_assertion(cap_node: tree_sitter::Node, byte
     let Some(name_node) = name_node else {
         return false;
     };
-    let Ok(method_name) = std::str::from_utf8(&bytes[name_node.byte_range()]) else {
+    let Some(method_name) = crate::cfg::node_str(name_node, bytes) else {
         return false;
     };
     if !method_name
@@ -3545,7 +3889,7 @@ fn python_assertion_bounds_deser(
     let Some(name_node) = name_node else {
         return false;
     };
-    let Ok(verb) = std::str::from_utf8(&bytes[name_node.byte_range()]) else {
+    let Some(verb) = crate::cfg::node_str(name_node, bytes) else {
         return false;
     };
     let lowered = verb.to_ascii_lowercase();
@@ -3654,7 +3998,7 @@ fn python_pytest_assert_bounds_deser(deser_call: tree_sitter::Node, bytes: &[u8]
                 if func.kind() != "identifier" {
                     return false;
                 }
-                let Ok(name) = std::str::from_utf8(&bytes[func.byte_range()]) else {
+                let Some(name) = crate::cfg::node_str(func, bytes) else {
                     return false;
                 };
                 match name {
@@ -3766,10 +4110,10 @@ fn is_python_deser_call(call_node: tree_sitter::Node, bytes: &[u8]) -> bool {
             let Some(attr) = func.child_by_field_name("attribute") else {
                 return false;
             };
-            let Ok(obj_text) = std::str::from_utf8(&bytes[obj.byte_range()]) else {
+            let Some(obj_text) = crate::cfg::node_str(obj, bytes) else {
                 return false;
             };
-            let Ok(attr_text) = std::str::from_utf8(&bytes[attr.byte_range()]) else {
+            let Some(attr_text) = crate::cfg::node_str(attr, bytes) else {
                 return false;
             };
             matches!(
@@ -3786,7 +4130,7 @@ fn is_python_deser_call(call_node: tree_sitter::Node, bytes: &[u8]) -> bool {
             )
         }
         "identifier" => {
-            let Ok(name) = std::str::from_utf8(&bytes[func.byte_range()]) else {
+            let Some(name) = crate::cfg::node_str(func, bytes) else {
                 return false;
             };
             matches!(name, "loads" | "load" | "unsafe_load")
@@ -3993,7 +4337,7 @@ fn is_ruby_deser_inside_test_assertion(cap_node: tree_sitter::Node, bytes: &[u8]
     let Some(method_node) = outer_call.child_by_field_name("method") else {
         return false;
     };
-    let Ok(name) = std::str::from_utf8(&bytes[method_node.byte_range()]) else {
+    let Some(name) = crate::cfg::node_str(method_node, bytes) else {
         return false;
     };
 
@@ -4023,7 +4367,7 @@ fn is_ruby_deser_inside_test_assertion(cap_node: tree_sitter::Node, bytes: &[u8]
         let Some(rspec_method) = rspec_outer.child_by_field_name("method") else {
             return false;
         };
-        let Ok(verb) = std::str::from_utf8(&bytes[rspec_method.byte_range()]) else {
+        let Some(verb) = crate::cfg::node_str(rspec_method, bytes) else {
             return false;
         };
         if !matches!(verb, "to" | "not_to" | "to_not") {
@@ -4035,6 +4379,53 @@ fn is_ruby_deser_inside_test_assertion(cap_node: tree_sitter::Node, bytes: &[u8]
         return ruby_rspec_matcher_bounds_deser(matcher_args, bytes);
     }
 
+    false
+}
+
+/// True iff the Ruby `instance_eval` / `class_eval` / `module_eval` call
+/// enclosing `cap_node` is passed a **code-string argument** — the shape
+/// that actually evaluates dynamic code — rather than a block.
+///
+/// `instance_eval` / `class_eval` / `module_eval` are dual-form methods:
+///
+/// * **Block form** (`obj.instance_eval do … end`, `klass.class_eval { …
+///   }`): the code is statically authored in the source and lives in the
+///   call's separate `block:` field (a `do_block` / `block` node), never
+///   in the argument list.  This is the canonical Ruby metaprogramming
+///   DSL idiom (Rails `included` mixins, RSpec object probes) and carries
+///   **no injection surface** — there is nothing an attacker can steer.
+/// * **String form** (`klass.class_eval("def #{m}; end")`): the first
+///   positional argument is the code string, which CAN be built from
+///   dynamic / attacker-controlled data.  This is the genuine
+///   code-execution sink.
+///
+/// So the presence of a non-block-pass argument in the call's argument
+/// list is the signal that this is a real string-eval.  A `&proc`
+/// block-pass (`instance_eval(&blk)`) is not a code string and is
+/// skipped.  `cap_node` may be the method-name identifier capture or the
+/// whole-call capture; [`find_enclosing_call`] normalises both.
+fn is_ruby_eval_string_arg(cap_node: tree_sitter::Node) -> bool {
+    let Some(call) = find_enclosing_call(cap_node) else {
+        return false;
+    };
+    // Block form (or a bare receiver-less `eval`-family call with neither
+    // args nor block) has no `argument_list` child at all — the block sits
+    // in the `block:` field.  No argument list ⇒ no code string.
+    let Some(arg_list) = find_arg_list(call) else {
+        return false;
+    };
+    for i in 0..arg_list.named_child_count() as u32 {
+        let Some(child) = arg_list.named_child(i) else {
+            continue;
+        };
+        // `&blk` block-pass is a proc, not a code string.  Any other
+        // positional argument is the evaluated code string (the method
+        // contract puts it first), so it is a real string-eval.
+        if child.kind() == "block_argument" {
+            continue;
+        }
+        return true;
+    }
     false
 }
 
@@ -4052,10 +4443,10 @@ fn is_ruby_deser_call(call_node: tree_sitter::Node, bytes: &[u8]) -> bool {
     if receiver.kind() != "constant" {
         return false;
     }
-    let Ok(recv_text) = std::str::from_utf8(&bytes[receiver.byte_range()]) else {
+    let Some(recv_text) = crate::cfg::node_str(receiver, bytes) else {
         return false;
     };
-    let Ok(method_text) = std::str::from_utf8(&bytes[method.byte_range()]) else {
+    let Some(method_text) = crate::cfg::node_str(method, bytes) else {
         return false;
     };
     matches!(
@@ -4079,7 +4470,7 @@ fn ruby_minitest_assertion_bounds_deser(
     let Some(method) = call.child_by_field_name("method") else {
         return false;
     };
-    let Ok(name) = std::str::from_utf8(&bytes[method.byte_range()]) else {
+    let Some(name) = crate::cfg::node_str(method, bytes) else {
         return false;
     };
     let Some(arg_list) = call.child_by_field_name("arguments") else {
@@ -4147,7 +4538,7 @@ fn ruby_rspec_matcher_bounds_deser(args_node: tree_sitter::Node, bytes: &[u8]) -
     match matcher.kind() {
         "identifier" => {
             // Bare-name matchers: be_nil, be_truthy, be_falsey, etc.
-            let Ok(name) = std::str::from_utf8(&bytes[matcher.byte_range()]) else {
+            let Some(name) = crate::cfg::node_str(matcher, bytes) else {
                 return false;
             };
             is_ruby_rspec_bare_matcher(name)
@@ -4156,7 +4547,7 @@ fn ruby_rspec_matcher_bounds_deser(args_node: tree_sitter::Node, bytes: &[u8]) -
             let Some(method) = matcher.child_by_field_name("method") else {
                 return false;
             };
-            let Ok(name) = std::str::from_utf8(&bytes[method.byte_range()]) else {
+            let Some(name) = crate::cfg::node_str(method, bytes) else {
                 return false;
             };
             let Some(matcher_args) = matcher.child_by_field_name("arguments") else {
@@ -4466,7 +4857,7 @@ fn is_c_lit_or_macro_branch(node: tree_sitter::Node, bytes: &[u8]) -> bool {
     match node.kind() {
         "string_literal" | "raw_string_literal" | "string" => true,
         "identifier" => {
-            let Ok(name) = std::str::from_utf8(&bytes[node.byte_range()]) else {
+            let Some(name) = crate::cfg::node_str(node, bytes) else {
                 return false;
             };
             is_all_caps_macro_name(name)
@@ -4514,13 +4905,13 @@ fn c_string_literal_payload(node: tree_sitter::Node, bytes: &[u8]) -> Option<Str
     for i in 0..node.named_child_count() as u32 {
         if let Some(c) = node.named_child(i)
             && c.kind() == "string_content"
-            && let Ok(s) = std::str::from_utf8(&bytes[c.byte_range()])
+            && let Some(s) = crate::cfg::node_str(c, bytes)
         {
             return Some(s.to_string());
         }
     }
     // Fall back: strip the surrounding quotes from the full literal text.
-    let raw = std::str::from_utf8(&bytes[node.byte_range()]).ok()?;
+    let raw = crate::cfg::node_str(node, bytes)?;
     let trimmed = raw.trim();
     // Drop optional encoding prefix.
     let after_prefix = trimmed
@@ -4625,13 +5016,13 @@ fn is_string_literal_with_text(node: tree_sitter::Node, text: &str, bytes: &[u8]
     }
     let Some(payload) = payload else {
         // Fall back: PHP single-quoted strings sometimes inline the content.
-        if let Ok(s) = std::str::from_utf8(&bytes[node.byte_range()]) {
+        if let Some(s) = crate::cfg::node_str(node, bytes) {
             let trimmed = s.trim_matches(|c| c == '\'' || c == '"');
             return trimmed == text;
         }
         return false;
     };
-    if let Ok(s) = std::str::from_utf8(&bytes[payload.byte_range()]) {
+    if let Some(s) = crate::cfg::node_str(payload, bytes) {
         return s == text;
     }
     false
@@ -4700,7 +5091,7 @@ fn is_cpp_cast_target_type_safe(rule_id: &str, cap_node: tree_sitter::Node, byte
     if targs.kind() != "template_argument_list" {
         return false;
     }
-    let Ok(text) = std::str::from_utf8(&bytes[targs.byte_range()]) else {
+    let Some(text) = crate::cfg::node_str(targs, bytes) else {
         return false;
     };
     let inner = text
@@ -5014,7 +5405,7 @@ fn is_php_weak_hash_non_crypto_use(cap_node: tree_sitter::Node, bytes: &[u8]) ->
                 });
                 if let Some(nn) = name_node
                     && nn.kind() == "name"
-                    && let Ok(method) = std::str::from_utf8(&bytes[nn.byte_range()])
+                    && let Some(method) = crate::cfg::node_str(nn, bytes)
                     && method_is_lookup_verb(method)
                 {
                     return true;
@@ -5037,7 +5428,7 @@ fn is_php_weak_hash_non_crypto_use(cap_node: tree_sitter::Node, bytes: &[u8]) ->
                         else {
                             return false;
                         };
-                        let Ok(name) = std::str::from_utf8(&bytes[nn.byte_range()]) else {
+                        let Some(name) = crate::cfg::node_str(nn, bytes) else {
                             return false;
                         };
                         return method_name_is_non_crypto(name);
@@ -5067,6 +5458,81 @@ fn is_php_weak_hash_non_crypto_use(cap_node: tree_sitter::Node, bytes: &[u8]) ->
     false
 }
 
+/// Layer H — PHP `assert()` first-argument string check.
+///
+/// PHP's `assert()` evaluates a *string FIRST argument* as live PHP code
+/// under PHP < 8.0 / `zend.assertions=1` (the dangerous `assert("code")`
+/// form).  Since PHP 7.2 the optional SECOND parameter is a *description*
+/// string that is thrown with the `AssertionError` and is **never**
+/// evaluated: `assert($a === $b, 'values must match')`.  The
+/// `php.code_exec.assert_string` query matches a `(string)` in any argument
+/// position, so it over-fires on the two-argument form's (typically
+/// single-quoted) description — pervasive in PHPUnit / atoum test suites
+/// (e.g. glpi `tests/src/GLPITestCase.php:131`,
+/// `tests/functional/SLMTest.php:2217`).
+///
+/// Returns `true` when the enclosing `assert(...)` call's FIRST argument is
+/// itself a string literal (`string` / `encapsed_string`) — the genuinely
+/// dangerous shape the rule targets — and `false` when the first argument is
+/// any non-string expression (comparison, instance-of test, call, …), so the
+/// caller suppresses the finding.
+fn is_php_assert_string_first_arg(cap_node: tree_sitter::Node) -> bool {
+    // Locate the enclosing assert() function_call_expression.  The capture
+    // node may be `@n` (the `assert` name), `@code` (the string argument),
+    // or `@vuln` (the call itself).
+    let call = if cap_node.kind() == "function_call_expression" {
+        cap_node
+    } else {
+        let mut cur = cap_node;
+        let mut found = None;
+        for _ in 0..4 {
+            if cur.kind() == "function_call_expression" {
+                found = Some(cur);
+                break;
+            }
+            match cur.parent() {
+                Some(p) => cur = p,
+                None => break,
+            }
+        }
+        match found {
+            Some(c) => c,
+            None => return false,
+        }
+    };
+
+    let Some(arguments) = call.child_by_field_name("arguments") else {
+        return false;
+    };
+    // First named `argument` child of the `arguments` list (the anonymous
+    // `(` / `,` tokens are skipped by `named_child`).
+    let mut first_arg = None;
+    for i in 0..arguments.named_child_count() as u32 {
+        if let Some(c) = arguments.named_child(i)
+            && c.kind() == "argument"
+        {
+            first_arg = Some(c);
+            break;
+        }
+    }
+    let Some(first_arg) = first_arg else {
+        return false;
+    };
+    // The argument's value expression.  PHP 8 named args carry a `name:`
+    // field followed by the value as the last named child; positional args
+    // have a single named child.  Take the last named child and unwrap
+    // redundant parentheses.
+    let count = first_arg.named_child_count() as u32;
+    if count == 0 {
+        return false;
+    }
+    let Some(inner) = first_arg.named_child(count - 1) else {
+        return false;
+    };
+    let inner = unwrap_php_paren(inner);
+    matches!(inner.kind(), "string" | "encapsed_string")
+}
+
 /// Resolve the final identifier of a PHP l-value expression to a string
 /// suitable for [`name_is_non_crypto`] classification.
 ///
@@ -5084,9 +5550,7 @@ fn resolve_php_lvalue_name(lhs: tree_sitter::Node, bytes: &[u8]) -> Option<Strin
     match lhs.kind() {
         "variable_name" => {
             let name_node = lhs.named_child(0)?;
-            std::str::from_utf8(&bytes[name_node.byte_range()])
-                .ok()
-                .map(String::from)
+            crate::cfg::node_str(name_node, bytes).map(String::from)
         }
         "member_access_expression" => {
             let n = lhs.child_by_field_name("name").or_else(|| {
@@ -5100,9 +5564,7 @@ fn resolve_php_lvalue_name(lhs: tree_sitter::Node, bytes: &[u8]) -> Option<Strin
             // Property access can name a `name` (bare ident) or a
             // `variable_name` (dynamic ${$x} — which we don't resolve).
             if n.kind() == "name" {
-                std::str::from_utf8(&bytes[n.byte_range()])
-                    .ok()
-                    .map(String::from)
+                crate::cfg::node_str(n, bytes).map(String::from)
             } else {
                 None
             }
@@ -5150,12 +5612,10 @@ fn string_literal_text(node: tree_sitter::Node, bytes: &[u8]) -> Option<String> 
         if let Some(c) = node.named_child(i)
             && (c.kind() == "string_content" || c.kind() == "string_value")
         {
-            return std::str::from_utf8(&bytes[c.byte_range()])
-                .ok()
-                .map(String::from);
+            return crate::cfg::node_str(c, bytes).map(String::from);
         }
     }
-    if let Ok(s) = std::str::from_utf8(&bytes[node.byte_range()]) {
+    if let Some(s) = crate::cfg::node_str(node, bytes) {
         let trimmed = s.trim_matches(|c| c == '\'' || c == '"');
         return Some(trimmed.to_string());
     }
@@ -5986,6 +6446,15 @@ pub struct FusedResult {
         String,
         std::sync::Arc<HashMap<String, crate::symbol::FuncKey>>,
     )>,
+    /// Pass-1 cross-file caller-scope edges harvested from this file's
+    /// authorization model: one entry per (caller-unit, distinct
+    /// callee-leaf) recording whether the caller is an authorized route
+    /// handler.  Pass 1 folds these into
+    /// `GlobalSummaries.caller_scope_by_callee`; pass 2's
+    /// `apply_cross_file_caller_scope` lifts route-level auth onto private
+    /// helpers whose every caller is authorized.  Empty for non-Full mode,
+    /// files with auth disabled, or files with no call sites.
+    pub caller_scope_facts: Vec<auth_analysis::caller_scope::CallerScopeEdge>,
 }
 
 /// Parse the file once, build the CFG once, and produce both function
@@ -6023,6 +6492,7 @@ pub fn analyse_file_fused(
             auth_summaries: vec![],
             router_facts: None,
             cross_package_imports: None,
+            caller_scope_facts: vec![],
         });
     };
 
@@ -6074,6 +6544,7 @@ pub fn analyse_file_fused(
         crate::symbol::FuncKey,
         auth_analysis::model::AuthCheckSummary,
     )> = Vec::new();
+    let mut caller_scope_facts: Vec<auth_analysis::caller_scope::CallerScopeEdge> = Vec::new();
 
     // Per-file router-dep facts for cross-file FastAPI propagation.
     // Extracted unconditionally for Python files so pass 1 can persist
@@ -6153,6 +6624,18 @@ pub fn analyse_file_fused(
                     parsed.source.path,
                     scan_root,
                 );
+                // Harvest cross-file caller-scope edges from the same base
+                // model so pass 1 can record, per callee leaf, whether
+                // every caller across the index is an authorized route
+                // handler.  Pass 2 lifts route-level auth onto private
+                // helpers reached only from authorized routes in other
+                // files.  See `auth_analysis::caller_scope`.
+                caller_scope_facts = auth_analysis::harvest_caller_scope_facts(
+                    &auth_model,
+                    parsed.source.lang_slug,
+                    &parsed.source.tree,
+                    parsed.source.bytes,
+                );
             }
             let var_types = parsed.collect_file_var_types();
             out.extend(auth_analysis::run_auth_analysis_with_model(
@@ -6201,6 +6684,7 @@ pub fn analyse_file_fused(
         auth_summaries,
         router_facts: router_facts_for_this_file,
         cross_package_imports: cross_package_imports_for_this_file,
+        caller_scope_facts,
     })
 }
 
@@ -7130,6 +7614,74 @@ fn python_deser_inside_unittest_assertion_recognises_roundtrip_shapes() {
     );
 }
 
+/// Layer G: `<env>.from_string(...)` is suppressed only when the receiver is a
+/// Jinja2 *sandboxed* environment.  Motivated by CVE-2024-32651
+/// (changedetection.io) whose fix routes notification bodies through
+/// `ImmutableSandboxedEnvironment(...).from_string(...)`.
+#[test]
+fn python_sandboxed_jinja_from_string_only_suppresses_sandbox() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    parser.set_language(&lang).unwrap();
+    // Exactly the production `py.xss.jinja_from_string` query — index-0 capture
+    // is the `from_string` identifier, mirroring `run_ast_queries`.
+    let q = r#"(call function: (attribute attribute: (identifier) @fn (#eq? @fn "from_string"))) @vuln"#;
+
+    // Two-statement sandboxed env (the patched-CVE shape) → suppressed.
+    let code = b"import jinja2.sandbox\ndef render(t):\n    env = jinja2.sandbox.ImmutableSandboxedEnvironment(extensions=[])\n    return env.from_string(t).render({})\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_python_capture(&tree, code, q);
+    assert!(
+        is_python_sandboxed_jinja_from_string(cap, code),
+        "ImmutableSandboxedEnvironment local receiver should be suppressed"
+    );
+
+    // Bare `SandboxedEnvironment` local receiver → suppressed.
+    let code = b"from jinja2.sandbox import SandboxedEnvironment\ndef render(t):\n    env = SandboxedEnvironment()\n    return env.from_string(t).render()\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_python_capture(&tree, code, q);
+    assert!(
+        is_python_sandboxed_jinja_from_string(cap, code),
+        "SandboxedEnvironment local receiver should be suppressed"
+    );
+
+    // Inline sandboxed constructor receiver → suppressed.
+    let code = b"import jinja2.sandbox\ndef render(t):\n    return jinja2.sandbox.ImmutableSandboxedEnvironment().from_string(t).render()\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_python_capture(&tree, code, q);
+    assert!(
+        is_python_sandboxed_jinja_from_string(cap, code),
+        "inline ImmutableSandboxedEnvironment receiver should be suppressed"
+    );
+
+    // Unrestricted `Environment(loader=BaseLoader)` (the vulnerable shape) → fires.
+    let code = b"from jinja2 import Environment, BaseLoader\ndef render(t):\n    env = Environment(loader=BaseLoader)\n    return env.from_string(t).render()\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_python_capture(&tree, code, q);
+    assert!(
+        !is_python_sandboxed_jinja_from_string(cap, code),
+        "unrestricted Environment receiver must keep firing"
+    );
+
+    // Receiver later downgraded from sandbox to unrestricted Environment → fires.
+    let code = b"from jinja2 import Environment\nfrom jinja2.sandbox import SandboxedEnvironment\ndef render(t):\n    env = SandboxedEnvironment()\n    env = Environment()\n    return env.from_string(t).render()\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_python_capture(&tree, code, q);
+    assert!(
+        !is_python_sandboxed_jinja_from_string(cap, code),
+        "receiver reassigned to unrestricted Environment must keep firing"
+    );
+
+    // Unresolved receiver (field access) → conservatively fires.
+    let code = b"def render(self, t):\n    return self.env.from_string(t).render()\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_python_capture(&tree, code, q);
+    assert!(
+        !is_python_sandboxed_jinja_from_string(cap, code),
+        "unresolved field receiver must keep firing (conservative)"
+    );
+}
+
 /// Pytest plain-`assert` round-trip recogniser invariants.  Same
 /// entry point as the unittest test above (the function handles both
 /// idioms) but the asserted shape sits under an `assert_statement`
@@ -7440,6 +7992,87 @@ fn ruby_deser_inside_test_assertion_recognises_roundtrip_shapes() {
     );
 }
 
+/// Ruby Layer I invariants.  `instance_eval` / `class_eval` /
+/// `module_eval` are string-eval sinks ONLY in the string-argument form;
+/// the block form (`do … end` / `{ … }`) is a static metaprogramming DSL
+/// with no injection surface and must NOT fire.
+#[test]
+fn ruby_eval_string_arg_distinguishes_block_from_string() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
+    parser.set_language(&lang).unwrap();
+    let q_ie = r#"(call method: (identifier) @id (#eq? @id "instance_eval")) @vuln"#;
+    let q_ce =
+        r#"(call method: (identifier) @id (#match? @id "^(class_eval|module_eval)$")) @vuln"#;
+
+    // ── Block forms → NOT a string eval (suppress) ─────────────────────
+    // `do … end` block.
+    let code = b"module M\n  def self.included(model)\n    model.class_eval do\n      belongs_to :author\n    end\n  end\nend\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ce);
+    assert!(
+        !is_ruby_eval_string_arg(cap),
+        "class_eval do … end block is a static DSL, not a string eval"
+    );
+
+    // `{ … }` brace block.
+    let code = b"before do\n  @fetcher.instance_eval {\n    @person = person\n  }\nend\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ie);
+    assert!(
+        !is_ruby_eval_string_arg(cap),
+        "instance_eval brace block is not a string eval"
+    );
+
+    // `&proc` block-pass — a proc, not a code string.
+    let code = b"def run(blk)\n  obj.instance_eval(&blk)\nend\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ie);
+    assert!(
+        !is_ruby_eval_string_arg(cap),
+        "instance_eval(&blk) block-pass is a proc, not a code string"
+    );
+
+    // ── String forms → real string eval (fires) ───────────────────────
+    // Interpolated string argument (dynamic — the real sink).
+    let code = b"def define(m)\n  klass.class_eval(\"def #{m}; end\")\nend\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ce);
+    assert!(
+        is_ruby_eval_string_arg(cap),
+        "class_eval(\"def #{{m}}; end\") interpolated string IS a string eval"
+    );
+
+    // Variable argument — could hold a dynamic code string.
+    let code = b"def run(code)\n  obj.instance_eval(code)\nend\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ie);
+    assert!(
+        is_ruby_eval_string_arg(cap),
+        "instance_eval(code) variable arg IS a string eval"
+    );
+
+    // String literal argument (recogniser reports true; Layer A separately
+    // handles the all-literal case).
+    let code = b"obj.instance_eval(\"2 + 2\")\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ie);
+    assert!(
+        is_ruby_eval_string_arg(cap),
+        "instance_eval(\"literal\") carries a code-string argument"
+    );
+
+    // String argument alongside a trailing block still counts as a string
+    // eval (the string is evaluated).
+    let code = b"obj.instance_eval(code) { extra }\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_ruby_capture(&tree, code, q_ie);
+    assert!(
+        is_ruby_eval_string_arg(cap),
+        "instance_eval(code) with both arg and trailing block still evals the string"
+    );
+}
+
 #[test]
 fn php_weak_hash_non_crypto_use_recognises_canonical_shapes() {
     let mut parser = tree_sitter::Parser::new();
@@ -7564,6 +8197,66 @@ fn php_weak_hash_non_crypto_use_recognises_canonical_shapes() {
     assert!(
         !is_php_weak_hash_non_crypto_use(cap, code),
         "var_dump(md5(...)) has no recognisable consumer name and must NOT be suppressed"
+    );
+}
+
+#[test]
+fn php_assert_string_first_arg_distinguishes_code_from_description() {
+    let mut parser = tree_sitter::Parser::new();
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    parser.set_language(&lang).unwrap();
+    let q = r#"(function_call_expression
+                 function: (name) @n (#eq? @n "assert")
+                 arguments: (arguments
+                   (argument (string) @code)))
+               @vuln"#;
+
+    // VULN: single-arg string literal first argument — evaluated as code,
+    // must keep firing.
+    let code = b"<?php\nassert('phpinfo()');\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_assert_string_first_arg(cap),
+        "assert('code') string first arg must keep firing"
+    );
+
+    // VULN: string first arg WITH a description second arg — first arg is
+    // still code, must keep firing.
+    let code = b"<?php\nassert('phpinfo()', 'msg');\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        is_php_assert_string_first_arg(cap),
+        "assert('code', 'msg') string first arg must keep firing"
+    );
+
+    // SAFE: comparison expression first arg, string description second —
+    // PHP 7.2+ form, must be suppressed.
+    let code = b"<?php\nassert($a === $b, 'values must be equal');\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_assert_string_first_arg(cap),
+        "assert($a === $b, 'desc') must be suppressed (bool first arg)"
+    );
+
+    // SAFE: instanceof negation first arg + string description.
+    let code = b"<?php\nassert(!$x instanceof Foo, 'wrong type');\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_assert_string_first_arg(cap),
+        "assert(!$x instanceof Foo, 'desc') must be suppressed"
+    );
+
+    // SAFE: function-call first arg (is_a(...)) + string description.
+    let code = b"<?php\nassert(is_a($t, Rule::class, true), '$t must be a Rule');\n";
+    let tree = parser.parse(code, None).unwrap();
+    let cap = first_php_capture(&tree, code, q);
+    assert!(
+        !is_php_assert_string_first_arg(cap),
+        "assert(is_a(...), 'desc') must be suppressed (call first arg)"
     );
 }
 

@@ -32,6 +32,38 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
         case_sensitive: false,
     },
+    // Symfony HttpFoundation `Request` accessors.  The Request built by
+    // `Request::createFromGlobals()` and its typed property bags expose
+    // attacker-controlled HTTP data, and HttpFoundation is the de-facto request
+    // abstraction across the PHP ecosystem (phpMyFAQ, Drupal, Laravel-over-
+    // Symfony, ...), so these generalise well beyond any single CVE.  Matched on
+    // the chain-normalised callee text: `Request::createFromGlobals` ->
+    // `createFromGlobals`, `$request->getClientIp()` -> `request.getClientIp`,
+    // `$request->headers->get('user-agent')` -> `request.headers.get`.  The
+    // `match_suffix_cs` `.`/`:` boundary check keeps `headers.get` from firing
+    // on unrelated `myheaders.get`.
+    //
+    // NOTE: `query.get` / `request.get` (the GET/POST `ParameterBag`s) are
+    // intentionally omitted here -- they collide with the ubiquitous bare
+    // `->get()` idiom and, once seeded, require the path-traversal reject-guard
+    // recogniser (`str_contains($p, "..")` / `str_starts_with($p, "/")`) to
+    // avoid FPs on already-validated flows (see php/auth/safe_isgranted.php).
+    // Tracked in CVE_DEFERRED.md.
+    //
+    // Motivating CVE: CVE-2026-46364 -- phpMyFAQ `BuiltinCaptcha::garbageCollector`
+    // interpolates the `user-agent` header and client IP into a DELETE.
+    LabelRule {
+        matchers: &[
+            "createFromGlobals",
+            "getClientIp",
+            "headers.get",
+            "cookies.get",
+            "files.get",
+            "server.get",
+        ],
+        label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
+    },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["htmlspecialchars", "htmlentities"],
@@ -70,6 +102,15 @@ pub static RULES: &[LabelRule] = &[
             "pg_escape_string",
             "pg_escape_literal",
             "pg_escape_identifier",
+            // Driver-side escape on a DB-abstraction handle.  `$db->escape($s)`
+            // (phpMyFAQ `Database`, MediaWiki, and most PSR/legacy DB wrappers)
+            // and the mysqli OOP `$conn->escape_string($s)` shorthand both apply
+            // charset-aware quoting equivalent to `mysqli_real_escape_string`.
+            // `match_suffix_cs`' `.`/`:` boundary keeps `escape` from matching
+            // `escapeshellarg` / `htmlescape`.  Patched side of CVE-2026-46364
+            // (phpMyFAQ `escapeQueryValue` -> `$this->configuration->getDb()->escape(...)`).
+            "escape",
+            "escape_string",
         ],
         label: DataLabel::Sanitizer(Cap::SQL_QUERY),
         case_sensitive: false,
@@ -601,6 +642,13 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "do_statement"                  => Kind::While,
 
     "return_statement"              => Kind::Return,
+    // `exit`/`exit(1)` parse as their own statement node rather than as a
+    // call, so the terminator check in the CFG's call arm never sees them.
+    // Control leaves the script, so model it exactly like `return`: the
+    // block dead-ends and no fall-through edge reaches the join.  (`die(...)`
+    // is NOT this node — it is absent from the PHP grammar and parses as an
+    // ordinary call, so it is handled by `is_builtin_terminator` instead.)
+    "exit_statement"                => Kind::Return,
     "throw_expression"              => Kind::Throw,
     "break_statement"               => Kind::Break,
     "continue_statement"            => Kind::Continue,

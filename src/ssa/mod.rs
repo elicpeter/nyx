@@ -50,7 +50,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OptimizeResult {
     /// Per-SSA-value constant lattice values.
-    pub const_values: HashMap<SsaValue, const_prop::ConstLattice>,
+    pub const_values: const_prop::ConstValues,
     /// Type fact analysis results.
     pub type_facts: type_facts::TypeFactResult,
     /// XML-parser configuration facts: per-receiver SSA value

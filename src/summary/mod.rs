@@ -468,15 +468,15 @@ impl FuncSummary {
     /// Build a [`FuncKey`] from this summary, normalizing the namespace
     /// relative to `scan_root`.
     pub fn func_key(&self, scan_root: Option<&str>) -> FuncKey {
-        FuncKey {
-            lang: Lang::from_slug(&self.lang).unwrap_or(Lang::Rust),
-            namespace: normalize_namespace(&self.file_path, scan_root),
-            container: self.container.clone(),
-            name: self.name.clone(),
-            arity: Some(self.param_count),
-            disambig: self.disambig,
-            kind: self.kind,
-        }
+        FuncKey::from_parts(
+            Lang::from_slug(&self.lang).unwrap_or(Lang::Rust),
+            normalize_namespace(&self.file_path, scan_root),
+            self.container.clone(),
+            self.name.clone(),
+            Some(self.param_count),
+            self.disambig,
+            self.kind,
+        )
     }
 
     /// Phase-04 [`FuncKey`] builder that consults a project-wide
@@ -493,19 +493,15 @@ impl FuncSummary {
         scan_root: Option<&str>,
         module_graph: Option<&crate::resolve::ModuleGraph>,
     ) -> FuncKey {
-        FuncKey {
-            lang: Lang::from_slug(&self.lang).unwrap_or(Lang::Rust),
-            namespace: crate::symbol::namespace_with_package(
-                &self.file_path,
-                scan_root,
-                module_graph,
-            ),
-            container: self.container.clone(),
-            name: self.name.clone(),
-            arity: Some(self.param_count),
-            disambig: self.disambig,
-            kind: self.kind,
-        }
+        FuncKey::from_parts(
+            Lang::from_slug(&self.lang).unwrap_or(Lang::Rust),
+            crate::symbol::namespace_with_package(&self.file_path, scan_root, module_graph),
+            self.container.clone(),
+            self.name.clone(),
+            Some(self.param_count),
+            self.disambig,
+            self.kind,
+        )
     }
 }
 
@@ -673,6 +669,20 @@ pub struct GlobalSummaries {
     /// indexed-mode parity gap on transitive cross-package IPA inside
     /// inlined frames.
     cross_package_imports_by_namespace: HashMap<String, std::sync::Arc<HashMap<String, FuncKey>>>,
+    /// Cross-file caller-scope IPA accumulator (Phase 2), keyed by
+    /// `(Lang, callee_leaf_name)`.  For each callee leaf observed in
+    /// pass 1, records whether EVERY caller across the whole index is an
+    /// authorized route handler, plus the union of route-level checks to
+    /// lift onto the callee.  Consumed by
+    /// [`crate::auth_analysis::caller_scope::apply_cross_file_caller_scope`]
+    /// at pass 2 to suppress `missing_ownership_check` /
+    /// `token_override_without_validation` on private helpers that live in
+    /// a different file from their authorized route handler (the dominant
+    /// sentry / saleor / airflow FP shape).  Folded with AND/OR/union so
+    /// it combines safely under rayon `reduce`.  See
+    /// [`crate::auth_analysis::caller_scope`] for the soundness argument.
+    caller_scope_by_callee:
+        HashMap<(Lang, String), crate::auth_analysis::caller_scope::CalleeCallerAcc>,
     /// Type hierarchy index for runtime virtual-dispatch fan-out.
     ///
     /// Installed by [`Self::install_hierarchy`] after pass 1 from the
@@ -711,7 +721,9 @@ impl GlobalSummaries {
             match self.by_key.get(&key) {
                 Some(existing) if !summaries_compatible(existing, summary) => {
                     let synth = synthesize_disambig(summary).wrapping_add(probe);
-                    key.disambig = Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT));
+                    key.set_disambig(Some(
+                        SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT),
+                    ));
                     probe = probe.wrapping_add(1);
                     if probe >= 1024 {
                         tracing::warn!(
@@ -749,7 +761,9 @@ impl GlobalSummaries {
                 return key;
             }
             let synth = synthesize_ssa_disambig(summary).wrapping_add(probe);
-            key.disambig = Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT));
+            key.set_disambig(Some(
+                SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT),
+            ));
             probe = probe.wrapping_add(1);
             if probe >= 1024 {
                 tracing::warn!(
@@ -787,8 +801,10 @@ impl GlobalSummaries {
             let synth = (body.param_count as u32)
                 .wrapping_mul(0x9E37_79B9)
                 .wrapping_add(probe);
-            key.disambig = Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT));
-            key.arity = Some(body.param_count);
+            key.set_disambig(Some(
+                SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT),
+            ));
+            key.set_arity(Some(body.param_count));
             probe = probe.wrapping_add(1);
             if probe >= 1024 {
                 tracing::warn!(
@@ -994,6 +1010,16 @@ impl GlobalSummaries {
         for (ns, map) in other.cross_package_imports_by_namespace {
             self.cross_package_imports_by_namespace.insert(ns, map);
         }
+        // Caller-scope accumulator: NOT last-writer-wins — combine via the
+        // associative/commutative `CalleeCallerAcc::merge` (OR on
+        // has_caller, AND on all_authorized, union on lifted_checks) so a
+        // callee's caller set is the union across every file.
+        for (key, acc) in other.caller_scope_by_callee {
+            self.caller_scope_by_callee
+                .entry(key)
+                .or_default()
+                .merge(acc);
+        }
         // Hierarchy index: invalidate after a merge so the next consumer
         // sees a freshly-built view that includes `other`'s edges.  The
         // alternative, point-merging two indexes, is racy when the
@@ -1161,6 +1187,47 @@ impl GlobalSummaries {
         self.auth_by_key.len()
     }
 
+    /// Fold one pass-1 caller-scope edge into the accumulator.
+    ///
+    /// Accumulates per `(Lang, callee_leaf)`: OR on `has_caller`, AND on
+    /// `all_authorized`, union on `lifted_checks`.  Idempotent under the
+    /// rayon fold/reduce because the underlying accumulator's `fold_edge`
+    /// / `merge` are associative + commutative.
+    pub fn fold_caller_scope_edge(
+        &mut self,
+        edge: crate::auth_analysis::caller_scope::CallerScopeEdge,
+    ) {
+        let crate::auth_analysis::caller_scope::CallerScopeEdge {
+            lang,
+            callee_leaf,
+            caller_authorized,
+            route_checks,
+        } = edge;
+        self.caller_scope_by_callee
+            .entry((lang, callee_leaf))
+            .or_default()
+            .fold_edge(caller_authorized, &route_checks);
+    }
+
+    /// Resolve the cross-file caller-scope accumulator for a callee leaf.
+    pub fn resolve_caller_scope(
+        &self,
+        lang: Lang,
+        leaf: &str,
+    ) -> Option<&crate::auth_analysis::caller_scope::CalleeCallerAcc> {
+        // Avoid allocating a `String` key on the hot lookup path by
+        // probing with a borrowed tuple via the `Borrow` blanket impl —
+        // but `(Lang, String)` keys can't be borrowed as `(Lang, &str)`,
+        // so fall back to a cheap owned probe.  Caller-scope lookups run
+        // once per helper unit at pass 2, not per instruction.
+        self.caller_scope_by_callee.get(&(lang, leaf.to_string()))
+    }
+
+    /// Count of distinct `(Lang, callee_leaf)` caller-scope entries.
+    pub fn caller_scope_len(&self) -> usize {
+        self.caller_scope_by_callee.len()
+    }
+
     /// Insert a per-file `PerFileRouterFacts` snapshot.  Last-writer-wins
     /// per `module_id` key — re-analysing a file produces a fresh
     /// snapshot of its router declarations and `include_router` edges.
@@ -1173,20 +1240,37 @@ impl GlobalSummaries {
     }
 
     /// Resolve cross-file router-level deps for the file identified by
-    /// `child_module_id`.  Walks every other file's persisted
-    /// `RouterIncludeEdge` list, finds edges whose `child_module_id`
-    /// matches, and accumulates the parent file's
-    /// `local_router_deps[parent_var]` against `child_var` — producing
-    /// a `<child_var> → Vec<(CallSite, scoped_security)>` map ready to
+    /// `child_module_id`.  Produces a `<child_var> →
+    /// Vec<(CallSite, scoped_security)>` map of the deps a router declared
+    /// in this file inherits from its FastAPI ancestor routers, ready to
     /// merge into the active file's
     /// `AuthorizationModel.cross_file_router_deps`.
     ///
-    /// Single-hop only.  Transitive lifts (`grandparent.include_router(parent);
-    /// parent.include_router(child)`) are not currently resolved — the
-    /// airflow shape that motivated this fix is single-hop, and adding
-    /// transitive resolution is a follow-up that would also need to
-    /// model the bare-identifier `outer.include_router(inner_router)`
-    /// case which the extractor presently skips.
+    /// **Transitive.**  FastAPI applies a router's `dependencies=[...]` to
+    /// every route reachable through `include_router`, including nested
+    /// chains: `grandparent.include_router(parent);
+    /// parent.include_router(child)` lifts the grandparent's deps onto the
+    /// child even when the intermediate `parent` declares no deps of its
+    /// own.  This resolver builds a router graph over
+    /// `(storage_key, var)` nodes — where an edge points a child node at
+    /// its parent router — and accumulates every ancestor's own deps via a
+    /// cycle-guarded DFS.  Both dotted cross-file child refs
+    /// (`task_instances.router`) and bare same-file child refs
+    /// (`outer.include_router(inner_router)`, `child_local == true`) are
+    /// modeled.
+    ///
+    /// Nodes are keyed by the file's **storage key** (full path) rather
+    /// than its basename module id, because a parent router can live in a
+    /// `__init__.py` file whose [`module_id_for_path`] is `None`
+    /// (`__init__.py` is unaddressable as a *child* target).  Storage-key
+    /// keying keeps such root/parent routers in the graph so their deps
+    /// still propagate — a basename keying would silently drop every
+    /// `__init__.py`-declared parent's deps and regress the airflow
+    /// single-hop shape.  Duplicate basenames still over-accumulate (a
+    /// dotted child ref wires the parent onto *every* file sharing that
+    /// basename), matching the prior single-hop behavior.
+    ///
+    /// [`module_id_for_path`]: crate::auth_analysis::router_facts::module_id_for_path
     ///
     /// Returns an empty map when `child_module_id` matches no edges or
     /// when the index is empty.
@@ -1194,34 +1278,96 @@ impl GlobalSummaries {
         &self,
         child_module_id: &str,
     ) -> HashMap<String, Vec<(crate::auth_analysis::model::CallSite, bool)>> {
+        use crate::auth_analysis::router_facts::module_id_for_path;
+        use std::path::Path;
+
         let mut out: HashMap<String, Vec<(crate::auth_analysis::model::CallSite, bool)>> =
             HashMap::new();
         if self.router_facts_by_module.is_empty() {
             return out;
         }
-        for facts in self.router_facts_by_module.values() {
+
+        // ── Build the router graph (all borrows outlive this fn) ──────
+        // `files_by_module[basename]` = storage keys sharing that
+        // basename, for dotted child-ref resolution.
+        // `own_deps[(storage_key, var)]` = that router's inline deps.
+        let mut files_by_module: HashMap<String, Vec<&str>> = HashMap::new();
+        let mut own_deps: HashMap<
+            (&str, &str),
+            &Vec<(crate::auth_analysis::model::CallSite, bool)>,
+        > = HashMap::new();
+        for (storage_key, facts) in &self.router_facts_by_module {
+            if let Some(m) = module_id_for_path(Path::new(storage_key)) {
+                files_by_module
+                    .entry(m)
+                    .or_default()
+                    .push(storage_key.as_str());
+            }
+            for (var, deps) in &facts.local_router_deps {
+                if !deps.is_empty() {
+                    own_deps.insert((storage_key.as_str(), var.as_str()), deps);
+                }
+            }
+        }
+
+        // `parents[child_node]` = router nodes that `include_router` the
+        // child (FastAPI parents whose deps flow downward).  A dotted
+        // child ref wires the parent onto every file sharing the child's
+        // basename; a local (bare-identifier) ref wires it onto the
+        // sibling var in the edge's own file.
+        let mut parents: HashMap<(&str, &str), Vec<(&str, &str)>> = HashMap::new();
+        for (storage_key, facts) in &self.router_facts_by_module {
             for edge in &facts.include_router_edges {
-                if edge.child_module_id != child_module_id {
+                let parent_node = (storage_key.as_str(), edge.parent_var.as_str());
+                if edge.child_local {
+                    let child_node = (storage_key.as_str(), edge.child_var.as_str());
+                    parents.entry(child_node).or_default().push(parent_node);
+                } else if let Some(files) = files_by_module.get(edge.child_module_id.as_str()) {
+                    for &child_sk in files {
+                        let child_node = (child_sk, edge.child_var.as_str());
+                        parents.entry(child_node).or_default().push(parent_node);
+                    }
+                }
+            }
+        }
+
+        // ── For each edge whose child resolves to the target module,
+        // accumulate the parent node's full ancestor deps onto the child
+        // var.  `effective_deps(parent)` already folds in the parent's own
+        // inline deps plus every transitively-reachable ancestor. ──
+        for (storage_key, facts) in &self.router_facts_by_module {
+            let owner_mod = module_id_for_path(Path::new(storage_key));
+            for edge in &facts.include_router_edges {
+                let matches_target = if edge.child_local {
+                    owner_mod.as_deref() == Some(child_module_id)
+                } else {
+                    edge.child_module_id == child_module_id
+                };
+                if !matches_target {
                     continue;
                 }
-                // Look up the parent's deps in the SAME file's
-                // local_router_deps map (parent declarations and the
-                // include_router edge live in the same file).
-                let Some(parent_deps) = facts.local_router_deps.get(&edge.parent_var) else {
-                    continue;
-                };
-                if parent_deps.is_empty() {
+                let parent_node = (storage_key.as_str(), edge.parent_var.as_str());
+                let mut visited = std::collections::HashSet::new();
+                let mut deps = Vec::new();
+                accumulate_router_ancestor_deps(
+                    parent_node,
+                    &own_deps,
+                    &parents,
+                    &mut visited,
+                    &mut deps,
+                );
+                if deps.is_empty() {
                     continue;
                 }
                 let entry = out.entry(edge.child_var.clone()).or_default();
-                for dep in parent_deps {
+                for dep in deps {
                     // Dedup by (callee name, scoped flag) so multiple
-                    // parents declaring the same dep don't double-fire.
+                    // ancestors declaring the same dep don't double-fire.
                     let already = entry
                         .iter()
                         .any(|(call, scoped)| call.name == dep.0.name && *scoped == dep.1);
                     if !already {
-                        entry.push(dep.clone());
+                        entry.push(dep);
                     }
                 }
             }
@@ -1332,6 +1478,7 @@ impl GlobalSummaries {
             && self.auth_by_key.is_empty()
             && self.router_facts_by_module.is_empty()
             && self.cross_package_imports_by_namespace.is_empty()
+            && self.caller_scope_by_callee.is_empty()
     }
 
     /// Iterate over all (key, summary) pairs.
@@ -1617,11 +1764,36 @@ impl GlobalSummaries {
             };
         }
 
-        // ── Step 2: namespace_qualifier (non-authoritative) ─────────
-        if let Some(nq) = q.namespace_qualifier
-            && let Some(key) = try_qualified(nq)
-        {
-            return CalleeResolution::Resolved(key);
+        // ── Step 2: namespace_qualifier (authoritative for `::` paths) ──
+        if let Some(nq) = q.namespace_qualifier {
+            if let Some(key) = try_qualified(nq) {
+                return CalleeResolution::Resolved(key);
+            }
+            // A `::`-qualified callee names a concrete type or module.  With
+            // no summary in that container it is an external associated
+            // function (stdlib / third-party crate) or a module-path free
+            // function — never a same-leaf METHOD in an unrelated container.
+            // Refuse the caller-container (step 3) and leaf/arity fallbacks
+            // (steps 4/6) that would bind the stdlib `File::open` to the
+            // enclosing `impl V5Reader { fn open }`, or `BufReader::new` to a
+            // unique-arity `UpdateFile::new`.  Allow only a unique same-leaf
+            // FREE function (`crate::util::sanitize` → top-level `fn
+            // sanitize`).  `Self::` / `self::` is a real self-call and defers
+            // to the caller-container step below.
+            if !matches!(nq, "Self" | "self") {
+                let free: Vec<FuncKey> = self
+                    .lookup_same_lang(q.caller_lang, q.name)
+                    .into_iter()
+                    .map(|(k, _)| k)
+                    .filter(|k| k.container.is_empty() && arity_matches(k))
+                    .cloned()
+                    .collect();
+                return match free.len() {
+                    1 => CalleeResolution::Resolved(free[0].clone()),
+                    0 => CalleeResolution::NotFound,
+                    _ => CalleeResolution::Ambiguous(free),
+                };
+            }
         }
 
         // ── Step 3: caller self-container ───────────────────────────
@@ -1889,6 +2061,7 @@ impl std::fmt::Debug for GlobalSummaries {
                 "cross_package_imports_len",
                 &self.cross_package_imports_by_namespace.len(),
             )
+            .field("caller_scope_len", &self.caller_scope_by_callee.len())
             .finish()
     }
 }
@@ -1958,6 +2131,40 @@ pub(crate) fn synthesize_disambig(summary: &FuncSummary) -> u32 {
     summary.sink_caps.hash(&mut h);
     summary.module_path.hash(&mut h);
     h.finish() as u32
+}
+
+/// Depth-first accumulation of a router node's ancestor deps for
+/// [`GlobalSummaries::resolve_cross_file_router_deps`].  Collects the
+/// node's own inline deps, then recurses into every parent router that
+/// `include_router`s it, deduping by `(callee name, scoped flag)`.  The
+/// `visited` set both prevents cycles (`a.include_router(b);
+/// b.include_router(a)`) and collapses diamond ancestries to a single
+/// visit — correct because the dedup makes the union idempotent.
+fn accumulate_router_ancestor_deps<'a>(
+    node: (&'a str, &'a str),
+    own_deps: &HashMap<(&'a str, &'a str), &'a Vec<(crate::auth_analysis::model::CallSite, bool)>>,
+    parents: &HashMap<(&'a str, &'a str), Vec<(&'a str, &'a str)>>,
+    visited: &mut std::collections::HashSet<(&'a str, &'a str)>,
+    out: &mut Vec<(crate::auth_analysis::model::CallSite, bool)>,
+) {
+    if !visited.insert(node) {
+        return;
+    }
+    if let Some(deps) = own_deps.get(&node) {
+        for dep in deps.iter() {
+            let already = out
+                .iter()
+                .any(|(call, scoped)| call.name == dep.0.name && *scoped == dep.1);
+            if !already {
+                out.push(dep.clone());
+            }
+        }
+    }
+    if let Some(ps) = parents.get(&node) {
+        for &parent in ps {
+            accumulate_router_ancestor_deps(parent, own_deps, parents, visited, out);
+        }
+    }
 }
 
 /// Return `true` iff the new `SsaFuncSummary` is consistent with the
@@ -2105,13 +2312,15 @@ mod arity_leniency_tests {
     use crate::symbol::{FuncKey, Lang};
 
     fn py_func(name: &str, namespace: &str, param_count: usize) -> (FuncKey, FuncSummary) {
-        let key = FuncKey {
-            lang: Lang::Python,
-            namespace: namespace.into(),
-            name: name.into(),
-            arity: Some(param_count),
-            ..Default::default()
-        };
+        let key = FuncKey::from_parts(
+            Lang::Python,
+            namespace,
+            String::new(),
+            name,
+            Some(param_count),
+            None,
+            FuncKind::Function,
+        );
         let summary = FuncSummary {
             name: name.into(),
             file_path: namespace.into(),
@@ -2220,5 +2429,123 @@ mod arity_leniency_tests {
             arity: Some(2),
         });
         assert_eq!(resolved, CalleeResolution::NotFound);
+    }
+}
+
+#[cfg(test)]
+mod namespace_qualifier_authority_tests {
+    //! `::`-qualified callee authority in [`GlobalSummaries::resolve_callee`].
+    //! A qualifier that names no local container must not fall through to the
+    //! caller-container / leaf-arity heuristics and bind an unrelated same-leaf
+    //! method (meilisearch dump-reader leaf collisions: `File::open` →
+    //! `Reader::open`, `BufReader::new` → `IndexReader::new`).
+    use super::*;
+    use crate::symbol::{FuncKey, FuncKind, Lang};
+
+    fn rs_method(container: &str, name: &str, arity: usize) -> (FuncKey, FuncSummary) {
+        let key = FuncKey::from_parts(
+            Lang::Rust,
+            "mod.rs",
+            container,
+            name,
+            Some(arity),
+            None,
+            FuncKind::Method,
+        );
+        let summary = FuncSummary {
+            name: name.into(),
+            file_path: "mod.rs".into(),
+            lang: "rust".into(),
+            container: container.into(),
+            param_count: arity,
+            ..Default::default()
+        };
+        (key, summary)
+    }
+
+    fn rs_free(name: &str, arity: usize) -> (FuncKey, FuncSummary) {
+        let key = FuncKey::new_function(Lang::Rust, "mod.rs", name, Some(arity));
+        let summary = FuncSummary {
+            name: name.into(),
+            file_path: "mod.rs".into(),
+            lang: "rust".into(),
+            param_count: arity,
+            ..Default::default()
+        };
+        (key, summary)
+    }
+
+    fn base_gs() -> GlobalSummaries {
+        let mut gs = GlobalSummaries::new();
+        let (k1, s1) = rs_method("Reader", "open", 1);
+        let (k2, s2) = rs_method("IndexReader", "new", 1);
+        let (k3, s3) = rs_free("sanitize", 1);
+        gs.insert(k1, s1);
+        gs.insert(k2, s2);
+        gs.insert(k3, s3);
+        gs
+    }
+
+    fn query<'a>(
+        name: &'a str,
+        qualifier: Option<&'a str>,
+        caller_container: Option<&'a str>,
+    ) -> CalleeQuery<'a> {
+        CalleeQuery {
+            name,
+            caller_lang: Lang::Rust,
+            caller_namespace: "mod.rs",
+            caller_container,
+            receiver_type: None,
+            namespace_qualifier: qualifier,
+            receiver_var: None,
+            arity: Some(1),
+        }
+    }
+
+    #[test]
+    fn file_open_qualifier_miss_does_not_bind_caller_container() {
+        let gs = base_gs();
+        let r = gs.resolve_callee(&query("open", Some("File"), Some("Reader")));
+        assert_eq!(
+            r,
+            CalleeResolution::NotFound,
+            "File::open must not bind caller-container Reader::open"
+        );
+    }
+
+    #[test]
+    fn bufreader_new_qualifier_miss_does_not_bind_unique_leaf() {
+        let gs = base_gs();
+        let r = gs.resolve_callee(&query("new", Some("BufReader"), Some("Reader")));
+        assert_eq!(
+            r,
+            CalleeResolution::NotFound,
+            "BufReader::new must not bind the unique-arity IndexReader::new"
+        );
+    }
+
+    #[test]
+    fn qualifier_matching_container_resolves() {
+        let gs = base_gs();
+        let (k, _) = rs_method("Reader", "open", 1);
+        let r = gs.resolve_callee(&query("open", Some("Reader"), None));
+        assert_eq!(r, CalleeResolution::Resolved(k));
+    }
+
+    #[test]
+    fn self_qualifier_defers_to_caller_container() {
+        let gs = base_gs();
+        let (k, _) = rs_method("Reader", "open", 1);
+        let r = gs.resolve_callee(&query("open", Some("Self"), Some("Reader")));
+        assert_eq!(r, CalleeResolution::Resolved(k));
+    }
+
+    #[test]
+    fn module_path_qualifier_resolves_free_function() {
+        let gs = base_gs();
+        let (k, _) = rs_free("sanitize", 1);
+        let r = gs.resolve_callee(&query("sanitize", Some("util"), Some("Reader")));
+        assert_eq!(r, CalleeResolution::Resolved(k));
     }
 }

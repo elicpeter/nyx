@@ -475,6 +475,191 @@ static REGISTRY: Lazy<HashMap<&'static str, &'static [LabelRule]>> = Lazy::new(|
     m
 });
 
+/// One flat matcher of a [`LabelRule`], flattened out of the per-rule
+/// `matchers` slice so the dispatch index can address it by a single index.
+struct MatcherEntry {
+    /// Raw matcher bytes, including any leading `=` exact-match sigil
+    /// (`match_suffix_cs`/`starts_with_cs` re-strip the sigil themselves).
+    matcher: &'static [u8],
+    label: DataLabel,
+    case_sensitive: bool,
+}
+
+/// Per-language last-byte dispatch index for the flat (non-gated)
+/// `classify` / `classify_all` matching path.
+///
+/// The original inner loops walked **every** matcher of **every** rule for
+/// **every** classified node — `O(matchers)` per node (Go ≈ 150 matchers,
+/// JS ≈ 200+), and `classify_all` runs once per CFG call node. A suffix/exact
+/// match (`match_suffix_cs`) can only succeed when the candidate text's final
+/// byte equals the matcher's final byte (case-insensitively) — every other
+/// matcher is rejected on the very first byte compared. This index buckets the
+/// suffix/exact matchers by their lowercased last byte, so a lookup visits only
+/// the handful sharing the text's last byte: `O(bucket)` per node, an
+/// asymptotic reduction of the per-node classify cost.
+///
+/// The bucket is a **pre-filter that never drops a true match**: a matcher
+/// absent from the looked-up bucket has a different last byte and would have
+/// been rejected by `ends_with_cs` anyway, so the labels produced (and their
+/// order — bucket lists preserve the original registry iteration order, and the
+/// full `match_suffix_cs` boundary/case check still runs on every candidate)
+/// are byte-identical to the linear scan. `prefix` matchers (`foo_`) are a
+/// small minority (Go has zero) and stay a linear list.
+struct LabelIndex {
+    /// Suffix/exact matchers (matcher does not end in `_`), in registry order.
+    suffix: Vec<MatcherEntry>,
+    /// `suffix_by_last[b]` = ascending indices into `suffix` of matchers whose
+    /// lowercased last byte is `b`. Length 256.
+    suffix_by_last: Vec<Vec<u32>>,
+    /// Suffix matchers whose stripped form is empty (a bare `=` sigil) — cannot
+    /// be keyed by a last byte, so they are consulted on every lookup to remain
+    /// bit-identical. Empty for all real rule sets.
+    suffix_always: Vec<u32>,
+    /// Prefix matchers (matcher ends in `_`), in registry order.
+    prefix: Vec<MatcherEntry>,
+}
+
+impl LabelIndex {
+    fn build(rules: &'static [LabelRule]) -> LabelIndex {
+        let mut suffix: Vec<MatcherEntry> = Vec::new();
+        let mut suffix_by_last: Vec<Vec<u32>> = (0..256).map(|_| Vec::new()).collect();
+        let mut suffix_always: Vec<u32> = Vec::new();
+        let mut prefix: Vec<MatcherEntry> = Vec::new();
+        for rule in rules {
+            for raw in rule.matchers {
+                let m = raw.as_bytes();
+                let entry = MatcherEntry {
+                    matcher: m,
+                    label: rule.label,
+                    case_sensitive: rule.case_sensitive,
+                };
+                if m.last() == Some(&b'_') {
+                    // Prefix matcher (`foo_`) — Pass 2, kept as a linear list.
+                    prefix.push(entry);
+                } else {
+                    let idx = suffix.len() as u32;
+                    let (stripped, _) = unpack_matcher(m);
+                    match stripped.last() {
+                        Some(&lb) => suffix_by_last[lb.to_ascii_lowercase() as usize].push(idx),
+                        None => suffix_always.push(idx),
+                    }
+                    suffix.push(entry);
+                }
+            }
+        }
+        LabelIndex {
+            suffix,
+            suffix_by_last,
+            suffix_always,
+            prefix,
+        }
+    }
+
+    /// Visit the suffix-match candidates for a text pair whose lowercased last
+    /// bytes are `tlb` / `nlb`, in ascending registry order, calling `f` on
+    /// each. `f` returns `true` to stop early (first-match callers). The ≤3
+    /// index lists (`tlb` bucket, distinct `nlb` bucket, `suffix_always`) are
+    /// individually ascending and mutually disjoint — each suffix matcher lives
+    /// in exactly one — so a k-way merge yields every candidate exactly once in
+    /// registry order.
+    #[inline]
+    fn for_each_suffix_candidate<F: FnMut(&MatcherEntry) -> bool>(
+        &self,
+        tlb: Option<u8>,
+        nlb: Option<u8>,
+        bucketed: bool,
+        mut f: F,
+    ) {
+        if !bucketed {
+            // A/B escape hatch (`NYX_DISABLE_LABEL_INDEX=1`): the pre-index
+            // linear scan — `suffix` is exactly the flat, registry-ordered list
+            // of every suffix matcher, so iterating it whole reproduces the old
+            // inner loop.
+            for e in &self.suffix {
+                if f(e) {
+                    return;
+                }
+            }
+            return;
+        }
+        let mut lists: SmallVec<[&[u32]; 3]> = SmallVec::new();
+        if let Some(b) = tlb {
+            let l = &self.suffix_by_last[b as usize];
+            if !l.is_empty() {
+                lists.push(l);
+            }
+        }
+        if let Some(b) = nlb {
+            if Some(b) != tlb {
+                let l = &self.suffix_by_last[b as usize];
+                if !l.is_empty() {
+                    lists.push(l);
+                }
+            }
+        }
+        if !self.suffix_always.is_empty() {
+            lists.push(&self.suffix_always);
+        }
+        let n = lists.len();
+        // Fast path: a single candidate list is already ascending.
+        if n == 1 {
+            for &i in lists[0] {
+                if f(&self.suffix[i as usize]) {
+                    return;
+                }
+            }
+            return;
+        }
+        let mut heads = [0usize; 3];
+        loop {
+            let mut best: Option<(usize, u32)> = None;
+            for (i, list) in lists.iter().enumerate() {
+                if heads[i] < list.len() {
+                    let v = list[heads[i]];
+                    match best {
+                        Some((_, bv)) if bv <= v => {}
+                        _ => best = Some((i, v)),
+                    }
+                }
+            }
+            let Some((li, v)) = best else { break };
+            heads[li] += 1;
+            if f(&self.suffix[v as usize]) {
+                return;
+            }
+        }
+    }
+}
+
+/// Last-byte dispatch index over [`REGISTRY`], built once at first use. Keyed
+/// identically (every language alias) so `LABEL_INDEX.get(lang)` matches
+/// `REGISTRY.get(lang)`.
+static LABEL_INDEX: Lazy<HashMap<&'static str, LabelIndex>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    for (k, rules) in REGISTRY.iter() {
+        m.insert(*k, LabelIndex::build(rules));
+    }
+    m
+});
+
+/// A/B escape hatch: `NYX_DISABLE_LABEL_INDEX=1` forces the pre-index linear
+/// matcher scan (for single-binary before/after benchmarking and as a safety
+/// valve). Enabled path (default) uses the last-byte dispatch buckets.
+fn label_index_bucketed() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    !*DISABLED.get_or_init(|| std::env::var("NYX_DISABLE_LABEL_INDEX").is_ok())
+}
+
+/// Resolve a language's [`LabelIndex`], retrying with the lowercased key (mirror
+/// of the `REGISTRY.get(...).or_else(lowercase)` fallback the old path used).
+#[inline]
+fn label_index_for(lang: &str) -> Option<&'static LabelIndex> {
+    LABEL_INDEX.get(lang).or_else(|| {
+        let key = lang.to_ascii_lowercase();
+        LABEL_INDEX.get(key.as_str())
+    })
+}
+
 static GATED_REGISTRY: Lazy<HashMap<&'static str, &'static [SinkGate]>> = Lazy::new(|| {
     let mut m = HashMap::new();
     m.insert("javascript", javascript::GATED_SINKS);
@@ -1267,36 +1452,34 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
     }
 
     // ── Built-in static rules ────────────────────────────────────────
-    let rules = REGISTRY.get(lang).or_else(|| {
-        let key = lang.to_ascii_lowercase();
-        REGISTRY.get(key.as_str())
-    })?;
+    let index = label_index_for(lang)?;
+    let tlb = trimmed.last().map(u8::to_ascii_lowercase);
+    let nlb = full_norm_bytes.last().map(u8::to_ascii_lowercase);
 
-    // Pass 1: exact / suffix matches (high confidence)
-    for rule in *rules {
-        for raw in rule.matchers {
-            let m = raw.as_bytes();
-            if m.last() == Some(&b'_') {
-                continue;
-            }
-            if match_suffix_cs(trimmed, m, rule.case_sensitive)
-                || match_suffix_cs(full_norm_bytes, m, rule.case_sensitive)
-            {
-                return Some(rule.label);
-            }
+    // Pass 1: exact / suffix matches (high confidence). Only matchers whose
+    // last byte matches `text`'s last byte can suffix-match, so the last-byte
+    // buckets visit just those candidates in registry order.
+    let mut hit: Option<DataLabel> = None;
+    index.for_each_suffix_candidate(tlb, nlb, label_index_bucketed(), |e| {
+        if match_suffix_cs(trimmed, e.matcher, e.case_sensitive)
+            || match_suffix_cs(full_norm_bytes, e.matcher, e.case_sensitive)
+        {
+            hit = Some(e.label);
+            true
+        } else {
+            false
         }
+    });
+    if hit.is_some() {
+        return hit;
     }
 
     // Pass 2: prefix matches (catch-all, lower priority)
-    for rule in *rules {
-        for raw in rule.matchers {
-            let m = raw.as_bytes();
-            if m.last() == Some(&b'_')
-                && (starts_with_cs(trimmed, m, rule.case_sensitive)
-                    || starts_with_cs(full_norm_bytes, m, rule.case_sensitive))
-            {
-                return Some(rule.label);
-            }
+    for e in &index.prefix {
+        if starts_with_cs(trimmed, e.matcher, e.case_sensitive)
+            || starts_with_cs(full_norm_bytes, e.matcher, e.case_sensitive)
+        {
+            return Some(e.label);
         }
     }
 
@@ -1368,37 +1551,26 @@ pub fn classify_all(
     }
 
     // ── Built-in static rules ────────────────────────────────────────
-    let rules = REGISTRY.get(lang).or_else(|| {
-        let key = lang.to_ascii_lowercase();
-        REGISTRY.get(key.as_str())
-    });
+    if let Some(index) = label_index_for(lang) {
+        let tlb = trimmed.last().map(u8::to_ascii_lowercase);
+        let nlb = full_norm_bytes.last().map(u8::to_ascii_lowercase);
 
-    if let Some(rules) = rules {
         // Pass 1: exact / suffix matches (high confidence)
-        for rule in *rules {
-            for raw in rule.matchers {
-                let m = raw.as_bytes();
-                if m.last() == Some(&b'_') {
-                    continue;
-                }
-                if match_suffix_cs(trimmed, m, rule.case_sensitive)
-                    || match_suffix_cs(full_norm_bytes, m, rule.case_sensitive)
-                {
-                    push_dedup(&mut out, rule.label);
-                }
+        index.for_each_suffix_candidate(tlb, nlb, label_index_bucketed(), |e| {
+            if match_suffix_cs(trimmed, e.matcher, e.case_sensitive)
+                || match_suffix_cs(full_norm_bytes, e.matcher, e.case_sensitive)
+            {
+                push_dedup(&mut out, e.label);
             }
-        }
+            false
+        });
 
         // Pass 2: prefix matches (catch-all, lower priority)
-        for rule in *rules {
-            for raw in rule.matchers {
-                let m = raw.as_bytes();
-                if m.last() == Some(&b'_')
-                    && (starts_with_cs(trimmed, m, rule.case_sensitive)
-                        || starts_with_cs(full_norm_bytes, m, rule.case_sensitive))
-                {
-                    push_dedup(&mut out, rule.label);
-                }
+        for e in &index.prefix {
+            if starts_with_cs(trimmed, e.matcher, e.case_sensitive)
+                || starts_with_cs(full_norm_bytes, e.matcher, e.case_sensitive)
+            {
+                push_dedup(&mut out, e.label);
             }
         }
     }
@@ -1667,6 +1839,40 @@ pub fn classify_gated_sink(
     const_keyword_arg: impl Fn(&str) -> Option<String>,
     kwarg_present: impl Fn(&str) -> bool,
 ) -> SmallVec<[GateMatch; 2]> {
+    // Backward-compatible entry point: assume every positional activation arg is
+    // *present* (`|_| true`), which reproduces the historical
+    // conservative-fire-on-unknown behaviour for callers that only know the
+    // callee name (name-based cap lookups, chained-gate guards).  Callers that
+    // hold the actual call node should use
+    // [`classify_gated_sink_with_presence`] so a *missing* activation arg
+    // suppresses rather than fires.
+    classify_gated_sink_with_presence(
+        lang,
+        callee_text,
+        const_arg_at,
+        const_keyword_arg,
+        kwarg_present,
+        |_| true,
+    )
+}
+
+/// Like [`classify_gated_sink`], but takes an `arg_present` predicate so a
+/// positional `ValueMatch` gate whose activation argument is **absent** (never
+/// passed at the call site) suppresses instead of firing conservatively.  A
+/// *present-but-dynamic* activation arg (`arg_present` true, `const_arg_at`
+/// `None`) still fires conservatively, because an attacker-controlled flag /
+/// attribute is itself a vulnerability path.  Motivated by CVE-2025-48882
+/// (PHPOffice/Math): the fix drops the `LIBXML_DTDLOAD` options arg entirely
+/// (`$dom->loadXML($content)`), which is XXE-safe under the libxml >= 2.9
+/// default; the missing options arg must not keep the gate firing.
+pub fn classify_gated_sink_with_presence(
+    lang: &str,
+    callee_text: &str,
+    const_arg_at: impl Fn(usize) -> Option<String>,
+    const_keyword_arg: impl Fn(&str) -> Option<String>,
+    kwarg_present: impl Fn(&str) -> bool,
+    arg_present: impl Fn(usize) -> bool,
+) -> SmallVec<[GateMatch; 2]> {
     let mut out: SmallVec<[GateMatch; 2]> = SmallVec::new();
     let gates = match GATED_REGISTRY.get(lang).or_else(|| {
         let key = lang.to_ascii_lowercase();
@@ -1795,6 +2001,17 @@ pub fn classify_gated_sink(
             // ambiguously-named suffix matchers like bare `extend`).
             None => {
                 if matches!(gate.activation, GateActivation::LiteralOnly) {
+                    continue;
+                }
+                // Positional gate whose activation arg is ABSENT (never passed
+                // at the call site): the guarded flag / attribute cannot hold a
+                // dangerous value, so the call takes the language default and
+                // the gate must not fire.  Only a PRESENT-but-dynamic activation
+                // arg reaches the conservative push below.  Keyword-selected
+                // gates keep their prior semantics (handled by the multi-kwarg
+                // presence path above / single-kwarg lookup).  Motivated by
+                // CVE-2025-48882: `loadXML($content)` (no `$options`) is XXE-safe.
+                if gate.keyword_name.is_none() && !arg_present(gate.arg_index) {
                     continue;
                 }
                 out.push(GateMatch {
@@ -2373,6 +2590,164 @@ pub fn custom_rule_id(lang: &str, kind: &str, matchers: &[String]) -> String {
 mod tests {
     use super::*;
 
+    /// Reference (pre-index) linear built-in `classify`: walks every matcher of
+    /// every rule in registry order, exactly as the old inner loops did. Pins
+    /// the `LabelIndex` dispatch against the naive scan.
+    fn ref_classify(lang: &str, text: &str) -> Option<DataLabel> {
+        let head = text.split(['(', '<']).next().unwrap_or("");
+        let trimmed = head.trim().as_bytes();
+        if is_excluded(lang, trimmed) {
+            return None;
+        }
+        let full = normalize_chained_call(text);
+        let fb = full.as_bytes();
+        let rules = REGISTRY.get(lang).or_else(|| {
+            let k = lang.to_ascii_lowercase();
+            REGISTRY.get(k.as_str())
+        })?;
+        for rule in *rules {
+            for raw in rule.matchers {
+                let m = raw.as_bytes();
+                if m.last() == Some(&b'_') {
+                    continue;
+                }
+                if match_suffix_cs(trimmed, m, rule.case_sensitive)
+                    || match_suffix_cs(fb, m, rule.case_sensitive)
+                {
+                    return Some(rule.label);
+                }
+            }
+        }
+        for rule in *rules {
+            for raw in rule.matchers {
+                let m = raw.as_bytes();
+                if m.last() == Some(&b'_')
+                    && (starts_with_cs(trimmed, m, rule.case_sensitive)
+                        || starts_with_cs(fb, m, rule.case_sensitive))
+                {
+                    return Some(rule.label);
+                }
+            }
+        }
+        None
+    }
+
+    /// Reference (pre-index) linear built-in `classify_all`.
+    fn ref_classify_all(lang: &str, text: &str) -> SmallVec<[DataLabel; 2]> {
+        let head = text.split(['(', '<']).next().unwrap_or("");
+        let trimmed = head.trim().as_bytes();
+        let mut out: SmallVec<[DataLabel; 2]> = SmallVec::new();
+        if is_excluded(lang, trimmed) {
+            return out;
+        }
+        let full = normalize_chained_call(text);
+        let fb = full.as_bytes();
+        let push = |out: &mut SmallVec<[DataLabel; 2]>, l: DataLabel| {
+            if !out.contains(&l) {
+                out.push(l);
+            }
+        };
+        if let Some(rules) = REGISTRY.get(lang).or_else(|| {
+            let k = lang.to_ascii_lowercase();
+            REGISTRY.get(k.as_str())
+        }) {
+            for rule in *rules {
+                for raw in rule.matchers {
+                    let m = raw.as_bytes();
+                    if m.last() == Some(&b'_') {
+                        continue;
+                    }
+                    if match_suffix_cs(trimmed, m, rule.case_sensitive)
+                        || match_suffix_cs(fb, m, rule.case_sensitive)
+                    {
+                        push(&mut out, rule.label);
+                    }
+                }
+            }
+            for rule in *rules {
+                for raw in rule.matchers {
+                    let m = raw.as_bytes();
+                    if m.last() == Some(&b'_')
+                        && (starts_with_cs(trimmed, m, rule.case_sensitive)
+                            || starts_with_cs(fb, m, rule.case_sensitive))
+                    {
+                        push(&mut out, rule.label);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The last-byte dispatch index must be byte-identical to the linear scan
+    /// for both `classify` (first match) and `classify_all` (ordered multi),
+    /// across every matcher of every language plus boundary/case/miss shapes.
+    #[test]
+    fn label_index_matches_linear_scan_over_full_registry() {
+        let langs = [
+            "rust",
+            "rs",
+            "javascript",
+            "js",
+            "typescript",
+            "ts",
+            "python",
+            "py",
+            "go",
+            "java",
+            "c",
+            "cpp",
+            "c++",
+            "php",
+            "ruby",
+            "rb",
+        ];
+        // Extra freeform probes that stress misses, empty, boundaries, chains.
+        let extra_texts = [
+            "",
+            "x",
+            "a.b.c",
+            "randomFunctionName",
+            "foo.bar.Baz",
+            "r.URL.Query().Get",
+            "obj.method(arg)",
+            "Some::Path::to::thing",
+            "OPEN",
+            "Execute",
+        ];
+        for lang in langs {
+            let rules = match REGISTRY.get(lang) {
+                Some(r) => *r,
+                None => continue,
+            };
+            let mut texts: Vec<String> = extra_texts.iter().map(|s| s.to_string()).collect();
+            for rule in rules {
+                for raw in rule.matchers {
+                    let stripped = raw.strip_prefix('=').unwrap_or(raw);
+                    // Exercise each matcher as a hit and in boundary/case forms.
+                    texts.push(stripped.to_string());
+                    texts.push(format!("obj.{stripped}"));
+                    texts.push(format!("Mod::{stripped}"));
+                    texts.push(format!("x{stripped}")); // no boundary — exact-only/`.`
+                    texts.push(stripped.to_ascii_uppercase());
+                    texts.push(format!("{stripped}(a, b)"));
+                }
+            }
+            for text in &texts {
+                assert_eq!(
+                    classify(lang, text, None),
+                    ref_classify(lang, text),
+                    "classify mismatch lang={lang} text={text:?}"
+                );
+                assert_eq!(
+                    classify_all(lang, text, None).into_vec(),
+                    ref_classify_all(lang, text).into_vec(),
+                    "classify_all mismatch lang={lang} text={text:?}"
+                );
+            }
+        }
+    }
+
     /// Pin the current set of caps whose `rule_id` is reachable via the
     /// diag-id routing in `ast.rs::diag_for_finding`.  When migrating a
     /// legacy cap (e.g. SQL_QUERY → `taint-sql-injection`), update both
@@ -2683,6 +3058,62 @@ mod tests {
         assert_eq!(result, None);
     }
 
+    // CVE-2024-37896 (gin-vue-admin ORDER BY injection):
+    // GORM query-builder methods take a raw SQL fragment at arg 0.  The
+    // terminal / assigned form (`db = db.Order(x)`) resolves by suffix on a
+    // `db`-named receiver; the `GormDb.<verb>` variant covers `gorm.Open`-typed
+    // receivers with other names.  Each is also a payload-arg-0 gate so the
+    // parameterised `db.Where("col = ?", val)` form stays silent.
+    #[test]
+    fn classify_go_gorm_order_is_sql_query_sink() {
+        assert_eq!(
+            classify("go", "db.Order", None),
+            Some(DataLabel::Sink(Cap::SQL_QUERY))
+        );
+    }
+
+    #[test]
+    fn classify_go_gorm_where_and_group_are_sql_query_sinks() {
+        assert_eq!(
+            classify("go", "db.Where", None),
+            Some(DataLabel::Sink(Cap::SQL_QUERY))
+        );
+        assert_eq!(
+            classify("go", "db.Group", None),
+            Some(DataLabel::Sink(Cap::SQL_QUERY))
+        );
+    }
+
+    #[test]
+    fn classify_go_gorm_typed_order_is_sql_query_sink() {
+        assert_eq!(
+            classify("go", "GormDb.Order", None),
+            Some(DataLabel::Sink(Cap::SQL_QUERY))
+        );
+    }
+
+    #[test]
+    fn classify_go_gorm_where_gate_targets_payload_arg_zero() {
+        let no_kw = |_: &str| None;
+        let no_kw_present = |_: &str| false;
+        let result = classify_gated_sink("go", "db.Where", |_| None, no_kw, no_kw_present);
+        let m = result
+            .iter()
+            .find(|m| m.label == DataLabel::Sink(Cap::SQL_QUERY))
+            .expect("expected SQL_QUERY gate for db.Where");
+        // SQL string at arg 0; bind values at arg 1+ travel the parameterised
+        // path and must not be scanned for taint.
+        assert_eq!(m.payload_args, &[0]);
+    }
+
+    #[test]
+    fn classify_go_non_gorm_db_method_is_not_sink() {
+        // A non-GORM builder method must not become a SQL sink just because the
+        // receiver ends in `db`.
+        assert_eq!(classify("go", "db.Limit", None), None);
+        assert_eq!(classify("go", "db.Offset", None), None);
+    }
+
     // CVE Hunt Session 2 (Go CVE-2023-3188 Owncast SSRF):
     // `http.DefaultClient.Get/Post/Head/Do/PostForm` is the idiomatic Go
     // SSRF sink shape (`http.DefaultClient` is the package-level shared
@@ -2801,6 +3232,55 @@ mod tests {
     }
 
     #[test]
+    fn classify_ruby_bare_system_exec_are_shell_escape_sinks() {
+        // The receiver-less Kernel#system / Kernel#exec primitives keep the
+        // SHELL_ESCAPE classification via the `=system` / `=exec` exact-match
+        // matchers (CVE-2026-42087 regression guard).
+        assert_eq!(
+            classify("ruby", "system", None),
+            Some(DataLabel::Sink(Cap::SHELL_ESCAPE))
+        );
+        assert_eq!(
+            classify("ruby", "exec", None),
+            Some(DataLabel::Sink(Cap::SHELL_ESCAPE))
+        );
+    }
+
+    #[test]
+    fn classify_ruby_receiver_exec_is_not_shell_escape_sink() {
+        // `conn.exec(sql)` on a typed receiver must NOT pick up the bare
+        // Kernel#exec SHELL_ESCAPE label — the `=exec` exact-match sigil only
+        // fires on the receiver-less form so the type-qualified
+        // `DatabaseConnection.exec` SQL sink can take over.  Core of the
+        // CVE-2026-42087 cmdi-misclassification fix.
+        let result = classify_all("ruby", "conn.exec", None);
+        assert!(!result.contains(&DataLabel::Sink(Cap::SHELL_ESCAPE)));
+    }
+
+    #[test]
+    fn classify_ruby_database_connection_exec_is_sql_sink() {
+        // Type-qualified raw `pg` driver sink: the resolver rewrites a
+        // DatabaseConnection-typed `conn.exec(sql)` to `DatabaseConnection.exec`.
+        assert_eq!(
+            classify("ruby", "DatabaseConnection.exec", None),
+            Some(DataLabel::Sink(Cap::SQL_QUERY))
+        );
+        assert_eq!(
+            classify("ruby", "DatabaseConnection.exec_query", None),
+            Some(DataLabel::Sink(Cap::SQL_QUERY))
+        );
+    }
+
+    #[test]
+    fn classify_ruby_database_connection_exec_params_is_not_sink() {
+        // The parameterised `exec_params` / `exec_prepared` forms use libpq
+        // `$1` placeholders and are the documented safe API — they must not be
+        // SQL sinks (CVE-2026-42087 patched form).
+        let result = classify_all("ruby", "DatabaseConnection.exec_params", None);
+        assert!(!result.contains(&DataLabel::Sink(Cap::SQL_QUERY)));
+    }
+
+    #[test]
     fn classify_ruby_file_open_is_not_shell_escape_sink() {
         // The exact-match sigil on `=open` must NOT fire on `File.open`.
         // `File.open` is a separate FILE_IO sink (existing rule); the
@@ -2836,6 +3316,43 @@ mod tests {
         // CVE-2021-21288 (CarrierWave) regression guard.
         let result = classify("ruby", "OpenURI.open_uri", None);
         assert_eq!(result, Some(DataLabel::Sink(Cap::SSRF)));
+    }
+
+    #[test]
+    fn classify_java_apache_httpclient_request_constructors_are_ssrf_sinks() {
+        // CVE-2024-39954 (Apache EventMesh): the target URL is bound on the
+        // request object at construction, so `new HttpGet(url)` /
+        // `new HttpOptions(url)` and the rest of the Apache HttpClient request
+        // family are the SSRF interception point.  Constructor calls classify
+        // with the bare type name as the callee (KINDS maps
+        // `object_creation_expression` to `Kind::CallFn`).
+        for ctor in [
+            "HttpGet",
+            "HttpPost",
+            "HttpPut",
+            "HttpDelete",
+            "HttpHead",
+            "HttpOptions",
+            "HttpTrace",
+            "HttpPatch",
+        ] {
+            let result = classify_all("java", ctor, None);
+            assert!(
+                result.contains(&DataLabel::Sink(Cap::SSRF)),
+                "expected `{ctor}` to be an SSRF sink, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_java_apache_httpclient_constructors_are_case_sensitive() {
+        // The bare request-type matchers are case-sensitive so a lowercase
+        // method/var named `httpget` does not widen into an SSRF sink.
+        let result = classify_all("java", "httpget", None);
+        assert!(
+            !result.contains(&DataLabel::Sink(Cap::SSRF)),
+            "lowercase `httpget` must not match the SSRF constructor rule, got {result:?}"
+        );
     }
 
     #[test]
@@ -3003,6 +3520,94 @@ mod tests {
             no_kw_present,
         );
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn gated_sink_absent_positional_activation_arg_suppresses() {
+        // CVE-2025-48882 (PHPOffice/Math): the fix drops the `LIBXML_DTDLOAD`
+        // options arg (`$dom->loadXML($content)`), which is XXE-safe under the
+        // libxml >= 2.9 default.  With the options activation arg ABSENT
+        // (const_arg None AND arg_present false) the ValueMatch XXE gate must
+        // NOT fire, rather than firing conservatively on the dynamic-unknown
+        // path.
+        let result = classify_gated_sink_with_presence(
+            "php",
+            "dom.loadXML",
+            |_| None, // options arg has no resolvable constant value...
+            no_kw,
+            no_kw_present,
+            |_| false, // ...because it is absent entirely
+        );
+        assert!(
+            result.is_empty(),
+            "absent options arg must suppress the XXE gate: {result:?}"
+        );
+
+        // Sibling gates on the same shape: bare `simplexml_load_string($xml)`.
+        let simplexml = classify_gated_sink_with_presence(
+            "php",
+            "simplexml_load_string",
+            |_| None,
+            no_kw,
+            no_kw_present,
+            |_| false,
+        );
+        assert!(simplexml.is_empty(), "{simplexml:?}");
+    }
+
+    #[test]
+    fn gated_sink_present_dynamic_activation_still_fires() {
+        // `$dom->loadXML($content, $runtimeFlags)`: the options arg is PRESENT
+        // but dynamic.  An attacker-controlled flags value could enable entity
+        // expansion, so the gate still fires conservatively (ALL_ARGS_PAYLOAD).
+        let result = classify_gated_sink_with_presence(
+            "php",
+            "dom.loadXML",
+            |_| None,
+            no_kw,
+            no_kw_present,
+            |idx| idx <= 1, // arg 1 (options) IS present
+        );
+        assert_eq!(
+            result.as_slice(),
+            &[GateMatch {
+                label: DataLabel::Sink(Cap::XXE),
+                payload_args: ALL_ARGS_PAYLOAD,
+                object_destination_fields: &[],
+            }]
+        );
+    }
+
+    #[test]
+    fn gated_sink_present_dangerous_positional_fires_restricted() {
+        // `$dom->loadXML($content, LIBXML_DTDLOAD)`: dangerous flag present →
+        // fire, payload restricted to arg 0 (the XML string).
+        let result = classify_gated_sink_with_presence(
+            "php",
+            "dom.loadXML",
+            |idx| (idx == 1).then(|| "LIBXML_DTDLOAD".to_string()),
+            no_kw,
+            no_kw_present,
+            |idx| idx <= 1,
+        );
+        assert_eq!(
+            result.as_slice(),
+            &[GateMatch {
+                label: DataLabel::Sink(Cap::XXE),
+                payload_args: [0usize].as_slice(),
+                object_destination_fields: &[],
+            }]
+        );
+    }
+
+    #[test]
+    fn gated_sink_wrapper_assumes_activation_arg_present() {
+        // The 3-arg `classify_gated_sink` wrapper preserves the historical
+        // conservative-fire-on-unknown behaviour (arg_present = always true) for
+        // name-only callers, so it still fires on an unresolved activation arg.
+        let result = classify_gated_sink("php", "dom.loadXML", |_| None, no_kw, no_kw_present);
+        assert_eq!(result.len(), 1, "{result:?}");
+        assert_eq!(result[0].payload_args, ALL_ARGS_PAYLOAD);
     }
 
     #[test]

@@ -49,7 +49,7 @@ fn pipeline_global_summaries(files: &[File<'_>]) -> GlobalSummaries {
     let mut all_ssa: Vec<(FuncKey, SsaFuncSummary)> = Vec::new();
     for f in files {
         let path = Path::new(f.namespace);
-        let (func, ssa, _bodies, _auth, _cpi) =
+        let (func, ssa, _bodies, _auth, _cpi, _, _) =
             extract_all_summaries_from_bytes(f.bytes, path, &cfg, None)
                 .expect("extract_all_summaries_from_bytes must succeed");
         all_func.extend(func);
@@ -158,14 +158,15 @@ class Cache {
     // Step 2: build_call_graph must route the edge to FileHandle::close,
     // not to Cache::close.
     let cg = build_call_graph(&gs, &[]);
-    let read_key = FuncKey {
-        lang: Lang::Java,
-        namespace: "Reader.java".into(),
-        container: "Reader".into(),
-        name: "read".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let read_key = FuncKey::from_parts(
+        Lang::Java,
+        "Reader.java",
+        "Reader",
+        "read",
+        Some(0),
+        None,
+        nyx_scanner::symbol::FuncKind::Function,
+    );
     let read_node = match cg.index.get(&read_key) {
         Some(&n) => n,
         None => {
@@ -463,13 +464,15 @@ fn audit_n3_zero_match_falls_through_to_today() {
     };
 
     let mut gs = merge_summaries(vec![worker, caller], None);
-    let caller_key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "src/main.rs".into(),
-        name: "drive".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let caller_key = FuncKey::from_parts(
+        Lang::Rust,
+        "src/main.rs",
+        String::new(),
+        "drive",
+        Some(0),
+        None,
+        nyx_scanner::symbol::FuncKind::Function,
+    );
     gs.insert_ssa(
         caller_key.clone(),
         SsaFuncSummary {
@@ -548,13 +551,15 @@ fn audit_r3_ambiguous_without_typed_receiver_stays_ambiguous() {
     };
     let gs = merge_summaries(vec![send_http, send_mail, caller], None);
     let cg = build_call_graph(&gs, &[]);
-    let caller_key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "src/main.rs".into(),
-        name: "go".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let caller_key = FuncKey::from_parts(
+        Lang::Rust,
+        "src/main.rs",
+        String::new(),
+        "go",
+        Some(0),
+        None,
+        nyx_scanner::symbol::FuncKind::Function,
+    );
     let caller_node = cg.index[&caller_key];
     assert_eq!(
         cg.graph.edges(caller_node).count(),
@@ -603,13 +608,15 @@ fn audit_r4_arity_filter_still_applies_after_devirt() {
     };
 
     let mut gs = merge_summaries(vec![one, two, caller], None);
-    let caller_key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "src/main.rs".into(),
-        name: "drive".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let caller_key = FuncKey::from_parts(
+        Lang::Rust,
+        "src/main.rs",
+        String::new(),
+        "drive",
+        Some(0),
+        None,
+        nyx_scanner::symbol::FuncKind::Function,
+    );
     gs.insert_ssa(
         caller_key.clone(),
         SsaFuncSummary {

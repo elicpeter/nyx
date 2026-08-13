@@ -203,8 +203,15 @@ fn build_summaries_inline(files: &[PathBuf], scan_root: &Path, config: &Config) 
             let Ok(bytes) = std::fs::read(path) else {
                 return local_gs;
             };
-            let Ok((func_summaries, ssa_summaries, ssa_bodies, auth_summaries, cross_pkg)) =
-                extract_all_summaries_from_bytes(&bytes, path, config, Some(scan_root))
+            let Ok((
+                func_summaries,
+                ssa_summaries,
+                ssa_bodies,
+                auth_summaries,
+                cross_pkg,
+                caller_scope_facts,
+                router_facts,
+            )) = extract_all_summaries_from_bytes(&bytes, path, config, Some(scan_root))
             else {
                 return local_gs;
             };
@@ -223,6 +230,15 @@ fn build_summaries_inline(files: &[PathBuf], scan_root: &Path, config: &Config) 
             }
             if let Some((ns, map)) = cross_pkg {
                 local_gs.insert_cross_package_imports(ns, map);
+            }
+            // Fold the cross-file authorization facts into the same
+            // accumulator: the surface pass builds a real `GlobalSummaries`,
+            // and `merge` carries both fact sets through the rayon reduce.
+            for edge in caller_scope_facts {
+                local_gs.fold_caller_scope_edge(edge);
+            }
+            if let Some((module_id, facts)) = router_facts {
+                local_gs.insert_router_facts(module_id, facts);
             }
             local_gs
         })

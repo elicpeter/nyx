@@ -501,6 +501,35 @@ pub(super) fn extract_const_macro_arg(
     }
 }
 
+/// Whether `call_node` has a positional argument at `index`.
+///
+/// Used by the gated-sink activation logic (via
+/// [`crate::labels::classify_gated_sink_with_presence`]) to distinguish a
+/// **missing** activation argument from a **present-but-dynamic** one.  A
+/// `ValueMatch` gate whose activation arg is *absent* must not fire
+/// conservatively: the guarded flag / option was never passed, so the call
+/// takes the library's default (safe) behaviour.  For example PHP
+/// `simplexml_load_string($xml)` / `$dom->loadXML($xml)` with no `$options`
+/// literal is XXE-safe (libxml >= 2.9 default), so it should suppress; whereas
+/// `loadXML($xml, $dynamicFlags)` (present but dynamic) still fires because the
+/// runtime flags could enable entity expansion.
+///
+/// Mirrors the argument walk in [`extract_const_string_arg`] /
+/// [`extract_const_macro_arg`] (`child_by_field_name("arguments")`) so
+/// presence stays consistent with the const-extraction those closures do; the
+/// `argument_list` fallback errs toward "present" (never a spurious suppress)
+/// for any grammar that names the container differently.
+pub(super) fn call_has_arg_at(call_node: Node, index: usize) -> bool {
+    let Some(args) = call_node
+        .child_by_field_name("arguments")
+        .or_else(|| call_node.child_by_field_name("argument_list"))
+    else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    args.named_children(&mut cursor).nth(index).is_some()
+}
+
 /// Extract the value of a keyword argument from a call node (e.g. Python `shell=True`).
 /// Walks argument children looking for `keyword_argument` nodes, matches the keyword
 /// name, and extracts the value node text for literals.
@@ -704,10 +733,55 @@ pub(super) fn arg0_kind_and_interpolation(call_node: Node) -> Option<(String, bo
     let args = call_node.child_by_field_name("arguments")?;
     let mut cursor = args.walk();
     let arg0 = args.named_children(&mut cursor).next()?;
-    let arg0 = unwrap_parens(arg0);
+    let arg0 = unwrap_ts_value_wrappers(unwrap_parens(arg0));
     let kind = arg0.kind().to_string();
     let has_interp = subtree_has_interpolation(arg0);
     Some((kind, has_interp))
+}
+
+/// Strip TypeScript value-transparent wrappers (`x as T`, `x satisfies T`,
+/// `x!`) so the underlying value node's kind is observed.  A cast does not
+/// change the runtime value, only its static type, so `db.query(key as UID)`
+/// carries the same model-UID reference (`key`, an `identifier`) as
+/// `db.query(key)`.  Recurses to handle nested casts.
+fn unwrap_ts_value_wrappers(node: Node) -> Node {
+    match node.kind() {
+        "as_expression" | "satisfies_expression" | "non_null_expression" => {
+            if let Some(inner) = node.named_child(0) {
+                return unwrap_ts_value_wrappers(unwrap_parens(inner));
+            }
+            node
+        }
+        _ => node,
+    }
+}
+
+/// Arg-0 shapes that denote a model-UID *reference* for the ORM-accessor chain
+/// `<recv>.query(UID).<orm_method>(...)` (e.g. Strapi
+/// `strapi.db.query(uid).findMany({...})`,
+/// `strapi.db.query(RELEASE_MODEL_UID).findOne({...})`).
+///
+/// A Strapi / TypeORM model UID handed to `db.query(...)` is a string literal,
+/// a const / variable identifier (`uid`, `RELEASE_MODEL_UID`), or a member
+/// access (`models.Release`, `this.uid`) — it is *never* a runtime-computed
+/// SQL string (`"SELECT " + x` → `binary_expression`, a call, etc.).  What
+/// proves the chain is a parameterised ORM accessor is the trailing ORM method
+/// (`findMany` / `findOne` / `update` / …), not the literalness of the UID;
+/// requiring a string *literal* at arg 0 misses the dominant real-repo shapes
+/// where the UID is passed by variable or module constant.  Interpolated
+/// templates are still rejected by the `!has_interp` gate at the call site, so
+/// a raw `db.query(`SELECT ${x}`)` never reaches here.
+pub(super) fn js_orm_query_arg0_is_uid_ref(kind: &str) -> bool {
+    matches!(
+        kind,
+        "string"
+            | "string_fragment"
+            | "template_string"
+            | "identifier"
+            | "shorthand_property_identifier"
+            | "property_identifier"
+            | "member_expression"
+    )
 }
 
 /// Walk a Java method-chain receiver looking for an inner `method_invocation`
@@ -907,6 +981,42 @@ pub(super) fn js_chain_outer_method_for_inner<'a>(
     None
 }
 
+/// Bounded pre-order DFS over a node subtree for the ORM-accessor call
+/// `<recv>.query(UID).<orm_method>(...)`, i.e. the outer call whose receiver
+/// spine contains an inner `query` / `execute` call (matched by
+/// [`js_chain_outer_method_for_inner`] against `target_inner`).
+///
+/// More robust than a fixed-depth `find_call_node_deep`, which loses the chain
+/// when a wrapper (`(await ...)`, `... > 0`, `... as T`) pushes it past the
+/// depth budget, or when a non-ORM outer call (`Promise.all([...])`) is found
+/// first and shadows the ORM call nested in its arguments.  Pre-order returns
+/// the outermost matching call (`findMany`) before descending into its inner
+/// `query(...)` receiver, so the immediate outer ORM method is what surfaces.
+/// `budget` bounds the walk so a large statement subtree cannot blow up.
+pub(super) fn find_orm_query_chain_call<'a>(
+    n: Node<'a>,
+    target_inner: &[&str],
+    code: &'a [u8],
+    budget: &mut u32,
+) -> Option<Node<'a>> {
+    if *budget == 0 {
+        return None;
+    }
+    *budget -= 1;
+    if n.kind() == "call_expression"
+        && js_chain_outer_method_for_inner(n, target_inner, code).is_some()
+    {
+        return Some(n);
+    }
+    let mut cursor = n.walk();
+    for c in n.children(&mut cursor) {
+        if let Some(found) = find_orm_query_chain_call(c, target_inner, code, budget) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 /// For a chained method call (`a.b().c().d()`), walk down the receiver
 /// chain (`function.object`) and return the innermost call_expression
 /// alongside its callee text (e.g. `"http.get"`).
@@ -1020,6 +1130,75 @@ pub(super) fn find_chained_inner_call<'a>(
     let raw = text_of(function, code)?;
     let inner_text: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
     Some((outer, inner_text))
+}
+
+/// Walk the receiver chain of `outer` (the outer call plus every chained
+/// receiver call), from outermost inward, and return the FIRST call whose
+/// callee text classifies as a gated sink for `lang`.
+///
+/// Unlike [`find_chained_inner_call`] — which descends to the
+/// structurally-innermost method regardless of what it classifies as —
+/// this selects by GATE MATCH, so a gated sink that sits in the MIDDLE of a
+/// builder chain is found rather than skipped.
+///
+/// Motivated by RUSTSEC-2022-0072 (hyper-staticfile open redirect): the
+/// redirect Location header is set via
+/// `HttpResponseBuilder::new().status(..).header(LOCATION, target).body(..)`,
+/// where the gated `header` sink is neither the outermost call (`.body`) nor
+/// the structurally-innermost (`.status`).  `find_chained_inner_call`
+/// returned `.status`, so the existing rebind dispatch saw no gate and the
+/// open-redirect flow was lost.  classify_gated_sink suffix-matches the last
+/// dotted segment, so the full member text (e.g. `…status().header`) still
+/// resolves to the `header` gate.
+pub(super) fn find_chained_gated_sink_call<'a>(
+    outer: Node<'a>,
+    lang: &str,
+    code: &[u8],
+) -> Option<(Node<'a>, String)> {
+    let mut cur = outer;
+    loop {
+        if !matches!(lookup(lang, cur.kind()), Kind::CallFn | Kind::CallMethod) {
+            return None;
+        }
+        let function = cur
+            .child_by_field_name("function")
+            .or_else(|| cur.child_by_field_name("method"))?;
+        // Only treat THIS chain level as a candidate sink when its callee is a
+        // real member/method access (has an own method-name segment). For an
+        // immediately-invoked-call form `f(..)(..)` (e.g. lodash
+        // `_.template(t)(data)`), `function` is itself a call_expression with
+        // no member segment; the whole-chain text would spuriously normalise
+        // to the inner gate, so we must NOT claim the outer application call
+        // here — skip it and let the `find_chained_inner_call` fallback bind
+        // the real inner call.
+        let has_own_method = function.child_by_field_name("property").is_some()
+            || function.child_by_field_name("field").is_some()
+            || function.child_by_field_name("attribute").is_some()
+            || function.child_by_field_name("name").is_some();
+        // Callee text of THIS chain level: the call's `function`/`method`
+        // field text, whitespace-stripped (mirrors `find_chained_inner_call`
+        // so the gate's suffix matchers hit on both single- and multi-line
+        // chains).
+        if has_own_method && let Some(raw) = text_of(function, code) {
+            let callee: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+            if !crate::labels::classify_gated_sink(lang, &callee, |_| None, |_| None, |_| false)
+                .is_empty()
+            {
+                return Some((cur, callee));
+            }
+        }
+        // Descend to the receiver call, if any.
+        let object = function
+            .child_by_field_name("object")
+            .or_else(|| function.child_by_field_name("value"))
+            .or_else(|| function.child_by_field_name("operand"));
+        match object {
+            Some(o) if matches!(lookup(lang, o.kind()), Kind::CallFn | Kind::CallMethod) => {
+                cur = o;
+            }
+            _ => return None,
+        }
+    }
 }
 
 /// Recursively walk the receiver chain of `outer` (a CallFn / CallMethod
@@ -1516,7 +1695,7 @@ fn collect_format_macro_idents_recursive(n: Node, code: &[u8], out: &mut Vec<Str
     }
 }
 
-fn is_rust_format_style_macro(name: &str) -> bool {
+pub(super) fn is_rust_format_style_macro(name: &str) -> bool {
     matches!(
         name,
         "format"
@@ -2168,6 +2347,25 @@ pub(super) fn extract_arg_string_literals(call_node: Node, code: &[u8]) -> Vec<O
                 let raw = text_of(target, code);
                 raw.and_then(|s| strip_literal_quotes(&s, target, code))
             }
+            // JS/TS backtick template literal.  A constant string only when it
+            // has no `${…}` interpolation (no `template_substitution` child) —
+            // an interpolation-free template is byte-for-byte a string literal
+            // (`\`SELECT * FROM t\``).  Capturing it lets positional-arg-aware
+            // suppressions (SQL-string const check, URL prefix lock) treat the
+            // extremely common `sequelize.query(\`…const DDL…\`, { transaction })`
+            // migration idiom as the constant it is.  A template WITH
+            // interpolation stays `None` (its dynamic parts may carry taint).
+            "template_string" => {
+                let mut tw = target.walk();
+                let has_interp = target
+                    .named_children(&mut tw)
+                    .any(|c| c.kind() == "template_substitution");
+                if has_interp {
+                    None
+                } else {
+                    text_of(target, code).map(|s| s.trim_matches('`').to_string())
+                }
+            }
             // Boolean / null / numeric literal tokens — capture verbatim so
             // downstream pattern-aware analysis (e.g. the XXE config-fact
             // pass that needs to read the boolean polarity arg of
@@ -2472,8 +2670,29 @@ pub(super) fn def_use(
                     let mut idents = Vec::new();
                     let mut paths = Vec::new();
                     collect_idents_with_paths(lhs, code, &mut idents, &mut paths);
-                    // Prefer dotted path (member expression) over last ident
-                    defs = paths.pop().or_else(|| idents.pop());
+                    if let Some(path) = paths.pop() {
+                        // Member-expression LHS (`obj.field = ...`): the dotted
+                        // path is the sole define; the bare idents it decomposed
+                        // into are receiver components, not defines.
+                        defs = Some(path);
+                    } else if !idents.is_empty() {
+                        // Bare multi-target assignment `a, b = rhs` whose LHS is a
+                        // plain identifier list — Go's `expression_list` (e.g.
+                        // `handle, err = os.Open(p)`). The FIRST identifier is the
+                        // primary define and the rest are `extra_defs`, mirroring
+                        // the `:=` / CallWrapper arm. Picking the LAST ident
+                        // (`idents.pop()`) bound the resource-lifecycle handle to
+                        // Go's trailing `err` return — an error value is never a
+                        // closeable resource, so every `handle, err = open()`
+                        // reported a false `resource-leak` on `err` — and dropped
+                        // the real handle (and any taint on it) from the def set
+                        // entirely (`val, ok = os.LookupEnv(); sink(val)` lost the
+                        // flow to `val`).
+                        defs = Some(idents[0].clone());
+                        for ident in &idents[1..] {
+                            extra_defs.push(ident.clone());
+                        }
+                    }
                 }
             }
             if let Some(rhs) = ast.child_by_field_name("right") {
@@ -2861,4 +3080,108 @@ fn is_shell_command_flag(shell: &str, flag: &str) -> bool {
     }
     // POSIX shells.
     flag == "-c"
+}
+
+#[cfg(test)]
+mod orm_uid_ref_tests {
+    use super::{
+        find_orm_query_chain_call, js_chain_outer_method_for_inner, js_orm_query_arg0_is_uid_ref,
+    };
+
+    fn parse_ts(src: &[u8]) -> tree_sitter::Tree {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
+        parser.parse(src, None).unwrap()
+    }
+
+    const QT: &[&str] = &["query", "execute"];
+
+    /// The robust DFS locates the `<recv>.query(UID).<orm_method>(...)` call
+    /// through wrappers that defeat a fixed-depth lookup: `(await ...)` const
+    /// bindings, `(await ...) > 0` binary expressions, and `Promise.all([...])`
+    /// array arguments.  For each, the surfaced outer method must be the ORM
+    /// accessor, not the wrapping call.
+    #[test]
+    fn dfs_finds_orm_chain_through_wrappers() {
+        for (src, want) in [
+            (
+                &b"async function f(u:string){ const r = (await x.db.query(u).findMany({})); return r; }"[..],
+                "findMany",
+            ),
+            (
+                &b"async function f(a:unknown){ return (await x.db.query('admin::user').count({where:a})) > 0; }"[..],
+                "count",
+            ),
+            (
+                &b"async function f(m:string){ return Promise.all([x.db.query(m).findOne({})]); }"[..],
+                "findOne",
+            ),
+        ] {
+            let tree = parse_ts(src);
+            let bytes = src;
+            let mut budget = 96u32;
+            let call = find_orm_query_chain_call(tree.root_node(), QT, bytes, &mut budget)
+                .unwrap_or_else(|| panic!("DFS should find ORM call in: {}", String::from_utf8_lossy(src)));
+            assert_eq!(
+                js_chain_outer_method_for_inner(call, QT, bytes).as_deref(),
+                Some(want),
+                "outer method for: {}",
+                String::from_utf8_lossy(src),
+            );
+        }
+    }
+
+    /// A `key as UID.Schema` type-cast argument is transparent: the observed
+    /// inner-query arg-0 kind is the underlying `identifier`, not
+    /// `as_expression`, so the UID-reference gate accepts it.
+    #[test]
+    fn as_cast_arg0_unwraps_to_identifier() {
+        let src = &b"function f(k:string){ return x.db.query(k as any).count({}); }"[..];
+        let tree = parse_ts(src);
+        let call = find_orm_query_chain_call(tree.root_node(), QT, src, &mut 96u32)
+            .expect("DFS finds the count call");
+        let (kind, has_interp) =
+            super::js_chain_arg0_kind_for_method(call, QT, src).expect("inner query arg0");
+        assert_eq!(kind, "identifier", "as-cast should unwrap to identifier");
+        assert!(!has_interp);
+        assert!(js_orm_query_arg0_is_uid_ref(&kind));
+    }
+
+    /// Model-UID references accepted by the `db.query(UID).<orm_method>(...)`
+    /// ORM-chain recogniser: string literals AND by-reference forms (variable /
+    /// const identifier, member access).  Pins the real-repo shapes
+    /// `db.query(uid)` / `db.query(RELEASE_MODEL_UID)` / `db.query(models.x)`.
+    #[test]
+    fn accepts_literal_and_reference_uid_shapes() {
+        for k in [
+            "string",
+            "string_fragment",
+            "template_string",
+            "identifier",
+            "shorthand_property_identifier",
+            "property_identifier",
+            "member_expression",
+        ] {
+            assert!(js_orm_query_arg0_is_uid_ref(k), "should accept {k}");
+        }
+    }
+
+    /// Computed / concatenated arg-0 shapes are NOT model-UID references: a
+    /// `binary_expression` (`"SELECT " + x`) or a nested call could carry raw
+    /// SQL, so the sanitizer synthesis must refuse them even when an ORM method
+    /// is chained.  Guards against re-broadening the allowlist.
+    #[test]
+    fn rejects_computed_arg_shapes() {
+        for k in [
+            "binary_expression",
+            "call_expression",
+            "await_expression",
+            "ternary_expression",
+            "subscript_expression",
+        ] {
+            assert!(!js_orm_query_arg0_is_uid_ref(k), "should reject {k}");
+        }
+    }
 }

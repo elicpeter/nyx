@@ -329,9 +329,85 @@ fn find_post_if_sinks(cfg: &crate::cfg::Cfg, if_node: NodeIndex) -> Vec<NodeInde
     sinks_after
 }
 
+/// Collect the variable names DEFINED (assigned / re-bound) anywhere in
+/// the if's TRUE branch, bounded at the if's post-dominator `join`.
+///
+/// This recognises the **default-on-error recovery idiom** — the single
+/// most common `cfg-error-fallthrough` false positive on real Go code
+/// (minio `interval, err := time.ParseDuration(...); if err != nil ||
+/// interval < time.Second { interval = defaultMetricsInterval }`,
+/// portainer `cmd, err := lookup(r); if err != nil { cmd = "all" }`):
+///
+/// ```go
+/// name, err := lookup(r)
+/// if err != nil {
+///     name = "default"   // recovery: re-bind the failed value
+/// }
+/// os.Open(name)          // consumes the recovered default, not the failure
+/// ```
+///
+/// The rule's premise is "an error occurred → the values produced by the
+/// failing call are invalid → a downstream dangerous op consuming them is
+/// risky".  When the error branch re-assigns the very value the sink
+/// consumes, that premise no longer holds — on the error path the sink
+/// sees the recovered default, not the failed result.  The caller
+/// suppresses the finding only when EVERY dangerous post-if sink consumes
+/// a recovered variable (a sink reading a non-recovered failed value still
+/// fires — see the `handleUnrelated` / `vuln_error_log_then_sink` shapes).
+///
+/// The walk is bounded at the if's join (post-dominator) so assignments in
+/// the function tail past the if are not attributed to the error branch.
+fn collect_true_branch_defines(
+    cfg: &crate::cfg::Cfg,
+    if_node: NodeIndex,
+    join: Option<NodeIndex>,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+
+    let mut defs: HashSet<String> = HashSet::new();
+    let mut visited: HashSet<NodeIndex> = HashSet::new();
+    let mut stack: Vec<NodeIndex> = cfg
+        .edges(if_node)
+        .filter(|e| matches!(e.weight(), EdgeKind::True))
+        .map(|e| e.target())
+        .collect();
+
+    while let Some(current) = stack.pop() {
+        // Reaching the join means we walked past the if body; stop.
+        if join == Some(current) {
+            continue;
+        }
+        if !visited.insert(current) {
+            continue;
+        }
+
+        let info = &cfg[current];
+        if let Some(d) = info.taint.defines.as_deref() {
+            defs.insert(d.to_string());
+        }
+        for d in &info.taint.extra_defines {
+            defs.insert(d.clone());
+        }
+
+        for edge in cfg.edges(current) {
+            if matches!(edge.weight(), EdgeKind::Back | EdgeKind::Exception) {
+                continue;
+            }
+            stack.push(edge.target());
+        }
+    }
+
+    defs
+}
+
 impl CfgAnalysis for IncompleteErrorHandling {
     fn run(&self, ctx: &AnalysisContext) -> Vec<CfgFinding> {
         let mut findings = Vec::new();
+
+        // Post-dominators are needed both to bound `branch_terminates`'s
+        // walk and to bound the recovery-idiom true-branch walk; compute
+        // once per CFG and reuse for the recovery check below.
+        let post_doms = super::dominators::compute_post_dominators(ctx.cfg);
 
         for idx in ctx.cfg.node_indices() {
             let info = &ctx.cfg[idx];
@@ -384,21 +460,47 @@ impl CfgAnalysis for IncompleteErrorHandling {
 
             // Check: are there dangerous calls/sinks after this error check?
             let post_sinks = find_post_if_sinks(ctx.cfg, idx);
-            let has_dangerous_successor = post_sinks.iter().any(|&s| is_sink(&ctx.cfg[s]));
+            let dangerous: Vec<NodeIndex> = post_sinks
+                .iter()
+                .copied()
+                .filter(|&s| is_sink(&ctx.cfg[s]))
+                .collect();
 
-            if has_dangerous_successor {
-                findings.push(CfgFinding {
-                    rule_id: "cfg-error-fallthrough".to_string(),
-                    severity: Severity::Medium,
-                    confidence: Confidence::Medium,
-                    span: info.ast.span,
-                    message: "Error check does not terminate on error; \
-                              execution falls through to dangerous operations"
-                        .to_string(),
-                    evidence: vec![idx],
-                    score: None,
-                });
+            if dangerous.is_empty() {
+                continue;
             }
+
+            // Default-on-error recovery idiom: the error branch re-binds
+            // the value(s) the post-if sink consumes
+            // (`if err != nil { name = "default" }; os.Open(name)`), so on
+            // the error path the sink sees the recovered value, not the
+            // failed result.  Suppress only when EVERY dangerous sink
+            // consumes a recovered variable — a sink reading a
+            // non-recovered failed value (`if err != nil { log(err) };
+            // sink(failed)`) still fires.
+            let join = post_doms
+                .as_ref()
+                .and_then(|pd| pd.immediate_dominator(idx));
+            let recovered = collect_true_branch_defines(ctx.cfg, idx, join);
+            if !recovered.is_empty()
+                && dangerous
+                    .iter()
+                    .all(|&s| ctx.cfg[s].taint.uses.iter().any(|u| recovered.contains(u)))
+            {
+                continue;
+            }
+
+            findings.push(CfgFinding {
+                rule_id: "cfg-error-fallthrough".to_string(),
+                severity: Severity::Medium,
+                confidence: Confidence::Medium,
+                span: info.ast.span,
+                message: "Error check does not terminate on error; \
+                          execution falls through to dangerous operations"
+                    .to_string(),
+                evidence: vec![idx],
+                score: None,
+            });
         }
 
         findings

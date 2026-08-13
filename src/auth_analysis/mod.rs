@@ -57,10 +57,12 @@
 //!   SQL parser
 
 pub mod auth_markers;
+pub mod caller_scope;
 pub mod checks;
 pub mod config;
 pub mod extract;
 pub mod model;
+pub mod persist;
 pub mod router_facts;
 pub mod sql_semantics;
 
@@ -207,6 +209,23 @@ pub fn run_auth_analysis_with_model(
     // (when provided) for cross-file helpers that live in other files.
     apply_helper_lifting(&mut model, lang, file_path, scan_root, global_summaries);
 
+    // Cross-file caller-scope IPA (Phase 2): lift route-handler auth
+    // checks DOWN onto helper units defined in THIS file but called only
+    // from authorized route handlers in OTHER files.  Consults the
+    // pass-1 `GlobalSummaries.caller_scope_by_callee` accumulator.  Runs
+    // BEFORE the in-file pass so a cross-file-lifted helper can itself
+    // seed the in-file fixed point onto its same-file sub-callees.  See
+    // [`caller_scope`] for the soundness argument.  Gated by
+    // `NYX_XFILE_CALLER_SCOPE` (default on; set "0"/"false" to disable).
+    if caller_scope::cross_file_enabled()
+        && let Some(lang_enum) = Lang::from_slug(lang)
+        && let Some(gs) = global_summaries
+    {
+        caller_scope::apply_cross_file_caller_scope(&mut model, lang_enum, |l, leaf| {
+            gs.resolve_caller_scope(l, leaf).cloned()
+        });
+    }
+
     // Caller-scope IPA: propagate route-handler-level auth checks DOWN
     // to callee helper units within the same file.  See
     // [`apply_caller_scope_propagation`] for the propagation rule.
@@ -254,6 +273,80 @@ pub fn extract_auth_summaries_by_key(
         None,
     );
     extract_auth_summaries_from_model(&model, lang, file_path, scan_root)
+}
+
+/// Harvest cross-file caller-scope edges from a base authorization model.
+///
+/// Shared by both pass-1 extractors — the fused in-memory path
+/// ([`crate::ast::analyse_file_fused`], used by `--index off`) and the indexed
+/// path ([`crate::ast::extract_all_summaries_from_bytes`]) — so the two cannot
+/// drift.  Drift here is invisible rather than loud: a fact set harvested on
+/// one path and not the other produces no error, just a different finding set
+/// depending on whether indexing happened to be on.
+///
+/// The gitea extension is part of the harvest, not a caller's job: `web.Router`
+/// registers handlers cross-package (`r.Get(path, container.GetBlobsUpload)`)
+/// under closure groups whose trailing ownership-guard middleware is colocated
+/// with the registration, so the route → handler-leaf edges only exist at the
+/// registration site.  A no-op on non-gitea Go files.
+pub fn harvest_caller_scope_facts(
+    model: &model::AuthorizationModel,
+    lang: &str,
+    tree: &Tree,
+    source: &[u8],
+) -> Vec<caller_scope::CallerScopeEdge> {
+    let Some(lang_enum) = Lang::from_slug(lang) else {
+        return Vec::new();
+    };
+    let mut facts = caller_scope::extract_caller_scope_facts(model, lang_enum);
+    if lang_enum == Lang::Go {
+        facts.extend(extract::gitea::extract_route_handler_auth_edges(
+            tree, source, lang_enum,
+        ));
+    }
+    facts
+}
+
+/// [`extract_auth_summaries_by_key`] plus the caller-scope edges harvested
+/// from the same model.
+///
+/// The indexed pass-1 extractor needs both, and building the authorization
+/// model is the expensive part, so they are produced together rather than by
+/// two separate AST walks.
+pub fn extract_auth_facts_by_key(
+    tree: &Tree,
+    source: &[u8],
+    lang: &str,
+    file_path: &Path,
+    cfg: &Config,
+    scan_root: Option<&Path>,
+) -> (
+    Vec<(FuncKey, model::AuthCheckSummary)>,
+    Vec<caller_scope::CallerScopeEdge>,
+) {
+    let rules = config::build_auth_rules(cfg, lang);
+    if !rules.enabled {
+        return (Vec::new(), Vec::new());
+    }
+    let model = extract::extract_authorization_model(
+        lang,
+        cfg.framework_ctx.as_ref(),
+        tree,
+        source,
+        file_path,
+        &rules,
+        None,
+    );
+    let summaries = extract_auth_summaries_from_model(&model, lang, file_path, scan_root);
+    // Mirrors the fused path's gate: the caller-scope lift is a Full-mode
+    // analysis, and harvesting edges in the lighter modes would persist facts
+    // that pass 2 never consults.
+    let caller_scope_facts = if cfg.scanner.mode == crate::utils::config::AnalysisMode::Full {
+        harvest_caller_scope_facts(&model, lang, tree, source)
+    } else {
+        Vec::new()
+    };
+    (summaries, caller_scope_facts)
 }
 
 /// Variant of [`extract_auth_summaries_by_key`] that consumes a
@@ -305,15 +398,15 @@ fn summaries_keyed_by_func(
             continue;
         };
         let leaf = name.rsplit('.').next().unwrap_or(name).to_string();
-        let key = FuncKey {
-            lang: lang_enum,
-            namespace: namespace.clone(),
-            container: String::new(),
-            name: leaf,
-            arity: Some(unit.params.len()),
-            disambig: None,
-            kind: crate::symbol::FuncKind::Function,
-        };
+        let key = FuncKey::from_parts(
+            lang_enum,
+            namespace.clone(),
+            String::new(),
+            leaf,
+            Some(unit.params.len()),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         out.push((key, summary));
     }
     out
@@ -971,6 +1064,7 @@ fn synthesise_cross_file_checks_for_unit(
         canonical.disambig = None;
         canonical.container = String::new();
         canonical.kind = crate::symbol::FuncKind::Function;
+        canonical.recompute_hash();
         let Some(summary) = gs.get_auth(&canonical) else {
             continue;
         };

@@ -705,7 +705,7 @@ mod tests {
 
         let b = ProbeArg::Bytes(vec![b'h', b'i']);
         assert_eq!(b.as_str(), Some("hi"));
-        assert_eq!(b.as_bytes(), Some(&[b'h', b'i'][..]));
+        assert_eq!(b.as_bytes(), Some(&b"hi"[..]));
     }
 
     #[test]

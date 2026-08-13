@@ -130,6 +130,58 @@ fn clean_usage_no_state_findings() {
 }
 
 #[test]
+fn c_struct_field_call_acquire_transfers_ownership_but_local_still_leaks() {
+    // A malloc/calloc assigned DIRECTLY into a struct-field LHS
+    // (`b->buf = malloc(...)`, `s->buf = malloc(...)`) transfers ownership to
+    // the containing struct — the field must NOT be tracked as a
+    // function-local resource, so no `state-resource-leak` on `b->buf`.
+    let file = "c_struct_field_call_alloc.c";
+    let leak_msgs: Vec<String> = state_diags_for(file)
+        .into_iter()
+        .filter(|d| d.id == "state-resource-leak")
+        .map(|d| d.message.clone().unwrap_or_default())
+        .collect();
+    assert!(
+        leak_msgs.iter().all(|m| !m.contains("buf")),
+        "struct-field acquire `b->buf` must not leak (ownership transfers to the struct).\n  Got: {leak_msgs:?}"
+    );
+    // Recall guard: a genuinely orphaned plain-local malloc in the same file
+    // still fires the leak — the field-LHS gate must not over-suppress.
+    assert!(
+        leak_msgs.iter().any(|m| m.contains("orphan")),
+        "plain-local `orphan` malloc should still fire state-resource-leak.\n  Got: {leak_msgs:?}"
+    );
+}
+
+#[test]
+fn c_struct_field_nonescaping_local_leaks_but_escaping_stays_suppressed() {
+    // Container escape analysis (deferred deep fix from session-0049).
+    // A field-acquire into a provably NON-escaping local value struct
+    // (`struct Ctx c; c.buf = malloc();`, never freed) genuinely leaks —
+    // the blanket ownership-transfer suppression is lifted for it.  A
+    // field-acquire into an ESCAPING container (parameter arrow, address-
+    // taken, freed in-body) stays suppressed.
+    let file = "c_struct_field_nonescaping_local_leaks.c";
+    let leak_msgs: Vec<String> = state_diags_for(file)
+        .into_iter()
+        .filter(|d| d.id == "state-resource-leak")
+        .map(|d| d.message.clone().unwrap_or_default())
+        .collect();
+    // RECALL: the non-escaping `c.buf` leak IS reported.
+    assert!(
+        leak_msgs.iter().any(|m| m.contains("c.buf")),
+        "non-escaping local `c.buf` must fire state-resource-leak.\n  Got: {leak_msgs:?}"
+    );
+    // PRECISION: none of the escaping containers fire.
+    for esc in ["p->buf", "e.buf", "g.buf"] {
+        assert!(
+            leak_msgs.iter().all(|m| !m.contains(esc)),
+            "escaping container `{esc}` must stay suppressed.\n  Got: {leak_msgs:?}"
+        );
+    }
+}
+
+#[test]
 fn state_analysis_disabled_via_flag() {
     let mut cfg = common::test_config(AnalysisMode::Full);
     cfg.scanner.enable_state_analysis = false;
@@ -515,6 +567,43 @@ fn go_no_defer_manual_close_clean() {
     assert_no_state_findings("go_no_defer_manual_close.go");
 }
 
+#[test]
+fn go_multi_assign_predeclared_defer_close_no_leak() {
+    // `f, err = os.Open(p)` (pre-declared `var (f; err)`, Go `expression_list`
+    // LHS for a `=` multi-target assignment) + `defer f.Close()`.  The resource
+    // handle is `f` (first LHS target), not the trailing `err`, so the defer
+    // close clears it and NO resource-leak may fire.  Regression guard for the
+    // hugo `contentr, err = Os.Open(...)` false leak that named `err`.
+    assert_no_state_findings("go_multi_assign_predeclared_defer_close.go");
+}
+
+#[test]
+fn go_multi_assign_predeclared_no_close_leaks_on_handle() {
+    // Recall counterpart: the same `=` multi-assign shape with NO close must
+    // still fire the resource-leak rule, and the leaked resource must be the
+    // HANDLE `f` — the first LHS target — not the trailing `err`.  Before the
+    // def-attribution fix the resource was bound to `err` (the last ident), so
+    // this fired on `err` (a false attribution) while the real handle went
+    // untracked.
+    assert_has_prefix(
+        "go_multi_assign_predeclared_no_close.go",
+        "state-resource-leak",
+    );
+    assert_message_contains(
+        "go_multi_assign_predeclared_no_close.go",
+        "state-resource-leak",
+        "`f`",
+    );
+    // And crucially NOT on the trailing error binding.
+    assert!(
+        !state_diags_for("go_multi_assign_predeclared_no_close.go")
+            .iter()
+            .any(|d| d.id == "state-resource-leak"
+                && d.message.as_deref().unwrap_or("").contains("`err`")),
+        "resource-leak must not be attributed to the trailing `err` binding"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // (9) Auth, unauthed access detection
 // ═══════════════════════════════════════════════════════════════════════
@@ -872,6 +961,128 @@ fn java_prepared_stmt_leak() {
 #[test]
 fn java_prepared_stmt_clean() {
     assert_no_state_findings("java_prepared_stmt_clean.java");
+}
+
+// A JDBC `ResultSet` is owned by the `Statement` that produced it: closing
+// the statement (here via try-with-resources) transitively closes the
+// result set.  The engine must not flag `resultSet` as an independent leak.
+#[test]
+fn java_resultset_owned_by_statement_no_leak() {
+    assert_no_state_findings("java_resultset_owned_by_statement.java");
+}
+
+// Recall + invariant: in the prepared-statement leak fixture the real leak is
+// `stmt` (a `PreparedStatement` on a caller-supplied `Connection`, never
+// closed).  That leak must still fire, while the redundant `rs` leak (the
+// result set is owned by `stmt`) must be suppressed.
+#[test]
+fn java_prepared_stmt_leak_reports_statement_not_resultset() {
+    let leaks: Vec<&Diag> = state_diags_for("java_prepared_stmt_leak.java")
+        .into_iter()
+        .filter(|d| d.id == "state-resource-leak")
+        .collect();
+    assert!(
+        leaks
+            .iter()
+            .any(|d| d.message.as_deref().unwrap_or("").contains("`stmt`")),
+        "expected the `stmt` PreparedStatement leak to still fire.\n  Got: {:?}",
+        leaks
+            .iter()
+            .map(|d| d.message.as_deref().unwrap_or("(none)"))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !leaks
+            .iter()
+            .any(|d| d.message.as_deref().unwrap_or("").contains("`rs`")),
+        "the `rs` ResultSet leak should be suppressed (owned by `stmt`).\n  Got: {:?}",
+        leaks
+            .iter()
+            .map(|d| d.message.as_deref().unwrap_or("(none)"))
+            .collect::<Vec<_>>()
+    );
+}
+
+// A JDBC `Connection` borrowed from a managed session / DB abstraction
+// (here Liquibase's `Database` argument) is owned and closed by that
+// abstraction, not the borrower.  The engine must not flag the borrowed
+// connection as an independent leak.
+#[test]
+fn java_borrowed_connection_from_managed_session_no_leak() {
+    assert_no_state_findings("java_borrowed_connection_no_leak.java");
+}
+
+// Recall guard for the borrowed-connection suppression: a connection OWNED
+// by the caller — `DriverManager.getConnection(url)`, never closed — must
+// still fire.  The receiver `DriverManager` is not a borrowed owner, so the
+// leak is preserved.
+#[test]
+fn java_owned_driver_manager_connection_still_leaks() {
+    assert_has_prefix("java_db_connection_leak.java", "state-resource-leak");
+}
+
+// A JDBC `PreparedStatement` opened on a `Connection` acquired locally in the
+// same body (here borrowed from a managed `Session`) is transitively closed
+// by that connection's lifecycle.  The standalone statement leak is a false
+// positive and must be suppressed — even when the statement is released via a
+// static `closeQuietly` helper the release detector does not recognise.
+#[test]
+fn java_statement_from_borrowed_local_connection_no_leak() {
+    assert_no_state_findings("java_statement_from_borrowed_connection_no_leak.java");
+}
+
+// Recall guard for the statement-from-connection suppression: a statement
+// opened on a LONG-LIVED field connection (not a resource acquired in this
+// body) genuinely accumulates, so the `pstmt` leak must still fire.
+#[test]
+fn java_statement_from_field_connection_still_leaks() {
+    let leaks: Vec<&Diag> = state_diags_for("java_statement_from_field_connection_leaks.java")
+        .into_iter()
+        .filter(|d| d.id == "state-resource-leak")
+        .collect();
+    assert!(
+        leaks
+            .iter()
+            .any(|d| d.message.as_deref().unwrap_or("").contains("`pstmt`")),
+        "expected the `pstmt` leak on a long-lived field connection to still fire.\n  Got: {:?}",
+        leaks
+            .iter()
+            .map(|d| d.message.as_deref().unwrap_or("(none)"))
+            .collect::<Vec<_>>()
+    );
+}
+
+// Invariant: an OWNED connection (`DriverManager.getConnection`) that leaks is
+// the single actionable root; the derived statement is redundant.  The `conn`
+// leak must survive (recall preserved) while the derived `ps` statement leak
+// is suppressed.
+#[test]
+fn java_owned_connection_reports_connection_not_derived_statement() {
+    let leaks: Vec<&Diag> =
+        state_diags_for("java_owned_connection_statement_reports_connection_only.java")
+            .into_iter()
+            .filter(|d| d.id == "state-resource-leak")
+            .collect();
+    assert!(
+        leaks
+            .iter()
+            .any(|d| d.message.as_deref().unwrap_or("").contains("`conn`")),
+        "expected the owned `conn` connection leak to still fire.\n  Got: {:?}",
+        leaks
+            .iter()
+            .map(|d| d.message.as_deref().unwrap_or("(none)"))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !leaks
+            .iter()
+            .any(|d| d.message.as_deref().unwrap_or("").contains("`ps`")),
+        "the derived `ps` statement leak should be suppressed (owned by `conn`).\n  Got: {:?}",
+        leaks
+            .iter()
+            .map(|d| d.message.as_deref().unwrap_or("(none)"))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]

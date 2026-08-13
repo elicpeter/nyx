@@ -551,6 +551,78 @@ pub(super) fn classify_param_type<'a>(
         "javascript" | "js" => classify_param_type_ts(param, code),
         "rust" | "rs" => classify_param_type_rust(param, code),
         "python" | "py" => classify_param_type_python(param, code),
+        "go" => classify_param_type_go(param, code),
+        _ => None,
+    }
+}
+
+/// Go: recognise a **generic (non-response) writer** parameter from its
+/// declared static type and tag it [`TypeKind::FileHandle`].
+///
+/// The single motivating consumer is the Go `fmt.Fprintf` XSS gate in
+/// `taint::ssa_transfer` (via
+/// [`crate::ssa::type_facts::GoInterfaceTable::definitely_not`]).
+/// `fmt.Fprintf(w, fmt, args...)` is modelled as an `HTML_ESCAPE` (reflected
+/// XSS) sink because `w` is *often* an `http.ResponseWriter`.  When `w` is
+/// instead declared as a generic byte writer (`io.Writer`, `io.WriteCloser`,
+/// a `*bytes.Buffer`, a `*strings.Builder`, an `*os.File`, a `bufio.Writer`,
+/// ...), the formatted bytes never reach an HTTP client, so the finding is a
+/// false positive.  Tagging the parameter `FileHandle` — which
+/// `GoInterfaceTable::definitely_not(FileHandle, "http.ResponseWriter")`
+/// already reports as provably-not-a-ResponseWriter — makes the existing gate
+/// strip `HTML_ESCAPE` at the sink.
+///
+/// A *real* reflected-XSS handler declares its writer explicitly as
+/// `http.ResponseWriter` (or a framework response type).  Those are left
+/// untyped here so the gate's conservative unknown-type path keeps firing —
+/// i.e. this recogniser only ever *suppresses* the FP family, never the TP.
+///
+/// Precision/recall note: an `io.Writer` parameter *could* dynamically be
+/// bound to an `http.ResponseWriter` at some call site (an interprocedural
+/// XSS via a generic write-helper).  We accept that residual recall loss:
+/// idiomatic Go response handlers take `http.ResponseWriter` directly, and
+/// the FP volume from buffer / pipe / file / doc-gen writers dominates.
+/// `FileHandle` is not in the `Int | Bool` set consulted by
+/// `is_type_safe_for_sink`, and Go has no `FileHandle.*` type-qualified
+/// method rules, so the tag has no effect outside the ResponseWriter gate.
+///
+/// Motivated by prometheus `util/documentcli/documentcli.go`
+/// (`func GenerateMarkdown(model, writer io.Writer)` → `fmt.Fprintf(writer,
+/// ...)`) and the gitea `*bytes.Buffer` / `*os.File` write helpers.
+fn classify_param_type_go<'a>(param: Node<'a>, code: &'a [u8]) -> Option<TypeKind> {
+    if param.kind() != "parameter_declaration" && param.kind() != "variadic_parameter_declaration" {
+        return None;
+    }
+    let type_node = param.child_by_field_name("type")?;
+    let type_text = text_of(type_node, code)?;
+    go_writer_type_to_kind(&type_text)
+}
+
+/// Map a Go parameter / local type-text to [`TypeKind::FileHandle`] when the
+/// head names a generic byte writer that is provably not an
+/// `http.ResponseWriter`.  Strips a leading pointer marker (`*`) and
+/// surrounding whitespace, then matches the qualified type name.  Returns
+/// `None` for `http.ResponseWriter` and every unrecognised type so the sink
+/// gate stays conservative.
+pub(super) fn go_writer_type_to_kind(t: &str) -> Option<TypeKind> {
+    let head = t.trim().trim_start_matches('*').trim();
+    match head {
+        // Generic writer interfaces — a bare `io.Writer` is written to be
+        // destination-agnostic; a reflected-XSS handler would name
+        // `http.ResponseWriter` explicitly.
+        "io.Writer"
+        | "io.WriteCloser"
+        | "io.ReadWriteCloser"
+        | "io.ReadWriter"
+        // Concrete in-memory / local byte sinks — never an HTTP response.
+        | "bytes.Buffer"
+        | "strings.Builder"
+        | "os.File"
+        | "bufio.Writer"
+        | "bufio.ReadWriter"
+        | "tabwriter.Writer"
+        | "gzip.Writer"
+        | "zlib.Writer" => Some(TypeKind::FileHandle),
         _ => None,
     }
 }
@@ -1053,11 +1125,109 @@ pub(super) fn python_primitive_to_kind(t: &str) -> Option<TypeKind> {
     }
 }
 
-/// Check if a callee name matches any configured terminator.
-pub(super) fn is_configured_terminator(
+/// Language built-ins that never return.  A call to one of these ends the
+/// block: control reaches nothing after it, so the CFG builder must not
+/// draw a fall-through edge out of it.
+///
+/// This matters far beyond dead-code accounting, because it decides whether
+/// a validation guard is *dominating*.  In
+///
+/// ```php
+/// if (!in_array($cmd, $allowed)) { die('denied'); }
+/// system($cmd);
+/// ```
+///
+/// the sink is reachable only along the edge on which `in_array` held.  If
+/// `die` keeps a fall-through edge, the rejected value merges back in at the
+/// join and every "validate, else abort" guard in the language silently stops
+/// suppressing — the shape reads as unvalidated no matter how the guard is
+/// written.  The same argument covers `exit(1)` in C, `panic!()` in Rust and
+/// `sys.exit()` in Python.
+///
+/// Until now `LangAnalysisRules::terminators` was populated *only* from user
+/// config (`labels::build_lang_rules`), so out of the box no language had any
+/// terminator at all.  The knowledge did exist, but in
+/// `cfg_analysis::error_handling::call_never_returns`, which is reachable only
+/// from the `cfg-error-fallthrough` rule and never consulted while the graph
+/// is being built.  These are the built-in defaults the CFG builder needs;
+/// user config still unions on top.
+///
+/// Deliberately conservative.  Marking a call a terminator makes everything
+/// after it unreachable, which turns a false positive into a false *negative*
+/// if the callee can in fact return.  So this list only holds names that
+/// cannot return in the surface language, and only in their unambiguous
+/// namespace-qualified or reserved-word forms:
+///
+///  * PHP `die` / `exit` are reserved constructs and cannot be redefined.
+///  * Rust's diverging macros are `!`-typed by definition.  `assert!` and
+///    friends are excluded — they are conditional.
+///  * Bare `Exit` / `exit` on an arbitrary receiver (`session.exit()`) is
+///    *not* matched; only the qualified std forms are.
+fn is_builtin_terminator(lang: &str, callee: &str) -> bool {
+    // Receiver-qualified std terminators are matched on the full callee text,
+    // never on the trailing segment, so a user-defined `server.Exit()` or
+    // `session.exit()` is not mistaken for `os.Exit` / `sys.exit`.
+    match lang {
+        "php" => matches!(callee, "die" | "exit"),
+        // `_Exit` / `quick_exit` are C11; `err`/`errx` are BSD and exit(3)
+        // internally.  `abort` raises SIGABRT and never returns.
+        "c" | "cpp" => matches!(
+            callee,
+            "exit" | "_exit" | "_Exit" | "abort" | "quick_exit" | "err" | "errx"
+        ),
+        // Macro callees are recorded without the trailing `!`
+        // (see `is_rust_format_style_macro`).
+        "rust" => matches!(
+            callee,
+            "panic"
+                | "unreachable"
+                | "todo"
+                | "unimplemented"
+                | "process::exit"
+                | "process::abort"
+                | "std::process::exit"
+                | "std::process::abort"
+        ),
+        "python" => matches!(callee, "sys.exit" | "os._exit" | "os.abort"),
+        "go" => matches!(
+            callee,
+            "panic"
+                | "os.Exit"
+                | "syscall.Exit"
+                | "runtime.Goexit"
+                | "log.Fatal"
+                | "log.Fatalf"
+                | "log.Fatalln"
+                | "log.Panic"
+                | "log.Panicf"
+                | "log.Panicln"
+        ),
+        "java" => matches!(callee, "System.exit"),
+        "javascript" | "typescript" | "tsx" => matches!(callee, "process.exit"),
+        // Ruby `exit`/`exit!`/`abort` raise SystemExit / terminate.  `raise`
+        // is deliberately absent: it is modelled as `Kind::Throw`, which the
+        // CFG already routes to handlers rather than to a dead end.
+        "ruby" => matches!(callee, "exit" | "exit!" | "abort" | "Kernel.exit"),
+        _ => false,
+    }
+}
+
+/// Check if a callee name is a terminator: either a language built-in
+/// ([`is_builtin_terminator`]) or a user-configured one.
+///
+/// Config matching stays case-insensitive, as it always was.  Built-in
+/// matching is case-*sensitive* because the names it carries are qualified
+/// std identifiers where case is meaningful (`os.Exit` is Go's, `os.exit` is
+/// nobody's) and a case-insensitive compare would let a user-defined
+/// `System.Exit` or `PANIC` slip in.
+pub(super) fn is_terminator_call(
+    lang: &str,
     callee: &str,
     analysis_rules: Option<&LangAnalysisRules>,
 ) -> bool {
+    if is_builtin_terminator(lang, callee) {
+        return true;
+    }
     if let Some(rules) = analysis_rules {
         let callee_lower = callee.to_ascii_lowercase();
         rules

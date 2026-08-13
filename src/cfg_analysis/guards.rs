@@ -23,6 +23,27 @@ use std::collections::HashSet;
 
 pub struct UnguardedSink;
 
+/// True when this CFG node introduces untrusted data into the structural
+/// analysis.
+///
+/// A [`DataLabel::Source`] label is the base signal, minus the hardcoded
+/// network-fetch exemption the SSA taint engine already applies
+/// (`file_get_contents("https://api.example.com/health")`): a network-fetch
+/// primitive is a source only because it reaches out over the network, so
+/// when its endpoint is pinned by a literal URL the response is
+/// developer-chosen and the result is as constant as the URL that produced
+/// it.  Without the mirror the taint engine stays silent on such a flow
+/// while the structural rule still treats the fetch result as a source,
+/// which both defeats the constant-argument suppressions below and promotes
+/// the finding to High via `sink_arg_is_source_derived`.
+fn node_introduces_untrusted_data(info: &crate::cfg::NodeInfo) -> bool {
+    info.taint
+        .labels
+        .iter()
+        .any(|l| matches!(l, DataLabel::Source(_)))
+        && !crate::taint::ssa_transfer::node_is_hardcoded_network_fetch_source(info)
+}
+
 /// Check whether **all** arguments to the sink are constants (no taint-capable
 /// variable flows).  Extends the inline callee-part check by tracing one hop
 /// through the CFG: if a used variable is defined by a node that itself has
@@ -80,13 +101,7 @@ fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
             if info.taint.defines.as_deref() == Some(u.as_str()) {
                 // If the defining node has no uses (pure constant) and is not
                 // a Source, the variable is constant.
-                if info.taint.uses.is_empty()
-                    && !info
-                        .taint
-                        .labels
-                        .iter()
-                        .any(|l| matches!(l, DataLabel::Source(_)))
-                {
+                if info.taint.uses.is_empty() && !node_introduces_untrusted_data(info) {
                     return true;
                 }
             }
@@ -228,6 +243,97 @@ fn sink_payload_args_const(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     })
 }
 
+/// CFG-syntactic variant of [`sink_payload_args_const`]: suppress a
+/// `cfg-unguarded-sink` finding when every operand at the sink's
+/// `sink_payload_args` positions is a constant literal recorded on the call
+/// node at CFG-build time (`arg_string_literals`).
+///
+/// Unlike the SSA-backed [`sink_payload_args_const`], this reads the
+/// per-argument literals captured directly from the AST during CFG
+/// construction, so it holds even when the sink lives inside a nested callback
+/// body whose statements the per-function SSA const-facts do not cover.  This
+/// is the dominant real-repo shape for raw-SQL migrations (outline
+/// `server/migrations/*.js`):
+///
+/// ```text
+/// queryInterface.sequelize.transaction(async (transaction) => {
+///   queryInterface.sequelize.query(`ALTER TABLE …`, { transaction });
+/// });
+/// ```
+///
+/// The SQL template (payload arg 0) is a constant, but the sink node is inside
+/// the arrow callback, so `sink_payload_args_const` cannot find its SSA `Call`
+/// inst, and the `{ transaction }` options object (arg 1) defeats the
+/// whole-call `is_all_args_constant`.  A constant payload provably carries no
+/// injection regardless of the non-payload options object, so this is sound
+/// independent of `has_taint`.
+/// Return true when every payload position of a sink call resolves to a
+/// captured constant string literal.
+///
+/// `payload_args = Some(non-empty)` (a gated sink, e.g. `sequelize.query` with
+/// `payload_args = [0]`): each listed position must be a `Some(literal)`.
+/// `payload_args = None`/empty (an unrestricted sink, every argument is a
+/// payload): every recorded argument must be a `Some(literal)` — mirroring
+/// `is_all_args_constant` — and there must be at least one recorded argument
+/// (an empty list is unproven → not suppressed).
+fn payload_positions_all_literal(
+    payload_args: &Option<Vec<usize>>,
+    lits: &[Option<String>],
+) -> bool {
+    match payload_args {
+        Some(p) if !p.is_empty() => p.iter().all(|&pos| matches!(lits.get(pos), Some(Some(_)))),
+        _ => !lits.is_empty() && lits.iter().all(|l| l.is_some()),
+    }
+}
+
+fn sink_payload_args_syntactic_const(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
+    let info = &ctx.cfg[sink];
+
+    // Hoisted-callback sink: the `Sink` label on this wrapper node was hoisted
+    // from an inner call nested inside a callback-argument function literal
+    // (`sequelize.transaction(async (t) => { sequelize.query(`…const…`, {t}) })`).
+    // The wrapper's own arguments are the callback, not the SQL payload, so the
+    // syntactic-const check below (keyed on the wrapper's `sink_payload_args` /
+    // `arg_string_literals`) can never see the constant.  Consult the recorded
+    // INNER sink call's payload positions + literals instead.  Sound regardless
+    // of `has_taint`: a syntactic literal at the inner payload position cannot
+    // carry taint, and a tainted inner payload leaves that position non-literal
+    // so the wrapper finding still fires.  (The inner sink call also has its own
+    // CFG node in the nested-callback body, so real detection is never lost.)
+    if let Some(h) = &info.call.hoisted_sink {
+        return payload_positions_all_literal(&h.payload_args, &h.arg_string_literals);
+    }
+
+    let payload_positions = match &info.call.sink_payload_args {
+        Some(p) if !p.is_empty() => p,
+        _ => return false,
+    };
+    // Only trust the syntactic literals when the sink's callee identity was
+    // NOT overridden by an inner-nested / chained-call rebind.  When
+    // `outer_callee` is set (e.g. `http.get(target, cb).on('error', cb2)`,
+    // where the SSRF sink is rebound to the inner `http.get` but the node's
+    // `arg_string_literals` still reflect the outer `.on('error', …)` call),
+    // `sink_payload_args` and `arg_string_literals` come from DIFFERENT call
+    // nodes and are no longer positionally aligned — the `'error'` string
+    // literal at the `.on` arg 0 would masquerade as a constant SSRF payload.
+    // A direct raw-SQL sink (`sequelize.query(`…`, opts)`) has no override, so
+    // this preserves the migration suppression while refusing the misaligned
+    // rebind case.
+    if info.call.outer_callee.is_some() {
+        return false;
+    }
+    // `arg_string_literals` is aligned with positional arguments (keyword /
+    // named args are skipped during extraction), matching the positional
+    // indices carried in `sink_payload_args`.  Every payload position must
+    // resolve to a captured literal; a position outside the recorded arg list
+    // (empty vec on splat args, arity mismatch) is left unproven → not
+    // suppressed.
+    let lits = &info.call.arg_string_literals;
+    payload_positions
+        .iter()
+        .all(|&pos| matches!(lits.get(pos), Some(Some(_))))
+}
+
 /// Suppress a `cfg-unguarded-sink` SSRF finding when the sink's URL operand
 /// is origin-locked: it is the result of a `new URL(path, base)` /
 /// `urljoin(base, path)` / `url.JoinPath(base, …)` builder whose base
@@ -354,12 +460,7 @@ fn ssa_operand_const_or_param(
         let cfg_node = inst.cfg_node;
         if cfg
             .node_weight(cfg_node)
-            .map(|info| {
-                info.taint
-                    .labels
-                    .iter()
-                    .any(|l| matches!(l, DataLabel::Source(_)))
-            })
+            .map(node_introduces_untrusted_data)
             .unwrap_or(false)
         {
             return false;
@@ -437,12 +538,7 @@ fn ssa_operand_constant(
         let cfg_node = inst.cfg_node;
         if cfg
             .node_weight(cfg_node)
-            .map(|info| {
-                info.taint
-                    .labels
-                    .iter()
-                    .any(|l| matches!(l, DataLabel::Source(_)))
-            })
+            .map(node_introduces_untrusted_data)
             .unwrap_or(false)
         {
             return false;
@@ -601,6 +697,151 @@ fn sink_args_typed_safe(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) 
         }
     }
     type_facts_suppress(&values, sink_caps, type_facts)
+}
+
+/// Suppress a Go `cfg-unguarded-sink` reflected-XSS finding on
+/// `fmt.Fprintf` / `fmt.Fprint` / `fmt.Fprintln` when the writer (positional
+/// arg 0) is provably not an `http.ResponseWriter` — an in-memory
+/// `*bytes.Buffer`, an `*os.File`, a `bufio.Writer`, an `io.Writer`
+/// parameter, and similar non-response byte sinks.
+///
+/// Mirrors the SSA taint engine's Go printf writer gate
+/// ([`crate::ssa::type_facts::go_writer_is_non_response`]) so the two rules
+/// agree: the taint engine already strips `HTML_ESCAPE` when the writer is a
+/// non-response type, which leaves the sink unconfirmed (`!has_taint`) and
+/// re-opens the structural finding on the identical call.  gitea
+/// `models/unittest/mock_http.go:103` (`fmt.Fprintf(out, "%s: %s\n", …)`
+/// where `out := os.Create(…)`) and `temp_repo.go:152`
+/// (`fmt.Fprintf(stdIn, …)` where `stdIn := new(bytes.Buffer)`) are the
+/// motivating shapes.
+fn go_fprintf_writer_non_response(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) -> bool {
+    if !sink_caps.contains(Cap::HTML_ESCAPE) {
+        return false;
+    }
+    let sink_info = &ctx.cfg[sink];
+    let callee = sink_info.call.callee.as_deref().unwrap_or("");
+    if !matches!(callee, "fmt.Fprintf" | "fmt.Fprint" | "fmt.Fprintln") {
+        return false;
+    }
+    let Some(facts) = ctx.body_const_facts else {
+        return false;
+    };
+    let Some(type_facts) = ctx.type_facts else {
+        return false;
+    };
+    let Some(&sink_val) = facts.ssa.cfg_node_map.get(&sink) else {
+        return false;
+    };
+    let Some(inst) = find_inst(&facts.ssa, sink_val) else {
+        return false;
+    };
+    let SsaOp::Call { args, .. } = &inst.op else {
+        return false;
+    };
+    let Some(&first_val) = args.first().and_then(|g| g.first()) else {
+        return false;
+    };
+    type_facts
+        .get_type(first_val)
+        .is_some_and(crate::ssa::type_facts::go_writer_is_non_response)
+}
+
+/// Suppress a `cfg-unguarded-sink` finding when every real argument to the
+/// sink is a value-use identifier proven *numeric-confined* by the CFG-level
+/// AST walk ([`crate::cfg::NodeInfo::numeric_confined_uses`]): each occurrence
+/// of the identifier in the sink node is consumed by a numeric / safe-string
+/// producer (`x.parse::<u16>().unwrap().to_string()`, `parseInt(x)`, …), so it
+/// reaches the sink only as a number.  The structural analogue of the SSA
+/// taint engine's `numeric_confined_uses` drop, kept in lock-step so both
+/// findings paths agree (an inline numeric chain never lowers to its own SSA
+/// value, so the value-level `type_facts_suppress` above cannot reach it).
+///
+/// Gated to fully-type-suppressible sinks (a number can still be an IDOR /
+/// `UNAUTHORIZED_ID` payload, so confinement must not silence those).
+fn sink_args_numeric_confined(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) -> bool {
+    let type_suppressible = Cap::SQL_QUERY
+        | Cap::FILE_IO
+        | Cap::SHELL_ESCAPE
+        | Cap::HTML_ESCAPE
+        | Cap::SSRF
+        | Cap::DATA_EXFIL
+        | Cap::HEADER_INJECTION
+        | Cap::OPEN_REDIRECT;
+    if sink_caps.is_empty() || !(sink_caps & !type_suppressible).is_empty() {
+        return false;
+    }
+    let sink_info = &ctx.cfg[sink];
+    if sink_info.numeric_confined_uses.is_empty() {
+        return false;
+    }
+    let Some(facts) = ctx.body_const_facts else {
+        return false;
+    };
+    let Some(&sink_val) = facts.ssa.cfg_node_map.get(&sink) else {
+        return false;
+    };
+    let Some(inst) = find_inst(&facts.ssa, sink_val) else {
+        return false;
+    };
+    let SsaOp::Call { args, receiver, .. } = &inst.op else {
+        return false;
+    };
+
+    let callee_desc = sink_info.call.callee.as_deref().unwrap_or("");
+    let callee_parts: Vec<&str> = callee_desc
+        .split(['.', ':'])
+        .map(|p| p.split('(').next().unwrap_or(p))
+        .collect();
+    let outer_parts: Vec<&str> = sink_info
+        .call
+        .outer_callee
+        .as_deref()
+        .map(|oc| {
+            oc.split(['.', ':'])
+                .map(|p| p.split('(').next().unwrap_or(p))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // A "real" arg is a non-constant, non-callee-fragment SSA value.  Its
+    // var_name must be listed in `numeric_confined_uses`; otherwise the sink
+    // carries an un-confined operand and the finding is preserved.
+    let mut saw_real = false;
+    let mut all_confined = true;
+    let mut check = |v: SsaValue| {
+        let Some(def) = find_inst(&facts.ssa, v) else {
+            return;
+        };
+        if matches!(def.op, SsaOp::Const(_)) {
+            return;
+        }
+        let name = def.var_name.as_deref().unwrap_or("");
+        if matches!(def.op, SsaOp::Param { .. })
+            && (is_callee_fragment(name, callee_desc, &callee_parts, &outer_parts)
+                || sink_info
+                    .format_macro_method_idents
+                    .iter()
+                    .any(|m| m == name))
+        {
+            // Callee receiver-chain fragments and Rust `format!`-macro phantom
+            // method/macro-name tokens (`format`, `parse`, `unwrap`) are
+            // syntactic machinery flattened into the use set, not real values.
+            return;
+        }
+        saw_real = true;
+        if !sink_info.numeric_confined_uses.iter().any(|n| n == name) {
+            all_confined = false;
+        }
+    };
+    if let Some(r) = receiver {
+        check(*r);
+    }
+    for group in args {
+        for v in group.iter() {
+            check(*v);
+        }
+    }
+    saw_real && all_confined
 }
 
 /// Suppress a `cfg-unguarded-sink` SQL_QUERY finding when any positional
@@ -2211,6 +2452,219 @@ fn cond_indirect_validator_callee(
     crate::ssa::type_facts::classify_input_validator_callee(callee).map(|_| callee.to_string())
 }
 
+/// Behaviour-based path-confinement guard recognition for
+/// `cfg-unguarded-sink`.
+///
+/// Returns `true` when the `if`-condition gates on a helper whose SSA
+/// summary records a constant-prefix path-confinement predicate
+/// ([`crate::summary::ssa_summary::SsaFuncSummary::confines_path_params`]),
+/// mirroring the taint engine's `apply_summary_confinement_narrowing` so the
+/// structural and taint layers agree on this validator shape.  Recognises
+/// both the inline (`if (!isOptimizedDepFile(p))`) and two-statement
+/// (`const ok = isOptimizedDepFile(p); if (!ok)`) forms.  The caller scopes
+/// the registered guard to `Cap::FILE_IO`, matching the confinement
+/// semantics.
+///
+/// Name-based confinement helpers (`isValid…` / `isSafe…`) are already
+/// recognised via [`classify_condition`] / [`cond_indirect_validator_callee`];
+/// this closes the gap for behaviour-recognised helpers whose names carry no
+/// validator marker.  Motivated by CVE-2026-39365 (Vite sourcemap traversal).
+fn cond_confinement_helper(info: &crate::cfg::NodeInfo, ctx: &AnalysisContext) -> bool {
+    let Some(ssa_summaries) = ctx.ssa_summaries else {
+        return false;
+    };
+    let confines = |name: &str| -> bool {
+        ssa_summaries.iter().any(|(k, s)| {
+            k.lang == ctx.lang && k.name == name && !s.confines_path_params.is_empty()
+        })
+    };
+
+    // Inline call form: `if (!helper(p))`.
+    if let Some(cond_text) = info.condition_text.as_deref()
+        && !cond_text.contains("&&")
+        && !cond_text.contains("||")
+    {
+        let trimmed = cond_text.trim_start_matches(['(', '!', ' ', '\t']);
+        let trimmed = trimmed.strip_prefix("not ").unwrap_or(trimmed).trim();
+        if trimmed.contains('(') {
+            let callee_part = trimmed.split('(').next().unwrap_or("");
+            let bare = callee_part
+                .rsplit(['.', ':'])
+                .next()
+                .unwrap_or(callee_part)
+                .trim();
+            if !bare.is_empty() && confines(bare) {
+                return true;
+            }
+        }
+    }
+
+    // Two-statement form: condition var is defined by a Call to the helper.
+    // Mirrors `cond_indirect_validator_callee`'s CFG scan, gated on the
+    // confinement summary instead of the validator-name classifier.
+    if info.condition_vars.len() == 1 {
+        let var_name = info.condition_vars[0].as_str();
+        let cond_func = info.ast.enclosing_func.as_deref();
+        let cond_span_start = info.ast.span.0;
+        let mut best: Option<(usize, &str)> = None;
+        for nidx in ctx.cfg.node_indices() {
+            let n = &ctx.cfg[nidx];
+            if n.kind != crate::cfg::StmtKind::Call {
+                continue;
+            }
+            if n.taint.defines.as_deref() != Some(var_name) {
+                continue;
+            }
+            if n.ast.enclosing_func.as_deref() != cond_func {
+                continue;
+            }
+            let span_start = n.ast.span.0;
+            if span_start >= cond_span_start {
+                continue;
+            }
+            let Some(callee) = n.call.callee.as_deref() else {
+                continue;
+            };
+            match best {
+                Some((s, _)) if s >= span_start => {}
+                _ => best = Some((span_start, callee)),
+            }
+        }
+        if let Some((_, callee)) = best {
+            let bare = crate::labels::bare_method_name(callee);
+            if confines(bare) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Whether the `if`-condition at `info` gates a redirect on the result of a
+/// recognised relative-URL confiner
+/// ([`crate::summary::ssa_summary::SsaFuncSummary::sanitizes_open_redirect_return`]),
+/// e.g. `const dest = normalize_relative_url(...); if (dest !== null) res.redirect(dest);`.
+///
+/// Mirrors the taint layer's OPEN_REDIRECT strip (the `outer_callee`-aware
+/// confiner check in `transfer_inst`) so `cfg-unguarded-sink` agrees the
+/// redirect is guarded.  The confining call is recorded either as the defining
+/// node's `callee` or — when it wraps a nested source expression — as its
+/// `outer_callee`.  Scoped by the caller to `Cap::OPEN_REDIRECT`.  Motivated
+/// by CVE-2026-42259 (Saltcorn login open redirect).
+fn cond_open_redirect_confiner(info: &crate::cfg::NodeInfo, ctx: &AnalysisContext) -> bool {
+    let Some(ssa_summaries) = ctx.ssa_summaries else {
+        return false;
+    };
+    let confines = |name: &str| -> bool {
+        ssa_summaries
+            .iter()
+            .any(|(k, s)| k.lang == ctx.lang && k.name == name && s.sanitizes_open_redirect_return)
+    };
+
+    // Inline form: `if (helper(x) !== null)` / `if (!helper(x))`.
+    if let Some(cond_text) = info.condition_text.as_deref()
+        && !cond_text.contains("&&")
+        && !cond_text.contains("||")
+    {
+        let trimmed = cond_text.trim_start_matches(['(', '!', ' ', '\t']);
+        if trimmed.contains('(') {
+            let callee_part = trimmed.split('(').next().unwrap_or("");
+            let bare = callee_part
+                .rsplit(['.', ':'])
+                .next()
+                .unwrap_or(callee_part)
+                .trim();
+            if !bare.is_empty() && confines(bare) {
+                return true;
+            }
+        }
+    }
+
+    // Two-statement form: `const dest = normalize_relative_url(...); if (dest ...)`.
+    cond_open_redirect_confiner_two_statement(info, ctx)
+}
+
+/// Whether a Call node's argument expression wraps the redirect target in an
+/// open-redirect confiner, without an intervening `if` guard, e.g.
+/// `return redirect(get_safe_redirect(next_url))` (Flask-AppBuilder
+/// CVE-2022-24776).  The wrapper survives in [`CallMeta::arg_uses`] (or, for a
+/// `find_classifiable_inner_call` override, `outer_callee`), and its SSA summary
+/// records [`SsaFuncSummary::sanitizes_open_redirect_return`].  Mirrors the taint
+/// layer's nested-sink OPEN_REDIRECT strip so `cfg-unguarded-sink` agrees the
+/// redirect is same-origin.  Registered as a guard on the node itself
+/// (dominance is reflexive).
+fn call_arg_open_redirect_confiner(info: &crate::cfg::NodeInfo, ctx: &AnalysisContext) -> bool {
+    let Some(ssa_summaries) = ctx.ssa_summaries else {
+        return false;
+    };
+    let confines = |name: &str| -> bool {
+        ssa_summaries
+            .iter()
+            .any(|(k, s)| k.lang == ctx.lang && k.name == name && s.sanitizes_open_redirect_return)
+    };
+    info.call
+        .arg_uses
+        .iter()
+        .flatten()
+        .chain(info.call.outer_callee.as_ref())
+        .any(|id| confines(crate::labels::bare_method_name(id)))
+}
+
+/// Two-statement form of [`cond_open_redirect_confiner`]:
+/// `const dest = normalize_relative_url(...); if (dest !== null) res.redirect(dest);`.
+fn cond_open_redirect_confiner_two_statement(
+    info: &crate::cfg::NodeInfo,
+    ctx: &AnalysisContext,
+) -> bool {
+    let Some(ssa_summaries) = ctx.ssa_summaries else {
+        return false;
+    };
+    let confines = |name: &str| -> bool {
+        ssa_summaries
+            .iter()
+            .any(|(k, s)| k.lang == ctx.lang && k.name == name && s.sanitizes_open_redirect_return)
+    };
+
+    if info.condition_vars.len() == 1 {
+        let var_name = info.condition_vars[0].as_str();
+        let cond_func = info.ast.enclosing_func.as_deref();
+        let cond_span_start = info.ast.span.0;
+        let mut best: Option<(usize, NodeIndex)> = None;
+        for nidx in ctx.cfg.node_indices() {
+            let n = &ctx.cfg[nidx];
+            if n.kind != crate::cfg::StmtKind::Call {
+                continue;
+            }
+            if n.taint.defines.as_deref() != Some(var_name) {
+                continue;
+            }
+            if n.ast.enclosing_func.as_deref() != cond_func {
+                continue;
+            }
+            let span_start = n.ast.span.0;
+            if span_start >= cond_span_start {
+                continue;
+            }
+            match best {
+                Some((s, _)) if s >= span_start => {}
+                _ => best = Some((span_start, nidx)),
+            }
+        }
+        if let Some((_, nidx)) = best {
+            let n = &ctx.cfg[nidx];
+            let matches = |c: &str| confines(crate::labels::bare_method_name(c));
+            if n.call.callee.as_deref().is_some_and(matches)
+                || n.call.outer_callee.as_deref().is_some_and(matches)
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Match a guard suffix matcher against a callee, requiring the suffix to
 /// begin on a *leaf-name boundary* rather than mid-identifier.
 ///
@@ -2248,6 +2702,17 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
 
     for idx in ctx.cfg.node_indices() {
         let info = &ctx.cfg[idx];
+
+        // Nested-expression open-redirect confiner guard (CVE-2022-24776):
+        //   return redirect(get_safe_redirect(next_url))
+        // The redirect target is wrapped by a same-origin confiner in one
+        // nested expression with no `if` guard; the wrapper name survives in the
+        // sink node's `arg_uses`.  Register the node itself as an OPEN_REDIRECT
+        // guard (dominance is reflexive) so `cfg-unguarded-sink` agrees the
+        // validated redirect is same-origin.  Mirrors the taint-layer strip.
+        if call_arg_open_redirect_confiner(info, ctx) {
+            result.push((idx, Cap::OPEN_REDIRECT));
+        }
 
         // If-condition guards: allowlist checks, type checks, validation
         // calls, shell-metachar rejections, and bounded-length checks in
@@ -2298,6 +2763,23 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
                     //
                     // Motivated by Novu CVE GHSA-4x48-cgf9-q33f.
                     result.push((idx, Cap::all()));
+                } else if cond_confinement_helper(info, ctx) {
+                    // Behaviour-based path-confinement helper guard:
+                    //   if (!isOptimizedDepFile(p)) return next();
+                    // The helper's name carries no validator marker, but its
+                    // SSA summary records a constant-prefix path-confinement
+                    // predicate.  Scope to FILE_IO (confinement only proves
+                    // path safety).  Motivated by CVE-2026-39365 (Vite).
+                    result.push((idx, Cap::FILE_IO));
+                } else if cond_open_redirect_confiner(info, ctx) {
+                    // Behaviour-based relative-URL confiner guard:
+                    //   const dest = normalize_relative_url(x);
+                    //   if (dest !== null) res.redirect(dest);
+                    // The helper's SSA summary records an OPEN_REDIRECT
+                    // confinement (rejects `//` + `scheme:`), so a redirect
+                    // gated on its non-null result is same-origin.  Scope to
+                    // OPEN_REDIRECT.  Motivated by CVE-2026-42259 (Saltcorn).
+                    result.push((idx, Cap::OPEN_REDIRECT));
                 } else if matches!(
                     kind,
                     PredicateKind::ShellMetaValidated | PredicateKind::BoundedLength
@@ -2385,12 +2867,7 @@ fn sink_arg_is_source_derived(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
         if info.ast.enclosing_func.as_deref() != sink_func {
             continue;
         }
-        if !info
-            .taint
-            .labels
-            .iter()
-            .any(|l| matches!(l, DataLabel::Source(_)))
-        {
+        if !node_introduces_untrusted_data(info) {
             continue;
         }
         // Source node defines a variable that the sink reads → source-derived
@@ -2960,6 +3437,20 @@ impl CfgAnalysis for UnguardedSink {
                 continue;
             }
 
+            // Syntactic payload-const suppression (scope-robust): when every
+            // operand at the sink's `sink_payload_args` positions is a constant
+            // literal captured on the call node at CFG-build time, the injection
+            // vector is provably non-attacker-controlled.  Unlike the SSA-backed
+            // check below, this holds even when the sink lives inside a nested
+            // callback body the per-function SSA const-facts don't cover — the
+            // dominant raw-SQL migration idiom
+            // `sequelize.transaction(async (t) => { sequelize.query(`…DDL…`, { transaction: t }) })`.
+            // Sound regardless of `has_taint`: a syntactic literal at a payload
+            // position cannot itself carry taint.
+            if sink_payload_args_syntactic_const(ctx, *sink) {
+                continue;
+            }
+
             // Payload-arg-gated sinks (e.g. Go `db.QueryContext(ctx, sql,
             // ...binds)`, `payload_args = [1]`): only the payload positions can
             // carry an injection.  When the taint engine is already silent
@@ -3023,6 +3514,15 @@ impl CfgAnalysis for UnguardedSink {
             // engine already covers the source→sink flow via type-aware
             // suppression.  Unknown-typed or mixed operands fall through.
             if !has_taint && sink_args_typed_safe(ctx, *sink, sink_caps) {
+                continue;
+            }
+
+            // Go `fmt.Fprint*` reflected-XSS onto a non-response writer
+            // (`*bytes.Buffer`, `*os.File`, `bufio.Writer`, `io.Writer`
+            // param): the taint engine strips `HTML_ESCAPE` for the same
+            // writer type, so the flow is not confirmed here (`!has_taint`)
+            // and the structural finding would be a twin false positive.
+            if !has_taint && go_fprintf_writer_non_response(ctx, *sink, sink_caps) {
                 continue;
             }
 
@@ -3103,6 +3603,16 @@ impl CfgAnalysis for UnguardedSink {
             // placeholders ($1, ?, %s, :name) and a params argument exists.
             // These are safe by construction, the driver handles escaping.
             if sink_info.parameterized_query {
+                continue;
+            }
+
+            // Numeric-confinement: every real argument to the sink is an
+            // inline numeric call-chain (`Command::arg(s.parse::<u16>()
+            // .unwrap().to_string())`) whose source leaf reaches the sink only
+            // as a number.  Fires regardless of `has_taint` — the SSA taint
+            // engine drops the same flow via `numeric_confined_uses`, so the
+            // structural finding must clear in lock-step.
+            if sink_args_numeric_confined(ctx, *sink, sink_caps) {
                 continue;
             }
 
@@ -3278,5 +3788,51 @@ mod guard_suffix_boundary_tests {
             "validate"
         ));
         assert!(!suffix_matches_at_leaf_boundary("os.system", "quote"));
+    }
+}
+
+#[cfg(test)]
+mod hoisted_payload_tests {
+    use super::payload_positions_all_literal;
+
+    #[test]
+    fn gated_payload_all_literal_suppresses() {
+        // `sequelize.query(`const DDL`, { transaction })` — gated payload_args=[0],
+        // arg 0 literal, arg 1 non-literal options object. Only position 0 counts.
+        let lits = vec![Some("DROP VIEW x".to_string()), None];
+        assert!(payload_positions_all_literal(&Some(vec![0]), &lits));
+    }
+
+    #[test]
+    fn gated_payload_non_literal_position_does_not_suppress() {
+        // Interpolated inner SQL: payload position 0 is a non-const template.
+        let lits = vec![None, None];
+        assert!(!payload_positions_all_literal(&Some(vec![0]), &lits));
+    }
+
+    #[test]
+    fn gated_payload_position_out_of_range_does_not_suppress() {
+        let lits = vec![Some("x".to_string())];
+        assert!(!payload_positions_all_literal(&Some(vec![1]), &lits));
+    }
+
+    #[test]
+    fn unrestricted_sink_requires_every_arg_literal() {
+        // No gate: every recorded argument must be a constant literal.
+        assert!(payload_positions_all_literal(
+            &None,
+            &[Some("a".to_string()), Some("b".to_string())]
+        ));
+        assert!(!payload_positions_all_literal(
+            &None,
+            &[Some("a".to_string()), None]
+        ));
+    }
+
+    #[test]
+    fn unrestricted_sink_empty_args_unproven() {
+        // Empty literal list is unproven → not suppressed (conservative).
+        assert!(!payload_positions_all_literal(&None, &[]));
+        assert!(!payload_positions_all_literal(&Some(vec![]), &[]));
     }
 }

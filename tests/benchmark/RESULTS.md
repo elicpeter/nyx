@@ -25,42 +25,83 @@ Real disclosed CVEs reduced to minimal reproducers, vulnerable + patched pair pe
 | CVE-2024-23334 | Python     | aiohttp                    | Apache-2.0           | path_traversal  | detected |
 | CVE-2023-6568  | Python     | MLflow                     | Apache-2.0           | XSS             | detected |
 | CVE-2024-21513 | Python     | LangChain Experimental     | MIT                  | code_exec       | detected |
+| CVE-2024-32651 | Python     | changedetection.io         | Apache-2.0           | SSTI            | detected |
+| CVE-2022-24776 | Python     | Flask-AppBuilder           | BSD-3-Clause         | open_redirect   | detected |
 | CVE-2019-14939 | JavaScript | mongo-express              | MIT                  | code_exec       | detected |
 | CVE-2025-64430 | JavaScript | Parse Server               | Apache-2.0           | SSRF            | detected |
 | CVE-2023-22621 | JavaScript | Strapi                     | MIT                  | code_exec (SSTI)| detected |
+| CVE-2026-42259 | JavaScript | Saltcorn                   | MIT                  | open_redirect   | detected |
+| CVE-2026-41478 | JavaScript | Saltcorn                   | MIT                  | sqli            | detected |
 | CVE-2023-26159 | TypeScript | follow-redirects           | MIT                  | SSRF            | detected |
 | GHSA-4x48-cgf9-q33f | TypeScript | Novu                       | MIT                  | SSRF            | detected |
 | CVE-2022-30323 | Go         | hashicorp/go-getter        | MPL-2.0              | CMDI            | detected |
 | CVE-2023-3188  | Go         | owncast                    | MIT                  | SSRF            | detected |
 | CVE-2024-31450 | Go         | owncast                    | MIT                  | path_traversal  | detected |
 | CVE-2026-41422 | Go         | daptin                     | LGPL-3.0             | sql_injection   | detected |
+| CVE-2024-37896 | Go         | gin-vue-admin              | Apache-2.0           | sql_injection   | detected (patched precision deferred) |
+| CVE-2026-21859 | Go         | Mailpit                    | MIT                  | SSRF            | detected (patched precision fixed: InArray allowlist + copy-alias-aware narrowing) |
 | CVE-2015-7501  | Java       | Apache Commons Collections | Apache-2.0           | Deserialization | detected |
 | CVE-2017-12629 | Java       | Apache Solr                | Apache-2.0           | CMDI            | detected |
 | CVE-2022-1471  | Java       | SnakeYAML                  | Apache-2.0           | Deserialization | detected |
 | CVE-2022-42889 | Java       | Apache Commons Text        | Apache-2.0           | code_exec       | detected |
 | GHSA-h8cj-hpmg-636v | Java  | Appsmith                   | Apache-2.0           | sql_injection   | detected |
+| CVE-2024-39954 | Java       | Apache EventMesh           | Apache-2.0           | SSRF            | detected |
+| CVE-2021-21234 | Java       | spring-boot-actuator-logview | MIT                | path_traversal  | detected |
 | CVE-2013-0156  | Ruby       | Ruby on Rails              | MIT                  | Deserialization | detected |
 | CVE-2020-8130  | Ruby       | Rake                       | MIT                  | CMDI            | detected |
 | CVE-2021-21288 | Ruby       | CarrierWave                | MIT                  | SSRF            | detected |
 | CVE-2023-38337 | Ruby       | rswag                      | MIT                  | path_traversal  | detected |
+| CVE-2023-26153 | Ruby       | geokit-rails               | MIT                  | deserialization | detected (fires rb.deser.yaml_load; patched JSON.parse silent) |
+| CVE-2026-40295 | Ruby       | Devise                     | MIT                  | open_redirect   | deferred (recall+precision: bare Ruby method-call source dropped by scope_all lowering) |
 | CVE-2017-9841  | PHP        | PHPUnit                    | BSD-3-Clause         | code_exec       | detected |
 | CVE-2018-15133 | PHP        | Laravel                    | MIT                  | Deserialization | detected |
 | CVE-2026-33486 | PHP        | Roadiz CMS                 | MIT                  | SSRF            | detected |
+| CVE-2026-46364 | PHP        | phpMyFAQ                   | MPL-2.0              | SQLi            | detected (patched deferred) |
+| CVE-2025-48882 | PHP        | PHPOffice/Math             | MIT                  | XXE             | detected |
 | CVE-2018-20997 | Rust       | tar-rs                     | MIT OR Apache-2.0    | path_traversal  | detected |
 | CVE-2022-36113 | Rust       | cargo                      | MIT OR Apache-2.0    | path_traversal  | detected |
 | CVE-2023-42456 | Rust       | sudo-rs                    | Apache-2.0           | path_traversal  | detected |
 | CVE-2024-24576 | Rust       | Rust stdlib                | MIT OR Apache-2.0    | CMDI            | detected |
 | CVE-2024-32884 | Rust       | gitoxide                   | Apache-2.0 OR MIT    | CMDI            | detected |
 | CVE-2025-53549 | Rust       | matrix-rust-sdk            | Apache-2.0           | SQL Injection   | detected |
+| RUSTSEC-2022-0072 | Rust    | hyper-staticfile           | MIT                  | Open Redirect   | detected |
+| CVE-2026-53956 | Rust    | rattler (rattler_cache)    | BSD-3-Clause         | Path Traversal  | detected (patched precision: `ensure_safe_path_component(x)?` path-safety `Result` guard confines FILE_IO via `result_reject_guard_params` + `apply_path_validator_confinement`) |
 | CVE-2016-3714  | C          | ImageMagick (ImageTragick) | ImageMagick License  | CMDI            | detected |
 | CVE-2017-1000117 | C        | git (ssh:// argv injection)| GPL-2.0              | cmdi (argv-inj) | detected |
 | CVE-2019-18634 | C          | sudo (pwfeedback)          | ISC                  | memory_safety   | detected |
+| CVE-2020-5221  | C          | uftpd                      | ISC                  | path_traversal  | detected + patched clean (interproc path-return confinement: confines_path_return + propagate fixpoint + confined-sink prune) |
 | CVE-2019-13132 | C++        | ZeroMQ libzmq              | MPL-2.0              | memory_safety   | detected |
 | CVE-2022-1941  | C++        | Protocol Buffers           | BSD-3-Clause         | memory_safety   | detected |
 | CVE-2026-25544 | TypeScript | Payload (Drizzle adapter)  | MIT                  | sql_injection   | detected |
 | CVE-2026-42353 | JavaScript | i18next-http-middleware    | MIT                  | path_traversal  | detected |
+| CVE-2026-39365 | TypeScript | Vite                       | MIT                  | path_traversal  | detected |
+| CVE-2026-27728 | TypeScript | OneUptime                  | Apache-2.0           | cmdi            | detected |
 
-No real-CVE entries are currently deferred. If a future real-CVE fixture exposes a detector gap, keep it committed with `disabled: true` in ground truth so the gap remains visible.
+CVE-2026-39365 (Vite) is fully resolved (2026-06-12). The recall side
+(`JSON.parse(await fsp.readFile(...))` nested FILE_IO sink surfaced past the
+`JSON.parse` sanitizer) landed earlier; the patched-precision side now passes
+via behaviour-based path-confinement recognition: the custom boolean guard
+`isOptimizedDepFile` (`normalizePath(id).startsWith(`${depsCacheDir}/`)`) is
+recognised by its body (a constant-prefix containment check on a parameter),
+recorded as `SsaFuncSummary.confines_path_params`, and consumed by both the
+taint branch-narrowing (`apply_summary_confinement_narrowing`, clears
+`Cap::FILE_IO` on the confined branch) and the `cfg-unguarded-sink` guard pass
+(`cond_confinement_helper`). Both ground-truth entries are `disabled: false`;
+pinned by synthetic corpus fixtures `ts-safe-024` (helper gates read → silent)
+and `ts-path_traversal-004` (helper defined-but-unused → still fires).
+
+CVE-2026-27728 (OneUptime NetworkPathMonitor) adds the first TypeScript
+`cmdi` real-CVE: an attacker-configured monitor destination is interpolated
+into a `traceroute` shell command run via `execAsync = promisify(exec)`
+(`req.body.destination → trace() → performTraceroute() → execAsync(command)`).
+The vulnerable side fires `taint-unsanitised-flow` interprocedurally; the
+patched side switches to `execFile(binary, argv-array)` (no shell) plus an
+`isValidDestination` hostname/IP allowlist. Landing the pair surfaced a
+precision fix: a `promisify(exec/execFile)` alias now inherits the wrapped
+callee's gate `payload_args` (arg 0 only), so a tainted argv element or
+`{ cwd/env }` option at arg 1+ of a promisified `execFile`/`exec` no longer
+spuriously fires — `execFile` passes argv without a shell. Pinned by
+`ts-cmdi-003` (interproc recall) and `ts-safe-026` (execFile argv precision).
 
 ### How CVEs get picked
 
@@ -83,6 +124,11 @@ Most recent first. Metrics are rule-level on the corpus size at that point.
 
 | Date       | Change                                                                       | Corpus | P     | R     | F1    |
 |------------|------------------------------------------------------------------------------|--------|-------|-------|-------|
+| 2026-07-15 | CVE-2025-48882 (PHPOffice/Math MathML XXE, MIT) added — first XXE CVE in the corpus. Vulnerable detects `taint-xxe` (`$dom->loadXML($content, LIBXML_DTDLOAD)`); patched (flag dropped: `loadXML($content)`) now silent via a **presence-aware gated-sink fix**. Root cause: a positional `ValueMatch` gate whose activation arg is *absent* (never passed) was firing conservatively (`ALL_ARGS_PAYLOAD`), conflating "arg missing" with "arg present-but-dynamic"; the missing options arg means the libxml >= 2.9 XXE-safe default, so it must suppress. New `classify_gated_sink_with_presence` + `call_has_arg_at`; the 3-arg `classify_gated_sink` wrapper assumes present (backward compatible). Cross-language precision fix (also clears bare `simplexml_load_string($tainted)` / `Nokogiri::XML($tainted)` FPs). Pinned by 4 gate unit tests + `php_simplexml_load_string_no_options_arg_clean` + synthetics `php-xxe-loadxml-dtdload-001` (TP) / `php-safe-xxe-loadxml-no-options-001` (TN). No existing fixture's classification changed (the only absent-activation-arg gate calls in the corpus are the two new no-options TN fixtures); the 4 pre-existing php `safe` FPs are unrelated (cmdi/cfg-unguarded). xxe class F1=1.000 (TP=2). | 667 | 0.978 | 0.975 | 0.977 |
+| 2026-07-14 | CVE-2020-5221 (uftpd directory traversal, ISC) patched-precision **RESOLVED** — interprocedural path-return confinement. New `SsaFuncSummary.confines_path_return` + `detect_path_confined_return` (a `strncmp(rv, prefix, strlen(prefix))` guard on the returned value, transitive passthrough robust to the SSA optimiser's `return ptr` -> `nop` rewrite) + `apply_call_return_confinement` (strips `FILE_IO` from a confining call's result in both replay loops) + `propagate_path_return_confinement` fixpoint (marks the `compose_path` -> `compose_abspath` chain before the sink lift) + `prune_confined_file_io_sinks` (removes first-pass FILE_IO param-sinks the confinement-aware re-run dropped; add-only merge could not). Fixtures gained a faithful `check_auth(ctrl)` gate (uftpd requires login before RETR) to suppress the orthogonal `state-unauthed-access`/`cfg-auth-gap`. Pinned by 2 detector unit tests + synthetics `c-safe-020` (TN) / `c-path-005` (TP recall guard). c F1 0.950 -> 0.952, FP=0, path_traversal F1=1.000. | 642 | 0.978 | 0.978 | 0.978 |
+| 2026-07-13 | CVE-2026-46364 (phpMyFAQ BuiltinCaptcha SQLi, MPL-2.0) added — vulnerable detects `taint-unsanitised-flow` @68; **patched-precision side DEFERRED** (`disabled: true`, see CVE_DEFERRED.md). Root cause: the default taint model is field-INsensitive (per-field cells gated behind `NYX_POINTER_ANALYSIS`), so a tainted write to any `$this->field` taints the whole `$this` scalar and every later `$this->...` reference reads the polluted base, bypassing the `$db->escape()` on the DELETE. A field-sensitivity prototype (dotted member-access defines + field-write base rebuild + `FieldProj` field-precise reads) silenced the patched fixture but zeroing the field-write base scalar is unsound for whole-object reads (`res.send(obj)` must still fire), so it was reverted; the sound fix needs default-mode per-field cells (multi-day, cross-language). | 616 | — | — | — |
+| 2026-06-12 | Python SSTI sandbox precision (`ast.rs` Layer G): `<env>.from_string(...)` suppresses `py.xss.jinja_from_string` only when the receiver is a Jinja2 `SandboxedEnvironment` / `ImmutableSandboxedEnvironment` (inline ctor or resolved local), the canonical SSTI mitigation; unrestricted `Environment(loader=BaseLoader)` keeps firing. CVE-2024-32651 (changedetection.io notification SSTI-to-RCE, Apache-2.0) added — vulnerable detects, patched (sandboxed fix) now silent. Pinned by `python_sandboxed_jinja_from_string_only_suppresses_sandbox` + synthetics `safe_jinja_sandboxed_from_string.py` (TN) / `ssti_unrestricted_from_string.py` (TP). | 596 | 0.976 | 0.976 | 0.976 |
+| 2026-06-11 | Ruby raw `pg`-gem SQLi: `PG::Connection.new`/`PG.connect` typed `DatabaseConnection`; new `DatabaseConnection.exec`/`exec_query`/`query` SQL_QUERY sinks (`exec_params` left safe); Kernel `system`/`exec` shell sinks tightened to receiver-less via `=system`/`=exec` exact-match + `!receiver` on `rb.cmdi.system_interp` (so `conn.exec(sql)` is SQL, not cmdi); Ruby `operator_assignment` (`||=`/`+=`) now lowered as Assignment. Motivated by CVE-2026-42087 (OpenC3 COSMOS QuestDB SQLi) — AGPL upstream not fixtured; pinned by synthetic `sqli_pg_raw_exec.rb` (TP) + `safe_pg_exec_params.rb` (TN). | 567 | 0.975 | 0.975 | 0.975 |
 | 2026-05-26 | C argv-injection taint now propagates through execvp argv arrays while recognising the upstream `ssh_host[0] == '-'` dash-prefix rejection and ignoring env-derived executable-path argv elements; CVE-2017-1000117 re-enabled and detected, patched counterpart stays clean | 565 | 1.000 | 0.996 | 0.998 |
 | 2026-05-26 | Benchmark docs corrected for CVE-2026-25544: the Payload Drizzle SQL injection fixture is enabled and detected in `ground_truth.json` | 565 | 1.000 | 1.000 | 1.000 |
 | 2026-05-04 | C cvehunt session-0014: CVE-2017-1000117 (git ssh:// hostname-as-argv injection) added in corpus disabled — three-layer C engine gap: (a) array-element taint propagation through `args[i] = ssh_host;` writes, (b) missing `c.cmdi.exec*` AST patterns in `src/patterns/c.rs`, (c) sanitizer recognition of the upstream `if (ssh_host[0] == '-') die(...)` dash-prefix guard | 565 | 1.000 | 1.000 | 1.000 |

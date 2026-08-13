@@ -286,6 +286,92 @@ fn ssa_const_prop_preserves_sink_on_dynamic_source_arg() {
     );
 }
 
+/// outline migration idiom (top-level form): the SQL string (arg 0) is a
+/// constant template literal and the options object (arg 1) is a non-constant
+/// identifier.  The `sequelize.query` `payload_args=[0]` gate plus the
+/// syntactic payload-const suppression must silence `cfg-unguarded-sink` even
+/// though the whole-call `is_all_args_constant` rejects the non-const opts.
+#[test]
+fn js_raw_sql_const_payload_suppresses_unguarded_sink() {
+    let src = br#"
+        function migrate(queryInterface, opts) {
+          queryInterface.sequelize.query(`SELECT 1`, opts);
+        }
+    "#;
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+    let guard: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        guard.is_empty(),
+        "constant SQL payload must suppress cfg-unguarded-sink, got {guard:?}"
+    );
+}
+
+/// Recall counterpart: attacker data interpolated INTO the SQL string (arg 0)
+/// is non-constant, so the raw-SQL `payload_args=[0]` gate must NOT suppress
+/// the finding.
+#[test]
+fn js_raw_sql_interpolated_payload_still_flagged() {
+    let src = br#"
+        function migrate(queryInterface, name) {
+          queryInterface.sequelize.query(`SELECT ${name}`, {});
+        }
+    "#;
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+    let guard: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !guard.is_empty(),
+        "an interpolated SQL payload (arg 0) must still fire cfg-unguarded-sink"
+    );
+}
+
+/// Chained-rebind alignment guard: `http.get(target, cb).on('error', cb2)`
+/// rebinds the SSRF sink onto the inner `http.get`, but the node's
+/// `arg_string_literals` still reflect the outer `.on('error', …)` call.  The
+/// `'error'` string literal at the `.on` arg 0 must NOT be mistaken for a
+/// constant SSRF payload by the syntactic payload-const suppression — the
+/// finding must survive.
+#[test]
+fn chained_rebind_sink_not_suppressed_by_misaligned_syntactic_const() {
+    let src = br#"
+        const http = require('http');
+        function proxy(req, res) {
+          const target = req.query.url;
+          http.get(target, r => { res.end(); }).on('error', e => { res.end(); });
+        }
+    "#;
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+    let guard: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !guard.is_empty(),
+        "chained http.get SSRF sink must not be suppressed by the outer \
+         `.on('error', …)` string literal, got {findings:?}"
+    );
+}
+
 // ─── Guard validation tests ───────────────────────────────────────────
 
 #[test]
@@ -983,6 +1069,67 @@ def process():
     assert!(
         !leak_findings.is_empty(),
         "Should detect open() without close() in Python"
+    );
+}
+
+#[test]
+fn resource_leak_python_django_signals_not_flagged() {
+    // taiga real-repo shape: Django signal registrations share the `connect`
+    // callee leaf with real DB acquires but register observers (return None,
+    // hold no resource).  `.disconnect` must not suffix-match `connect`; the
+    // signal-kwarg and bare-receiver forms of `.connect` must be recognised.
+    let src = br#"
+def register(model):
+    pre_save.connect(remove_files_on_change, sender=model)
+    post_delete.connect(remove_files_on_delete, sender=model)
+    setting_changed.connect(reload_api_settings)
+    signals.post_save.connect(on_save_any_model, dispatch_uid="events_change")
+    signals.post_save.disconnect(dispatch_uid="events_change")
+    cleanup_post_delete.disconnect(delete_thumbnail_files)
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "python",
+        Language::from(tree_sitter_python::LANGUAGE),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        leak_findings.is_empty(),
+        "Django signal connect/disconnect must not be treated as DB-connection \
+         leaks, got {leak_findings:?}"
+    );
+}
+
+#[test]
+fn resource_leak_python_real_db_connect_still_flagged() {
+    // Recall guard for the signal-registration suppression: a genuine DB
+    // connection acquired and bound but never closed must still leak.
+    let src = br#"
+def get_conn():
+    conn = psycopg2.connect("dbname=test user=admin")
+    rows = conn.execute("SELECT 1")
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "python",
+        Language::from(tree_sitter_python::LANGUAGE),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        !leak_findings.is_empty(),
+        "A bound-but-unclosed psycopg2.connect() must still be flagged as a leak"
     );
 }
 
@@ -2167,5 +2314,212 @@ fn type_facts_preserve_untyped_string_shell_arg() {
     assert!(
         !guard_findings.is_empty(),
         "Untyped String shell argument must still produce cfg-unguarded-sink"
+    );
+}
+
+#[test]
+fn type_facts_pathbuf_let_annotation_not_suppressed() {
+    // Recall counterpart to `type_facts_suppress_int_typed_shell_arg`
+    // (deep_engine_fixes #4-deep): a `let p: PathBuf = raw.parse()` binding
+    // lowers its annotation to `TypeKind::Object` (non-Int), which OVERRIDES
+    // the conservative bare-`parse` -> Int heuristic.  A parsed path is
+    // attacker-controlled and can carry `..` traversal, so the structural
+    // cfg-unguarded-sink must NOT be suppressed.
+    let src = br#"
+        use std::env;
+        use std::process::Command;
+        use std::path::PathBuf;
+        fn main() {
+            let raw = env::var("USER_PATH").unwrap();
+            let p: PathBuf = raw.parse().expect("invalid path");
+            Command::new("listener").arg(p.to_string()).status().unwrap();
+        }"#;
+
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "rust",
+        Language::from(tree_sitter_rust::LANGUAGE),
+    );
+
+    let guard_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !guard_findings.is_empty(),
+        "PathBuf-typed (non-numeric) sink argument must NOT be suppressed, got: {:?}",
+        findings
+    );
+}
+
+#[test]
+fn go_fprintf_new_bytes_buffer_writer_not_flagged_unguarded_xss() {
+    // `stdIn := new(bytes.Buffer); fmt.Fprintf(stdIn, "0 %s", name)` — the
+    // writer is a non-response in-memory byte buffer (gitea temp_repo.go
+    // shape), so the reflected-XSS `cfg-unguarded-sink` must be suppressed,
+    // mirroring the SSA taint engine's Go printf writer-type gate.  The
+    // `new(T)` type argument is recovered via `extract_decl_type_go`.
+    let src = br#"package main
+import ("bytes"; "fmt"; "net/http")
+func h(r *http.Request) {
+    name := r.URL.Query().Get("name")
+    stdIn := new(bytes.Buffer)
+    fmt.Fprintf(stdIn, "0 %s", name)
+    _ = stdIn.Bytes()
+}
+"#;
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "go",
+        Language::from(tree_sitter_go::LANGUAGE),
+    );
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "new(bytes.Buffer) writer must not flag cfg-unguarded-sink XSS, got: {:?}",
+        findings
+    );
+}
+
+#[test]
+fn go_fprintf_os_create_writer_not_flagged_unguarded_xss() {
+    // `out, _ := os.Create(path); fmt.Fprintf(out, "%s", name)` — the writer
+    // is an `*os.File` handle (gitea mock_http.go shape), typed FileHandle
+    // via `constructor_type`.  The static-TypeFacts path must recognise it
+    // even though the write sits inside a loop where the flow-sensitive env
+    // widens the type away.
+    let src = br#"package main
+import ("fmt"; "net/http"; "os")
+func h(r *http.Request) {
+    name := r.URL.Query().Get("name")
+    out, _ := os.Create("/tmp/x")
+    for i := 0; i < 3; i++ {
+        fmt.Fprintf(out, "%s\n", name)
+    }
+}
+"#;
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "go",
+        Language::from(tree_sitter_go::LANGUAGE),
+    );
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "os.Create file-handle writer must not flag cfg-unguarded-sink XSS, got: {:?}",
+        findings
+    );
+}
+
+#[test]
+fn go_fprintf_response_writer_still_flagged_unguarded_xss() {
+    // Recall guard: an actual `http.ResponseWriter` writer is a genuine
+    // reflected-XSS sink — the writer-type gate must NOT suppress it.
+    let src = br#"package main
+import ("fmt"; "net/http")
+func h(w http.ResponseWriter, r *http.Request) {
+    name := r.URL.Query().Get("name")
+    fmt.Fprintf(w, "<b>%s</b>", name)
+}
+"#;
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "go",
+        Language::from(tree_sitter_go::LANGUAGE),
+    );
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !unguarded.is_empty(),
+        "http.ResponseWriter fmt.Fprintf must still flag cfg-unguarded-sink, got: {:?}",
+        findings
+    );
+}
+
+#[test]
+fn go_new_bytes_buffer_binding_typed_filehandle() {
+    // `extract_decl_type_go`: a local bound to `new(bytes.Buffer)` types as
+    // FileHandle (the `new(T)` type argument is dropped from the CFG's
+    // arg_uses, so the constructor text is read from the binding).
+    let src = br#"package main
+import ("bytes"; "fmt"; "net/http")
+func h(r *http.Request) {
+    name := r.URL.Query().Get("name")
+    stdIn := new(bytes.Buffer)
+    fmt.Fprintf(stdIn, "0 %s", name)
+    _ = stdIn.Bytes()
+}
+"#;
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_go::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src, None).unwrap();
+    let file_cfg = build_cfg(&tree, src, "go", "test.go", None);
+    let body = file_cfg.first_body();
+    let facts = build_body_const_facts(body, Lang::Go).expect("body const facts");
+    let val = facts
+        .ssa
+        .blocks
+        .iter()
+        .flat_map(|b| b.body.iter())
+        .find(|i| {
+            i.var_name.as_deref() == Some("stdIn") && matches!(i.op, crate::ssa::SsaOp::Call { .. })
+        })
+        .map(|i| i.value)
+        .expect("stdIn := new(bytes.Buffer) call value");
+    assert_eq!(
+        facts.type_facts.get_type(val),
+        Some(&crate::ssa::type_facts::TypeKind::FileHandle),
+        "new(bytes.Buffer) local must type as FileHandle"
+    );
+}
+
+#[test]
+fn go_new_non_writer_struct_binding_not_typed_filehandle() {
+    // Conservative: `new(T)` for a non-writer struct type must NOT type as
+    // FileHandle, so the writer-type gate stays sound (never suppresses a
+    // real `http.ResponseWriter` that happened to be `new`-constructed).
+    let src = br#"package main
+type Payload struct{ X string }
+func h() {
+    p := new(Payload)
+    _ = p.X
+}
+"#;
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_go::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src, None).unwrap();
+    let file_cfg = build_cfg(&tree, src, "go", "test.go", None);
+    let body = file_cfg.first_body();
+    let facts = build_body_const_facts(body, Lang::Go).expect("body const facts");
+    let val = facts
+        .ssa
+        .blocks
+        .iter()
+        .flat_map(|b| b.body.iter())
+        .find(|i| {
+            i.var_name.as_deref() == Some("p") && matches!(i.op, crate::ssa::SsaOp::Call { .. })
+        })
+        .map(|i| i.value)
+        .expect("p := new(Payload) call value");
+    assert_ne!(
+        facts.type_facts.get_type(val),
+        Some(&crate::ssa::type_facts::TypeKind::FileHandle),
+        "new(non-writer-struct) must not type as FileHandle"
     );
 }

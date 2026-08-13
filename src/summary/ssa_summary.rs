@@ -348,6 +348,138 @@ pub struct SsaFuncSummary {
     #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
     pub validated_params_to_return: SmallVec<[usize; 2]>,
 
+    /// Parameter indices that the function's boolean return value confines
+    /// to a constant path prefix.
+    ///
+    /// Recognises a behaviour-based path-confinement predicate: a helper
+    /// whose return value is a constant-prefix containment check on a
+    /// parameter (`normalizePath(id).startsWith("/safe/")`,
+    /// `strings.HasPrefix(p, "/safe")`, Python `.startswith`, Ruby
+    /// `.start_with?`), where the checked subject traces back to formal
+    /// parameter `idx` and the prefix is a fixed value (not param-derived).
+    /// The predicate is `BooleanTrueIsValid`: a `true` result proves the
+    /// argument is contained under a known-safe directory.
+    ///
+    /// At a call site, when the caller branches on this helper's result
+    /// (`if (!isOptimizedDepFile(p)) return next()`), the argument passed
+    /// to a confined position has its `Cap::FILE_IO` stripped on the
+    /// surviving (confined) branch — the same cap-aware narrowing the
+    /// inline `if (x.startsWith("/safe/"))` check performs, lifted through
+    /// the wrapper helper.  Consumed by
+    /// `apply_summary_confinement_narrowing` in the SSA taint transfer.
+    ///
+    /// Closes the precision gap behind CVE-2026-39365 (Vite dev-server
+    /// sourcemap path traversal): the patched fix gates the read on a
+    /// custom `isOptimizedDepFile` confinement helper that nyx recognised
+    /// only by name before, false-positiving on the fixed code.  Empty
+    /// (the default) for helpers that do not confine any parameter.
+    #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
+    pub confines_path_params: SmallVec<[usize; 2]>,
+
+    /// Formal-parameter indices confined by an *assert-guard* path check: a
+    /// `void` guard method whose body asserts a fixed-prefix containment on the
+    /// parameter and throws otherwise (`Assert.isTrue(canonical.startsWith(
+    /// base), msg)`, `Preconditions.checkArgument(p.startsWith(dir))`).  Any
+    /// normal return from such a method is a post-condition that the checked
+    /// parameter is contained under a known-safe directory, so a *call* to it
+    /// clears [`crate::labels::Cap::FILE_IO`] from the argument passed at each
+    /// confined position — **unconditionally**, with no caller branch (unlike
+    /// [`Self::confines_path_params`], a return-value boolean confiner the
+    /// caller must branch on).  Consumed by `apply_call_post_confinement` in
+    /// the SSA taint transfer.
+    ///
+    /// Closes the precision gap behind CVE-2021-21234 (spring-boot-actuator-
+    /// logview path traversal): the patched `securityCheck(Path base, String
+    /// filename)` canonicalises the resolved path and
+    /// `Assert.isTrue(canonicalLoggingPath.startsWith(baseCanonicalPath), …)` —
+    /// the canonical Java `getCanonicalPath().startsWith(base)` containment
+    /// idiom — which nyx false-positived on before.  Empty (the default) for
+    /// helpers that do not assert-confine any parameter.
+    #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
+    pub asserts_path_confined_params: SmallVec<[usize; 2]>,
+
+    /// Formal parameters that reach an `Err(...)` construction in the body of a
+    /// `Result`-returning validator-guard — i.e. parameters this function
+    /// *rejects* (returns `Err` on) rather than transforms.  Recorded
+    /// name-independently by `detect_result_reject_guard_params`.
+    ///
+    /// Unlike [`Self::asserts_path_confined_params`] (self-proving assert
+    /// guards, confined unconditionally), this field is confined **only** at a
+    /// call site whose callee bare name matches the path-safety-validator
+    /// grammar (`ensure_safe_path_component`, `validate_safe_path`, …), via
+    /// `apply_path_validator_confinement`.  The structural gate proves the
+    /// callee is a rejection guard; the call-site name gate proves it is a
+    /// *path* rejection guard — the path-traversal sentinels (`".."`, `'/'`)
+    /// are collapsed out of the SSA by boolean-expression lowering, so the
+    /// callee name is the only surviving path-specificity signal.
+    ///
+    /// Closes the precision gap behind CVE-2026-53956 (rattler package-cache
+    /// path traversal): the patched cache-key path is routed through
+    /// `ensure_safe_path_component(&segment)?`, a `Result` guard that rejects
+    /// `..` / separators — which nyx false-positived on before.  Empty (the
+    /// default) for functions that construct no rejecting `Err`.
+    #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
+    pub result_reject_guard_params: SmallVec<[usize; 2]>,
+
+    /// The function's return value is a *relative-URL confiner*: it
+    /// normalises its input and rejects protocol-relative (`//`) and
+    /// absolute-`scheme:` URLs before returning the confined, same-origin
+    /// value (returning a reject sentinel — `null`/`false`/`undefined` —
+    /// otherwise).  When such a helper's result is redirected to, the
+    /// redirect target is provably same-origin, so the call's return value
+    /// clears [`crate::labels::Cap::OPEN_REDIRECT`].
+    ///
+    /// Recognised structurally by `detect_open_redirect_normalizer`: the
+    /// body must contain both a `startsWith("//")` protocol-relative
+    /// rejection *and* a scheme rejection (a regex `.test(...)`), and at
+    /// least one return path must carry a parameter-derived (normalised)
+    /// value.  The *weak* form `!url.includes("//") && !url.includes(":/")`
+    /// — which misses backslash normalisation and matches by substring, not
+    /// prefix — is deliberately **not** recognised, so a redirect gated only
+    /// by it still fires.
+    ///
+    /// Closes the precision gap behind CVE-2026-42259 (Saltcorn login
+    /// open redirect): the patched fix routes `dest` through a
+    /// `normalize_relative_url` confiner, which nyx false-positived on
+    /// before.  `false` (the default) for helpers that do not confine.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sanitizes_open_redirect_return: bool,
+
+    /// The function's return value is a *path-prefix confiner*: every non-null
+    /// value it returns is guarded by a C prefix-containment check
+    /// (`strncmp(rv, prefix, strlen(prefix))`) on the *returned* value, so any
+    /// non-null path it returns is provably contained under a fixed directory
+    /// prefix.  A call to it clears [`crate::labels::Cap::FILE_IO`] from the
+    /// call result (`apply_call_return_confinement`).
+    ///
+    /// Distinct from [`Self::confines_path_params`] (a *boolean* return the
+    /// caller must branch on) and [`Self::asserts_path_confined_params`] (an
+    /// assert-guard that confines an *argument*): here the confined thing is
+    /// the *returned value itself*, and the caller needs no branch — the
+    /// function only ever returns NULL or a prefix-confined path.
+    ///
+    /// Recognised structurally by `detect_path_confined_return`: a
+    /// `PathPrefixConfined` branch (`strncmp(rpath, home, strlen(home))`)
+    /// whose confined edge leads to a `return rpath`, where the confined
+    /// subject matches the returned value's name.
+    ///
+    /// Closes the *interprocedural* precision gap behind CVE-2020-5221 (uftpd
+    /// directory traversal): the patched `compose_path` confines the
+    /// `realpath()`-resolved `rpath` before returning it to a `fopen()` sink
+    /// in a *separate* function (`handle_RETR`).  The returned `rpath` is a
+    /// `static` buffer disconnected from the tainted-parameter SSA chain, so
+    /// the intra-function `PathPrefixConfined` narrowing (which clears the
+    /// `rpath` value's `FILE_IO`) does not survive into the summary's return
+    /// caps — the summary's param-taint fallback re-attributes the source
+    /// parameter's `FILE_IO` to the return.  Recording the confinement as a
+    /// summary post-condition carries it across the return.  The vulnerable
+    /// form `strncmp(dir, home, …)` confines a *different* var (`dir`) than the
+    /// returned `rpath`, so subject != return-value name and this stays
+    /// `false` — the exact bug/fix discriminator.  `false` (the default) for
+    /// functions that do not confine their returned path.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub confines_path_return: bool,
+
     /// Phase-10 Next.js entry-point classification.  Mirrors
     /// [`crate::summary::FuncSummary::entry_kind`] — recorded on the
     /// SSA summary so cross-file consumers don't have to consult the

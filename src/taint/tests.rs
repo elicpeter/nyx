@@ -460,13 +460,15 @@ fn cross_file_source_resolved_via_global_summaries() {
 
     // Build global summaries as if file A exported get_dangerous
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "file_a.rs".into(),
-        name: "get_dangerous".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "file_a.rs",
+        String::new(),
+        "get_dangerous",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -515,13 +517,15 @@ fn cross_file_sanitizer_resolved_via_global_summaries() {
     let local_summaries = &file_cfg.summaries;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "file_a.rs".into(),
-        name: "my_sanitize".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "file_a.rs",
+        String::new(),
+        "my_sanitize",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -593,13 +597,15 @@ fn cross_file_sink_resolved_via_global_summaries() {
     let local_summaries = &file_cfg.summaries;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "file_a.rs".into(),
-        name: "dangerous_exec".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "file_a.rs",
+        String::new(),
+        "dangerous_exec",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -651,13 +657,15 @@ fn cross_file_sink_finding_carries_primary_location() {
     let local_summaries = &file_cfg.summaries;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "file_a.rs".into(),
-        name: "dangerous_exec".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "file_a.rs",
+        String::new(),
+        "dangerous_exec",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     // Summary: param 0 (`cmd`) flows to a shell-exec sink at file_a.rs:42:5.
     let sink_site = SinkSite {
         file_rel: "file_a.rs".into(),
@@ -732,13 +740,15 @@ fn cross_file_sink_cap_only_site_leaves_primary_location_none() {
     let local_summaries = &file_cfg.summaries;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "file_a.rs".into(),
-        name: "dangerous_exec".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "file_a.rs",
+        String::new(),
+        "dangerous_exec",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -962,13 +972,15 @@ fn multi_file_passthrough_preserves_taint() {
     // identity() just returns its argument, it propagates taint but has no
     // source/sanitizer/sink caps of its own.
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "lib.rs".into(),
-        name: "identity".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "lib.rs",
+        String::new(),
+        "identity",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -1181,13 +1193,15 @@ fn local_summary_takes_precedence_over_global() {
     "#;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "other.rs".into(),
-        name: "my_func".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "other.rs",
+        String::new(),
+        "my_func",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -1287,13 +1301,15 @@ fn source_and_sink_on_same_function() {
     // Cross-file function that is both source AND sink.
     // Tainted arg hits sink → 1 finding.
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Rust,
-        namespace: "lib.rs".into(),
-        name: "source_and_sink".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Rust,
+        "lib.rs",
+        String::new(),
+        "source_and_sink",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key,
         FuncSummary {
@@ -1347,13 +1363,15 @@ fn multiple_cross_file_sources_one_sanitised() {
 
     let mut global = GlobalSummaries::new();
     // Two cross-file sources
-    let key1 = FuncKey {
-        lang: Lang::Rust,
-        namespace: "lib.rs".into(),
-        name: "get_secret".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key1 = FuncKey::from_parts(
+        Lang::Rust,
+        "lib.rs",
+        String::new(),
+        "get_secret",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key1,
         FuncSummary {
@@ -1372,13 +1390,15 @@ fn multiple_cross_file_sources_one_sanitised() {
             ..Default::default()
         },
     );
-    let key2 = FuncKey {
-        lang: Lang::Rust,
-        namespace: "lib.rs".into(),
-        name: "get_other_secret".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key2 = FuncKey::from_parts(
+        Lang::Rust,
+        "lib.rs",
+        String::new(),
+        "get_other_secret",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key2,
         FuncSummary {
@@ -1497,6 +1517,109 @@ fn ts_source_to_sink() {
     );
 }
 
+/// Behaviour-based path-confinement (CVE-2026-39365, Vite).  A helper whose
+/// name is NOT a recognised validator (`isWithinBaseDir` — no
+/// `is_valid`/`is_safe`/`validate`/`verify` prefix) but whose body returns a
+/// constant-prefix containment check is recognised by behaviour: gating the
+/// read on `if (!isWithinBaseDir(p))` narrows the FILE_IO taint on the
+/// surviving branch so the read is safe.
+#[test]
+fn ts_behaviour_path_confinement_helper_narrows_file_io() {
+    let src = br#"import fs from 'node:fs'
+import path from 'node:path'
+const baseDir = '/srv/assets'
+const normalizePath = (id) => id.replace(/\\/g, '/')
+const isWithinBaseDir = (id) => normalizePath(id).startsWith(`${baseDir}/`)
+export function readAsset(req) {
+  const p = path.resolve(baseDir, req.query.f)
+  if (!isWithinBaseDir(p)) { return }
+  const map = JSON.parse(fs.readFileSync(p, 'utf-8'))
+  return map
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
+    let file_cfg = parse_lang(src, "typescript", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::TypeScript,
+        "test.ts",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "behaviour-based confinement helper must narrow the gated FILE_IO read; got {findings:?}"
+    );
+}
+
+/// Precision guard for behaviour-based path-confinement: the confinement
+/// helper is DEFINED but never used to gate the read, so the FILE_IO flow
+/// must still fire.  Recognition alone must not suppress an unguarded sink.
+#[test]
+fn ts_confinement_helper_unused_still_fires() {
+    let src = br#"import fs from 'node:fs'
+import path from 'node:path'
+const baseDir = '/srv/assets'
+const normalizePath = (id) => id.replace(/\\/g, '/')
+const isWithinBaseDir = (id) => normalizePath(id).startsWith(`${baseDir}/`)
+export function readAsset(req) {
+  const p = path.resolve(baseDir, req.query.f)
+  const map = JSON.parse(fs.readFileSync(p, 'utf-8'))
+  return map
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
+    let file_cfg = parse_lang(src, "typescript", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::TypeScript,
+        "test.ts",
+        &[],
+        None,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "confinement helper defined-but-unused must not suppress the read; got {findings:?}"
+    );
+}
+
+/// Pins the summary-extraction invariant: the helper's `SsaFuncSummary`
+/// records its sole parameter (index 0) in `confines_path_params`.
+#[test]
+fn ssa_summary_records_path_confining_predicate_param() {
+    let src = br#"const baseDir = '/srv/assets'
+const normalizePath = (id) => id.replace(/\\/g, '/')
+const isWithinBaseDir = (id) => normalizePath(id).startsWith(`${baseDir}/`)
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
+    let file_cfg = parse_lang(src, "typescript", lang);
+    let (ssa_summaries, _) = crate::taint::lower_all_functions_from_bodies(
+        &file_cfg,
+        Lang::TypeScript,
+        "test.ts",
+        &file_cfg.summaries,
+        None,
+        None,
+        None,
+        None,
+    );
+    let helper = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "isWithinBaseDir")
+        .map(|(_, v)| v)
+        .expect("isWithinBaseDir summary must exist");
+    assert_eq!(
+        helper.confines_path_params.as_slice(),
+        &[0],
+        "isWithinBaseDir confines its sole param (index 0)"
+    );
+}
+
 #[test]
 fn python_source_to_sink() {
     let src = b"def main():\n    x = os.getenv(\"SECRET\")\n    os.system(x)\n";
@@ -1534,6 +1657,95 @@ fn go_source_to_sink() {
     );
 }
 
+/// CVE-2026-21859 (Mailpit) regression: an SSRF allowlist guard
+/// `if !InArray(uri, links) { return }` must narrow the taint on the
+/// surviving branch even when the guarded value reaches the sink through an
+/// elided container index (`uri := parts[1]` lowers to a pure copy).  Two
+/// engine capabilities combine: (1) the camelCase `InArray(value, list)` free
+/// function is recognised as a value-first membership AllowlistCheck, and
+/// (2) the sink's `all_validated` gate is copy-alias-aware, so the value
+/// surfacing under the copy-source name (`parts`) is still treated as
+/// validated.
+#[test]
+fn go_inarray_allowlist_narrows_ssrf_through_split_copy() {
+    let src = br#"package main
+import ("encoding/base64"; "net/http"; "strings")
+var stored = map[string][]string{}
+func getAssets(id string) ([]string, error) { return stored[id], nil }
+func InArray(k string, arr []string) bool {
+	for _, v := range arr {
+		if strings.EqualFold(v, k) {
+			return true
+		}
+	}
+	return false
+}
+func ProxyHandler(w http.ResponseWriter, r *http.Request) {
+	encoded := r.URL.Query().Get("data")
+	decoded, _ := base64.StdEncoding.DecodeString(encoded)
+	parts := strings.SplitN(string(decoded), ":", 2)
+	id := parts[0]
+	uri := parts[1]
+	links, _ := getAssets(id)
+	if !InArray(uri, links) {
+		return
+	}
+	resp, _ := http.Get(uri)
+	_ = resp
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
+    let file_cfg = parse_lang(src, "go", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Go,
+        "test.go",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "InArray allowlist guard must narrow the SSRF flow through the split/copy-derived uri; got {findings:?}"
+    );
+}
+
+/// Precision guard for the above: with NO allowlist guard (only a scheme-prefix
+/// predicate, exactly the Mailpit vulnerable shape), the SSRF flow must still
+/// fire.  Recognising `InArray` as an allowlist must not suppress an unguarded
+/// outbound request.
+#[test]
+fn go_ssrf_fires_without_allowlist_guard() {
+    let src = br#"package main
+import ("net/http"; "regexp")
+var linkRe = regexp.MustCompile(`(?i)^https?://`)
+func ProxyHandler(w http.ResponseWriter, r *http.Request) {
+	uri := r.URL.Query().Get("url")
+	if !linkRe.MatchString(uri) {
+		return
+	}
+	resp, _ := http.Get(uri)
+	_ = resp
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
+    let file_cfg = parse_lang(src, "go", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Go,
+        "test.go",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "unguarded SSRF (scheme-prefix predicate only) must still fire; got {findings:?}"
+    );
+}
+
 #[test]
 fn java_source_to_sink() {
     let src = b"class Main {\n  void main() {\n    String x = System.getenv(\"SECRET\");\n    Runtime.exec(x);\n  }\n}\n";
@@ -1553,6 +1765,220 @@ fn java_source_to_sink() {
         findings.len(),
         1,
         "Java: source->sink should produce 1 finding"
+    );
+}
+
+/// CVE-2021-21234: an assert-guard containment check
+/// `Assert.isTrue(<param-derived>.getCanonicalPath().startsWith(<fixed base>))`
+/// confines its path argument for FILE_IO, so a downstream (interprocedural)
+/// file read gated behind the guard call does not fire.  Pins the
+/// `asserts_path_confined_params` summary field + `apply_call_post_confinement`
+/// consumer.
+#[test]
+fn java_assert_startswith_confinement_suppresses_file_io() {
+    let src = br#"class LV {
+  private String baseDir = "/var/data";
+  void doGet(javax.servlet.http.HttpServletRequest req, javax.servlet.http.HttpServletResponse resp) throws Exception {
+    String name = req.getParameter("name");
+    confine(name);
+    read(name, resp.getOutputStream());
+  }
+  private void confine(String name) throws java.io.IOException {
+    String canonical = new java.io.File(baseDir, name).getCanonicalPath();
+    String base = new java.io.File(baseDir).getCanonicalPath();
+    org.springframework.util.Assert.isTrue(canonical.startsWith(base), "outside base");
+  }
+  private void read(String name, java.io.OutputStream out) throws java.io.IOException {
+    new java.io.FileInputStream(new java.io.File(baseDir, name)).transferTo(out);
+  }
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
+    let file_cfg = parse_lang(src, "java", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Java,
+        "test.java",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "Java: assert-guard startsWith containment should confine the read, got {findings:#?}"
+    );
+}
+
+/// Recall counterpart: a blocklist assertion `Assert.doesNotContain(name, "..")`
+/// is NOT a prefix-containment confinement (it is bypassable), so the same
+/// interprocedural read must still fire.  Pins that the recogniser keys on the
+/// `startsWith` containment predicate, not on any `Assert.*` call.
+#[test]
+fn java_assert_does_not_contain_still_fires() {
+    let src = br#"class LV {
+  private String baseDir = "/var/data";
+  void doGet(javax.servlet.http.HttpServletRequest req, javax.servlet.http.HttpServletResponse resp) throws Exception {
+    String name = req.getParameter("name");
+    org.springframework.util.Assert.doesNotContain(name, "..");
+    read(name, resp.getOutputStream());
+  }
+  private void read(String name, java.io.OutputStream out) throws java.io.IOException {
+    new java.io.FileInputStream(new java.io.File(baseDir, name)).transferTo(out);
+  }
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
+    let file_cfg = parse_lang(src, "java", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Java,
+        "test.java",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "Java: doesNotContain blocklist must not confine the read"
+    );
+}
+
+/// CVE-2026-53956 (rattler): a `?`-guarded, path-safety-named `Result`
+/// rejection guard (`ensure_safe_path_component(&segment)?`) confines its
+/// argument for FILE_IO, so the downstream `path.join(segment)` -> `fs::write`
+/// does not fire.  Pins the `result_reject_guard_params` summary field +
+/// `apply_path_validator_confinement` consumer.
+#[test]
+fn rust_path_component_guard_confines_file_io() {
+    let src = br#"use std::env;
+use std::path::PathBuf;
+#[derive(Debug)]
+pub struct InvalidPathComponentError { pub value: String }
+impl std::fmt::Display for InvalidPathComponentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.value) }
+}
+impl std::error::Error for InvalidPathComponentError {}
+pub fn ensure_safe_path_component(component: &str) -> Result<(), InvalidPathComponentError> {
+    let is_unsafe = component == "." || component == ".."
+        || component.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0'));
+    if is_unsafe { Err(InvalidPathComponentError { value: component.to_string() }) } else { Ok(()) }
+}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cache_root = PathBuf::from("/tmp/pkgs");
+    let build = env::var("PKG_BUILD").unwrap_or_default();
+    let segment = format!("demo-1.0-{}", build);
+    ensure_safe_path_component(&segment)?;
+    let cache_path = cache_root.join(segment);
+    std::fs::write(cache_path.join("payload"), b"x")?;
+    Ok(())
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_rust::LANGUAGE);
+    let file_cfg = parse_lang(src, "rust", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "Rust: ensure_safe_path_component guard should confine the write, got {findings:#?}"
+    );
+}
+
+/// Recall guard: the same path-safety validator is DEFINED but never called on
+/// the flow, so the tainted build string still reaches `fs::write` and the flow
+/// must still fire.  Pins that defining a path-safety guard does not suppress —
+/// confinement is applied only at an actual guarded call site.
+#[test]
+fn rust_path_validator_defined_unused_still_fires() {
+    let src = br#"use std::env;
+use std::path::PathBuf;
+#[derive(Debug)]
+pub struct InvalidPathComponentError { pub value: String }
+impl std::fmt::Display for InvalidPathComponentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.value) }
+}
+impl std::error::Error for InvalidPathComponentError {}
+pub fn ensure_safe_path_component(component: &str) -> Result<(), InvalidPathComponentError> {
+    let is_unsafe = component == "." || component == ".."
+        || component.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0'));
+    if is_unsafe { Err(InvalidPathComponentError { value: component.to_string() }) } else { Ok(()) }
+}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cache_root = PathBuf::from("/tmp/pkgs");
+    let build = env::var("PKG_BUILD").unwrap_or_default();
+    let segment = format!("demo-1.0-{}", build);
+    let cache_path = cache_root.join(segment);
+    std::fs::write(cache_path.join("payload"), b"x")?;
+    Ok(())
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_rust::LANGUAGE);
+    let file_cfg = parse_lang(src, "rust", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "Rust: an unused path-safety validator must not confine the write"
+    );
+}
+
+/// Soundness guard for the name gate: a `Result` rejection guard whose name is
+/// NOT a path-safety validator (`ensure_valid_email`) must not confine
+/// `Cap::FILE_IO`, even when it is `?`-guarded on the flow — a non-path
+/// validator proves nothing about path traversal.  Pins that
+/// `apply_path_validator_confinement` requires the path-safety-validator name.
+#[test]
+fn rust_non_path_result_guard_does_not_confine() {
+    let src = br#"use std::env;
+use std::path::PathBuf;
+#[derive(Debug)]
+pub struct InvalidEmailError { pub value: String }
+impl std::fmt::Display for InvalidEmailError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.value) }
+}
+impl std::error::Error for InvalidEmailError {}
+pub fn ensure_valid_email(addr: &str) -> Result<(), InvalidEmailError> {
+    if !addr.contains('@') { Err(InvalidEmailError { value: addr.to_string() }) } else { Ok(()) }
+}
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cache_root = PathBuf::from("/tmp/pkgs");
+    let build = env::var("PKG_BUILD").unwrap_or_default();
+    let segment = format!("demo-1.0-{}", build);
+    ensure_valid_email(&segment)?;
+    let cache_path = cache_root.join(segment);
+    std::fs::write(cache_path.join("payload"), b"x")?;
+    Ok(())
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_rust::LANGUAGE);
+    let file_cfg = parse_lang(src, "rust", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "Rust: a non-path-named Result guard must not confine FILE_IO"
     );
 }
 
@@ -1948,6 +2374,53 @@ fn ruby_source_to_sink() {
     );
 }
 
+#[test]
+fn ruby_pg_raw_exec_is_sql_sink_via_operator_assignment() {
+    // CVE-2026-42087 (OpenC3 COSMOS) shape, exercised end-to-end:
+    //   * `conn ||= PG::Connection.new(...)` — `operator_assignment` (`||=`)
+    //     must bind `conn` AND carry the DatabaseConnection type.
+    //   * `conn.exec("…'#{x}…")` — resolves to the `DatabaseConnection.exec`
+    //     SQL_QUERY sink, not the bare Kernel#exec shell sink.
+    let src = b"def lookup\n  start_time = gets()\n  conn ||= PG::Connection.new(host: \"h\", dbname: \"qdb\")\n  query = \"SELECT * FROM t WHERE x < '#{start_time}'\"\n  conn.exec(query)\nend\n";
+    let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
+    let file_cfg = parse_lang(src, "ruby", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Ruby, "test.rb", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "Ruby: tainted query through ||= PG connection should reach conn.exec, got {findings:#?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.effective_sink_caps.contains(Cap::SQL_QUERY)),
+        "Ruby: conn.exec(interpolated) should fire as a SQL_QUERY sink, got {findings:#?}"
+    );
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.effective_sink_caps.contains(Cap::SHELL_ESCAPE)),
+        "Ruby: typed conn.exec must NOT be misclassified as a shell sink, got {findings:#?}"
+    );
+}
+
+#[test]
+fn ruby_pg_exec_params_is_not_sql_sink() {
+    // Precision guard: the parameterised `exec_params` form is the safe pg API
+    // and must not fire a SQL injection finding (CVE-2026-42087 patched form).
+    let src = b"def lookup\n  start_time = gets()\n  conn ||= PG::Connection.new(host: \"h\", dbname: \"qdb\")\n  query = \"SELECT * FROM t WHERE x < $1\"\n  conn.exec_params(query, [start_time])\nend\n";
+    let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
+    let file_cfg = parse_lang(src, "ruby", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Ruby, "test.rb", &[], None);
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.effective_sink_caps.contains(Cap::SQL_QUERY)),
+        "Ruby: exec_params is parameterised and must not fire a SQL sink, got {findings:#?}"
+    );
+}
+
 //  Cross-language multi-file tests
 //
 // Cross-language resolution now requires explicit InteropEdge declarations.
@@ -2005,13 +2478,15 @@ fn cross_lang_python_source_to_js_sink_via_interop() {
             callee_symbol: "get_input".into(),
             ordinal: 0,
         },
-        to: FuncKey {
-            lang: Lang::Python,
-            namespace: "lib.py".into(),
-            name: "get_input".into(),
-            arity: Some(0),
-            ..Default::default()
-        },
+        to: FuncKey::from_parts(
+            Lang::Python,
+            "lib.py",
+            String::new(),
+            "get_input",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
     }];
     let findings = analyse_file(
         &file_cfg,
@@ -2067,13 +2542,15 @@ fn cross_lang_go_source_to_python_sink_via_interop() {
             callee_symbol: "fetch_env".into(),
             ordinal: 0,
         },
-        to: FuncKey {
-            lang: Lang::Go,
-            namespace: "lib.go".into(),
-            name: "fetch_env".into(),
-            arity: Some(0),
-            ..Default::default()
-        },
+        to: FuncKey::from_parts(
+            Lang::Go,
+            "lib.go",
+            String::new(),
+            "fetch_env",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
     }];
     let findings = analyse_file(
         &file_cfg,
@@ -2116,13 +2593,15 @@ fn cross_lang_rust_sanitizer_in_js_via_interop() {
             callee_symbol: "clean_shell".into(),
             ordinal: 0,
         },
-        to: FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "clean_shell".into(),
-            arity: Some(1),
-            ..Default::default()
-        },
+        to: FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "clean_shell",
+            Some(1),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
     }];
     let findings = analyse_file(
         &file_cfg,
@@ -2166,13 +2645,15 @@ fn cross_lang_c_sink_called_from_java_via_interop() {
             callee_symbol: "run_cmd".into(),
             ordinal: 0,
         },
-        to: FuncKey {
-            lang: Lang::C,
-            namespace: "native.c".into(),
-            name: "run_cmd".into(),
-            arity: Some(1),
-            ..Default::default()
-        },
+        to: FuncKey::from_parts(
+            Lang::C,
+            "native.c",
+            String::new(),
+            "run_cmd",
+            Some(1),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
     }];
     let findings = analyse_file(
         &file_cfg,
@@ -2229,13 +2710,15 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 callee_symbol: "get_secret".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::Python,
-                namespace: "source.py".into(),
-                name: "get_secret".into(),
-                arity: Some(0),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::Python,
+                "source.py",
+                String::new(),
+                "get_secret",
+                Some(0),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
         InteropEdge {
             from: CallSiteKey {
@@ -2245,13 +2728,15 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 callee_symbol: "make_safe".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::Rust,
-                namespace: "lib.rs".into(),
-                name: "make_safe".into(),
-                arity: Some(1),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::Rust,
+                "lib.rs",
+                String::new(),
+                "make_safe",
+                Some(1),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
         InteropEdge {
             from: CallSiteKey {
@@ -2261,13 +2746,15 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 callee_symbol: "run_dangerous".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::C,
-                namespace: "native.c".into(),
-                name: "run_dangerous".into(),
-                arity: Some(1),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::C,
+                "native.c",
+                String::new(),
+                "run_dangerous",
+                Some(1),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
     ];
     let findings = analyse_file(
@@ -2318,13 +2805,15 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
                 callee_symbol: "get_secret".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::Python,
-                namespace: "source.py".into(),
-                name: "get_secret".into(),
-                arity: Some(0),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::Python,
+                "source.py",
+                String::new(),
+                "get_secret",
+                Some(0),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
         InteropEdge {
             from: CallSiteKey {
@@ -2334,13 +2823,15 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
                 callee_symbol: "run_dangerous".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::C,
-                namespace: "native.c".into(),
-                name: "run_dangerous".into(),
-                arity: Some(1),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::C,
+                "native.c",
+                String::new(),
+                "run_dangerous",
+                Some(1),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
     ];
     let findings = analyse_file(
@@ -2413,13 +2904,15 @@ fn cross_lang_ruby_passthrough_in_js_via_interop() {
     use crate::summary::FuncSummary;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Ruby,
-        namespace: "helper.rb".into(),
-        name: "transform".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Ruby,
+        "helper.rb",
+        String::new(),
+        "transform",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key.clone(),
         FuncSummary {
@@ -2507,13 +3000,15 @@ fn cross_lang_php_source_to_go_sink_via_interop() {
             callee_symbol: "read_input".into(),
             ordinal: 0,
         },
-        to: FuncKey {
-            lang: Lang::Php,
-            namespace: "input.php".into(),
-            name: "read_input".into(),
-            arity: Some(0),
-            ..Default::default()
-        },
+        to: FuncKey::from_parts(
+            Lang::Php,
+            "input.php",
+            String::new(),
+            "read_input",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
     }];
     let findings = analyse_file(
         &file_cfg,
@@ -2534,13 +3029,15 @@ fn cross_lang_wrong_sanitizer_still_flags_via_interop() {
     use crate::summary::FuncSummary;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Python,
-        namespace: "sanitizers.py".into(),
-        name: "html_clean".into(),
-        arity: Some(1),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Python,
+        "sanitizers.py",
+        String::new(),
+        "html_clean",
+        Some(1),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key.clone(),
         FuncSummary {
@@ -2682,13 +3179,15 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
                 callee_symbol: "dangerous_query".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::Python,
-                namespace: "db.py".into(),
-                name: "dangerous_query".into(),
-                arity: Some(0),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::Python,
+                "db.py",
+                String::new(),
+                "dangerous_query",
+                Some(0),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
         InteropEdge {
             from: CallSiteKey {
@@ -2698,13 +3197,15 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
                 callee_symbol: "run_query".into(),
                 ordinal: 0,
             },
-            to: FuncKey {
-                lang: Lang::JavaScript,
-                namespace: "db.js".into(),
-                name: "run_query".into(),
-                arity: Some(1),
-                ..Default::default()
-            },
+            to: FuncKey::from_parts(
+                Lang::JavaScript,
+                "db.js",
+                String::new(),
+                "run_query",
+                Some(1),
+                None,
+                crate::symbol::FuncKind::Function,
+            ),
         },
     ];
     let findings = analyse_file(
@@ -2732,13 +3233,15 @@ fn ambiguous_resolution_returns_none() {
     // Two same-lang functions, same name + arity, different namespaces
     let mut global = GlobalSummaries::new();
     for ns in &["a.rs", "b.rs"] {
-        let key = FuncKey {
-            lang: Lang::Rust,
-            namespace: (*ns).to_string(),
-            name: "helper".into(),
-            arity: Some(0),
-            ..Default::default()
-        };
+        let key = FuncKey::from_parts(
+            Lang::Rust,
+            (*ns).to_string(),
+            String::new(),
+            "helper",
+            Some(0),
+            None,
+            crate::symbol::FuncKind::Function,
+        );
         global.insert(
             key,
             FuncSummary {
@@ -2794,13 +3297,15 @@ fn exact_namespace_match_wins() {
     // Same name in two namespaces, but one matches caller's namespace
     let mut global = GlobalSummaries::new();
     // test.rs version: source
-    let key_local = FuncKey {
-        lang: Lang::Rust,
-        namespace: "test.rs".into(),
-        name: "helper".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key_local = FuncKey::from_parts(
+        Lang::Rust,
+        "test.rs",
+        String::new(),
+        "helper",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key_local,
         FuncSummary {
@@ -2820,13 +3325,15 @@ fn exact_namespace_match_wins() {
         },
     );
     // other.rs version: no caps
-    let key_other = FuncKey {
-        lang: Lang::Rust,
-        namespace: "other.rs".into(),
-        name: "helper".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key_other = FuncKey::from_parts(
+        Lang::Rust,
+        "other.rs",
+        String::new(),
+        "helper",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key_other,
         FuncSummary {
@@ -2880,13 +3387,15 @@ fn interop_edge_wrong_caller_lang_no_match() {
     use crate::summary::FuncSummary;
 
     let mut global = GlobalSummaries::new();
-    let key = FuncKey {
-        lang: Lang::Python,
-        namespace: "lib.py".into(),
-        name: "get_data".into(),
-        arity: Some(0),
-        ..Default::default()
-    };
+    let key = FuncKey::from_parts(
+        Lang::Python,
+        "lib.py",
+        String::new(),
+        "get_data",
+        Some(0),
+        None,
+        crate::symbol::FuncKind::Function,
+    );
     global.insert(
         key.clone(),
         FuncSummary {
@@ -3328,13 +3837,15 @@ fn per_arg_propagation_tainted_param_propagates() {
     // transform(a, b) only propagates param 0. Tainted value at param 0 → finding.
     let mut global = GlobalSummaries::new();
     global.insert(
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "transform".into(),
-            arity: Some(2),
-            ..Default::default()
-        },
+        FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "transform",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
         FuncSummary {
             name: "transform".into(),
             file_path: "lib.rs".into(),
@@ -3387,13 +3898,15 @@ fn per_arg_propagation_safe_at_propagating_position() {
     // transform(a, b) only propagates param 0. Tainted value at param 1 (non-propagating) → no finding.
     let mut global = GlobalSummaries::new();
     global.insert(
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "transform".into(),
-            arity: Some(2),
-            ..Default::default()
-        },
+        FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "transform",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
         FuncSummary {
             name: "transform".into(),
             file_path: "lib.rs".into(),
@@ -3447,13 +3960,15 @@ fn per_arg_propagation_legacy_backward_compat() {
     // Should fall back to all-uses propagation.
     let mut global = GlobalSummaries::new();
     global.insert(
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "legacy_pass".into(),
-            arity: Some(2),
-            ..Default::default()
-        },
+        FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "legacy_pass",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
         FuncSummary {
             name: "legacy_pass".into(),
             file_path: "lib.rs".into(),
@@ -3506,13 +4021,15 @@ fn per_arg_propagation_both_params_propagate() {
     // concat(a, b) propagates both params 0 and 1. Tainted at param 1 → finding.
     let mut global = GlobalSummaries::new();
     global.insert(
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "concat".into(),
-            arity: Some(2),
-            ..Default::default()
-        },
+        FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "concat",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
         FuncSummary {
             name: "concat".into(),
             file_path: "lib.rs".into(),
@@ -3566,13 +4083,15 @@ fn per_arg_propagation_literal_first_arg() {
     // The literal arg at position 0 has no identifiers, but positional mapping is still correct.
     let mut global = GlobalSummaries::new();
     global.insert(
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "transform".into(),
-            arity: Some(2),
-            ..Default::default()
-        },
+        FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "transform",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
         FuncSummary {
             name: "transform".into(),
             file_path: "lib.rs".into(),
@@ -3625,13 +4144,15 @@ fn per_arg_propagation_nested_expr_arg() {
     // Nested call in arg 0 doesn't affect arg 1 position.
     let mut global = GlobalSummaries::new();
     global.insert(
-        FuncKey {
-            lang: Lang::Rust,
-            namespace: "lib.rs".into(),
-            name: "transform".into(),
-            arity: Some(2),
-            ..Default::default()
-        },
+        FuncKey::from_parts(
+            Lang::Rust,
+            "lib.rs",
+            String::new(),
+            "transform",
+            Some(2),
+            None,
+            crate::symbol::FuncKind::Function,
+        ),
         FuncSummary {
             name: "transform".into(),
             file_path: "lib.rs".into(),
@@ -7394,4 +7915,344 @@ fn cross_package_func_keys_namespace_uses_resolver_when_available() {
         ns = plain.namespace,
     );
     assert_eq!(plain.namespace, "packages/util/src/index.ts");
+}
+
+/// Behaviour-based open-redirect confiner (CVE-2026-42259, Saltcorn).  A
+/// helper whose name is NOT a recognised validator (`normalize_relative_url`)
+/// but whose body normalises the input and rejects protocol-relative (`//`)
+/// and `scheme:` URLs is recognised by behaviour: redirecting to its non-null
+/// result is same-origin, so the flow is silent even though the source is
+/// nested directly in the confining call.
+#[test]
+fn js_open_redirect_normalizer_confines_return() {
+    let src = br#"const normalize_relative_url = (url) => {
+  if (typeof url !== "string") return null;
+  const normalised = url.replace(/\\/g, "/").trimStart();
+  if (normalised.startsWith("//")) return null;
+  if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(normalised)) return null;
+  return normalised;
+};
+function handler(req, res) {
+  const dest = normalize_relative_url(decodeURIComponent(req.body.dest));
+  if (dest !== null) res.redirect(dest);
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "relative-URL confiner must clear OPEN_REDIRECT on its return; got {findings:?}"
+    );
+}
+
+/// Precision guard for the open-redirect confiner: a redirect gated only by
+/// the *weak* `is_relative_url` (substring `.includes("//")`, no backslash
+/// normalisation) must still fire — the weak form is not a sound confiner.
+#[test]
+fn js_open_redirect_weak_relative_check_still_fires() {
+    let src = br#"const is_relative_url = (url) => {
+  return typeof url === "string" && !url.includes(":/") && !url.includes("//");
+};
+function handler(req, res) {
+  if (is_relative_url(decodeURIComponent(req.body.dest))) {
+    res.redirect(decodeURIComponent(req.body.dest));
+  }
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "weak is_relative_url gate must not suppress the redirect; got {findings:?}"
+    );
+}
+
+/// Pins the summary-extraction invariant: the confiner's `SsaFuncSummary`
+/// sets `sanitizes_open_redirect_return`, while the weak substring form does
+/// not.
+#[test]
+fn ssa_summary_records_open_redirect_normalizer() {
+    let src = br#"const normalize_relative_url = (url) => {
+  if (typeof url !== "string") return null;
+  const normalised = url.replace(/\\/g, "/").trimStart();
+  if (normalised.startsWith("//")) return null;
+  if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:/.test(normalised)) return null;
+  return normalised;
+};
+const is_relative_url = (url) => {
+  return typeof url === "string" && !url.includes(":/") && !url.includes("//");
+};
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let (ssa_summaries, _) = crate::taint::lower_all_functions_from_bodies(
+        &file_cfg,
+        Lang::JavaScript,
+        "test.js",
+        &file_cfg.summaries,
+        None,
+        None,
+        None,
+        None,
+    );
+    let confiner = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "normalize_relative_url")
+        .map(|(_, v)| v)
+        .expect("normalize_relative_url summary must exist");
+    assert!(
+        confiner.sanitizes_open_redirect_return,
+        "normalize_relative_url must be recognised as an OPEN_REDIRECT confiner"
+    );
+    let weak = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "is_relative_url")
+        .map(|(_, v)| v)
+        .expect("is_relative_url summary must exist");
+    assert!(
+        !weak.sanitizes_open_redirect_return,
+        "weak is_relative_url (.includes substring form) must not be recognised as a confiner"
+    );
+}
+
+/// Extract `compose_path`'s `confines_path_return` flag for a given body.
+/// Shared by the uftpd CVE-2020-5221 return-confinement tests.
+#[cfg(test)]
+fn compose_path_confines_return(src: &[u8]) -> bool {
+    use crate::state::symbol::SymbolInterner;
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    let file_cfg = parse_lang(src, "c", lang);
+    let the_cfg = &file_cfg.first_body().graph;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let func_entries = super::find_function_entries(the_cfg);
+    for (name, entry) in &func_entries {
+        if name != "compose_path" {
+            continue;
+        }
+        let ssa = crate::ssa::lower_to_ssa(the_cfg, *entry, Some(name), false).unwrap();
+        let param_count = ssa
+            .blocks
+            .iter()
+            .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+            .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+            .count();
+        let summary = ssa_transfer::extract_ssa_func_summary(
+            &ssa,
+            the_cfg,
+            summaries,
+            None,
+            Lang::C,
+            "test.c",
+            &interner,
+            param_count,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        return summary.confines_path_return;
+    }
+    panic!("compose_path not found");
+}
+
+/// CVE-2020-5221 (uftpd): the *patched* `compose_path` confines the
+/// `realpath()`-resolved `rpath` with `strncmp(rpath, home, strlen(home))`
+/// before `return rpath`, so `confines_path_return` is set — the summary
+/// post-condition consumed at the `fopen(compose_abspath(...))` call site.
+#[test]
+fn uftpd_patched_compose_path_confines_return() {
+    let patched = br#"
+static char *home = "/srv/ftp";
+typedef struct { int sd; char cwd[4096]; } ctrl_t;
+char *compose_path(ctrl_t *ctrl, char *path)
+{
+	static char rpath[4096];
+	char dir[4096] = { 0 };
+	strlcpy(dir, ctrl->cwd, sizeof(dir));
+	strlcat(dir, path, sizeof(dir));
+	if (!realpath(dir, rpath))
+		return NULL;
+	if (strncmp(rpath, home, strlen(home))) {
+		return NULL;
+	}
+	return rpath;
+}
+"#;
+    assert!(
+        compose_path_confines_return(patched),
+        "strncmp(rpath, ...) on the returned rpath must set confines_path_return"
+    );
+}
+
+/// The *vulnerable* `compose_path` confines the unresolved `dir`
+/// (`strncmp(dir, home, ...)`), a different var than the returned `rpath`, so
+/// `confines_path_return` stays false — the flow to `fopen` still fires.  This
+/// pins the bug/fix discriminator: the confinement subject must match the
+/// returned value's name.
+#[test]
+fn uftpd_vulnerable_compose_path_does_not_confine_return() {
+    let vulnerable = br#"
+static char *home = "/srv/ftp";
+typedef struct { int sd; char cwd[4096]; } ctrl_t;
+char *compose_path(ctrl_t *ctrl, char *path)
+{
+	static char rpath[4096];
+	char dir[4096] = { 0 };
+	strlcpy(dir, ctrl->cwd, sizeof(dir));
+	strlcat(dir, path, sizeof(dir));
+	if (!realpath(dir, rpath))
+		return NULL;
+	if (strncmp(dir, home, strlen(home))) {
+		return NULL;
+	}
+	return rpath;
+}
+"#;
+    assert!(
+        !compose_path_confines_return(vulnerable),
+        "strncmp(dir, ...) confines a different var than the returned rpath — must not confine"
+    );
+}
+
+/// CVE-2022-24776 (Flask-AppBuilder): the patched `get_safe_redirect` returns
+/// its URL parameter only on the validated branch of a URL-safety guard
+/// (`is_safe_redirect_url`), so its SSA summary must record
+/// `sanitizes_open_redirect_return` (the guarded-passthrough confiner shape).
+#[test]
+fn ssa_summary_records_open_redirect_guarded_passthrough() {
+    let src = br#"
+from urllib.parse import urljoin, urlparse
+def is_safe_redirect_url(url):
+    host_url = urlparse(request.host_url)
+    redirect_url = urlparse(urljoin(request.host_url, url))
+    return redirect_url.scheme in ("http", "https") and host_url.netloc == redirect_url.netloc
+def get_safe_redirect(url):
+    if url and is_safe_redirect_url(url):
+        return url
+    return "/"
+def unguarded_passthrough(url):
+    log(url)
+    return url
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_lang(src, "python", lang);
+    let (ssa_summaries, _) = crate::taint::lower_all_functions_from_bodies(
+        &file_cfg,
+        Lang::Python,
+        "test.py",
+        &file_cfg.summaries,
+        None,
+        None,
+        None,
+        None,
+    );
+    let confiner = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "get_safe_redirect")
+        .map(|(_, v)| v)
+        .expect("get_safe_redirect summary must exist");
+    assert!(
+        confiner.sanitizes_open_redirect_return,
+        "get_safe_redirect (validated-branch passthrough) must be an OPEN_REDIRECT confiner"
+    );
+    // An unguarded passthrough (returns the param with no URL-safety guard) must
+    // NOT be recognised — it does not confine.
+    let weak = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "unguarded_passthrough")
+        .map(|(_, v)| v)
+        .expect("unguarded_passthrough summary must exist");
+    assert!(
+        !weak.sanitizes_open_redirect_return,
+        "an unguarded param passthrough must not be recognised as an OPEN_REDIRECT confiner"
+    );
+}
+
+/// CVE-2022-24776 end-to-end: `return redirect(get_safe_redirect(next_url))`
+/// (the confiner collapses out of the SSA and the tainted URL reaches the sink
+/// directly) must NOT fire — the `arg_uses` wrapper recovery strips
+/// OPEN_REDIRECT/SSRF for both the standalone and the `return`-duplicate node.
+#[test]
+fn python_nested_get_safe_redirect_suppresses_open_redirect() {
+    let src = br#"
+from urllib.parse import urljoin, urlparse
+from flask import Flask, redirect, request
+def is_safe_redirect_url(url):
+    host_url = urlparse(request.host_url)
+    redirect_url = urlparse(urljoin(request.host_url, url))
+    return redirect_url.scheme in ("http", "https") and host_url.netloc == redirect_url.netloc
+def get_safe_redirect(url):
+    if url and is_safe_redirect_url(url):
+        return url
+    return "/"
+def login():
+    next_url = request.args.get("next", "")
+    return redirect(get_safe_redirect(next_url))
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_lang(src, "python", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Python,
+        "test.py",
+        &[],
+        None,
+    );
+    assert!(
+        findings.is_empty(),
+        "get_safe_redirect confiner must clear OPEN_REDIRECT on the nested redirect; got {findings:?}"
+    );
+}
+
+/// Recall guard for the guarded-passthrough confiner: a redirect wrapped by a
+/// helper that does NOT validate the URL (a plain string transform) must still
+/// fire `taint-open-redirect`.
+#[test]
+fn python_weak_redirect_wrapper_still_fires() {
+    let src = br#"
+from flask import Flask, redirect, request
+def make_upper(url):
+    return url.upper()
+def login():
+    next_url = request.args.get("next", "")
+    return redirect(make_upper(next_url))
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_lang(src, "python", lang);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Python,
+        "test.py",
+        &[],
+        None,
+    );
+    assert!(
+        !findings.is_empty(),
+        "a non-validating wrapper must not confine the redirect; got {findings:?}"
+    );
 }
