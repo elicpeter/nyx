@@ -16,7 +16,7 @@ by CI (must hold for three consecutive runs before tagging).
 - [x] Determinism: every payload RNG seeds from `spec.spec_hash`; oracle canaries derive from `BLAKE3(spec_hash || run_nonce)`. `scripts/check_no_unseeded_rand.sh` audits the tree.
 - [x] Observability: each new code path emits a `VerifyTrace` event and a typed `Inconclusive` / `Unsupported` reason.
 - [x] Security: every sink-under-test routes through `src/dynamic/policy.rs` deny rules; no phase weakened the seccomp / `.sb` profile sets.
-- [ ] Performance: default `nyx scan` (no `--verify`) latency does not regress.
+- [x] Performance: default `nyx scan` (no `--verify`) latency does not regress.  `NYX_CI_BENCH=1 cargo test --release --test perf_tests`: 7 passed, every fixture well inside budget (cold <= 86ms vs 1500ms, warm <= 26ms vs 500ms).
 
 ## Ship gates (`scripts/m7_ship_gate.sh`)
 
@@ -25,9 +25,9 @@ by CI (must hold for three consecutive runs before tagging).
 - [x] Gate 3: with-verify / static-only wall-clock ratio <= 1.5x on `benches/fixtures/`.
 - [x] Gate 4: SARIF schema validation on every dynamic verdict variant.
 - [x] Gate 5: layering boundary test green.
-- [ ] Gate 6: Java OWASP Benchmark v1.2 `--verify` acceptance (wall-clock <= 15 min CI, per-cap precision >= 0.85 / recall >= 0.40, per-`(cap, lang)` budget). Self-skips without `NYX_OWASP_CORPUS`.
-- [ ] Gate 7: NodeGoat + Juice Shop acceptance. Self-skips without `NYX_NODEGOAT_CORPUS` / `NYX_JUICESHOP_CORPUS`.
-- [ ] Gate 8: RailsGoat / DVWA / DVPWA / gosec / RustSec acceptance. Self-skips without the matching `NYX_*_CORPUS`.
+- [x] Gate 6: Java OWASP Benchmark v1.2 `--verify` acceptance (wall-clock <= 15 min CI, per-cap precision >= 0.85 / recall >= 0.40, per-`(cap, lang)` budget). Self-skips without `NYX_OWASP_CORPUS`.  Green in `eval` on `a122f753` (14m36s).
+- [x] Gate 7: NodeGoat + Juice Shop acceptance. Self-skips without `NYX_NODEGOAT_CORPUS` / `NYX_JUICESHOP_CORPUS`.  Green in `eval` on `a122f753`.
+- [x] Gate 8: RailsGoat / DVWA / DVPWA / gosec / RustSec acceptance. Self-skips without the matching `NYX_*_CORPUS`.  Green in `eval` on `a122f753`.
 
 Gates 6 through 8 run against real corpora that are not vendored into the repo.
 They are enforced in the `eval` workflow with the corpora cached on the CI
@@ -35,21 +35,30 @@ runner. Locally they self-skip with a clear message.
 
 ## CI matrix rows (must be green three runs running)
 
+Ticks below record the full-green master run on `a122f753` (`CI`, `dynamic`
+and `eval` all `success`).  The three-consecutive-run requirement was waived
+by the maintainer for 0.8.0; see the Tag section.
+
 `ci.yml`:
-- [ ] frontend, rustfmt, clippy-stable, cargo-deny, unused-deps, third-party-licenses
-- [ ] docs-fresh (`nyx-docgen` output committed), rustdoc
-- [ ] rust-beta-build, msrv
-- [ ] rust-stable-test-linux-without-docker, rust-stable-test-linux-with-docker (`cargo nextest run --all-features`)
+- [x] frontend, rustfmt, clippy-stable, cargo-deny, unused-deps, third-party-licenses
+- [x] docs-fresh (`nyx-docgen` output committed), rustdoc
+- [x] rust-beta-build, msrv
+- [x] rust-stable-test-linux-without-docker, rust-stable-test-linux-with-docker (`cargo nextest run --all-features`)
 
 `dynamic.yml` (each runs `cargo nextest run --features dynamic`):
-- [ ] linux-process-only
-- [ ] linux-with-docker
-- [ ] macos
+- [x] linux-process-only
+- [x] linux-with-docker
+- [x] macos
 
 `eval.yml`:
-- [ ] owasp (Gate 6)
-- [ ] jsts matrix: nodegoat, juiceshop (Gate 7)
-- [ ] polyglot matrix: railsgoat, dvwa, dvpwa, gosec, rustsec (Gate 8)
+- [x] owasp (Gate 6)
+- [x] jsts matrix: nodegoat, juiceshop (Gate 7)
+- [x] polyglot matrix: railsgoat, dvwa, dvpwa, gosec, rustsec (Gate 8)
+
+`dynamic / linux-with-docker` and `dynamic / macos` were intermittently red
+before `0279d72c`.  Both were sandbox e2e cases starving past their 5s
+wall-clock budget under full-suite parallelism, not product defects; they are
+pinned to a single-threaded nextest group now.
 
 ## Docs and metadata
 
@@ -89,6 +98,11 @@ not release blockers, but the release notes should not overstate the verifier.
 
 ## Tag
 
-- [ ] Three consecutive green CI runs on `master` confirmed.
-- [ ] Real-corpus gates (6 through 8) green in the `eval` workflow with corpora wired.
-- [ ] `git tag v0.8.0` and push; `release-build.yml` publishes the binaries and `SHA256SUMS`.
+- [~] Three consecutive green CI runs on `master` confirmed.  WAIVED by the
+      maintainer for 0.8.0: one fully green master run (`a122f753`) plus the
+      flake fix in `0279d72c`.  Not satisfied as written.
+- [x] Real-corpus gates (6 through 8) green in the `eval` workflow with corpora wired.
+- [x] `git tag v0.8.0` and push; `release-build.yml` publishes the binaries and `SHA256SUMS`.
+- [ ] `cargo publish` to crates.io (manual; no workflow does this).  Build the
+      frontend first so `src/server/assets/dist` is fresh, since it is
+      gitignored but shipped via the `include` glob.
