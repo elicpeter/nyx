@@ -15,7 +15,7 @@ use libfuzzer_sys::fuzz_target;
 use nyx_scanner::ast::run_rules_on_bytes;
 use nyx_scanner::labels::Cap;
 use nyx_scanner::summary::{FuncSummary, GlobalSummaries};
-use nyx_scanner::symbol::{FuncKey, Lang};
+use nyx_scanner::symbol::{FuncKey, FuncKind, Lang};
 use nyx_scanner::utils::config::Config;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -63,13 +63,21 @@ fn build_global_summaries() -> GlobalSummaries {
                 HelperRole::Source => 0,
                 HelperRole::Sanitizer | HelperRole::Sink | HelperRole::PassThrough => 1,
             };
-            let key = FuncKey {
+            // `FuncKey::from_parts` rather than a struct literal: the cached
+            // `hash` field is private, and it is private precisely because it
+            // must stay in sync with the seven identity fields.  A literal
+            // with `..Default::default()` would leave it zeroed, so every
+            // `by_lang_name` / `ssa_by_key` lookup this target exists to
+            // exercise would miss and the fuzzer would silently cover nothing.
+            let key = FuncKey::from_parts(
                 lang,
-                namespace: format!("nyx_synthetic_{}.{}", lang.as_str(), default_ext(lang)),
-                name: name.into(),
-                arity: Some(arity),
-                ..Default::default()
-            };
+                format!("nyx_synthetic_{}.{}", lang.as_str(), default_ext(lang)),
+                "",
+                name,
+                Some(arity),
+                None,
+                FuncKind::Function,
+            );
             let summary = match role {
                 HelperRole::Source => FuncSummary {
                     name: name.into(),
