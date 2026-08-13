@@ -82,7 +82,7 @@ use literals::{
 };
 use params::{
     compute_container_and_kind, extract_param_meta, inject_framework_param_sources,
-    is_configured_terminator,
+    is_terminator_call,
 };
 
 /// Test-only re-export of `extract_param_meta` so the external
@@ -2216,7 +2216,11 @@ fn binary_operator_token(node: Node) -> Option<String> {
 /// / `.size` / `.count`; Java `.size()` / `.length()`; Rust `.len()`.  This
 /// list is intentionally narrow, only properties whose semantics across every
 /// host we scan return an integer, so the `TypeKind::Int` fact is sound.
-fn is_numeric_length_property(name: &str) -> bool {
+///
+/// Shared with [`crate::ssa::type_facts::is_int_producing_callee`] so the
+/// value-level grain (`int n = s.length();`) and the callee-text grain
+/// (`String.valueOf(s.length())`) agree on the same narrow list.
+pub(crate) fn is_numeric_length_property(name: &str) -> bool {
     matches!(name, "length" | "size" | "byteLength" | "count" | "len")
 }
 
@@ -7740,10 +7744,12 @@ pub(super) fn build_sub<'a>(
                 analysis_rules,
             );
 
-            // If the callee is a configured terminator, treat as a dead end
+            // If the callee never returns, treat as a dead end: no
+            // fall-through edge, so a guard whose failing arm aborts stays
+            // dominating.  See `is_terminator_call`.
             if kind == StmtKind::Call
                 && let Some(callee) = &g[node].call.callee
-                && is_configured_terminator(callee, analysis_rules)
+                && is_terminator_call(lang, callee, analysis_rules)
             {
                 return Vec::new();
             }
@@ -7792,7 +7798,8 @@ pub(super) fn build_sub<'a>(
             // pipeline. Append a synthetic If node (condition_vars includes <name>) so validation
             // predicates like `.chars().all(|c| c.is_ascii_*())` narrow taint on the guarded branch.
             if lang == "rust"
-                && let Some((guard, let_name)) = detect_rust_let_match_guard(ast, code)
+                && let Some((guard, let_name, alternatives_diverge)) =
+                    detect_rust_let_match_guard(ast, code)
             {
                 let if_node = emit_rust_match_guard_if(g, guard, &let_name, code, enclosing_func);
                 connect_all(g, &[node], if_node, EdgeKind::Seq);
@@ -7814,6 +7821,18 @@ pub(super) fn build_sub<'a>(
                 });
                 connect_all(g, &[if_node], true_gate, EdgeKind::True);
                 connect_all(g, &[if_node], false_gate, EdgeKind::False);
+                // When every other arm diverges (`_ => return`,
+                // `_ => panic!(…)`), the guard-false path never reaches the
+                // code after the `let`: the binding only exists on the
+                // guarded arm.  Leaving the false gate on the frontier would
+                // hand the join an unvalidated predecessor, and
+                // `validated_must` (AND-on-join) would drop the guard's
+                // narrowing, reporting a value the guard already proved safe.
+                // The false gate stays in the graph as a dead end, the same
+                // CFG shape an explicit `return` arm produces.
+                if alternatives_diverge {
+                    return vec![true_gate];
+                }
                 return vec![true_gate, false_gate];
             }
 
@@ -7847,9 +7866,11 @@ pub(super) fn build_sub<'a>(
             apply_arg_source_bindings(g, n, &src_bindings, &src_uses_only);
             connect_all(g, &effective_preds, n, EdgeKind::Seq);
 
-            // If the callee is a configured terminator, treat as a dead end
+            // If the callee never returns, treat as a dead end: no
+            // fall-through edge, so a guard whose failing arm aborts stays
+            // dominating.  See `is_terminator_call`.
             if let Some(callee) = &g[n].call.callee
-                && is_configured_terminator(callee, analysis_rules)
+                && is_terminator_call(lang, callee, analysis_rules)
             {
                 return Vec::new();
             }

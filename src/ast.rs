@@ -2645,17 +2645,23 @@ pub fn extract_all_summaries_from_bytes(
         String,
         std::sync::Arc<HashMap<String, crate::symbol::FuncKey>>,
     )>,
+    Vec<auth_analysis::caller_scope::CallerScopeEdge>,
+    Option<(String, auth_analysis::router_facts::PerFileRouterFacts)>,
 )> {
     let _span = tracing::debug_span!("extract_all_summaries", file = %path.display()).entered();
     let Some(source) = ParsedSource::try_new(bytes, path)? else {
-        return Ok((vec![], vec![], vec![], vec![], None));
+        return Ok((vec![], vec![], vec![], vec![], None, vec![], None));
     };
     let lang_slug = source.lang_slug;
     let parsed = ParsedFile::from_source(source, cfg);
     let func_summaries = parsed.export_summaries_with_root(scan_root);
     let (ssa_summaries, ssa_bodies) =
         parsed.extract_ssa_artifacts(None, scan_root, cfg.module_graph.as_deref());
-    let auth_summaries = auth_analysis::extract_auth_summaries_by_key(
+    // Both auth fact sets come from ONE authorization model: the indexed
+    // path has to persist the caller-scope edges and router facts that the
+    // fused path folds in memory, or `--index auto` silently loses the
+    // cross-file auth analysis (see `auth_analysis::persist`).
+    let (auth_summaries, caller_scope_facts) = auth_analysis::extract_auth_facts_by_key(
         &parsed.source.tree,
         parsed.source.bytes,
         lang_slug,
@@ -2663,6 +2669,20 @@ pub fn extract_all_summaries_from_bytes(
         cfg,
         scan_root,
     );
+    // Router facts are extracted unconditionally for Python, matching the
+    // fused path: the auth analysis runs only under Full, but the index has
+    // to be populated by the time pass 2 launches.
+    let router_facts = if lang_slug == "python" {
+        auth_analysis::router_facts::module_id_for_storage(parsed.source.path).map(|module_id| {
+            let facts = auth_analysis::router_facts::extract_router_facts_for_python(
+                &parsed.source.tree,
+                parsed.source.bytes,
+            );
+            (module_id, facts)
+        })
+    } else {
+        None
+    };
     let cross_package_imports = if parsed.file_cfg.resolved_imports.is_empty() {
         None
     } else {
@@ -2691,6 +2711,8 @@ pub fn extract_all_summaries_from_bytes(
         ssa_bodies,
         auth_summaries,
         cross_package_imports,
+        caller_scope_facts,
+        router_facts,
     ))
 }
 
@@ -6608,29 +6630,12 @@ pub fn analyse_file_fused(
                 // handler.  Pass 2 lifts route-level auth onto private
                 // helpers reached only from authorized routes in other
                 // files.  See `auth_analysis::caller_scope`.
-                if let Some(lang_enum) = Lang::from_slug(parsed.source.lang_slug) {
-                    caller_scope_facts = auth_analysis::caller_scope::extract_caller_scope_facts(
-                        &auth_model,
-                        lang_enum,
-                    );
-                    // Gitea `web.Router` registers handlers cross-package
-                    // (`r.Get(path, container.GetBlobsUpload)`) under
-                    // closure groups whose trailing ownership-guard
-                    // middleware (`reqPackageAccess`) is colocated with
-                    // the registration.  Harvest route→handler-leaf auth
-                    // edges so pass 2's caller-scope lift authorizes the
-                    // (other-file) handler unit.  A no-op on non-gitea Go
-                    // files (no closure-form groups).
-                    if lang_enum == Lang::Go {
-                        caller_scope_facts.extend(
-                            auth_analysis::extract::gitea::extract_route_handler_auth_edges(
-                                &parsed.source.tree,
-                                parsed.source.bytes,
-                                lang_enum,
-                            ),
-                        );
-                    }
-                }
+                caller_scope_facts = auth_analysis::harvest_caller_scope_facts(
+                    &auth_model,
+                    parsed.source.lang_slug,
+                    &parsed.source.tree,
+                    parsed.source.bytes,
+                );
             }
             let var_types = parsed.collect_file_var_types();
             out.extend(auth_analysis::run_auth_analysis_with_model(

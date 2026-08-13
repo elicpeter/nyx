@@ -4006,14 +4006,27 @@ fn collect_param_names(
         // and lifts typed-bounded scalar ids (`UserId: number`) into
         // `unit.params`, over-firing the user-input gate on non-route helpers.
         // Mirrors the Rust `parameter` arm plus the Go/Python id-like filter.
+        //
+        // The id-like drop is gated on the ANNOTATION, exactly like the Go
+        // arm's `type_is_bounded_scalar` gate: only a payload-incompatible
+        // primitive (`number` / `bigint` / `boolean`) makes an id-shaped name
+        // a caller-passed scope key rather than user input.  Gating on the
+        // name alone is unsound in TypeScript specifically, because TS
+        // annotates EVERY parameter — `targetUserId: string` is the canonical
+        // route-handed foreign-id shape, and dropping it left single-param
+        // helpers with an empty `unit.params`, closing
+        // `unit_has_user_input_evidence` and silencing
+        // `js.auth.missing_ownership_check` on the whole TS helper layer.
         "required_parameter" | "optional_parameter" => {
             if let Some(pattern) = node.child_by_field_name("pattern") {
-                if pattern.kind() == "identifier" && node.child_by_field_name("type").is_some() {
+                if pattern.kind() == "identifier"
+                    && let Some(type_node) = node.child_by_field_name("type")
+                {
                     let name = text(pattern, bytes);
-                    if !name.is_empty()
-                        && !out.contains(&name)
-                        && (include_id_like_typed || !is_python_id_like_typed_param(&name))
-                    {
+                    let drop_id_like = !include_id_like_typed
+                        && is_ts_payload_incompatible_type(type_node, bytes)
+                        && is_python_id_like_typed_param(&name);
+                    if !name.is_empty() && !out.contains(&name) && !drop_id_like {
                         out.push(name);
                     }
                 } else {
@@ -4083,6 +4096,29 @@ fn is_go_non_user_input_type(type_node: Node<'_>, bytes: &[u8]) -> bool {
 fn is_python_id_like_typed_param(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower == "id" || lower.ends_with("id") || lower.ends_with("_id") || lower.ends_with("ids")
+}
+
+/// True iff a TypeScript parameter's type annotation names a
+/// **payload-incompatible** primitive: `number`, `bigint`, or
+/// `boolean`.  Same vocabulary as `cfg::params::ts_type_to_kind`'s
+/// `TypeKind::Int` / `TypeKind::Bool` arms and as the
+/// `typed_bounded_vars` set that
+/// `auth_analysis::checks::is_typed_bounded_subject` reasons over; the
+/// three must move in lockstep (the cfg helper is `pub(super)` to its
+/// own module, so it cannot be shared directly, mirroring the
+/// `is_python_id_like_typed_param` / `is_go_id_like_typed_param`
+/// duplication above).
+///
+/// Used by the TS arm of `collect_param_names` to decide whether an
+/// id-shaped parameter name is a caller-passed scope key (`userId:
+/// number`) or user-controlled input (`targetUserId: string`).
+/// Deliberately narrow: only the bare primitive matches.  `string`,
+/// `any`, unions, interfaces, and DTO classes are payload-carrying
+/// shapes and keep their param name so the user-input gate stays open.
+fn is_ts_payload_incompatible_type(type_node: Node<'_>, bytes: &[u8]) -> bool {
+    let annotation = text(type_node, bytes);
+    let stripped = annotation.trim().trim_start_matches(':').trim();
+    matches!(stripped, "number" | "bigint" | "boolean")
 }
 
 /// Same shape predicate used by the Go typed-param fallback in

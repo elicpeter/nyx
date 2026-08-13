@@ -5347,55 +5347,30 @@ pub(super) fn transfer_inst(
             // hardcoded-URL fetch does not create a phantom
             // `taint-unsanitised-flow` finding when its result is
             // echoed/printed later in the same scope.
-            let is_network_fetch_source = info
-                .taint
-                .labels
-                .iter()
-                .any(|l| matches!(l, DataLabel::Source(_)))
-                && info
-                    .taint
-                    .labels
-                    .iter()
-                    .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(Cap::SSRF)));
             // Detect a hardcoded URL via three channels:
             //   1. `info.string_prefix`, populated by the JS/TS template-
             //      literal extractor and inline call shapes.
-            //   2. AbstractState `StringFact` on the first positional arg ,
+            //   2. AbstractState `StringFact` on the first positional arg,
             //      populated by const propagation for plain string literals.
             //   3. As a last resort when `info.call.first_arg_text` is
             //      populated with a hardcoded literal, extracted at CFG
             //      construction time for network-fetch primitive callees.
-            let url_prefix_safe_via_node = info
-                .string_prefix
-                .as_deref()
-                .map(|p| {
-                    let synthetic = crate::abstract_interp::StringFact::from_prefix(p);
-                    is_string_safe_for_ssrf(&synthetic)
-                })
-                .unwrap_or(false);
-            let url_prefix_safe_via_abs = state.abstract_state.as_ref().is_some_and(|abs| {
-                args.first().is_some_and(|first_arg| {
-                    !first_arg.is_empty()
-                        && first_arg
-                            .iter()
-                            .all(|v| is_string_safe_for_ssrf(&abs.get(*v).string))
-                })
-            });
-            let url_prefix_safe_via_first_arg_text = is_network_fetch_source
-                && info
-                    .call
-                    .arg_string_literals
-                    .first()
-                    .and_then(|v| v.as_deref())
-                    .map(|s| {
-                        let synthetic = crate::abstract_interp::StringFact::from_prefix(s);
-                        is_string_safe_for_ssrf(&synthetic)
+            // Channels 1 and 3 read only the CFG node, so they live in
+            // `node_is_hardcoded_network_fetch_source` where the structural
+            // `cfg-unguarded-sink` pass (which has no abstract state) shares
+            // them.  Channel 2 needs this block's `AbstractState` and stays
+            // here.
+            let url_prefix_safe_via_abs = is_network_fetch_source(info)
+                && state.abstract_state.as_ref().is_some_and(|abs| {
+                    args.first().is_some_and(|first_arg| {
+                        !first_arg.is_empty()
+                            && first_arg
+                                .iter()
+                                .all(|v| is_string_safe_for_ssrf(&abs.get(*v).string))
                     })
-                    .unwrap_or(false);
-            let url_is_hardcoded_safe = is_network_fetch_source
-                && (url_prefix_safe_via_node
-                    || url_prefix_safe_via_abs
-                    || url_prefix_safe_via_first_arg_text);
+                });
+            let url_is_hardcoded_safe =
+                node_is_hardcoded_network_fetch_source(info) || url_prefix_safe_via_abs;
 
             for lbl in &info.taint.labels {
                 if let DataLabel::Source(bits) = lbl {
@@ -9052,11 +9027,11 @@ fn refine_exec_argv_array_shell_taint(
     }
 
     for (value, caps, origins) in tainted.iter_mut() {
-        if !argv_values.iter().any(|argv| argv == value) {
+        let Some(vector) = exec_argv_vector_for(*value, argv_values, ssa) else {
             continue;
-        }
+        };
         let Some((argv_caps, argv_origins)) =
-            exec_argv_non_executable_shell_taint(*value, inst.value, state, ssa)
+            exec_argv_non_executable_shell_taint(vector, inst.value, state, ssa)
         else {
             continue;
         };
@@ -9067,6 +9042,56 @@ fn refine_exec_argv_array_shell_taint(
     }
 
     tainted.retain(|(_, caps, _)| caps.contains(Cap::SHELL_ESCAPE));
+}
+
+/// Resolve the argv vector that a tainted `execv*` operand speaks for.
+///
+/// Returns the vector itself when `value` IS the argv argument, and the
+/// container it was read out of when `value` is the synthetic `__index_get__`
+/// result the CFG pre-emits for a subscript argument.  The alias matters
+/// because the executable path is idiomatically read back out of the vector
+/// (`execvp(args[0], (char *const *)args)`): with pointer analysis on, arg 0
+/// binds to a `__nyx_idxget_*` element read, a value distinct from `args`, so
+/// a plain membership test sees the two operands as unrelated.
+///
+/// Both operands are governed by the same rule.  Taint that only reaches the
+/// executable slot of the vector chooses *which* binary the vector runs — the
+/// `GIT_SSH` shape behind CVE-2017-1000117 — which
+/// [`exec_argv_non_executable_shell_taint`] already separates from argv
+/// injection.  Resolving arg 0 back to the vector keeps that separation now
+/// that the executable path is a payload position of the `execv*` gates.
+///
+/// `None` for an operand unrelated to the vector, so a program path that does
+/// NOT come out of argv (`execvp(getenv("PROG_PATH"), NULL)`) keeps its
+/// SHELL_ESCAPE taint: nothing about the argv vector says anything about it.
+fn exec_argv_vector_for(
+    value: SsaValue,
+    argv_values: &[SsaValue],
+    ssa: &SsaBody,
+) -> Option<SsaValue> {
+    if argv_values.contains(&value) {
+        return Some(value);
+    }
+    for block in &ssa.blocks {
+        for candidate in block.phis.iter().chain(block.body.iter()) {
+            if candidate.value != value {
+                continue;
+            }
+            let SsaOp::Call {
+                callee,
+                receiver: Some(receiver),
+                ..
+            } = &candidate.op
+            else {
+                return None;
+            };
+            if callee == "__index_get__" && argv_values.contains(receiver) {
+                return Some(*receiver);
+            }
+            return None;
+        }
+    }
+    None
 }
 
 fn exec_argv_non_executable_shell_taint(
@@ -12231,6 +12256,51 @@ fn is_inst_data_exfil_destination_trusted(inst: &SsaInst, abs: &AbstractState, c
             .as_deref()
             .is_some_and(|p| is_string_prefix_trusted_destination(p, trusted))
     })
+}
+
+/// True when this call node is a network-fetch primitive: it carries BOTH a
+/// `Source` label and a `Sink(SSRF)` label (PHP `file_get_contents` /
+/// `curl_exec`, Python `requests.get`, JS `axios.get`, …).  Such a call is a
+/// source only because it reaches out over the network, so what it returns is
+/// exactly as trustworthy as the URL it was handed.
+fn is_network_fetch_source(info: &crate::cfg::NodeInfo) -> bool {
+    info.taint
+        .labels
+        .iter()
+        .any(|l| matches!(l, DataLabel::Source(_)))
+        && info
+            .taint
+            .labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(Cap::SSRF)))
+}
+
+/// Node-only half of the network-fetch source suppression applied in the
+/// `SsaOp::Call` transfer: a network-fetch primitive invoked with a hardcoded
+/// URL whose prefix passes [`is_string_safe_for_ssrf`] (a fully-formed
+/// `scheme://host/path`) has its endpoint bound at compile time, so the
+/// response body is developer-chosen, not attacker-chosen, and the `Source`
+/// label does not apply.
+///
+/// Lives here, on the node rather than on the dataflow state, so the
+/// structural `cfg-unguarded-sink` pass in `cfg_analysis::guards` can consult
+/// the same predicate.  Both engines must agree on which nodes introduce
+/// untrusted data: when only the taint engine honours the suppression, the
+/// structural rule keeps treating the fetch result as a source and fires on
+/// whatever consumes it, re-creating the finding the suppression removed.
+pub(crate) fn node_is_hardcoded_network_fetch_source(info: &crate::cfg::NodeInfo) -> bool {
+    if !is_network_fetch_source(info) {
+        return false;
+    }
+    let safe_prefix =
+        |p: &str| is_string_safe_for_ssrf(&crate::abstract_interp::StringFact::from_prefix(p));
+    info.string_prefix.as_deref().is_some_and(safe_prefix)
+        || info
+            .call
+            .arg_string_literals
+            .first()
+            .and_then(|v| v.as_deref())
+            .is_some_and(safe_prefix)
 }
 
 /// SSRF safety: prefix includes scheme + full host + path separator.

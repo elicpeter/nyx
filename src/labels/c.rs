@@ -163,8 +163,21 @@ pub static GATED_SINKS: &[SinkGate] = &[
             object_destination_fields: &[],
         },
     },
-    // `execv*` forms pass argv as arg 1. The executable path at arg 0 is not
-    // shell-parsed, so narrow SHELL_ESCAPE/argv-injection checks to the vector.
+    // `execv*` forms take the executable path at arg 0 and argv at arg 1.  BOTH
+    // positions are attacker-relevant, and for different reasons:
+    //
+    //   * arg 1 (argv) carries argv-injection — smuggling extra flags into an
+    //     otherwise fixed program.
+    //   * arg 0 (path) decides *which binary runs at all*.  There is no shell
+    //     here, so no metacharacter is needed: attacker control of arg 0 is
+    //     direct arbitrary-program execution (CWE-78).
+    //
+    // An earlier revision listed only `[1]`, reasoning that arg 0 "is not
+    // shell-parsed".  That conflates shell-metacharacter injection with
+    // choose-the-executable, and it silently went from a gate-scoping detail to
+    // a recall hole once `sink_payload_args` became authoritative for the SSA
+    // sink scan: `execvp(getenv("PROG_PATH"), NULL)` has a constant at every
+    // listed payload position, so the const-payload suppression swallowed it.
     SinkGate {
         callee_matcher: "execv",
         arg_index: 1,
@@ -172,7 +185,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_prefixes: &[],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
-        payload_args: &[1],
+        payload_args: &[0, 1],
         keyword_name: None,
         dangerous_kwargs: &[],
         activation: GateActivation::Destination {
@@ -186,7 +199,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_prefixes: &[],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
-        payload_args: &[1],
+        payload_args: &[0, 1],
         keyword_name: None,
         dangerous_kwargs: &[],
         activation: GateActivation::Destination {
@@ -200,7 +213,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_prefixes: &[],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
-        payload_args: &[1],
+        payload_args: &[0, 1],
         keyword_name: None,
         dangerous_kwargs: &[],
         activation: GateActivation::Destination {
@@ -214,7 +227,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_prefixes: &[],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
-        payload_args: &[1],
+        payload_args: &[0, 1],
         keyword_name: None,
         dangerous_kwargs: &[],
         activation: GateActivation::Destination {

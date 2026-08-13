@@ -1125,11 +1125,109 @@ pub(super) fn python_primitive_to_kind(t: &str) -> Option<TypeKind> {
     }
 }
 
-/// Check if a callee name matches any configured terminator.
-pub(super) fn is_configured_terminator(
+/// Language built-ins that never return.  A call to one of these ends the
+/// block: control reaches nothing after it, so the CFG builder must not
+/// draw a fall-through edge out of it.
+///
+/// This matters far beyond dead-code accounting, because it decides whether
+/// a validation guard is *dominating*.  In
+///
+/// ```php
+/// if (!in_array($cmd, $allowed)) { die('denied'); }
+/// system($cmd);
+/// ```
+///
+/// the sink is reachable only along the edge on which `in_array` held.  If
+/// `die` keeps a fall-through edge, the rejected value merges back in at the
+/// join and every "validate, else abort" guard in the language silently stops
+/// suppressing — the shape reads as unvalidated no matter how the guard is
+/// written.  The same argument covers `exit(1)` in C, `panic!()` in Rust and
+/// `sys.exit()` in Python.
+///
+/// Until now `LangAnalysisRules::terminators` was populated *only* from user
+/// config (`labels::build_lang_rules`), so out of the box no language had any
+/// terminator at all.  The knowledge did exist, but in
+/// `cfg_analysis::error_handling::call_never_returns`, which is reachable only
+/// from the `cfg-error-fallthrough` rule and never consulted while the graph
+/// is being built.  These are the built-in defaults the CFG builder needs;
+/// user config still unions on top.
+///
+/// Deliberately conservative.  Marking a call a terminator makes everything
+/// after it unreachable, which turns a false positive into a false *negative*
+/// if the callee can in fact return.  So this list only holds names that
+/// cannot return in the surface language, and only in their unambiguous
+/// namespace-qualified or reserved-word forms:
+///
+///  * PHP `die` / `exit` are reserved constructs and cannot be redefined.
+///  * Rust's diverging macros are `!`-typed by definition.  `assert!` and
+///    friends are excluded — they are conditional.
+///  * Bare `Exit` / `exit` on an arbitrary receiver (`session.exit()`) is
+///    *not* matched; only the qualified std forms are.
+fn is_builtin_terminator(lang: &str, callee: &str) -> bool {
+    // Receiver-qualified std terminators are matched on the full callee text,
+    // never on the trailing segment, so a user-defined `server.Exit()` or
+    // `session.exit()` is not mistaken for `os.Exit` / `sys.exit`.
+    match lang {
+        "php" => matches!(callee, "die" | "exit"),
+        // `_Exit` / `quick_exit` are C11; `err`/`errx` are BSD and exit(3)
+        // internally.  `abort` raises SIGABRT and never returns.
+        "c" | "cpp" => matches!(
+            callee,
+            "exit" | "_exit" | "_Exit" | "abort" | "quick_exit" | "err" | "errx"
+        ),
+        // Macro callees are recorded without the trailing `!`
+        // (see `is_rust_format_style_macro`).
+        "rust" => matches!(
+            callee,
+            "panic"
+                | "unreachable"
+                | "todo"
+                | "unimplemented"
+                | "process::exit"
+                | "process::abort"
+                | "std::process::exit"
+                | "std::process::abort"
+        ),
+        "python" => matches!(callee, "sys.exit" | "os._exit" | "os.abort"),
+        "go" => matches!(
+            callee,
+            "panic"
+                | "os.Exit"
+                | "syscall.Exit"
+                | "runtime.Goexit"
+                | "log.Fatal"
+                | "log.Fatalf"
+                | "log.Fatalln"
+                | "log.Panic"
+                | "log.Panicf"
+                | "log.Panicln"
+        ),
+        "java" => matches!(callee, "System.exit"),
+        "javascript" | "typescript" | "tsx" => matches!(callee, "process.exit"),
+        // Ruby `exit`/`exit!`/`abort` raise SystemExit / terminate.  `raise`
+        // is deliberately absent: it is modelled as `Kind::Throw`, which the
+        // CFG already routes to handlers rather than to a dead end.
+        "ruby" => matches!(callee, "exit" | "exit!" | "abort" | "Kernel.exit"),
+        _ => false,
+    }
+}
+
+/// Check if a callee name is a terminator: either a language built-in
+/// ([`is_builtin_terminator`]) or a user-configured one.
+///
+/// Config matching stays case-insensitive, as it always was.  Built-in
+/// matching is case-*sensitive* because the names it carries are qualified
+/// std identifiers where case is meaningful (`os.Exit` is Go's, `os.exit` is
+/// nobody's) and a case-insensitive compare would let a user-defined
+/// `System.Exit` or `PANIC` slip in.
+pub(super) fn is_terminator_call(
+    lang: &str,
     callee: &str,
     analysis_rules: Option<&LangAnalysisRules>,
 ) -> bool {
+    if is_builtin_terminator(lang, callee) {
+        return true;
+    }
     if let Some(rules) = analysis_rules {
         let callee_lower = callee.to_ascii_lowercase();
         rules

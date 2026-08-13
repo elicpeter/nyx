@@ -2828,7 +2828,15 @@ pub fn scan_with_index_parallel_observer(
                                 )
                             },
                         ) {
-                            Ok((func_sums, ssa_sums, ssa_bodies, auth_sums, cross_pkg_imports)) => {
+                            Ok((
+                                func_sums,
+                                ssa_sums,
+                                ssa_bodies,
+                                auth_sums,
+                                cross_pkg_imports,
+                                caller_scope_facts,
+                                router_facts,
+                            )) => {
                                 if let Some(p) = &progress_ref {
                                     p.inc_parsed(1);
                                     if let Some(lang) = func_sums.first().map(|s| s.lang.as_str()) {
@@ -2880,6 +2888,19 @@ pub fn scan_with_index_parallel_observer(
                                         )
                                     })
                                     .collect();
+                                let caller_scope_rows: Vec<_> = caller_scope_facts
+                                    .iter()
+                                    .map(crate::auth_analysis::persist::CallerScopeEdgeRow::from)
+                                    .collect();
+                                let router_facts_row =
+                                    router_facts.as_ref().map(|(module_id, facts)| {
+                                        (
+                                            module_id.clone(),
+                                            crate::auth_analysis::persist::PerFileRouterFactsRow::from(
+                                                facts,
+                                            ),
+                                        )
+                                    });
                                 // Extraction succeeded: this file's `files`
                                 // row may be stamped with the pass-1 hash.
                                 // Pass-1 persist failures abort the scan
@@ -2896,6 +2917,9 @@ pub fn scan_with_index_parallel_observer(
                                     let cpi_arg = cross_pkg_imports
                                         .as_ref()
                                         .map(|(ns, map)| (ns.as_str(), map.as_ref()));
+                                    let rf_arg = router_facts_row
+                                        .as_ref()
+                                        .map(|(module_id, facts)| (module_id.as_str(), facts));
                                     writer_idx.replace_all_for_file(
                                         &path_for_write,
                                         &hash,
@@ -2904,6 +2928,8 @@ pub fn scan_with_index_parallel_observer(
                                         &body_rows,
                                         &auth_rows,
                                         cpi_arg,
+                                        &caller_scope_rows,
+                                        rf_arg,
                                     )
                                 }) {
                                     record_persist_error(
@@ -3138,6 +3164,45 @@ pub fn scan_with_index_parallel_observer(
                 );
                 gs.insert_auth(key, auth_sum);
             }
+        }
+
+        // Cross-file authorization fact sets.  Replayed through the SAME
+        // `fold_caller_scope_edge` / `insert_router_facts` entry points the
+        // non-indexed pass-1 fold uses, so the merge semantics are identical
+        // between the two paths by construction rather than by parallel
+        // implementation.
+        //
+        // The fold is associative and commutative — `has_caller` OR,
+        // `all_authorized` AND (identity `true`), `lifted_checks` union — so
+        // replaying per-file edge lists in `ORDER BY file_path` reproduces the
+        // accumulator the rayon reduce would have built, whatever the file
+        // order was.
+        let mut caller_scope_edge_count = 0usize;
+        match idx.load_all_caller_scope_edges() {
+            Ok(rows) => {
+                caller_scope_edge_count = rows.len();
+                for row in rows {
+                    gs.fold_caller_scope_edge(row.into());
+                }
+            }
+            Err(e) => tracing::warn!("failed to load caller_scope_edges from DB: {e}"),
+        }
+        let mut router_facts_count = 0usize;
+        match idx.load_all_router_facts() {
+            Ok(rows) => {
+                router_facts_count = rows.len();
+                for (module_id, facts) in rows {
+                    gs.insert_router_facts(module_id, facts.into());
+                }
+            }
+            Err(e) => tracing::warn!("failed to load router_facts from DB: {e}"),
+        }
+        if caller_scope_edge_count > 0 || router_facts_count > 0 {
+            tracing::info!(
+                caller_scope_edges = caller_scope_edge_count,
+                router_facts = router_facts_count,
+                "loaded cross-file authorization facts from DB"
+            );
         }
 
         // Same observability as the non-indexed scan path so callers

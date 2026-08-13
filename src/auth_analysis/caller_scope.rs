@@ -46,9 +46,13 @@
 //!   unauthorized caller of `leaf`.  Phase 1 covers the transitive case
 //!   *within* a file; the cross-file transitive case needs a topological
 //!   / SCC fixed-point over caller-auth facts.
-//! - Non-indexed (`--index off`) only.  The accumulator is populated from
-//!   [`crate::ast::analyse_file_fused`] in the in-memory two-pass path.
-//!   The SQLite-indexed path would need serde on [`super::model::AuthCheck`].
+//!
+//! Both scan paths are covered.  The non-indexed path folds the accumulator
+//! in memory from [`crate::ast::analyse_file_fused`]; the indexed path
+//! persists the raw per-file edges (see [`super::persist`]) and replays them
+//! through the same [`crate::summary::GlobalSummaries::fold_caller_scope_edge`]
+//! entry point, so the merge semantics are identical by construction.
+//! `tests/indexed_parity_tests.rs` locks that with cold and warm parity cases.
 
 use crate::symbol::Lang;
 

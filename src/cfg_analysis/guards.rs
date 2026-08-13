@@ -23,6 +23,27 @@ use std::collections::HashSet;
 
 pub struct UnguardedSink;
 
+/// True when this CFG node introduces untrusted data into the structural
+/// analysis.
+///
+/// A [`DataLabel::Source`] label is the base signal, minus the hardcoded
+/// network-fetch exemption the SSA taint engine already applies
+/// (`file_get_contents("https://api.example.com/health")`): a network-fetch
+/// primitive is a source only because it reaches out over the network, so
+/// when its endpoint is pinned by a literal URL the response is
+/// developer-chosen and the result is as constant as the URL that produced
+/// it.  Without the mirror the taint engine stays silent on such a flow
+/// while the structural rule still treats the fetch result as a source,
+/// which both defeats the constant-argument suppressions below and promotes
+/// the finding to High via `sink_arg_is_source_derived`.
+fn node_introduces_untrusted_data(info: &crate::cfg::NodeInfo) -> bool {
+    info.taint
+        .labels
+        .iter()
+        .any(|l| matches!(l, DataLabel::Source(_)))
+        && !crate::taint::ssa_transfer::node_is_hardcoded_network_fetch_source(info)
+}
+
 /// Check whether **all** arguments to the sink are constants (no taint-capable
 /// variable flows).  Extends the inline callee-part check by tracing one hop
 /// through the CFG: if a used variable is defined by a node that itself has
@@ -80,13 +101,7 @@ fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
             if info.taint.defines.as_deref() == Some(u.as_str()) {
                 // If the defining node has no uses (pure constant) and is not
                 // a Source, the variable is constant.
-                if info.taint.uses.is_empty()
-                    && !info
-                        .taint
-                        .labels
-                        .iter()
-                        .any(|l| matches!(l, DataLabel::Source(_)))
-                {
+                if info.taint.uses.is_empty() && !node_introduces_untrusted_data(info) {
                     return true;
                 }
             }
@@ -445,12 +460,7 @@ fn ssa_operand_const_or_param(
         let cfg_node = inst.cfg_node;
         if cfg
             .node_weight(cfg_node)
-            .map(|info| {
-                info.taint
-                    .labels
-                    .iter()
-                    .any(|l| matches!(l, DataLabel::Source(_)))
-            })
+            .map(node_introduces_untrusted_data)
             .unwrap_or(false)
         {
             return false;
@@ -528,12 +538,7 @@ fn ssa_operand_constant(
         let cfg_node = inst.cfg_node;
         if cfg
             .node_weight(cfg_node)
-            .map(|info| {
-                info.taint
-                    .labels
-                    .iter()
-                    .any(|l| matches!(l, DataLabel::Source(_)))
-            })
+            .map(node_introduces_untrusted_data)
             .unwrap_or(false)
         {
             return false;
@@ -2862,12 +2867,7 @@ fn sink_arg_is_source_derived(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
         if info.ast.enclosing_func.as_deref() != sink_func {
             continue;
         }
-        if !info
-            .taint
-            .labels
-            .iter()
-            .any(|l| matches!(l, DataLabel::Source(_)))
-        {
+        if !node_introduces_untrusted_data(info) {
             continue;
         }
         // Source node defines a variable that the sink reads → source-derived

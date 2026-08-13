@@ -163,16 +163,23 @@ pub(super) fn push_condition_node<'a>(
 }
 
 /// For a Rust `let <pattern> = match <scrutinee> { <arm> if <guard> => .., ... }`,
-/// find the first guarded `match_arm` and return the guard expression node plus
-/// the primary let-binding name.  Returns `None` when the let-value is not a
-/// `match_expression` or no arm has a guard.
+/// find the first guarded `match_arm` and return the guard expression node, the
+/// primary let-binding name, and whether every *other* arm diverges.  Returns
+/// `None` when the let-value is not a `match_expression` or no arm has a guard.
 ///
 /// The guard lives on the tree-sitter `match_pattern` node as the field
 /// `condition` (present whenever the pattern is followed by `if <expr>`).
+///
+/// The third element answers "can the code after the `match` be reached without
+/// the guard holding?".  When every arm other than the guarded one diverges
+/// (`_ => return`, `_ => panic!(…)`), the binding downstream can only carry the
+/// guarded arm's value, so the caller drops the guard-false gate from the
+/// statement frontier rather than handing the join a predecessor on which the
+/// binding was never validated.
 pub(super) fn detect_rust_let_match_guard<'a>(
     ast: Node<'a>,
     code: &[u8],
-) -> Option<(Node<'a>, String)> {
+) -> Option<(Node<'a>, String, bool)> {
     if ast.kind() != "let_declaration" {
         return None;
     }
@@ -183,20 +190,105 @@ pub(super) fn detect_rust_let_match_guard<'a>(
     let body = value.child_by_field_name("body")?;
 
     let mut cursor = body.walk();
-    let guard = body.children(&mut cursor).find_map(|arm| {
-        if !matches!(arm.kind(), "match_arm" | "last_match_arm") {
-            return None;
-        }
-        let pattern = arm.child_by_field_name("pattern")?;
-        pattern.child_by_field_name("condition")
+    let arms: Vec<Node<'a>> = body
+        .children(&mut cursor)
+        .filter(|arm| matches!(arm.kind(), "match_arm" | "last_match_arm"))
+        .collect();
+
+    // The guarded arm the synthetic If node stands for: the same "first arm
+    // carrying a guard" rule the CFG synthesis is built around.
+    let guarded_idx = arms.iter().position(|arm| {
+        arm.child_by_field_name("pattern")
+            .and_then(|p| p.child_by_field_name("condition"))
+            .is_some()
     })?;
+    let guard = arms[guarded_idx]
+        .child_by_field_name("pattern")?
+        .child_by_field_name("condition")?;
+
+    // Every arm except the guarded one has to leave the function for the
+    // guard-false path to be unreachable downstream.  An arm that yields a
+    // value (including a second guarded arm) keeps the frontier conservative.
+    let alternatives_diverge = arms
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| *idx != guarded_idx)
+        .all(|(_, arm)| {
+            arm.child_by_field_name("value")
+                .is_some_and(|v| rust_expr_diverges(v, code))
+        });
 
     let pat = ast.child_by_field_name("pattern")?;
     let mut idents = Vec::new();
     collect_idents(pat, code, &mut idents);
     let name = idents.into_iter().next()?;
 
-    Some((guard, name))
+    Some((guard, name, alternatives_diverge))
+}
+
+/// Does this Rust expression leave the enclosing function instead of producing
+/// a value?
+///
+/// Recognises an explicit `return`, the diverging std macros / process
+/// terminators, and a block whose last statement does one of those.  Anything
+/// else is assumed to fall through, so the caller stays conservative.
+///
+/// The name list mirrors the Rust arm of `params::is_builtin_terminator`, but
+/// the test cannot be shared: that recogniser answers "does this CFG *node*
+/// end the block?", while a `let … = match …` collapses into a single Call
+/// node whose arm bodies never become CFG nodes at all, so the arms have to be
+/// judged on the AST.  `break` / `continue` are deliberately not claimed: they
+/// leave a loop rather than the function, and the match-guard synthesis does
+/// not model the surrounding loop edges.
+fn rust_expr_diverges(node: Node, code: &[u8]) -> bool {
+    // Macro callees are written without the trailing `!`, matching the way
+    // the CFG records them.
+    fn is_diverging_callee(name: &str) -> bool {
+        matches!(
+            name,
+            "panic"
+                | "unreachable"
+                | "todo"
+                | "unimplemented"
+                | "process::exit"
+                | "std::process::exit"
+                | "process::abort"
+                | "std::process::abort"
+        )
+    }
+
+    match node.kind() {
+        "return_expression" => true,
+        "macro_invocation" => node
+            .child_by_field_name("macro")
+            .and_then(|m| text_of(m, code))
+            .is_some_and(|name| is_diverging_callee(&name)),
+        "call_expression" => node
+            .child_by_field_name("function")
+            .and_then(|f| text_of(f, code))
+            .is_some_and(|name| is_diverging_callee(&name)),
+        // `_ => { return; }` and friends: the arm's value is a block, so the
+        // decision rests on its last statement.  Comments are skipped so a
+        // trailing `// unreachable` note cannot hide the terminator.
+        "block" => {
+            let mut cursor = node.walk();
+            let mut last: Option<Node> = None;
+            for child in node.named_children(&mut cursor) {
+                if !matches!(child.kind(), "line_comment" | "block_comment") {
+                    last = Some(child);
+                }
+            }
+            last.is_some_and(|stmt| {
+                let inner = if stmt.kind() == "expression_statement" {
+                    stmt.named_child(0).unwrap_or(stmt)
+                } else {
+                    stmt
+                };
+                rust_expr_diverges(inner, code)
+            })
+        }
+        _ => false,
+    }
 }
 
 /// Synthesize a `StmtKind::If` CFG node carrying a Rust match-arm guard's

@@ -8297,7 +8297,7 @@
       "notes": "Axum Path<String> \u2192 Html(format!(...)) \u2014 requires framework rules (Cargo.toml present)"
     },
     {
-      "case_id": "rs-safe-009",
+      "case_id": "rs-safe-013",
       "file": "rust/safe/safe_match_guard.rs",
       "language": "rust",
       "is_vulnerable": false,
@@ -17556,7 +17556,7 @@
       "notes": "Distilled from airflow tests/unit/models/test_backfill.py: pytest test methods with SQLAlchemy `session` fixture and `session.commit()` calls.  Bare `session.<sqlalchemy_verb>` no longer counts as auth Session evidence; only `session.<identity_field>` (user/user_id/...) does."
     },
     {
-      "case_id": "py-auth-realrepo-007",
+      "case_id": "py-auth-realrepo-027",
       "file": "python/auth/vuln_fastapi_route_no_dependencies.py",
       "language": "python",
       "is_vulnerable": true,

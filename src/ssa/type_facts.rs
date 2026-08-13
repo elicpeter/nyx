@@ -1495,6 +1495,20 @@ pub fn is_int_producing_callee(callee: &str) -> bool {
     // an empty segment.
     let trimmed = base.trim_end_matches([':', '.']);
     let suffix = trimmed.rsplit(['.', ':']).next().unwrap_or(trimmed);
+    // Zero-argument numeric-length accessors (`s.length()`, `list.size()`,
+    // `vec.len()`, `xs.count()`) produce an integer in every grammar we scan.
+    // The CFG detector already pins `TypeKind::Int` on the *binding* shape
+    // (`int n = s.length();` sets `NodeInfo::is_numeric_length_access`), but an
+    // accessor written inline inside a sink argument — `res.setHeader("X-Len",
+    // String.valueOf(rendered.length()))` — never lowers to its own SSA value,
+    // so the Int fact has nothing to attach to and only the callee-text
+    // predicates (`cfg::count_confined_idents_into`,
+    // `apply_arg_type_safe_suppression`) can still see it.  Reuse the single
+    // narrow property list instead of restating it so both grains stay in
+    // lock-step.
+    if crate::cfg::is_numeric_length_property(suffix) {
+        return true;
+    }
     matches!(
         suffix,
         "parseInt" | "parseFloat" | "Number"        // JS/TS

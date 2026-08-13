@@ -49,7 +49,7 @@ fn pipeline_global_summaries(files: &[File<'_>]) -> GlobalSummaries {
     let mut all_ssa: Vec<(FuncKey, SsaFuncSummary)> = Vec::new();
     for f in files {
         let path = Path::new(f.namespace);
-        let (func, ssa, _bodies, _auth, _cpi) =
+        let (func, ssa, _bodies, _auth, _cpi, _, _) =
             extract_all_summaries_from_bytes(f.bytes, path, &cfg, None)
                 .expect("extract_all_summaries_from_bytes must succeed");
         all_func.extend(func);

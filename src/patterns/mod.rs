@@ -224,22 +224,37 @@ impl FindingCategory {
     /// Category for a structural / state-machine finding identified by its
     /// rule id.
     ///
-    /// Resource-management and error-handling defects (`state-resource-leak`,
-    /// `cfg-resource-leak`, `cfg-error-fallthrough`) are *reliability* bugs,
-    /// not security vulnerabilities: a leaked file handle or an unhandled
-    /// error path is a correctness/robustness issue, not an exploitable flow.
-    /// Emitting them as `Security` floods security reports (and security
-    /// benchmarks) with non-security noise.  Everything else routed through
-    /// the structural/state pipeline — taint sinks (`cfg-unguarded-sink`),
-    /// authorization gaps (`cfg-auth-gap`, `state-unauthed-access`) and
-    /// memory-safety state errors (`state-use-after-close`,
-    /// `state-double-close`) — stays `Security`.
+    /// Resource and error-handling defects split on the **must / may** line the
+    /// analyses themselves already draw, rather than being demoted wholesale:
+    ///
+    /// * `state-resource-leak` is a *must*-leak.  `state::facts` only emits it
+    ///   when the resource is acquired on every path and reaches no release
+    ///   call, out-parameter, or field escape (anything weaker is downgraded to
+    ///   `state-resource-leak-possible` at the emit site).  An unbounded handle
+    ///   leak on an attacker-reachable path is resource exhaustion — CWE-401 /
+    ///   CWE-404 — so it stays `Security`.
+    /// * `state-resource-leak-possible` and `cfg-resource-leak` are *may*
+    ///   analyses ("not all exit paths release it").  `cfg-error-fallthrough`
+    ///   is likewise a robustness signal.  These are the shapes that flood a
+    ///   security report with non-exploitable noise, so they stay
+    ///   `Reliability`.
+    ///
+    /// An earlier revision demoted all four together.  Because a leak fixture's
+    /// only finding is a leak, that erased must-leaks from the security stream
+    /// entirely and silently swallowed the resource-lifecycle recall guards:
+    /// the rule still fired, but every consumer that filters on
+    /// `FindingCategory::Security` — the benchmark scorer included — saw
+    /// nothing at all.
+    ///
+    /// Everything else routed through the structural/state pipeline — taint
+    /// sinks (`cfg-unguarded-sink`), authorization gaps (`cfg-auth-gap`,
+    /// `state-unauthed-access`) and memory-safety state errors
+    /// (`state-use-after-close`, `state-double-close`) — stays `Security`.
     pub fn for_structural_rule(rule_id: &str) -> FindingCategory {
         match rule_id {
-            "state-resource-leak"
-            | "state-resource-leak-possible"
-            | "cfg-resource-leak"
-            | "cfg-error-fallthrough" => FindingCategory::Reliability,
+            "state-resource-leak-possible" | "cfg-resource-leak" | "cfg-error-fallthrough" => {
+                FindingCategory::Reliability
+            }
             _ => FindingCategory::Security,
         }
     }

@@ -1641,9 +1641,16 @@ pub fn analyse_file_summaries(
     config: &Config,
 ) -> Result<GlobalSummaries, StatusCode> {
     let bytes = std::fs::read(file_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let (func_summaries, ssa_rows, _ssa_bodies, auth_rows, cross_pkg_imports) =
-        crate::ast::extract_all_summaries_from_bytes(&bytes, file_path, config, None)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (
+        func_summaries,
+        ssa_rows,
+        _ssa_bodies,
+        auth_rows,
+        cross_pkg_imports,
+        caller_scope_facts,
+        router_facts,
+    ) = crate::ast::extract_all_summaries_from_bytes(&bytes, file_path, config, None)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut global = crate::summary::merge_summaries(func_summaries, None);
 
@@ -1655,6 +1662,12 @@ pub fn analyse_file_summaries(
     }
     if let Some((ns, map)) = cross_pkg_imports {
         global.insert_cross_package_imports(ns, map);
+    }
+    for edge in caller_scope_facts {
+        global.fold_caller_scope_edge(edge);
+    }
+    if let Some((module_id, facts)) = router_facts {
+        global.insert_router_facts(module_id, facts);
     }
 
     Ok(global)

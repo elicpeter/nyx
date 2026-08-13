@@ -164,7 +164,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_prefixes: &[],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
-        payload_args: &[1],
+        payload_args: &[0, 1],
         keyword_name: None,
         dangerous_kwargs: &[],
         activation: GateActivation::Destination {
@@ -178,7 +178,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_prefixes: &[],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
-        payload_args: &[1],
+        payload_args: &[0, 1],
         keyword_name: None,
         dangerous_kwargs: &[],
         activation: GateActivation::Destination {
@@ -192,7 +192,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_prefixes: &[],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
-        payload_args: &[1],
+        payload_args: &[0, 1],
         keyword_name: None,
         dangerous_kwargs: &[],
         activation: GateActivation::Destination {
@@ -206,7 +206,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_prefixes: &[],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
-        payload_args: &[1],
+        payload_args: &[0, 1],
         keyword_name: None,
         dangerous_kwargs: &[],
         activation: GateActivation::Destination {

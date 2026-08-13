@@ -667,34 +667,42 @@ fn benchmark_evaluation() {
     println!("\nResults written to: {}", results_path.display());
     println!("=== Benchmark complete ===\n");
 
-    // ── Regression thresholds (current baseline minus ~5pp) ────────
-    // Baseline (2026-04-24, post per-return-path PathFact landing):
-    // Rule-level P=0.947 R=0.994 F1=0.970 on the 316-case corpus
-    // (TP=179 FP=10 FN=1 TN=125).  Adds 8 cases from the path-sanitiser
-    // FP cluster (rs-safe-014, rs-safe-016, CVE-2018-20997 +
-    // CVE-2022-36113 + CVE-2024-24576 patched/vulnerable pairs).  Rust
-    // language F1 stayed at 1.000.
+    // ── Regression thresholds (current baseline minus ~2pp) ────────
+    // Baseline (2026-08-12): Rule-level P=1.000 R=0.997 F1=0.998 on the
+    // 669-case corpus (TP=324 FP=0 FN=1 TN=344).  The single remaining FN
+    // is java-sqli-realrepo-keycloak-001 (JPA `createQuery` concat), a
+    // long-standing recall gap tracked separately.
     //
-    // Floors sit ~5pp below that baseline: a single-case flip is ~0.3pp
-    // on this corpus, so 5pp is generous enough to absorb honest
-    // FP↔TN trades while still catching a real regression in a
-    // vulnerability class.  When you land a durable, measurable
-    // improvement, tighten these floors, do not relax them to paper
-    // over a regression.
+    // Floors were previously 0.897 / 0.944 / 0.920, calibrated in April
+    // against a 316-case corpus whose baseline was P=0.947 R=0.994.  That
+    // left ~8pp of slack, and the slack was not free: 13 cases silently
+    // regressed (7 FP + 6 FN across PHP divergent guards, Rust match
+    // guards, C/C++ `execv*` recall, resource-leak categorisation, the
+    // structural-vs-taint source disagreement, and the TS typed-param
+    // gate) and every one of them fitted inside the margin.  13 cases is
+    // ~2.1pp of precision and ~1.8pp of recall here, so an 8pp floor
+    // cannot see a drift of that size at all.
+    //
+    // ~2pp still absorbs an honest FP↔TN trade (a single-case flip is
+    // ~0.3pp on this corpus, so roughly six flips of headroom) while
+    // being tight enough that the drift above would have failed CI on
+    // the commit that introduced it.  When you land a durable, measurable
+    // improvement, tighten these floors, do not relax them to paper over
+    // a regression.
     let rule = &results.aggregate_rule_level;
     assert!(
-        rule.precision >= 0.897,
-        "Rule-level precision {:.3} fell below threshold 0.897 (baseline 0.947)",
+        rule.precision >= 0.980,
+        "Rule-level precision {:.3} fell below threshold 0.980 (baseline 1.000)",
         rule.precision,
     );
     assert!(
-        rule.recall >= 0.944,
-        "Rule-level recall {:.3} fell below threshold 0.944 (baseline 0.994)",
+        rule.recall >= 0.980,
+        "Rule-level recall {:.3} fell below threshold 0.980 (baseline 0.997)",
         rule.recall,
     );
     assert!(
-        rule.f1 >= 0.920,
-        "Rule-level F1 {:.3} fell below threshold 0.920 (baseline 0.970)",
+        rule.f1 >= 0.980,
+        "Rule-level F1 {:.3} fell below threshold 0.980 (baseline 0.998)",
         rule.f1,
     );
 

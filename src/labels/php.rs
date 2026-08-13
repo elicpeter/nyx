@@ -642,6 +642,13 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "do_statement"                  => Kind::While,
 
     "return_statement"              => Kind::Return,
+    // `exit`/`exit(1)` parse as their own statement node rather than as a
+    // call, so the terminator check in the CFG's call arm never sees them.
+    // Control leaves the script, so model it exactly like `return`: the
+    // block dead-ends and no fall-through edge reaches the join.  (`die(...)`
+    // is NOT this node — it is absent from the PHP grammar and parses as an
+    // ordinary call, so it is handled by `is_builtin_terminator` instead.)
+    "exit_statement"                => Kind::Return,
     "throw_expression"              => Kind::Throw,
     "break_statement"               => Kind::Break,
     "continue_statement"            => Kind::Continue,
