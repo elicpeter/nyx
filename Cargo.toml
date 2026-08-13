@@ -13,8 +13,24 @@ categories = ["security", "command-line-utilities", "development-tools", "parser
 readme = "README.md"
 default-run = "nyx"
 include = [
-    "/src/**",
-    "/tools/**",
+    # Deliberately extension-scoped rather than `/src/**` + `/tools/**`.  A
+    # bare recursive glob also matches editor and OS droppings (`.DS_Store`),
+    # and `include` overrides .gitignore, so those were being packaged into
+    # the published crate.  `exclude` cannot fix it: when `include` is set,
+    # Cargo ignores `exclude` entirely.
+    "/src/**/*.rs",
+    "/src/**/*.java",
+    "/src/**/*.toml",
+    "/src/**/*.sb",
+    "/src/server/assets/**/*.css",
+    "/src/server/assets/**/*.html",
+    "/src/server/assets/**/*.js",
+    "/src/server/assets/**/*.png",
+    "/src/server/assets/**/*.svg",
+    "/tools/**/*.rs",
+    "/tools/**/*.md",
+    "/tools/**/*.sh",
+    "/tools/**/*.toml",
     "/build.rs",
     "/Cargo.toml",
     "/Cargo.lock",
