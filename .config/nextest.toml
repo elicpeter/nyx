@@ -11,9 +11,34 @@
 # a single thread within their own group keeps their wall-clock predictable
 # without slowing the rest of the suite.
 
+#
+# `dynamic-sandbox-e2e` serialises the `e2e_phase_*` dynamic-verification
+# cases for the same reason, one layer down.  Each one spawns a real language
+# runtime inside a sandbox under `SandboxOptions`' 5s hard timeout, and that
+# budget is wall-clock, not CPU-time: when dozens of them start interpreters
+# concurrently alongside the other ~6800 tests, a process can burn the whole
+# 5s before its sink output is even scheduled.  The failure then looks like a
+# verification miss (`timed_out: true`, `oracle_fired: false`) rather than
+# what it is, so it reads as a product bug and reruns "fix" it.
+#
+# Observed on CI as `dynamic / linux-with-docker` and `dynamic / macos`
+# alternating pass/fail on unchanged code.  Both cases pass in isolation in
+# under 3s.
+#
+# Serialising the group rather than raising the timeout keeps the 5s budget
+# honest: it is the same budget real `nyx scan --verify` runs get, so a case
+# that genuinely cannot confirm inside it should still fail here.  Measured
+# cost on the dev reference machine: 105 tests, 22.5s parallel vs 110s
+# serialised, against a dynamic CI job that already runs ~30 minutes.
+
 [test-groups]
 hostile-input-timing = { max-threads = 1 }
+dynamic-sandbox-e2e = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'binary(hostile_input_tests) and (test(very_long_single_line_parses) or test(many_small_functions_do_not_explode))'
 test-group = 'hostile-input-timing'
+
+[[profile.default.overrides]]
+filter = 'test(/e2e_phase/)'
+test-group = 'dynamic-sandbox-e2e'
