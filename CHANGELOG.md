@@ -2,7 +2,7 @@
 
 All notable changes to Nyx are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). For where Nyx is going, see the [Roadmap](ROADMAP.md).
 
-## [0.8.0] - Unreleased
+## [0.8.0] - 2026-08-13
 
 The dynamic-verification release. An attack-surface map, a sandboxed dynamic verifier, a framework adapter registry that grounds both, the per-language build infrastructure that makes per-finding verification affordable at corpus scale, and the first real-corpus acceptance gates.
 
